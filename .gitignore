@@ -1,0 +1,17 @@
+# 忽略虚拟环境
+venv/
+.venv/
+env/
+
+# 忽略 Python 缓存
+__pycache__/
+*.py[cod]
+
+# 忽略数据和数据库（因为我们要的是代码，不是巨大的原始数据文件）
+data/raw/*.csv
+data/*.db
+
+# 忽略 VS Code 配置
+.vscode/
+
+.DS_Store
