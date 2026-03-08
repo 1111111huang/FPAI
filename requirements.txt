@@ -1,0 +1,17 @@
+# Data Processing
+pandas
+duckdb
+pydantic
+pyyaml
+
+# AI & Scrapers
+requests
+firecrawl-py  # 2026年主流的AI抓取工具
+
+# Machine Learning
+scikit-learn
+xgboost
+
+# Testing & Quality
+pytest
+ipykernel     # 方便你在VS Code里用Jupyter Notebook调试

@@ -1,0 +1,48 @@
+"""Centralized configuration loading for FPAI."""
+
+from __future__ import annotations
+
+from functools import lru_cache
+from pathlib import Path
+
+import yaml
+from pydantic import BaseModel, Field
+
+
+class PathsConfig(BaseModel):
+    """Filesystem paths used by the application."""
+
+    raw_data_dir: str = "data/raw"
+    processed_data_dir: str = "data/processed"
+    database_path: str = "data/fpai_core.db"
+    model_dir: str = "models"
+
+
+class RuntimeConfig(BaseModel):
+    """Runtime settings used across the pipeline."""
+
+    rolling_window: int = 5
+    min_matches_required: int = 10
+    test_size: float = 0.2
+    initial_bankroll: float = 1000.0
+
+
+class AppSettings(BaseModel):
+    """Top-level application settings parsed from config.yaml."""
+
+    project_name: str = "FPAI-Football-Predictor"
+    version: str = "1.0.0"
+    paths: PathsConfig = Field(default_factory=PathsConfig)
+    settings: RuntimeConfig = Field(default_factory=RuntimeConfig)
+
+
+@lru_cache(maxsize=32)
+def load_settings(config_path: str = "config.yaml") -> AppSettings:
+    """Load and validate settings from YAML, cached by path."""
+    path = Path(config_path)
+    with path.open("r", encoding="utf-8") as config_file:
+        raw_config = yaml.safe_load(config_file) or {}
+    return AppSettings.model_validate(raw_config)
+
+
+settings = load_settings()

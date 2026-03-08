@@ -1,0 +1,20 @@
+# FPAI Global Configuration
+project_name: "FPAI-Football-Predictor"
+version: "1.0.0"
+
+paths:
+  raw_data_dir: "data/raw"
+  processed_data_dir: "data/processed"
+  database_path: "data/fpai_core.db"
+
+leagues:
+  - name: "Premier League"
+    code: "E0"
+    country: "England"
+
+# Prototype 1 Settings
+settings:
+  rolling_window: 5
+  min_matches_required: 10
+  test_size: 0.2
+  initial_bankroll: 1000

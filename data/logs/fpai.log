@@ -1,0 +1,421 @@
+2026-03-07 11:23:36,616 | INFO | src.ingestion.data_loader | CSV ingestion completed for league E0 with 290 valid records.
+2026-03-07 11:23:36,617 | INFO | __main__ | Successfully processed league E0. Total records in database: 290
+2026-03-07 11:23:36,996 | INFO | __main__ | Features calculated and stored for 290 matches.
+2026-03-07 11:23:37,008 | INFO | src.models.model_manager | Accuracy: 0.6429
+2026-03-07 11:23:37,009 | INFO | src.models.model_manager | Log Loss: 0.6525
+2026-03-07 11:23:37,011 | INFO | __main__ | Model saved to models/lr_v1_20260307.joblib
+2026-03-07 11:23:37,019 | INFO | __main__ | Value Bets (Upcoming Week):
+2026-03-07 11:23:37,021 | INFO | src.strategy.strategy_engine | 
+                                                        match_id home_team   away_team  predicted_home_win_prob  odds_h       ev
+71b69e233a06ef7d05962240c4484ef00de3a466f2415adc2a0a9651a42bb917   Burnley   Brentford                 0.452216    4.50 1.034973
+4f679cc2e3b5c2a54cc1016381c94cf751b3bea9dde4c8fc5d4d3608eef1900a     Leeds    Man City                 0.355061    4.75 0.686538
+d5efed75fcb819e0d88c3cf21a2ba4d3c5b5a4879cab73d7cf8658a4b5ee2a44    Wolves   Liverpool                 0.301904    5.50 0.660475
+0220024f4d8714a4e686921459ff577585d47f05a84cc427649af7abdcf40e81    Wolves Aston Villa                 0.375816    4.10 0.540845
+e83826a6c89854a5beef59b988e7d25dcc8866a6e35f91eb0e5a1bb86a66d51d  Brighton     Arsenal                 0.308235    4.75 0.464117
+d7409a83f6bec239c571b80e6752dd307dd17a92bc6505fd9bbb02cb7443b62c Newcastle  Man United                 0.405131    2.63 0.065495
+2026-03-07 11:29:47,568 | INFO | src.ingestion.data_loader | CSV ingestion completed for league E0 with 290 valid records.
+2026-03-07 11:29:47,570 | INFO | __main__ | Successfully processed league E0. Total records in database: 290
+2026-03-07 11:29:47,932 | INFO | __main__ | Features calculated and stored for 290 matches.
+2026-03-07 11:29:47,943 | INFO | src.models.model_manager | Accuracy: 0.6429
+2026-03-07 11:29:47,944 | INFO | src.models.model_manager | Log Loss: 0.6525
+2026-03-07 11:29:47,946 | INFO | __main__ | Model saved to models/lr_v1_20260307.joblib
+2026-03-07 11:29:47,953 | INFO | __main__ | Value Bets (Upcoming Week):
+2026-03-07 11:29:47,955 | INFO | src.strategy.strategy_engine | 
+                                                        match_id home_team   away_team  predicted_home_win_prob  odds_h       ev
+71b69e233a06ef7d05962240c4484ef00de3a466f2415adc2a0a9651a42bb917   Burnley   Brentford                 0.452216    4.50 1.034973
+4f679cc2e3b5c2a54cc1016381c94cf751b3bea9dde4c8fc5d4d3608eef1900a     Leeds    Man City                 0.355061    4.75 0.686538
+d5efed75fcb819e0d88c3cf21a2ba4d3c5b5a4879cab73d7cf8658a4b5ee2a44    Wolves   Liverpool                 0.301904    5.50 0.660475
+0220024f4d8714a4e686921459ff577585d47f05a84cc427649af7abdcf40e81    Wolves Aston Villa                 0.375816    4.10 0.540845
+e83826a6c89854a5beef59b988e7d25dcc8866a6e35f91eb0e5a1bb86a66d51d  Brighton     Arsenal                 0.308235    4.75 0.464117
+d7409a83f6bec239c571b80e6752dd307dd17a92bc6505fd9bbb02cb7443b62c Newcastle  Man United                 0.405131    2.63 0.065495
+2026-03-07 22:13:41,374 | INFO | src.ingestion.data_loader | CSV ingestion completed for league E0 with 290 valid records.
+2026-03-07 22:13:41,376 | INFO | __main__ | Successfully processed league E0. Total records in database: 290
+2026-03-07 22:13:41,770 | INFO | __main__ | Features calculated and stored for 290 matches.
+2026-03-07 22:13:41,787 | INFO | src.models.model_manager | Accuracy: 0.6429
+2026-03-07 22:13:41,788 | INFO | src.models.model_manager | Log Loss: 0.6525
+2026-03-07 22:13:41,790 | INFO | __main__ | Model saved to models/lr_v1_20260307.joblib
+2026-03-07 22:13:41,798 | INFO | __main__ | Value Bets (Upcoming Week):
+2026-03-07 22:13:41,801 | INFO | src.strategy.strategy_engine | 
+                                                        match_id home_team   away_team  predicted_home_win_prob  odds_h       ev
+71b69e233a06ef7d05962240c4484ef00de3a466f2415adc2a0a9651a42bb917   Burnley   Brentford                 0.452216    4.50 1.034973
+4f679cc2e3b5c2a54cc1016381c94cf751b3bea9dde4c8fc5d4d3608eef1900a     Leeds    Man City                 0.355061    4.75 0.686538
+d5efed75fcb819e0d88c3cf21a2ba4d3c5b5a4879cab73d7cf8658a4b5ee2a44    Wolves   Liverpool                 0.301904    5.50 0.660475
+0220024f4d8714a4e686921459ff577585d47f05a84cc427649af7abdcf40e81    Wolves Aston Villa                 0.375816    4.10 0.540845
+e83826a6c89854a5beef59b988e7d25dcc8866a6e35f91eb0e5a1bb86a66d51d  Brighton     Arsenal                 0.308235    4.75 0.464117
+d7409a83f6bec239c571b80e6752dd307dd17a92bc6505fd9bbb02cb7443b62c Newcastle  Man United                 0.405131    2.63 0.065495
+2026-03-07 22:26:32,675 | INFO | __main__ | Executing command: ingest
+2026-03-07 22:26:32,675 | INFO | __main__ | Executing command: train
+2026-03-07 22:26:32,675 | INFO | __main__ | Executing command: predict
+2026-03-07 22:26:32,677 | INFO | __main__ | Loaded model artifact: models/lr_v1_20260307.joblib
+2026-03-07 22:26:32,711 | INFO | src.models.model_manager | Accuracy: 0.6429
+2026-03-07 22:26:32,712 | INFO | src.models.model_manager | Log Loss: 0.6525
+2026-03-07 22:26:32,714 | INFO | __main__ | Model saved to models/lr_v1_20260307.joblib
+2026-03-07 22:26:33,066 | INFO | src.ingestion.data_loader | CSV ingestion completed for league E0 with 290 valid records.
+2026-03-07 22:26:33,449 | INFO | __main__ | Ingest complete | raw_matches=290 | feature_store=290
+2026-03-07 22:26:38,780 | INFO | __main__ | Executing command: train
+2026-03-07 22:26:38,796 | INFO | src.models.model_manager | Accuracy: 0.6429
+2026-03-07 22:26:38,797 | INFO | src.models.model_manager | Log Loss: 0.6525
+2026-03-07 22:26:38,799 | INFO | __main__ | Model saved to models/lr_v1_20260307.joblib
+2026-03-07 22:26:38,822 | INFO | src.strategy.backtester | BET | West Ham vs Chelsea | EV=0.7587 | Odds=4.75 | Result=LOSS | PnL=-10.00 | Bankroll=990.00
+2026-03-07 22:26:38,823 | INFO | src.strategy.backtester | BET | Bournemouth vs Wolves | EV=0.1607 | Odds=1.80 | Result=WIN | PnL=8.00 | Bankroll=998.00
+2026-03-07 22:26:38,823 | INFO | src.strategy.backtester | BET | Brentford vs Aston Villa | EV=0.5453 | Odds=3.10 | Result=WIN | PnL=21.00 | Bankroll=1019.00
+2026-03-07 22:26:38,824 | INFO | src.strategy.backtester | BET | Fulham vs Man United | EV=0.7719 | Odds=3.25 | Result=LOSS | PnL=-10.00 | Bankroll=1009.00
+2026-03-07 22:26:38,824 | INFO | src.strategy.backtester | BET | Sunderland vs Brentford | EV=0.5332 | Odds=3.00 | Result=WIN | PnL=20.00 | Bankroll=1029.00
+2026-03-07 22:26:38,825 | INFO | src.strategy.backtester | BET | Tottenham vs Bournemouth | EV=0.0580 | Odds=1.73 | Result=LOSS | PnL=-10.00 | Bankroll=1019.00
+2026-03-07 22:26:38,825 | INFO | src.strategy.backtester | BET | Leeds vs Newcastle | EV=0.2459 | Odds=3.50 | Result=LOSS | PnL=-10.00 | Bankroll=1009.00
+2026-03-07 22:26:38,826 | INFO | src.strategy.backtester | BET | Brighton vs Man City | EV=0.0554 | Odds=3.80 | Result=WIN | PnL=28.00 | Bankroll=1037.00
+2026-03-07 22:26:38,826 | INFO | src.strategy.backtester | BET | Liverpool vs Arsenal | EV=0.1691 | Odds=2.20 | Result=WIN | PnL=12.00 | Bankroll=1049.00
+2026-03-07 22:26:38,827 | INFO | src.strategy.backtester | BET | Nott'm Forest vs West Ham | EV=0.0825 | Odds=1.67 | Result=LOSS | PnL=-10.00 | Bankroll=1039.00
+2026-03-07 22:26:38,827 | INFO | src.strategy.backtester | BET | Brentford vs Chelsea | EV=0.3282 | Odds=4.50 | Result=LOSS | PnL=-10.00 | Bankroll=1029.00
+2026-03-07 22:26:38,828 | INFO | src.strategy.backtester | BET | Bournemouth vs Brighton | EV=0.1313 | Odds=2.35 | Result=WIN | PnL=13.50 | Bankroll=1042.50
+2026-03-07 22:26:38,828 | INFO | src.strategy.backtester | BET | Everton vs Aston Villa | EV=0.5502 | Odds=2.45 | Result=LOSS | PnL=-10.00 | Bankroll=1032.50
+2026-03-07 22:26:38,829 | INFO | src.strategy.backtester | BET | West Ham vs Tottenham | EV=0.2908 | Odds=3.40 | Result=LOSS | PnL=-10.00 | Bankroll=1022.50
+2026-03-07 22:26:38,829 | INFO | src.strategy.backtester | BET | Burnley vs Liverpool | EV=1.4429 | Odds=8.00 | Result=LOSS | PnL=-10.00 | Bankroll=1012.50
+2026-03-07 22:26:38,830 | INFO | src.strategy.backtester | BET | Wolves vs Leeds | EV=0.1753 | Odds=2.70 | Result=LOSS | PnL=-10.00 | Bankroll=1002.50
+2026-03-07 22:26:38,830 | INFO | src.strategy.backtester | BET | West Ham vs Crystal Palace | EV=0.1582 | Odds=2.88 | Result=LOSS | PnL=-10.00 | Bankroll=992.50
+2026-03-07 22:26:38,831 | INFO | src.strategy.backtester | BET | Burnley vs Nott'm Forest | EV=0.4842 | Odds=3.40 | Result=LOSS | PnL=-10.00 | Bankroll=982.50
+2026-03-07 22:26:38,831 | INFO | src.strategy.backtester | BET | Bournemouth vs Newcastle | EV=0.3135 | Odds=2.50 | Result=LOSS | PnL=-10.00 | Bankroll=972.50
+2026-03-07 22:26:38,832 | INFO | src.strategy.backtester | BET | Sunderland vs Aston Villa | EV=0.9790 | Odds=3.40 | Result=LOSS | PnL=-10.00 | Bankroll=962.50
+2026-03-07 22:26:38,832 | INFO | src.strategy.backtester | BET | Brentford vs Man United | EV=0.4737 | Odds=3.40 | Result=WIN | PnL=24.00 | Bankroll=986.50
+2026-03-07 22:26:38,832 | INFO | src.strategy.backtester | BET | Leeds vs Bournemouth | EV=0.2027 | Odds=3.10 | Result=LOSS | PnL=-10.00 | Bankroll=976.50
+2026-03-07 22:26:38,833 | INFO | src.strategy.backtester | BET | Crystal Palace vs Liverpool | EV=0.3554 | Odds=3.80 | Result=WIN | PnL=28.00 | Bankroll=1004.50
+2026-03-07 22:26:38,833 | INFO | src.strategy.backtester | BET | Newcastle vs Arsenal | EV=0.0713 | Odds=3.60 | Result=LOSS | PnL=-10.00 | Bankroll=994.50
+2026-03-07 22:26:38,834 | INFO | src.strategy.backtester | BET | Chelsea vs Liverpool | EV=0.4678 | Odds=2.80 | Result=WIN | PnL=18.00 | Bankroll=1012.50
+2026-03-07 22:26:38,834 | INFO | src.strategy.backtester | BET | Brentford vs Man City | EV=0.9314 | Odds=4.75 | Result=LOSS | PnL=-10.00 | Bankroll=1002.50
+2026-03-07 22:26:38,834 | INFO | src.strategy.backtester | BET | Wolves vs Brighton | EV=0.2507 | Odds=3.60 | Result=LOSS | PnL=-10.00 | Bankroll=992.50
+2026-03-07 22:26:38,835 | INFO | src.strategy.backtester | BET | Fulham vs Arsenal | EV=1.2274 | Odds=5.75 | Result=LOSS | PnL=-10.00 | Bankroll=982.50
+2026-03-07 22:26:38,835 | INFO | src.strategy.backtester | BET | Brighton vs Newcastle | EV=0.4551 | Odds=2.63 | Result=WIN | PnL=16.30 | Bankroll=998.80
+2026-03-07 22:26:38,836 | INFO | src.strategy.backtester | BET | Sunderland vs Wolves | EV=0.0657 | Odds=2.50 | Result=WIN | PnL=15.00 | Bankroll=1013.80
+2026-03-07 22:26:38,836 | INFO | src.strategy.backtester | BET | Burnley vs Leeds | EV=0.2903 | Odds=3.25 | Result=WIN | PnL=22.50 | Bankroll=1036.30
+2026-03-07 22:26:38,837 | INFO | src.strategy.backtester | BET | Brentford vs Liverpool | EV=1.0289 | Odds=4.10 | Result=WIN | PnL=31.00 | Bankroll=1067.30
+2026-03-07 22:26:38,838 | INFO | src.strategy.backtester | BET | Aston Villa vs Man City | EV=0.6184 | Odds=4.33 | Result=WIN | PnL=33.30 | Bankroll=1100.60
+2026-03-07 22:26:38,838 | INFO | src.strategy.backtester | BET | Bournemouth vs Nott'm Forest | EV=0.1748 | Odds=1.80 | Result=WIN | PnL=8.00 | Bankroll=1108.60
+2026-03-07 22:26:38,838 | INFO | src.strategy.backtester | BET | Tottenham vs Chelsea | EV=0.3092 | Odds=2.70 | Result=LOSS | PnL=-10.00 | Bankroll=1098.60
+2026-03-07 22:26:38,839 | INFO | src.strategy.backtester | BET | Burnley vs Arsenal | EV=3.5336 | Odds=10.00 | Result=LOSS | PnL=-10.00 | Bankroll=1088.60
+2026-03-07 22:26:38,839 | INFO | src.strategy.backtester | BET | West Ham vs Newcastle | EV=0.8714 | Odds=5.25 | Result=WIN | PnL=42.50 | Bankroll=1131.10
+2026-03-07 22:26:38,840 | INFO | src.strategy.backtester | BET | Sunderland vs Everton | EV=0.3478 | Odds=2.70 | Result=LOSS | PnL=-10.00 | Bankroll=1121.10
+2026-03-07 22:26:38,840 | INFO | src.strategy.backtester | BET | Sunderland vs Arsenal | EV=2.0118 | Odds=7.50 | Result=LOSS | PnL=-10.00 | Bankroll=1111.10
+2026-03-07 22:26:38,841 | INFO | src.strategy.backtester | BET | Brentford vs Newcastle | EV=0.3428 | Odds=2.80 | Result=WIN | PnL=18.00 | Bankroll=1129.10
+2026-03-07 22:26:38,841 | INFO | src.strategy.backtester | BET | Man City vs Liverpool | EV=0.0848 | Odds=1.90 | Result=WIN | PnL=9.00 | Bankroll=1138.10
+2026-03-07 22:26:38,841 | INFO | src.strategy.backtester | BET | Burnley vs Chelsea | EV=1.4846 | Odds=6.25 | Result=LOSS | PnL=-10.00 | Bankroll=1128.10
+2026-03-07 22:26:38,842 | INFO | src.strategy.backtester | BET | Newcastle vs Man City | EV=0.4063 | Odds=3.60 | Result=WIN | PnL=26.00 | Bankroll=1154.10
+2026-03-07 22:26:38,842 | INFO | src.strategy.backtester | BET | Wolves vs Crystal Palace | EV=0.3223 | Odds=3.80 | Result=LOSS | PnL=-10.00 | Bankroll=1144.10
+2026-03-07 22:26:38,843 | INFO | src.strategy.backtester | BET | Man United vs Everton | EV=0.0824 | Odds=1.75 | Result=LOSS | PnL=-10.00 | Bankroll=1134.10
+2026-03-07 22:26:38,843 | INFO | src.strategy.backtester | BET | Tottenham vs Fulham | EV=0.0522 | Odds=2.20 | Result=LOSS | PnL=-10.00 | Bankroll=1124.10
+2026-03-07 22:26:38,844 | INFO | src.strategy.backtester | BET | Sunderland vs Bournemouth | EV=0.4206 | Odds=3.20 | Result=WIN | PnL=22.00 | Bankroll=1146.10
+2026-03-07 22:26:38,845 | INFO | src.strategy.backtester | BET | Everton vs Newcastle | EV=0.0659 | Odds=2.80 | Result=LOSS | PnL=-10.00 | Bankroll=1136.10
+2026-03-07 22:26:38,845 | INFO | src.strategy.backtester | BET | West Ham vs Liverpool | EV=1.3472 | Odds=4.33 | Result=LOSS | PnL=-10.00 | Bankroll=1126.10
+2026-03-07 22:26:38,846 | INFO | src.strategy.backtester | BET | Nott'm Forest vs Brighton | EV=0.1741 | Odds=2.75 | Result=LOSS | PnL=-10.00 | Bankroll=1116.10
+2026-03-07 22:26:38,846 | INFO | src.strategy.backtester | BET | Chelsea vs Arsenal | EV=0.6141 | Odds=3.40 | Result=LOSS | PnL=-10.00 | Bankroll=1106.10
+2026-03-07 22:26:38,847 | INFO | src.strategy.backtester | BET | Fulham vs Man City | EV=0.6981 | Odds=4.33 | Result=LOSS | PnL=-10.00 | Bankroll=1096.10
+2026-03-07 22:26:38,847 | INFO | src.strategy.backtester | BET | Leeds vs Chelsea | EV=0.5449 | Odds=4.10 | Result=WIN | PnL=31.00 | Bankroll=1127.10
+2026-03-07 22:26:38,848 | INFO | src.strategy.backtester | BET | Burnley vs Crystal Palace | EV=0.9680 | Odds=4.50 | Result=LOSS | PnL=-10.00 | Bankroll=1117.10
+2026-03-07 22:26:38,848 | INFO | src.strategy.backtester | BET | Aston Villa vs Arsenal | EV=0.9616 | Odds=4.20 | Result=WIN | PnL=32.00 | Bankroll=1149.10
+2026-03-07 22:26:38,848 | INFO | src.strategy.backtester | BET | Leeds vs Liverpool | EV=0.7894 | Odds=3.80 | Result=LOSS | PnL=-10.00 | Bankroll=1139.10
+2026-03-07 22:26:38,849 | INFO | src.strategy.backtester | BET | Bournemouth vs Chelsea | EV=0.0875 | Odds=3.10 | Result=LOSS | PnL=-10.00 | Bankroll=1129.10
+2026-03-07 22:26:38,849 | INFO | src.strategy.backtester | BET | Fulham vs Crystal Palace | EV=0.3619 | Odds=2.55 | Result=LOSS | PnL=-10.00 | Bankroll=1119.10
+2026-03-07 22:26:38,850 | INFO | src.strategy.backtester | BET | Wolves vs Man United | EV=0.1384 | Odds=4.20 | Result=LOSS | PnL=-10.00 | Bankroll=1109.10
+2026-03-07 22:26:38,850 | INFO | src.strategy.backtester | BET | Burnley vs Fulham | EV=0.3764 | Odds=4.00 | Result=LOSS | PnL=-10.00 | Bankroll=1099.10
+2026-03-07 22:26:38,851 | INFO | src.strategy.backtester | BET | West Ham vs Aston Villa | EV=0.2098 | Odds=3.75 | Result=LOSS | PnL=-10.00 | Bankroll=1089.10
+2026-03-07 22:26:38,851 | INFO | src.strategy.backtester | BET | Sunderland vs Newcastle | EV=0.1159 | Odds=3.30 | Result=WIN | PnL=23.00 | Bankroll=1112.10
+2026-03-07 22:26:38,852 | INFO | src.strategy.backtester | BET | Crystal Palace vs Man City | EV=0.1139 | Odds=3.90 | Result=LOSS | PnL=-10.00 | Bankroll=1102.10
+2026-03-07 22:26:38,852 | INFO | src.strategy.backtester | BET | Nott'm Forest vs Tottenham | EV=0.1131 | Odds=2.55 | Result=WIN | PnL=15.50 | Bankroll=1117.60
+2026-03-07 22:26:38,852 | INFO | src.strategy.backtester | BET | Wolves vs Brentford | EV=0.2368 | Odds=3.50 | Result=LOSS | PnL=-10.00 | Bankroll=1107.60
+2026-03-07 22:26:38,853 | INFO | src.strategy.backtester | BET | Leeds vs Crystal Palace | EV=0.3890 | Odds=2.60 | Result=WIN | PnL=16.00 | Bankroll=1123.60
+2026-03-07 22:26:38,853 | INFO | src.strategy.backtester | BET | Everton vs Arsenal | EV=1.0827 | Odds=5.75 | Result=LOSS | PnL=-10.00 | Bankroll=1113.60
+2026-03-07 22:26:38,854 | INFO | src.strategy.backtester | BET | Tottenham vs Liverpool | EV=0.3563 | Odds=3.50 | Result=LOSS | PnL=-10.00 | Bankroll=1103.60
+2026-03-07 22:26:38,854 | INFO | src.strategy.backtester | BET | Newcastle vs Chelsea | EV=0.4995 | Odds=2.75 | Result=LOSS | PnL=-10.00 | Bankroll=1093.60
+2026-03-07 22:26:38,855 | INFO | src.strategy.backtester | BET | Fulham vs Nott'm Forest | EV=0.2903 | Odds=2.40 | Result=WIN | PnL=14.00 | Bankroll=1107.60
+2026-03-07 22:26:38,855 | INFO | src.strategy.backtester | BET | Man United vs Newcastle | EV=0.2972 | Odds=2.55 | Result=WIN | PnL=15.50 | Bankroll=1123.10
+2026-03-07 22:26:38,856 | INFO | src.strategy.backtester | BET | Burnley vs Everton | EV=0.7480 | Odds=4.10 | Result=LOSS | PnL=-10.00 | Bankroll=1113.10
+2026-03-07 22:26:38,856 | INFO | src.strategy.backtester | BET | West Ham vs Brighton | EV=0.3877 | Odds=3.40 | Result=LOSS | PnL=-10.00 | Bankroll=1103.10
+2026-03-07 22:26:38,857 | INFO | src.strategy.backtester | BET | Burnley vs Newcastle | EV=1.0558 | Odds=5.25 | Result=LOSS | PnL=-10.00 | Bankroll=1093.10
+2026-03-07 22:26:38,857 | INFO | src.strategy.backtester | BET | Sunderland vs Man City | EV=0.5218 | Odds=7.50 | Result=LOSS | PnL=-10.00 | Bankroll=1083.10
+2026-03-07 22:26:38,858 | INFO | src.strategy.backtester | BET | Bournemouth vs Arsenal | EV=1.5612 | Odds=6.50 | Result=LOSS | PnL=-10.00 | Bankroll=1073.10
+2026-03-07 22:26:38,858 | INFO | src.strategy.backtester | BET | Fulham vs Liverpool | EV=0.5597 | Odds=3.80 | Result=LOSS | PnL=-10.00 | Bankroll=1063.10
+2026-03-07 22:26:38,859 | INFO | src.strategy.backtester | BET | Leeds vs Man United | EV=0.1413 | Odds=2.70 | Result=LOSS | PnL=-10.00 | Bankroll=1053.10
+2026-03-07 22:26:38,859 | INFO | src.strategy.backtester | BET | West Ham vs Nott'm Forest | EV=0.1392 | Odds=2.88 | Result=LOSS | PnL=-10.00 | Bankroll=1043.10
+2026-03-07 22:26:38,860 | INFO | src.strategy.backtester | BET | Fulham vs Chelsea | EV=0.5658 | Odds=3.40 | Result=WIN | PnL=24.00 | Bankroll=1067.10
+2026-03-07 22:26:38,860 | INFO | src.strategy.backtester | BET | Brentford vs Sunderland | EV=0.1742 | Odds=1.85 | Result=WIN | PnL=8.50 | Bankroll=1075.60
+2026-03-07 22:26:38,861 | INFO | src.strategy.backtester | BET | Burnley vs Man United | EV=0.6503 | Odds=4.75 | Result=LOSS | PnL=-10.00 | Bankroll=1065.60
+2026-03-07 22:26:38,861 | INFO | src.strategy.backtester | BET | Bournemouth vs Tottenham | EV=0.2209 | Odds=2.10 | Result=WIN | PnL=11.00 | Bankroll=1076.60
+2026-03-07 22:26:38,861 | INFO | src.strategy.backtester | BET | Nott'm Forest vs Arsenal | EV=0.8241 | Odds=6.00 | Result=LOSS | PnL=-10.00 | Bankroll=1066.60
+2026-03-07 22:26:38,862 | INFO | src.strategy.backtester | BET | Sunderland vs Crystal Palace | EV=0.1848 | Odds=2.75 | Result=WIN | PnL=17.50 | Bankroll=1084.10
+2026-03-07 22:26:38,863 | INFO | src.strategy.backtester | BET | Leeds vs Fulham | EV=0.0631 | Odds=2.15 | Result=WIN | PnL=11.50 | Bankroll=1095.60
+2026-03-07 22:26:38,863 | INFO | src.strategy.backtester | BET | Man United vs Man City | EV=0.5476 | Odds=3.70 | Result=WIN | PnL=27.00 | Bankroll=1122.60
+2026-03-07 22:26:38,864 | INFO | src.strategy.backtester | BET | Wolves vs Newcastle | EV=0.6460 | Odds=4.75 | Result=LOSS | PnL=-10.00 | Bankroll=1112.60
+2026-03-07 22:26:38,864 | INFO | src.strategy.backtester | BET | Burnley vs Tottenham | EV=0.5031 | Odds=3.70 | Result=LOSS | PnL=-10.00 | Bankroll=1102.60
+2026-03-07 22:26:38,864 | INFO | src.strategy.backtester | BET | West Ham vs Sunderland | EV=0.1219 | Odds=2.50 | Result=WIN | PnL=15.00 | Bankroll=1117.60
+2026-03-07 22:26:38,865 | INFO | src.strategy.backtester | BET | Bournemouth vs Liverpool | EV=0.9412 | Odds=3.75 | Result=WIN | PnL=27.50 | Bankroll=1145.10
+2026-03-07 22:26:38,865 | INFO | src.strategy.backtester | BET | Fulham vs Brighton | EV=0.1115 | Odds=2.60 | Result=WIN | PnL=16.00 | Bankroll=1161.10
+2026-03-07 22:26:38,866 | INFO | src.strategy.backtester | BET | Brentford vs Nott'm Forest | EV=0.1886 | Odds=1.91 | Result=LOSS | PnL=-10.00 | Bankroll=1151.10
+2026-03-07 22:26:38,866 | INFO | src.strategy.backtester | BET | Crystal Palace vs Chelsea | EV=0.1462 | Odds=3.50 | Result=LOSS | PnL=-10.00 | Bankroll=1141.10
+2026-03-07 22:26:38,867 | INFO | src.strategy.backtester | BET | Everton vs Leeds | EV=0.1202 | Odds=2.50 | Result=LOSS | PnL=-10.00 | Bankroll=1131.10
+2026-03-07 22:26:38,867 | INFO | src.strategy.backtester | BET | Leeds vs Arsenal | EV=1.2055 | Odds=5.75 | Result=LOSS | PnL=-10.00 | Bankroll=1121.10
+2026-03-07 22:26:38,867 | INFO | src.strategy.backtester | BET | Tottenham vs Man City | EV=1.1365 | Odds=4.50 | Result=LOSS | PnL=-10.00 | Bankroll=1111.10
+2026-03-07 22:26:38,868 | INFO | src.strategy.backtester | BET | Bournemouth vs Aston Villa | EV=0.5726 | Odds=2.70 | Result=LOSS | PnL=-10.00 | Bankroll=1101.10
+2026-03-07 22:26:38,868 | INFO | src.strategy.backtester | BET | Burnley vs West Ham | EV=0.2265 | Odds=3.30 | Result=LOSS | PnL=-10.00 | Bankroll=1091.10
+2026-03-07 22:26:38,869 | INFO | src.strategy.backtester | BET | Wolves vs Chelsea | EV=0.6005 | Odds=5.00 | Result=LOSS | PnL=-10.00 | Bankroll=1081.10
+2026-03-07 22:26:38,869 | INFO | src.strategy.backtester | BET | Liverpool vs Man City | EV=0.2357 | Odds=2.38 | Result=LOSS | PnL=-10.00 | Bankroll=1071.10
+2026-03-07 22:26:38,870 | INFO | src.strategy.backtester | BET | West Ham vs Man United | EV=0.8926 | Odds=4.50 | Result=LOSS | PnL=-10.00 | Bankroll=1061.10
+2026-03-07 22:26:38,870 | INFO | src.strategy.backtester | BET | Tottenham vs Newcastle | EV=0.4160 | Odds=3.20 | Result=LOSS | PnL=-10.00 | Bankroll=1051.10
+2026-03-07 22:26:38,870 | INFO | src.strategy.backtester | BET | Sunderland vs Liverpool | EV=0.8575 | Odds=4.75 | Result=LOSS | PnL=-10.00 | Bankroll=1041.10
+2026-03-07 22:26:38,871 | INFO | src.strategy.backtester | BET | Brentford vs Arsenal | EV=0.9151 | Odds=4.75 | Result=LOSS | PnL=-10.00 | Bankroll=1031.10
+2026-03-07 22:26:38,871 | INFO | src.strategy.backtester | BET | Wolves vs Arsenal | EV=1.7195 | Odds=11.00 | Result=LOSS | PnL=-10.00 | Bankroll=1021.10
+2026-03-07 22:26:38,872 | INFO | src.strategy.backtester | BET | West Ham vs Bournemouth | EV=0.2113 | Odds=2.50 | Result=LOSS | PnL=-10.00 | Bankroll=1011.10
+2026-03-07 22:26:38,872 | INFO | src.strategy.backtester | BET | Nott'm Forest vs Liverpool | EV=0.4090 | Odds=4.10 | Result=LOSS | PnL=-10.00 | Bankroll=1001.10
+2026-03-07 22:26:38,872 | INFO | src.strategy.backtester | BET | Tottenham vs Arsenal | EV=0.8790 | Odds=6.00 | Result=LOSS | PnL=-10.00 | Bankroll=991.10
+2026-03-07 22:26:38,873 | INFO | src.strategy.backtester | BET | Sunderland vs Fulham | EV=0.2563 | Odds=2.70 | Result=LOSS | PnL=-10.00 | Bankroll=981.10
+2026-03-07 22:26:38,874 | INFO | src.strategy.backtester | BET | Everton vs Man United | EV=0.2820 | Odds=3.70 | Result=LOSS | PnL=-10.00 | Bankroll=971.10
+2026-03-07 22:26:38,874 | INFO | src.strategy.backtester | BET | Wolves vs Aston Villa | EV=0.5408 | Odds=4.10 | Result=WIN | PnL=31.00 | Bankroll=1002.10
+2026-03-07 22:26:38,875 | INFO | src.strategy.backtester | BET | Leeds vs Man City | EV=0.6865 | Odds=4.75 | Result=LOSS | PnL=-10.00 | Bankroll=992.10
+2026-03-07 22:26:38,875 | INFO | src.strategy.backtester | BET | Burnley vs Brentford | EV=1.0350 | Odds=4.50 | Result=LOSS | PnL=-10.00 | Bankroll=982.10
+2026-03-07 22:26:38,876 | INFO | src.strategy.backtester | BET | Wolves vs Liverpool | EV=0.6605 | Odds=5.50 | Result=WIN | PnL=45.00 | Bankroll=1027.10
+2026-03-07 22:26:38,876 | INFO | src.strategy.backtester | BET | Newcastle vs Man United | EV=0.0655 | Odds=2.63 | Result=WIN | PnL=16.30 | Bankroll=1043.40
+2026-03-07 22:26:38,877 | INFO | src.strategy.backtester | BET | Brighton vs Arsenal | EV=0.4641 | Odds=4.75 | Result=LOSS | PnL=-10.00 | Bankroll=1033.40
+2026-03-07 22:26:38,878 | INFO | src.strategy.backtester | BACKTEST SUMMARY | Bets=117 | Final Bankroll=1033.40 | ROI=0.0334 | Win Rate=0.3333 | Max Drawdown=0.1636
+2026-03-07 22:26:38,879 | INFO | __main__ | Backtest metrics | ROI=0.0334 | Win Rate=0.3333 | Max Drawdown=0.1636 | Bets=117
+2026-03-07 22:26:40,006 | INFO | __main__ | Executing command: predict
+2026-03-07 22:26:40,007 | INFO | __main__ | Loaded model artifact: models/lr_v1_20260307.joblib
+2026-03-07 22:26:40,022 | INFO | __main__ | Value Bets (Current Week):
+2026-03-07 22:26:40,024 | INFO | src.strategy.strategy_engine | 
+                                                        match_id home_team   away_team  predicted_home_win_prob  odds_h       ev
+71b69e233a06ef7d05962240c4484ef00de3a466f2415adc2a0a9651a42bb917   Burnley   Brentford                 0.452216    4.50 1.034973
+4f679cc2e3b5c2a54cc1016381c94cf751b3bea9dde4c8fc5d4d3608eef1900a     Leeds    Man City                 0.355061    4.75 0.686538
+d5efed75fcb819e0d88c3cf21a2ba4d3c5b5a4879cab73d7cf8658a4b5ee2a44    Wolves   Liverpool                 0.301904    5.50 0.660475
+0220024f4d8714a4e686921459ff577585d47f05a84cc427649af7abdcf40e81    Wolves Aston Villa                 0.375816    4.10 0.540845
+e83826a6c89854a5beef59b988e7d25dcc8866a6e35f91eb0e5a1bb86a66d51d  Brighton     Arsenal                 0.308235    4.75 0.464117
+d7409a83f6bec239c571b80e6752dd307dd17a92bc6505fd9bbb02cb7443b62c Newcastle  Man United                 0.405131    2.63 0.065495
+2026-03-07 22:32:02,168 | INFO | __main__ | Executing command: train
+2026-03-07 22:32:02,215 | INFO | src.models.model_manager | Accuracy: 0.6429
+2026-03-07 22:32:02,216 | INFO | src.models.model_manager | Log Loss: 0.6525
+2026-03-07 22:32:02,217 | INFO | __main__ | Model saved to models/lr_v1_20260307.joblib
+2026-03-07 22:32:03,410 | INFO | __main__ | Executing command: backtest
+2026-03-07 22:32:03,411 | INFO | __main__ | Loaded model artifact: models/lr_v1_20260307.joblib
+2026-03-07 22:32:03,441 | INFO | src.strategy.backtester | BET | West Ham vs Chelsea | EV=0.7587 | Odds=4.75 | Result=LOSS | PnL=-10.00 | Bankroll=990.00
+2026-03-07 22:32:03,442 | INFO | src.strategy.backtester | BET | Bournemouth vs Wolves | EV=0.1607 | Odds=1.80 | Result=WIN | PnL=8.00 | Bankroll=998.00
+2026-03-07 22:32:03,443 | INFO | src.strategy.backtester | BET | Brentford vs Aston Villa | EV=0.5453 | Odds=3.10 | Result=WIN | PnL=21.00 | Bankroll=1019.00
+2026-03-07 22:32:03,443 | INFO | src.strategy.backtester | BET | Fulham vs Man United | EV=0.7719 | Odds=3.25 | Result=LOSS | PnL=-10.00 | Bankroll=1009.00
+2026-03-07 22:32:03,443 | INFO | src.strategy.backtester | BET | Sunderland vs Brentford | EV=0.5332 | Odds=3.00 | Result=WIN | PnL=20.00 | Bankroll=1029.00
+2026-03-07 22:32:03,444 | INFO | src.strategy.backtester | BET | Leeds vs Newcastle | EV=0.2459 | Odds=3.50 | Result=LOSS | PnL=-10.00 | Bankroll=1019.00
+2026-03-07 22:32:03,445 | INFO | src.strategy.backtester | BET | Liverpool vs Arsenal | EV=0.1691 | Odds=2.20 | Result=WIN | PnL=12.00 | Bankroll=1031.00
+2026-03-07 22:32:03,445 | INFO | src.strategy.backtester | BET | Brentford vs Chelsea | EV=0.3282 | Odds=4.50 | Result=LOSS | PnL=-10.00 | Bankroll=1021.00
+2026-03-07 22:32:03,446 | INFO | src.strategy.backtester | BET | Bournemouth vs Brighton | EV=0.1313 | Odds=2.35 | Result=WIN | PnL=13.50 | Bankroll=1034.50
+2026-03-07 22:32:03,446 | INFO | src.strategy.backtester | BET | Everton vs Aston Villa | EV=0.5502 | Odds=2.45 | Result=LOSS | PnL=-10.00 | Bankroll=1024.50
+2026-03-07 22:32:03,447 | INFO | src.strategy.backtester | BET | West Ham vs Tottenham | EV=0.2908 | Odds=3.40 | Result=LOSS | PnL=-10.00 | Bankroll=1014.50
+2026-03-07 22:32:03,447 | INFO | src.strategy.backtester | BET | Burnley vs Liverpool | EV=1.4429 | Odds=8.00 | Result=LOSS | PnL=-10.00 | Bankroll=1004.50
+2026-03-07 22:32:03,448 | INFO | src.strategy.backtester | BET | Wolves vs Leeds | EV=0.1753 | Odds=2.70 | Result=LOSS | PnL=-10.00 | Bankroll=994.50
+2026-03-07 22:32:03,448 | INFO | src.strategy.backtester | BET | West Ham vs Crystal Palace | EV=0.1582 | Odds=2.88 | Result=LOSS | PnL=-10.00 | Bankroll=984.50
+2026-03-07 22:32:03,448 | INFO | src.strategy.backtester | BET | Burnley vs Nott'm Forest | EV=0.4842 | Odds=3.40 | Result=LOSS | PnL=-10.00 | Bankroll=974.50
+2026-03-07 22:32:03,449 | INFO | src.strategy.backtester | BET | Bournemouth vs Newcastle | EV=0.3135 | Odds=2.50 | Result=LOSS | PnL=-10.00 | Bankroll=964.50
+2026-03-07 22:32:03,449 | INFO | src.strategy.backtester | BET | Sunderland vs Aston Villa | EV=0.9790 | Odds=3.40 | Result=LOSS | PnL=-10.00 | Bankroll=954.50
+2026-03-07 22:32:03,450 | INFO | src.strategy.backtester | BET | Brentford vs Man United | EV=0.4737 | Odds=3.40 | Result=WIN | PnL=24.00 | Bankroll=978.50
+2026-03-07 22:32:03,450 | INFO | src.strategy.backtester | BET | Leeds vs Bournemouth | EV=0.2027 | Odds=3.10 | Result=LOSS | PnL=-10.00 | Bankroll=968.50
+2026-03-07 22:32:03,451 | INFO | src.strategy.backtester | BET | Crystal Palace vs Liverpool | EV=0.3554 | Odds=3.80 | Result=WIN | PnL=28.00 | Bankroll=996.50
+2026-03-07 22:32:03,451 | INFO | src.strategy.backtester | BET | Chelsea vs Liverpool | EV=0.4678 | Odds=2.80 | Result=WIN | PnL=18.00 | Bankroll=1014.50
+2026-03-07 22:32:03,452 | INFO | src.strategy.backtester | BET | Brentford vs Man City | EV=0.9314 | Odds=4.75 | Result=LOSS | PnL=-10.00 | Bankroll=1004.50
+2026-03-07 22:32:03,452 | INFO | src.strategy.backtester | BET | Wolves vs Brighton | EV=0.2507 | Odds=3.60 | Result=LOSS | PnL=-10.00 | Bankroll=994.50
+2026-03-07 22:32:03,452 | INFO | src.strategy.backtester | BET | Fulham vs Arsenal | EV=1.2274 | Odds=5.75 | Result=LOSS | PnL=-10.00 | Bankroll=984.50
+2026-03-07 22:32:03,453 | INFO | src.strategy.backtester | BET | Brighton vs Newcastle | EV=0.4551 | Odds=2.63 | Result=WIN | PnL=16.30 | Bankroll=1000.80
+2026-03-07 22:32:03,453 | INFO | src.strategy.backtester | BET | Burnley vs Leeds | EV=0.2903 | Odds=3.25 | Result=WIN | PnL=22.50 | Bankroll=1023.30
+2026-03-07 22:32:03,454 | INFO | src.strategy.backtester | BET | Brentford vs Liverpool | EV=1.0289 | Odds=4.10 | Result=WIN | PnL=31.00 | Bankroll=1054.30
+2026-03-07 22:32:03,454 | INFO | src.strategy.backtester | BET | Aston Villa vs Man City | EV=0.6184 | Odds=4.33 | Result=WIN | PnL=33.30 | Bankroll=1087.60
+2026-03-07 22:32:03,454 | INFO | src.strategy.backtester | BET | Bournemouth vs Nott'm Forest | EV=0.1748 | Odds=1.80 | Result=WIN | PnL=8.00 | Bankroll=1095.60
+2026-03-07 22:32:03,455 | INFO | src.strategy.backtester | BET | Tottenham vs Chelsea | EV=0.3092 | Odds=2.70 | Result=LOSS | PnL=-10.00 | Bankroll=1085.60
+2026-03-07 22:32:03,456 | INFO | src.strategy.backtester | BET | Burnley vs Arsenal | EV=3.5336 | Odds=10.00 | Result=LOSS | PnL=-10.00 | Bankroll=1075.60
+2026-03-07 22:32:03,456 | INFO | src.strategy.backtester | BET | West Ham vs Newcastle | EV=0.8714 | Odds=5.25 | Result=WIN | PnL=42.50 | Bankroll=1118.10
+2026-03-07 22:32:03,457 | INFO | src.strategy.backtester | BET | Sunderland vs Everton | EV=0.3478 | Odds=2.70 | Result=LOSS | PnL=-10.00 | Bankroll=1108.10
+2026-03-07 22:32:03,458 | INFO | src.strategy.backtester | BET | Sunderland vs Arsenal | EV=2.0118 | Odds=7.50 | Result=LOSS | PnL=-10.00 | Bankroll=1098.10
+2026-03-07 22:32:03,458 | INFO | src.strategy.backtester | BET | Brentford vs Newcastle | EV=0.3428 | Odds=2.80 | Result=WIN | PnL=18.00 | Bankroll=1116.10
+2026-03-07 22:32:03,459 | INFO | src.strategy.backtester | BET | Burnley vs Chelsea | EV=1.4846 | Odds=6.25 | Result=LOSS | PnL=-10.00 | Bankroll=1106.10
+2026-03-07 22:32:03,459 | INFO | src.strategy.backtester | BET | Newcastle vs Man City | EV=0.4063 | Odds=3.60 | Result=WIN | PnL=26.00 | Bankroll=1132.10
+2026-03-07 22:32:03,460 | INFO | src.strategy.backtester | BET | Wolves vs Crystal Palace | EV=0.3223 | Odds=3.80 | Result=LOSS | PnL=-10.00 | Bankroll=1122.10
+2026-03-07 22:32:03,460 | INFO | src.strategy.backtester | BET | Sunderland vs Bournemouth | EV=0.4206 | Odds=3.20 | Result=WIN | PnL=22.00 | Bankroll=1144.10
+2026-03-07 22:32:03,460 | INFO | src.strategy.backtester | BET | West Ham vs Liverpool | EV=1.3472 | Odds=4.33 | Result=LOSS | PnL=-10.00 | Bankroll=1134.10
+2026-03-07 22:32:03,461 | INFO | src.strategy.backtester | BET | Nott'm Forest vs Brighton | EV=0.1741 | Odds=2.75 | Result=LOSS | PnL=-10.00 | Bankroll=1124.10
+2026-03-07 22:32:03,461 | INFO | src.strategy.backtester | BET | Chelsea vs Arsenal | EV=0.6141 | Odds=3.40 | Result=LOSS | PnL=-10.00 | Bankroll=1114.10
+2026-03-07 22:32:03,462 | INFO | src.strategy.backtester | BET | Fulham vs Man City | EV=0.6981 | Odds=4.33 | Result=LOSS | PnL=-10.00 | Bankroll=1104.10
+2026-03-07 22:32:03,462 | INFO | src.strategy.backtester | BET | Leeds vs Chelsea | EV=0.5449 | Odds=4.10 | Result=WIN | PnL=31.00 | Bankroll=1135.10
+2026-03-07 22:32:03,463 | INFO | src.strategy.backtester | BET | Burnley vs Crystal Palace | EV=0.9680 | Odds=4.50 | Result=LOSS | PnL=-10.00 | Bankroll=1125.10
+2026-03-07 22:32:03,463 | INFO | src.strategy.backtester | BET | Aston Villa vs Arsenal | EV=0.9616 | Odds=4.20 | Result=WIN | PnL=32.00 | Bankroll=1157.10
+2026-03-07 22:32:03,464 | INFO | src.strategy.backtester | BET | Leeds vs Liverpool | EV=0.7894 | Odds=3.80 | Result=LOSS | PnL=-10.00 | Bankroll=1147.10
+2026-03-07 22:32:03,464 | INFO | src.strategy.backtester | BET | Fulham vs Crystal Palace | EV=0.3619 | Odds=2.55 | Result=LOSS | PnL=-10.00 | Bankroll=1137.10
+2026-03-07 22:32:03,464 | INFO | src.strategy.backtester | BET | Wolves vs Man United | EV=0.1384 | Odds=4.20 | Result=LOSS | PnL=-10.00 | Bankroll=1127.10
+2026-03-07 22:32:03,465 | INFO | src.strategy.backtester | BET | Burnley vs Fulham | EV=0.3764 | Odds=4.00 | Result=LOSS | PnL=-10.00 | Bankroll=1117.10
+2026-03-07 22:32:03,465 | INFO | src.strategy.backtester | BET | West Ham vs Aston Villa | EV=0.2098 | Odds=3.75 | Result=LOSS | PnL=-10.00 | Bankroll=1107.10
+2026-03-07 22:32:03,466 | INFO | src.strategy.backtester | BET | Sunderland vs Newcastle | EV=0.1159 | Odds=3.30 | Result=WIN | PnL=23.00 | Bankroll=1130.10
+2026-03-07 22:32:03,466 | INFO | src.strategy.backtester | BET | Crystal Palace vs Man City | EV=0.1139 | Odds=3.90 | Result=LOSS | PnL=-10.00 | Bankroll=1120.10
+2026-03-07 22:32:03,467 | INFO | src.strategy.backtester | BET | Nott'm Forest vs Tottenham | EV=0.1131 | Odds=2.55 | Result=WIN | PnL=15.50 | Bankroll=1135.60
+2026-03-07 22:32:03,467 | INFO | src.strategy.backtester | BET | Wolves vs Brentford | EV=0.2368 | Odds=3.50 | Result=LOSS | PnL=-10.00 | Bankroll=1125.60
+2026-03-07 22:32:03,474 | INFO | src.strategy.backtester | BET | Leeds vs Crystal Palace | EV=0.3890 | Odds=2.60 | Result=WIN | PnL=16.00 | Bankroll=1141.60
+2026-03-07 22:32:03,475 | INFO | src.strategy.backtester | BET | Everton vs Arsenal | EV=1.0827 | Odds=5.75 | Result=LOSS | PnL=-10.00 | Bankroll=1131.60
+2026-03-07 22:32:03,476 | INFO | src.strategy.backtester | BET | Tottenham vs Liverpool | EV=0.3563 | Odds=3.50 | Result=LOSS | PnL=-10.00 | Bankroll=1121.60
+2026-03-07 22:32:03,481 | INFO | src.strategy.backtester | BET | Newcastle vs Chelsea | EV=0.4995 | Odds=2.75 | Result=LOSS | PnL=-10.00 | Bankroll=1111.60
+2026-03-07 22:32:03,482 | INFO | src.strategy.backtester | BET | Fulham vs Nott'm Forest | EV=0.2903 | Odds=2.40 | Result=WIN | PnL=14.00 | Bankroll=1125.60
+2026-03-07 22:32:03,502 | INFO | src.strategy.backtester | BET | Man United vs Newcastle | EV=0.2972 | Odds=2.55 | Result=WIN | PnL=15.50 | Bankroll=1141.10
+2026-03-07 22:32:03,502 | INFO | src.strategy.backtester | BET | Burnley vs Everton | EV=0.7480 | Odds=4.10 | Result=LOSS | PnL=-10.00 | Bankroll=1131.10
+2026-03-07 22:32:03,503 | INFO | src.strategy.backtester | BET | West Ham vs Brighton | EV=0.3877 | Odds=3.40 | Result=LOSS | PnL=-10.00 | Bankroll=1121.10
+2026-03-07 22:32:03,503 | INFO | src.strategy.backtester | BET | Burnley vs Newcastle | EV=1.0558 | Odds=5.25 | Result=LOSS | PnL=-10.00 | Bankroll=1111.10
+2026-03-07 22:32:03,504 | INFO | src.strategy.backtester | BET | Sunderland vs Man City | EV=0.5218 | Odds=7.50 | Result=LOSS | PnL=-10.00 | Bankroll=1101.10
+2026-03-07 22:32:03,504 | INFO | src.strategy.backtester | BET | Bournemouth vs Arsenal | EV=1.5612 | Odds=6.50 | Result=LOSS | PnL=-10.00 | Bankroll=1091.10
+2026-03-07 22:32:03,505 | INFO | src.strategy.backtester | BET | Fulham vs Liverpool | EV=0.5597 | Odds=3.80 | Result=LOSS | PnL=-10.00 | Bankroll=1081.10
+2026-03-07 22:32:03,505 | INFO | src.strategy.backtester | BET | Leeds vs Man United | EV=0.1413 | Odds=2.70 | Result=LOSS | PnL=-10.00 | Bankroll=1071.10
+2026-03-07 22:32:03,505 | INFO | src.strategy.backtester | BET | West Ham vs Nott'm Forest | EV=0.1392 | Odds=2.88 | Result=LOSS | PnL=-10.00 | Bankroll=1061.10
+2026-03-07 22:32:03,506 | INFO | src.strategy.backtester | BET | Fulham vs Chelsea | EV=0.5658 | Odds=3.40 | Result=WIN | PnL=24.00 | Bankroll=1085.10
+2026-03-07 22:32:03,506 | INFO | src.strategy.backtester | BET | Brentford vs Sunderland | EV=0.1742 | Odds=1.85 | Result=WIN | PnL=8.50 | Bankroll=1093.60
+2026-03-07 22:32:03,507 | INFO | src.strategy.backtester | BET | Burnley vs Man United | EV=0.6503 | Odds=4.75 | Result=LOSS | PnL=-10.00 | Bankroll=1083.60
+2026-03-07 22:32:03,507 | INFO | src.strategy.backtester | BET | Bournemouth vs Tottenham | EV=0.2209 | Odds=2.10 | Result=WIN | PnL=11.00 | Bankroll=1094.60
+2026-03-07 22:32:03,508 | INFO | src.strategy.backtester | BET | Nott'm Forest vs Arsenal | EV=0.8241 | Odds=6.00 | Result=LOSS | PnL=-10.00 | Bankroll=1084.60
+2026-03-07 22:32:03,509 | INFO | src.strategy.backtester | BET | Sunderland vs Crystal Palace | EV=0.1848 | Odds=2.75 | Result=WIN | PnL=17.50 | Bankroll=1102.10
+2026-03-07 22:32:03,510 | INFO | src.strategy.backtester | BET | Man United vs Man City | EV=0.5476 | Odds=3.70 | Result=WIN | PnL=27.00 | Bankroll=1129.10
+2026-03-07 22:32:03,512 | INFO | src.strategy.backtester | BET | Wolves vs Newcastle | EV=0.6460 | Odds=4.75 | Result=LOSS | PnL=-10.00 | Bankroll=1119.10
+2026-03-07 22:32:03,512 | INFO | src.strategy.backtester | BET | Burnley vs Tottenham | EV=0.5031 | Odds=3.70 | Result=LOSS | PnL=-10.00 | Bankroll=1109.10
+2026-03-07 22:32:03,513 | INFO | src.strategy.backtester | BET | West Ham vs Sunderland | EV=0.1219 | Odds=2.50 | Result=WIN | PnL=15.00 | Bankroll=1124.10
+2026-03-07 22:32:03,514 | INFO | src.strategy.backtester | BET | Bournemouth vs Liverpool | EV=0.9412 | Odds=3.75 | Result=WIN | PnL=27.50 | Bankroll=1151.60
+2026-03-07 22:32:03,514 | INFO | src.strategy.backtester | BET | Fulham vs Brighton | EV=0.1115 | Odds=2.60 | Result=WIN | PnL=16.00 | Bankroll=1167.60
+2026-03-07 22:32:03,515 | INFO | src.strategy.backtester | BET | Brentford vs Nott'm Forest | EV=0.1886 | Odds=1.91 | Result=LOSS | PnL=-10.00 | Bankroll=1157.60
+2026-03-07 22:32:03,516 | INFO | src.strategy.backtester | BET | Crystal Palace vs Chelsea | EV=0.1462 | Odds=3.50 | Result=LOSS | PnL=-10.00 | Bankroll=1147.60
+2026-03-07 22:32:03,521 | INFO | src.strategy.backtester | BET | Everton vs Leeds | EV=0.1202 | Odds=2.50 | Result=LOSS | PnL=-10.00 | Bankroll=1137.60
+2026-03-07 22:32:03,521 | INFO | src.strategy.backtester | BET | Leeds vs Arsenal | EV=1.2055 | Odds=5.75 | Result=LOSS | PnL=-10.00 | Bankroll=1127.60
+2026-03-07 22:32:03,521 | INFO | src.strategy.backtester | BET | Tottenham vs Man City | EV=1.1365 | Odds=4.50 | Result=LOSS | PnL=-10.00 | Bankroll=1117.60
+2026-03-07 22:32:03,522 | INFO | src.strategy.backtester | BET | Bournemouth vs Aston Villa | EV=0.5726 | Odds=2.70 | Result=LOSS | PnL=-10.00 | Bankroll=1107.60
+2026-03-07 22:32:03,523 | INFO | src.strategy.backtester | BET | Burnley vs West Ham | EV=0.2265 | Odds=3.30 | Result=LOSS | PnL=-10.00 | Bankroll=1097.60
+2026-03-07 22:32:03,523 | INFO | src.strategy.backtester | BET | Wolves vs Chelsea | EV=0.6005 | Odds=5.00 | Result=LOSS | PnL=-10.00 | Bankroll=1087.60
+2026-03-07 22:32:03,524 | INFO | src.strategy.backtester | BET | Liverpool vs Man City | EV=0.2357 | Odds=2.38 | Result=LOSS | PnL=-10.00 | Bankroll=1077.60
+2026-03-07 22:32:03,524 | INFO | src.strategy.backtester | BET | West Ham vs Man United | EV=0.8926 | Odds=4.50 | Result=LOSS | PnL=-10.00 | Bankroll=1067.60
+2026-03-07 22:32:03,525 | INFO | src.strategy.backtester | BET | Tottenham vs Newcastle | EV=0.4160 | Odds=3.20 | Result=LOSS | PnL=-10.00 | Bankroll=1057.60
+2026-03-07 22:32:03,526 | INFO | src.strategy.backtester | BET | Sunderland vs Liverpool | EV=0.8575 | Odds=4.75 | Result=LOSS | PnL=-10.00 | Bankroll=1047.60
+2026-03-07 22:32:03,526 | INFO | src.strategy.backtester | BET | Brentford vs Arsenal | EV=0.9151 | Odds=4.75 | Result=LOSS | PnL=-10.00 | Bankroll=1037.60
+2026-03-07 22:32:03,526 | INFO | src.strategy.backtester | BET | Wolves vs Arsenal | EV=1.7195 | Odds=11.00 | Result=LOSS | PnL=-10.00 | Bankroll=1027.60
+2026-03-07 22:32:03,527 | INFO | src.strategy.backtester | BET | West Ham vs Bournemouth | EV=0.2113 | Odds=2.50 | Result=LOSS | PnL=-10.00 | Bankroll=1017.60
+2026-03-07 22:32:03,528 | INFO | src.strategy.backtester | BET | Nott'm Forest vs Liverpool | EV=0.4090 | Odds=4.10 | Result=LOSS | PnL=-10.00 | Bankroll=1007.60
+2026-03-07 22:32:03,528 | INFO | src.strategy.backtester | BET | Tottenham vs Arsenal | EV=0.8790 | Odds=6.00 | Result=LOSS | PnL=-10.00 | Bankroll=997.60
+2026-03-07 22:32:03,529 | INFO | src.strategy.backtester | BET | Sunderland vs Fulham | EV=0.2563 | Odds=2.70 | Result=LOSS | PnL=-10.00 | Bankroll=987.60
+2026-03-07 22:32:03,529 | INFO | src.strategy.backtester | BET | Everton vs Man United | EV=0.2820 | Odds=3.70 | Result=LOSS | PnL=-10.00 | Bankroll=977.60
+2026-03-07 22:32:03,530 | INFO | src.strategy.backtester | BET | Wolves vs Aston Villa | EV=0.5408 | Odds=4.10 | Result=WIN | PnL=31.00 | Bankroll=1008.60
+2026-03-07 22:32:03,530 | INFO | src.strategy.backtester | BET | Leeds vs Man City | EV=0.6865 | Odds=4.75 | Result=LOSS | PnL=-10.00 | Bankroll=998.60
+2026-03-07 22:32:03,531 | INFO | src.strategy.backtester | BET | Burnley vs Brentford | EV=1.0350 | Odds=4.50 | Result=LOSS | PnL=-10.00 | Bankroll=988.60
+2026-03-07 22:32:03,531 | INFO | src.strategy.backtester | BET | Wolves vs Liverpool | EV=0.6605 | Odds=5.50 | Result=WIN | PnL=45.00 | Bankroll=1033.60
+2026-03-07 22:32:03,532 | INFO | src.strategy.backtester | BET | Brighton vs Arsenal | EV=0.4641 | Odds=4.75 | Result=LOSS | PnL=-10.00 | Bankroll=1023.60
+2026-03-07 22:32:03,537 | INFO | src.strategy.backtester | BACKTEST SUMMARY | Bets=105 | Final Bankroll=1023.60 | ROI=0.0236 | Win Rate=0.3238 | Max Drawdown=0.1627
+2026-03-07 22:32:03,537 | INFO | __main__ | Backtest Report | EV Threshold=0.1000 | Total ROI=0.0236 | Win Rate=0.3238 | Max Drawdown=0.1627 | Final Bankroll=1023.60
+2026-03-07 22:32:04,728 | INFO | __main__ | Executing command: predict
+2026-03-07 22:32:04,729 | INFO | __main__ | Loaded model artifact: models/lr_v1_20260307.joblib
+2026-03-07 22:32:04,748 | INFO | __main__ | Value Bets (Current Week):
+2026-03-07 22:32:04,751 | INFO | src.strategy.strategy_engine | 
+                                                        match_id home_team   away_team  predicted_home_win_prob  odds_h       ev
+71b69e233a06ef7d05962240c4484ef00de3a466f2415adc2a0a9651a42bb917   Burnley   Brentford                 0.452216    4.50 1.034973
+4f679cc2e3b5c2a54cc1016381c94cf751b3bea9dde4c8fc5d4d3608eef1900a     Leeds    Man City                 0.355061    4.75 0.686538
+d5efed75fcb819e0d88c3cf21a2ba4d3c5b5a4879cab73d7cf8658a4b5ee2a44    Wolves   Liverpool                 0.301904    5.50 0.660475
+0220024f4d8714a4e686921459ff577585d47f05a84cc427649af7abdcf40e81    Wolves Aston Villa                 0.375816    4.10 0.540845
+e83826a6c89854a5beef59b988e7d25dcc8866a6e35f91eb0e5a1bb86a66d51d  Brighton     Arsenal                 0.308235    4.75 0.464117
+d7409a83f6bec239c571b80e6752dd307dd17a92bc6505fd9bbb02cb7443b62c Newcastle  Man United                 0.405131    2.63 0.065495
+2026-03-07 22:34:47,023 | INFO | __main__ | Executing command: backtest
+2026-03-07 22:34:47,025 | INFO | __main__ | Loaded model artifact: models/lr_v1_20260307.joblib
+2026-03-07 22:34:47,077 | INFO | src.strategy.backtester | BET | West Ham vs Chelsea | EV=0.7587 | Odds=4.75 | Result=LOSS | PnL=-10.00 | Bankroll=990.00
+2026-03-07 22:34:47,077 | INFO | src.strategy.backtester | BET | Bournemouth vs Wolves | EV=0.1607 | Odds=1.80 | Result=WIN | PnL=8.00 | Bankroll=998.00
+2026-03-07 22:34:47,077 | INFO | src.strategy.backtester | BET | Brentford vs Aston Villa | EV=0.5453 | Odds=3.10 | Result=WIN | PnL=21.00 | Bankroll=1019.00
+2026-03-07 22:34:47,077 | INFO | src.strategy.backtester | BET | Fulham vs Man United | EV=0.7719 | Odds=3.25 | Result=LOSS | PnL=-10.00 | Bankroll=1009.00
+2026-03-07 22:34:47,077 | INFO | src.strategy.backtester | BET | Sunderland vs Brentford | EV=0.5332 | Odds=3.00 | Result=WIN | PnL=20.00 | Bankroll=1029.00
+2026-03-07 22:34:47,077 | INFO | src.strategy.backtester | BET | Leeds vs Newcastle | EV=0.2459 | Odds=3.50 | Result=LOSS | PnL=-10.00 | Bankroll=1019.00
+2026-03-07 22:34:47,077 | INFO | src.strategy.backtester | BET | Liverpool vs Arsenal | EV=0.1691 | Odds=2.20 | Result=WIN | PnL=12.00 | Bankroll=1031.00
+2026-03-07 22:34:47,077 | INFO | src.strategy.backtester | BET | Brentford vs Chelsea | EV=0.3282 | Odds=4.50 | Result=LOSS | PnL=-10.00 | Bankroll=1021.00
+2026-03-07 22:34:47,077 | INFO | src.strategy.backtester | BET | Bournemouth vs Brighton | EV=0.1313 | Odds=2.35 | Result=WIN | PnL=13.50 | Bankroll=1034.50
+2026-03-07 22:34:47,078 | INFO | src.strategy.backtester | BET | Everton vs Aston Villa | EV=0.5502 | Odds=2.45 | Result=LOSS | PnL=-10.00 | Bankroll=1024.50
+2026-03-07 22:34:47,078 | INFO | src.strategy.backtester | BET | West Ham vs Tottenham | EV=0.2908 | Odds=3.40 | Result=LOSS | PnL=-10.00 | Bankroll=1014.50
+2026-03-07 22:34:47,078 | INFO | src.strategy.backtester | BET | Burnley vs Liverpool | EV=1.4429 | Odds=8.00 | Result=LOSS | PnL=-10.00 | Bankroll=1004.50
+2026-03-07 22:34:47,078 | INFO | src.strategy.backtester | BET | Wolves vs Leeds | EV=0.1753 | Odds=2.70 | Result=LOSS | PnL=-10.00 | Bankroll=994.50
+2026-03-07 22:34:47,078 | INFO | src.strategy.backtester | BET | West Ham vs Crystal Palace | EV=0.1582 | Odds=2.88 | Result=LOSS | PnL=-10.00 | Bankroll=984.50
+2026-03-07 22:34:47,078 | INFO | src.strategy.backtester | BET | Burnley vs Nott'm Forest | EV=0.4842 | Odds=3.40 | Result=LOSS | PnL=-10.00 | Bankroll=974.50
+2026-03-07 22:34:47,078 | INFO | src.strategy.backtester | BET | Bournemouth vs Newcastle | EV=0.3135 | Odds=2.50 | Result=LOSS | PnL=-10.00 | Bankroll=964.50
+2026-03-07 22:34:47,078 | INFO | src.strategy.backtester | BET | Sunderland vs Aston Villa | EV=0.9790 | Odds=3.40 | Result=LOSS | PnL=-10.00 | Bankroll=954.50
+2026-03-07 22:34:47,078 | INFO | src.strategy.backtester | BET | Brentford vs Man United | EV=0.4737 | Odds=3.40 | Result=WIN | PnL=24.00 | Bankroll=978.50
+2026-03-07 22:34:47,078 | INFO | src.strategy.backtester | BET | Leeds vs Bournemouth | EV=0.2027 | Odds=3.10 | Result=LOSS | PnL=-10.00 | Bankroll=968.50
+2026-03-07 22:34:47,078 | INFO | src.strategy.backtester | BET | Crystal Palace vs Liverpool | EV=0.3554 | Odds=3.80 | Result=WIN | PnL=28.00 | Bankroll=996.50
+2026-03-07 22:34:47,078 | INFO | src.strategy.backtester | BET | Chelsea vs Liverpool | EV=0.4678 | Odds=2.80 | Result=WIN | PnL=18.00 | Bankroll=1014.50
+2026-03-07 22:34:47,078 | INFO | src.strategy.backtester | BET | Brentford vs Man City | EV=0.9314 | Odds=4.75 | Result=LOSS | PnL=-10.00 | Bankroll=1004.50
+2026-03-07 22:34:47,078 | INFO | src.strategy.backtester | BET | Wolves vs Brighton | EV=0.2507 | Odds=3.60 | Result=LOSS | PnL=-10.00 | Bankroll=994.50
+2026-03-07 22:34:47,078 | INFO | src.strategy.backtester | BET | Fulham vs Arsenal | EV=1.2274 | Odds=5.75 | Result=LOSS | PnL=-10.00 | Bankroll=984.50
+2026-03-07 22:34:47,078 | INFO | src.strategy.backtester | BET | Brighton vs Newcastle | EV=0.4551 | Odds=2.63 | Result=WIN | PnL=16.30 | Bankroll=1000.80
+2026-03-07 22:34:47,078 | INFO | src.strategy.backtester | BET | Burnley vs Leeds | EV=0.2903 | Odds=3.25 | Result=WIN | PnL=22.50 | Bankroll=1023.30
+2026-03-07 22:34:47,078 | INFO | src.strategy.backtester | BET | Brentford vs Liverpool | EV=1.0289 | Odds=4.10 | Result=WIN | PnL=31.00 | Bankroll=1054.30
+2026-03-07 22:34:47,078 | INFO | src.strategy.backtester | BET | Aston Villa vs Man City | EV=0.6184 | Odds=4.33 | Result=WIN | PnL=33.30 | Bankroll=1087.60
+2026-03-07 22:34:47,078 | INFO | src.strategy.backtester | BET | Bournemouth vs Nott'm Forest | EV=0.1748 | Odds=1.80 | Result=WIN | PnL=8.00 | Bankroll=1095.60
+2026-03-07 22:34:47,078 | INFO | src.strategy.backtester | BET | Tottenham vs Chelsea | EV=0.3092 | Odds=2.70 | Result=LOSS | PnL=-10.00 | Bankroll=1085.60
+2026-03-07 22:34:47,078 | INFO | src.strategy.backtester | BET | Burnley vs Arsenal | EV=3.5336 | Odds=10.00 | Result=LOSS | PnL=-10.00 | Bankroll=1075.60
+2026-03-07 22:34:47,078 | INFO | src.strategy.backtester | BET | West Ham vs Newcastle | EV=0.8714 | Odds=5.25 | Result=WIN | PnL=42.50 | Bankroll=1118.10
+2026-03-07 22:34:47,078 | INFO | src.strategy.backtester | BET | Sunderland vs Everton | EV=0.3478 | Odds=2.70 | Result=LOSS | PnL=-10.00 | Bankroll=1108.10
+2026-03-07 22:34:47,078 | INFO | src.strategy.backtester | BET | Sunderland vs Arsenal | EV=2.0118 | Odds=7.50 | Result=LOSS | PnL=-10.00 | Bankroll=1098.10
+2026-03-07 22:34:47,078 | INFO | src.strategy.backtester | BET | Brentford vs Newcastle | EV=0.3428 | Odds=2.80 | Result=WIN | PnL=18.00 | Bankroll=1116.10
+2026-03-07 22:34:47,078 | INFO | src.strategy.backtester | BET | Burnley vs Chelsea | EV=1.4846 | Odds=6.25 | Result=LOSS | PnL=-10.00 | Bankroll=1106.10
+2026-03-07 22:34:47,078 | INFO | src.strategy.backtester | BET | Newcastle vs Man City | EV=0.4063 | Odds=3.60 | Result=WIN | PnL=26.00 | Bankroll=1132.10
+2026-03-07 22:34:47,078 | INFO | src.strategy.backtester | BET | Wolves vs Crystal Palace | EV=0.3223 | Odds=3.80 | Result=LOSS | PnL=-10.00 | Bankroll=1122.10
+2026-03-07 22:34:47,078 | INFO | src.strategy.backtester | BET | Sunderland vs Bournemouth | EV=0.4206 | Odds=3.20 | Result=WIN | PnL=22.00 | Bankroll=1144.10
+2026-03-07 22:34:47,078 | INFO | src.strategy.backtester | BET | West Ham vs Liverpool | EV=1.3472 | Odds=4.33 | Result=LOSS | PnL=-10.00 | Bankroll=1134.10
+2026-03-07 22:34:47,078 | INFO | src.strategy.backtester | BET | Nott'm Forest vs Brighton | EV=0.1741 | Odds=2.75 | Result=LOSS | PnL=-10.00 | Bankroll=1124.10
+2026-03-07 22:34:47,078 | INFO | src.strategy.backtester | BET | Chelsea vs Arsenal | EV=0.6141 | Odds=3.40 | Result=LOSS | PnL=-10.00 | Bankroll=1114.10
+2026-03-07 22:34:47,078 | INFO | src.strategy.backtester | BET | Fulham vs Man City | EV=0.6981 | Odds=4.33 | Result=LOSS | PnL=-10.00 | Bankroll=1104.10
+2026-03-07 22:34:47,078 | INFO | src.strategy.backtester | BET | Leeds vs Chelsea | EV=0.5449 | Odds=4.10 | Result=WIN | PnL=31.00 | Bankroll=1135.10
+2026-03-07 22:34:47,078 | INFO | src.strategy.backtester | BET | Burnley vs Crystal Palace | EV=0.9680 | Odds=4.50 | Result=LOSS | PnL=-10.00 | Bankroll=1125.10
+2026-03-07 22:34:47,078 | INFO | src.strategy.backtester | BET | Aston Villa vs Arsenal | EV=0.9616 | Odds=4.20 | Result=WIN | PnL=32.00 | Bankroll=1157.10
+2026-03-07 22:34:47,078 | INFO | src.strategy.backtester | BET | Leeds vs Liverpool | EV=0.7894 | Odds=3.80 | Result=LOSS | PnL=-10.00 | Bankroll=1147.10
+2026-03-07 22:34:47,078 | INFO | src.strategy.backtester | BET | Fulham vs Crystal Palace | EV=0.3619 | Odds=2.55 | Result=LOSS | PnL=-10.00 | Bankroll=1137.10
+2026-03-07 22:34:47,078 | INFO | src.strategy.backtester | BET | Wolves vs Man United | EV=0.1384 | Odds=4.20 | Result=LOSS | PnL=-10.00 | Bankroll=1127.10
+2026-03-07 22:34:47,078 | INFO | src.strategy.backtester | BET | Burnley vs Fulham | EV=0.3764 | Odds=4.00 | Result=LOSS | PnL=-10.00 | Bankroll=1117.10
+2026-03-07 22:34:47,078 | INFO | src.strategy.backtester | BET | West Ham vs Aston Villa | EV=0.2098 | Odds=3.75 | Result=LOSS | PnL=-10.00 | Bankroll=1107.10
+2026-03-07 22:34:47,078 | INFO | src.strategy.backtester | BET | Sunderland vs Newcastle | EV=0.1159 | Odds=3.30 | Result=WIN | PnL=23.00 | Bankroll=1130.10
+2026-03-07 22:34:47,078 | INFO | src.strategy.backtester | BET | Crystal Palace vs Man City | EV=0.1139 | Odds=3.90 | Result=LOSS | PnL=-10.00 | Bankroll=1120.10
+2026-03-07 22:34:47,078 | INFO | src.strategy.backtester | BET | Nott'm Forest vs Tottenham | EV=0.1131 | Odds=2.55 | Result=WIN | PnL=15.50 | Bankroll=1135.60
+2026-03-07 22:34:47,078 | INFO | src.strategy.backtester | BET | Wolves vs Brentford | EV=0.2368 | Odds=3.50 | Result=LOSS | PnL=-10.00 | Bankroll=1125.60
+2026-03-07 22:34:47,078 | INFO | src.strategy.backtester | BET | Leeds vs Crystal Palace | EV=0.3890 | Odds=2.60 | Result=WIN | PnL=16.00 | Bankroll=1141.60
+2026-03-07 22:34:47,078 | INFO | src.strategy.backtester | BET | Everton vs Arsenal | EV=1.0827 | Odds=5.75 | Result=LOSS | PnL=-10.00 | Bankroll=1131.60
+2026-03-07 22:34:47,078 | INFO | src.strategy.backtester | BET | Tottenham vs Liverpool | EV=0.3563 | Odds=3.50 | Result=LOSS | PnL=-10.00 | Bankroll=1121.60
+2026-03-07 22:34:47,078 | INFO | src.strategy.backtester | BET | Newcastle vs Chelsea | EV=0.4995 | Odds=2.75 | Result=LOSS | PnL=-10.00 | Bankroll=1111.60
+2026-03-07 22:34:47,078 | INFO | src.strategy.backtester | BET | Fulham vs Nott'm Forest | EV=0.2903 | Odds=2.40 | Result=WIN | PnL=14.00 | Bankroll=1125.60
+2026-03-07 22:34:47,078 | INFO | src.strategy.backtester | BET | Man United vs Newcastle | EV=0.2972 | Odds=2.55 | Result=WIN | PnL=15.50 | Bankroll=1141.10
+2026-03-07 22:34:47,079 | INFO | src.strategy.backtester | BET | Burnley vs Everton | EV=0.7480 | Odds=4.10 | Result=LOSS | PnL=-10.00 | Bankroll=1131.10
+2026-03-07 22:34:47,079 | INFO | src.strategy.backtester | BET | West Ham vs Brighton | EV=0.3877 | Odds=3.40 | Result=LOSS | PnL=-10.00 | Bankroll=1121.10
+2026-03-07 22:34:47,079 | INFO | src.strategy.backtester | BET | Burnley vs Newcastle | EV=1.0558 | Odds=5.25 | Result=LOSS | PnL=-10.00 | Bankroll=1111.10
+2026-03-07 22:34:47,079 | INFO | src.strategy.backtester | BET | Sunderland vs Man City | EV=0.5218 | Odds=7.50 | Result=LOSS | PnL=-10.00 | Bankroll=1101.10
+2026-03-07 22:34:47,079 | INFO | src.strategy.backtester | BET | Bournemouth vs Arsenal | EV=1.5612 | Odds=6.50 | Result=LOSS | PnL=-10.00 | Bankroll=1091.10
+2026-03-07 22:34:47,079 | INFO | src.strategy.backtester | BET | Fulham vs Liverpool | EV=0.5597 | Odds=3.80 | Result=LOSS | PnL=-10.00 | Bankroll=1081.10
+2026-03-07 22:34:47,079 | INFO | src.strategy.backtester | BET | Leeds vs Man United | EV=0.1413 | Odds=2.70 | Result=LOSS | PnL=-10.00 | Bankroll=1071.10
+2026-03-07 22:34:47,079 | INFO | src.strategy.backtester | BET | West Ham vs Nott'm Forest | EV=0.1392 | Odds=2.88 | Result=LOSS | PnL=-10.00 | Bankroll=1061.10
+2026-03-07 22:34:47,079 | INFO | src.strategy.backtester | BET | Fulham vs Chelsea | EV=0.5658 | Odds=3.40 | Result=WIN | PnL=24.00 | Bankroll=1085.10
+2026-03-07 22:34:47,079 | INFO | src.strategy.backtester | BET | Brentford vs Sunderland | EV=0.1742 | Odds=1.85 | Result=WIN | PnL=8.50 | Bankroll=1093.60
+2026-03-07 22:34:47,079 | INFO | src.strategy.backtester | BET | Burnley vs Man United | EV=0.6503 | Odds=4.75 | Result=LOSS | PnL=-10.00 | Bankroll=1083.60
+2026-03-07 22:34:47,079 | INFO | src.strategy.backtester | BET | Bournemouth vs Tottenham | EV=0.2209 | Odds=2.10 | Result=WIN | PnL=11.00 | Bankroll=1094.60
+2026-03-07 22:34:47,079 | INFO | src.strategy.backtester | BET | Nott'm Forest vs Arsenal | EV=0.8241 | Odds=6.00 | Result=LOSS | PnL=-10.00 | Bankroll=1084.60
+2026-03-07 22:34:47,079 | INFO | src.strategy.backtester | BET | Sunderland vs Crystal Palace | EV=0.1848 | Odds=2.75 | Result=WIN | PnL=17.50 | Bankroll=1102.10
+2026-03-07 22:34:47,079 | INFO | src.strategy.backtester | BET | Man United vs Man City | EV=0.5476 | Odds=3.70 | Result=WIN | PnL=27.00 | Bankroll=1129.10
+2026-03-07 22:34:47,079 | INFO | src.strategy.backtester | BET | Wolves vs Newcastle | EV=0.6460 | Odds=4.75 | Result=LOSS | PnL=-10.00 | Bankroll=1119.10
+2026-03-07 22:34:47,079 | INFO | src.strategy.backtester | BET | Burnley vs Tottenham | EV=0.5031 | Odds=3.70 | Result=LOSS | PnL=-10.00 | Bankroll=1109.10
+2026-03-07 22:34:47,079 | INFO | src.strategy.backtester | BET | West Ham vs Sunderland | EV=0.1219 | Odds=2.50 | Result=WIN | PnL=15.00 | Bankroll=1124.10
+2026-03-07 22:34:47,079 | INFO | src.strategy.backtester | BET | Bournemouth vs Liverpool | EV=0.9412 | Odds=3.75 | Result=WIN | PnL=27.50 | Bankroll=1151.60
+2026-03-07 22:34:47,079 | INFO | src.strategy.backtester | BET | Fulham vs Brighton | EV=0.1115 | Odds=2.60 | Result=WIN | PnL=16.00 | Bankroll=1167.60
+2026-03-07 22:34:47,079 | INFO | src.strategy.backtester | BET | Brentford vs Nott'm Forest | EV=0.1886 | Odds=1.91 | Result=LOSS | PnL=-10.00 | Bankroll=1157.60
+2026-03-07 22:34:47,079 | INFO | src.strategy.backtester | BET | Crystal Palace vs Chelsea | EV=0.1462 | Odds=3.50 | Result=LOSS | PnL=-10.00 | Bankroll=1147.60
+2026-03-07 22:34:47,079 | INFO | src.strategy.backtester | BET | Everton vs Leeds | EV=0.1202 | Odds=2.50 | Result=LOSS | PnL=-10.00 | Bankroll=1137.60
+2026-03-07 22:34:47,079 | INFO | src.strategy.backtester | BET | Leeds vs Arsenal | EV=1.2055 | Odds=5.75 | Result=LOSS | PnL=-10.00 | Bankroll=1127.60
+2026-03-07 22:34:47,079 | INFO | src.strategy.backtester | BET | Tottenham vs Man City | EV=1.1365 | Odds=4.50 | Result=LOSS | PnL=-10.00 | Bankroll=1117.60
+2026-03-07 22:34:47,079 | INFO | src.strategy.backtester | BET | Bournemouth vs Aston Villa | EV=0.5726 | Odds=2.70 | Result=LOSS | PnL=-10.00 | Bankroll=1107.60
+2026-03-07 22:34:47,079 | INFO | src.strategy.backtester | BET | Burnley vs West Ham | EV=0.2265 | Odds=3.30 | Result=LOSS | PnL=-10.00 | Bankroll=1097.60
+2026-03-07 22:34:47,079 | INFO | src.strategy.backtester | BET | Wolves vs Chelsea | EV=0.6005 | Odds=5.00 | Result=LOSS | PnL=-10.00 | Bankroll=1087.60
+2026-03-07 22:34:47,079 | INFO | src.strategy.backtester | BET | Liverpool vs Man City | EV=0.2357 | Odds=2.38 | Result=LOSS | PnL=-10.00 | Bankroll=1077.60
+2026-03-07 22:34:47,079 | INFO | src.strategy.backtester | BET | West Ham vs Man United | EV=0.8926 | Odds=4.50 | Result=LOSS | PnL=-10.00 | Bankroll=1067.60
+2026-03-07 22:34:47,079 | INFO | src.strategy.backtester | BET | Tottenham vs Newcastle | EV=0.4160 | Odds=3.20 | Result=LOSS | PnL=-10.00 | Bankroll=1057.60
+2026-03-07 22:34:47,079 | INFO | src.strategy.backtester | BET | Sunderland vs Liverpool | EV=0.8575 | Odds=4.75 | Result=LOSS | PnL=-10.00 | Bankroll=1047.60
+2026-03-07 22:34:47,079 | INFO | src.strategy.backtester | BET | Brentford vs Arsenal | EV=0.9151 | Odds=4.75 | Result=LOSS | PnL=-10.00 | Bankroll=1037.60
+2026-03-07 22:34:47,079 | INFO | src.strategy.backtester | BET | Wolves vs Arsenal | EV=1.7195 | Odds=11.00 | Result=LOSS | PnL=-10.00 | Bankroll=1027.60
+2026-03-07 22:34:47,079 | INFO | src.strategy.backtester | BET | West Ham vs Bournemouth | EV=0.2113 | Odds=2.50 | Result=LOSS | PnL=-10.00 | Bankroll=1017.60
+2026-03-07 22:34:47,079 | INFO | src.strategy.backtester | BET | Nott'm Forest vs Liverpool | EV=0.4090 | Odds=4.10 | Result=LOSS | PnL=-10.00 | Bankroll=1007.60
+2026-03-07 22:34:47,079 | INFO | src.strategy.backtester | BET | Tottenham vs Arsenal | EV=0.8790 | Odds=6.00 | Result=LOSS | PnL=-10.00 | Bankroll=997.60
+2026-03-07 22:34:47,079 | INFO | src.strategy.backtester | BET | Sunderland vs Fulham | EV=0.2563 | Odds=2.70 | Result=LOSS | PnL=-10.00 | Bankroll=987.60
+2026-03-07 22:34:47,079 | INFO | src.strategy.backtester | BET | Everton vs Man United | EV=0.2820 | Odds=3.70 | Result=LOSS | PnL=-10.00 | Bankroll=977.60
+2026-03-07 22:34:47,079 | INFO | src.strategy.backtester | BET | Wolves vs Aston Villa | EV=0.5408 | Odds=4.10 | Result=WIN | PnL=31.00 | Bankroll=1008.60
+2026-03-07 22:34:47,079 | INFO | src.strategy.backtester | BET | Leeds vs Man City | EV=0.6865 | Odds=4.75 | Result=LOSS | PnL=-10.00 | Bankroll=998.60
+2026-03-07 22:34:47,079 | INFO | src.strategy.backtester | BET | Burnley vs Brentford | EV=1.0350 | Odds=4.50 | Result=LOSS | PnL=-10.00 | Bankroll=988.60
+2026-03-07 22:34:47,079 | INFO | src.strategy.backtester | BET | Wolves vs Liverpool | EV=0.6605 | Odds=5.50 | Result=WIN | PnL=45.00 | Bankroll=1033.60
+2026-03-07 22:34:47,079 | INFO | src.strategy.backtester | BET | Brighton vs Arsenal | EV=0.4641 | Odds=4.75 | Result=LOSS | PnL=-10.00 | Bankroll=1023.60
+2026-03-07 22:34:47,081 | INFO | src.strategy.backtester | BACKTEST SUMMARY | Bets=105 | Final Bankroll=1023.60 | ROI=0.0236 | Win Rate=0.3238 | Max Drawdown=0.1627
+2026-03-07 22:34:47,081 | INFO | __main__ | Backtest Report | EV Threshold=0.1000 | Total ROI=0.0236 | Win Rate=0.3238 | Max Drawdown=0.1627 | Final Bankroll=1023.60
