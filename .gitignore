@@ -15,3 +15,5 @@ data/*.db
 .vscode/
 
 .DS_Store
+
+mlruns/
