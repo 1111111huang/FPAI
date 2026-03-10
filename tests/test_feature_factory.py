@@ -28,6 +28,7 @@ def test_compute_rolling_stats_and_save_features(tmp_path: Path) -> None:
             CREATE TABLE raw_matches (
                 match_id TEXT PRIMARY KEY,
                 league TEXT,
+                tier INTEGER,
                 date TIMESTAMP,
                 home_team TEXT,
                 away_team TEXT,
@@ -42,12 +43,12 @@ def test_compute_rolling_stats_and_save_features(tmp_path: Path) -> None:
         conn.executemany(
             """
             INSERT INTO raw_matches
-            (match_id, league, date, home_team, away_team, fthg, ftag, odds_h, odds_d, odds_a)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            (match_id, league, tier, date, home_team, away_team, fthg, ftag, odds_h, odds_d, odds_a)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             [
-                ("m1", "E0", "2025-08-15 20:00:00", "Liverpool", "Bournemouth", 4, 2, 1.3, 6.0, 8.5),
-                ("m2", "E0", "2025-08-16 12:30:00", "Aston Villa", "Liverpool", 0, 1, 2.25, 3.5, 2.9),
+                ("m1", "E0", 1, "2025-08-15 20:00:00", "Liverpool", "Bournemouth", 4, 2, 1.3, 6.0, 8.5),
+                ("m2", "E0", 1, "2025-08-16 12:30:00", "Aston Villa", "Liverpool", 0, 1, 2.25, 3.5, 2.9),
             ],
         )
 
@@ -60,18 +61,32 @@ def test_compute_rolling_stats_and_save_features(tmp_path: Path) -> None:
         "home_avg_goals_conceded",
         "away_avg_goals_scored",
         "away_avg_goals_conceded",
+        "is_cold_start",
+        "relative_tier_change",
+        "market_prob_h",
+        "elo_rating_diff",
+        "home_advantage_trend",
     ]
     assert len(features) == 2
 
     match_1 = features.loc[features["match_id"] == "m1"].iloc[0]
-    assert pd.isna(match_1["home_avg_goals_scored"])
-    assert pd.isna(match_1["away_avg_goals_scored"])
+    assert not pd.isna(match_1["home_avg_goals_scored"])
+    assert not pd.isna(match_1["away_avg_goals_scored"])
+    assert bool(match_1["is_cold_start"]) is True
+    assert match_1["market_prob_h"] == pytest.approx(1 / 1.3)
+    assert match_1["elo_rating_diff"] == pytest.approx(0.0)
+    assert match_1["home_advantage_trend"] == pytest.approx(0.0)
 
     match_2 = features.loc[features["match_id"] == "m2"].iloc[0]
-    assert pd.isna(match_2["home_avg_goals_scored"])
-    assert pd.isna(match_2["home_avg_goals_conceded"])
+    assert not pd.isna(match_2["home_avg_goals_scored"])
+    assert not pd.isna(match_2["home_avg_goals_conceded"])
     assert match_2["away_avg_goals_scored"] == pytest.approx(4.0)
     assert match_2["away_avg_goals_conceded"] == pytest.approx(2.0)
+    assert bool(match_2["is_cold_start"]) is True
+    assert match_2["relative_tier_change"] == pytest.approx(0.0)
+    assert match_2["market_prob_h"] == pytest.approx(1 / 2.25)
+    assert match_2["elo_rating_diff"] == pytest.approx(-1.0)
+    assert match_2["home_advantage_trend"] == pytest.approx(0.0)
 
     feature_factory.save_features(features)
 
@@ -79,7 +94,8 @@ def test_compute_rolling_stats_and_save_features(tmp_path: Path) -> None:
         stored_count = conn.execute("SELECT COUNT(*) FROM feature_store").fetchone()[0]
         stored_row = conn.execute(
             """
-            SELECT away_avg_goals_scored, away_avg_goals_conceded
+            SELECT away_avg_goals_scored, away_avg_goals_conceded, is_cold_start, relative_tier_change,
+                   market_prob_h, elo_rating_diff, home_advantage_trend
             FROM feature_store
             WHERE match_id = 'm2'
             """
@@ -89,6 +105,11 @@ def test_compute_rolling_stats_and_save_features(tmp_path: Path) -> None:
     assert stored_row is not None
     assert stored_row[0] == pytest.approx(4.0)
     assert stored_row[1] == pytest.approx(2.0)
+    assert bool(stored_row[2]) is True
+    assert stored_row[3] == pytest.approx(0.0)
+    assert stored_row[4] == pytest.approx(1 / 2.25)
+    assert stored_row[5] == pytest.approx(-1.0)
+    assert stored_row[6] == pytest.approx(0.0)
 
 
 def test_compute_rolling_stats_no_data_leakage_for_sixth_match(tmp_path: Path) -> None:
@@ -105,6 +126,7 @@ def test_compute_rolling_stats_no_data_leakage_for_sixth_match(tmp_path: Path) -
             CREATE TABLE raw_matches (
                 match_id TEXT PRIMARY KEY,
                 league TEXT,
+                tier INTEGER,
                 date TIMESTAMP,
                 home_team TEXT,
                 away_team TEXT,
@@ -119,16 +141,16 @@ def test_compute_rolling_stats_no_data_leakage_for_sixth_match(tmp_path: Path) -
         conn.executemany(
             """
             INSERT INTO raw_matches
-            (match_id, league, date, home_team, away_team, fthg, ftag, odds_h, odds_d, odds_a)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            (match_id, league, tier, date, home_team, away_team, fthg, ftag, odds_h, odds_d, odds_a)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             [
-                ("m1", "E0", "2025-08-01 20:00:00", "Alpha FC", "Opp1", 1, 0, 1.8, 3.4, 4.2),
-                ("m2", "E0", "2025-08-08 20:00:00", "Alpha FC", "Opp2", 2, 1, 1.8, 3.4, 4.2),
-                ("m3", "E0", "2025-08-15 20:00:00", "Alpha FC", "Opp3", 3, 0, 1.8, 3.4, 4.2),
-                ("m4", "E0", "2025-08-22 20:00:00", "Alpha FC", "Opp4", 4, 1, 1.8, 3.4, 4.2),
-                ("m5", "E0", "2025-08-29 20:00:00", "Alpha FC", "Opp5", 5, 0, 1.8, 3.4, 4.2),
-                ("m6", "E0", "2025-09-05 20:00:00", "Alpha FC", "Opp6", 10, 10, 1.8, 3.4, 4.2),
+                ("m1", "E0", 1, "2025-08-01 20:00:00", "Alpha FC", "Opp1", 1, 0, 1.8, 3.4, 4.2),
+                ("m2", "E0", 1, "2025-08-08 20:00:00", "Alpha FC", "Opp2", 2, 1, 1.8, 3.4, 4.2),
+                ("m3", "E0", 1, "2025-08-15 20:00:00", "Alpha FC", "Opp3", 3, 0, 1.8, 3.4, 4.2),
+                ("m4", "E0", 1, "2025-08-22 20:00:00", "Alpha FC", "Opp4", 4, 1, 1.8, 3.4, 4.2),
+                ("m5", "E0", 1, "2025-08-29 20:00:00", "Alpha FC", "Opp5", 5, 0, 1.8, 3.4, 4.2),
+                ("m6", "E0", 1, "2025-09-05 20:00:00", "Alpha FC", "Opp6", 10, 10, 1.8, 3.4, 4.2),
             ],
         )
 
@@ -144,3 +166,109 @@ def test_compute_rolling_stats_no_data_leakage_for_sixth_match(tmp_path: Path) -
     assert match_6["home_avg_goals_scored"] == pytest.approx(expected_scored_without_leakage)
     assert match_6["home_avg_goals_conceded"] == pytest.approx(expected_conceded_without_leakage)
     assert match_6["home_avg_goals_scored"] != pytest.approx(scored_with_leakage)
+    # Opp6 has no prior history, so the match should still be flagged as cold-start risk.
+    assert bool(match_6["is_cold_start"]) is True
+    assert match_6["relative_tier_change"] == pytest.approx(0.0)
+
+
+def test_cross_season_new_team_uses_previous_season_bottom_three_average(tmp_path: Path) -> None:
+    db_path = tmp_path / "test_fpai.db"
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        yaml.safe_dump({"paths": {"database_path": str(db_path)}}),
+        encoding="utf-8",
+    )
+
+    with duckdb.connect(str(db_path)) as conn:
+        conn.execute(
+            """
+            CREATE TABLE raw_matches (
+                match_id TEXT PRIMARY KEY,
+                league TEXT,
+                tier INTEGER,
+                date TIMESTAMP,
+                home_team TEXT,
+                away_team TEXT,
+                fthg INTEGER,
+                ftag INTEGER,
+                odds_h FLOAT,
+                odds_d FLOAT,
+                odds_a FLOAT
+            )
+            """
+        )
+        conn.executemany(
+            """
+            INSERT INTO raw_matches
+            (match_id, league, tier, date, home_team, away_team, fthg, ftag, odds_h, odds_d, odds_a)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            [
+                ("p1", "E0", 1, "2024-08-01 20:00:00", "Alpha", "Beta", 2, 0, 1.8, 3.4, 4.2),
+                ("p2", "E0", 1, "2024-08-08 20:00:00", "Gamma", "Delta", 1, 3, 1.8, 3.4, 4.2),
+                ("n1", "E0", 1, "2025-08-10 20:00:00", "Promoted FC", "Alpha", 0, 1, 1.8, 3.4, 4.2),
+            ],
+        )
+
+    feature_factory = FeatureFactory(config_path=str(config_path))
+    features = feature_factory.compute_rolling_stats(window=5)
+    promoted_match = features.loc[features["match_id"] == "n1"].iloc[0]
+
+    # Bottom-3 teams from 2024-25 in this synthetic league:
+    # Beta (0,2), Gamma (1,3), Alpha (2,0)
+    expected_prev_avg_scored = (0 + 1 + 2) / 3
+    expected_prev_avg_conceded = (2 + 3 + 0) / 3
+
+    assert promoted_match["home_avg_goals_scored"] == pytest.approx(expected_prev_avg_scored)
+    assert promoted_match["home_avg_goals_conceded"] == pytest.approx(expected_prev_avg_conceded)
+    assert bool(promoted_match["is_cold_start"]) is True
+    assert promoted_match["relative_tier_change"] == pytest.approx(0.0)
+
+
+def test_relative_tier_change_flags_promotion_and_relegation(tmp_path: Path) -> None:
+    db_path = tmp_path / "test_fpai.db"
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        yaml.safe_dump({"paths": {"database_path": str(db_path)}}),
+        encoding="utf-8",
+    )
+
+    with duckdb.connect(str(db_path)) as conn:
+        conn.execute(
+            """
+            CREATE TABLE raw_matches (
+                match_id TEXT PRIMARY KEY,
+                league TEXT,
+                tier INTEGER,
+                date TIMESTAMP,
+                home_team TEXT,
+                away_team TEXT,
+                fthg INTEGER,
+                ftag INTEGER,
+                odds_h FLOAT,
+                odds_d FLOAT,
+                odds_a FLOAT
+            )
+            """
+        )
+        conn.executemany(
+            """
+            INSERT INTO raw_matches
+            (match_id, league, tier, date, home_team, away_team, fthg, ftag, odds_h, odds_d, odds_a)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            [
+                ("r1", "E1", 2, "2024-08-01 20:00:00", "Mover FC", "OppA", 1, 0, 2.0, 3.2, 3.8),
+                ("r2", "E0", 1, "2025-08-01 20:00:00", "Mover FC", "OppB", 1, 1, 2.0, 3.2, 3.8),
+                ("r3", "E2", 3, "2026-08-01 20:00:00", "Mover FC", "OppC", 0, 1, 2.0, 3.2, 3.8),
+            ],
+        )
+
+    feature_factory = FeatureFactory(config_path=str(config_path))
+    features = feature_factory.compute_rolling_stats(window=5)
+
+    promoted_match = features.loc[features["match_id"] == "r2"].iloc[0]
+    relegated_match = features.loc[features["match_id"] == "r3"].iloc[0]
+
+    assert promoted_match["relative_tier_change"] == pytest.approx(1.0)
+    assert relegated_match["relative_tier_change"] == pytest.approx(-1.0)

@@ -6,12 +6,17 @@ pyyaml
 
 # AI & Scrapers
 requests
+beautifulsoup4
 firecrawl-py  # 2026年主流的AI抓取工具
 
 # Machine Learning
 scikit-learn
 xgboost
+mlflow
+matplotlib
 
 # Testing & Quality
 pytest
 ipykernel     # 方便你在VS Code里用Jupyter Notebook调试
+beautifulsoup4
+mlflow

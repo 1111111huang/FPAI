@@ -3,13 +3,19 @@
 from __future__ import annotations
 
 import argparse
+from datetime import datetime
+import itertools
 from pathlib import Path
+from tempfile import TemporaryDirectory
 
+import mlflow
 import pandas as pd
+import matplotlib.pyplot as plt
+import yaml
 
 from src.features.feature_factory import FeatureFactory
-from src.ingestion.data_loader import CSVLoader
-from src.models import LRModel, ModelManager
+from src.ingestion import CSVLoader, FootballDataScraper
+from src.models import LRModel, ModelFactory, ModelManager, XGBoostModel
 from src.strategy import Backtester, StrategyEngine
 from src.utils import DuckDBManager, configure_logger, get_logger
 from src.utils.config_loader import AppSettings, settings
@@ -20,22 +26,87 @@ FEATURE_COLUMNS = [
     "home_avg_goals_conceded",
     "away_avg_goals_scored",
     "away_avg_goals_conceded",
+    "is_cold_start",
+    "relative_tier_change",
+    "market_prob_h",
+    "elo_rating_diff",
+    "home_advantage_trend",
 ]
+LEAGUE_LABELS = {
+    "E0": "Premier League",
+    "E1": "Championship",
+    "E2": "League One",
+}
+MODEL_REGISTRY = {
+    "lr": LRModel,
+    "xgb": XGBoostModel,
+    "xgboost": XGBoostModel,
+}
 
 
 def _build_parser() -> argparse.ArgumentParser:
-    """Create CLI parser with ingest, train, and predict subcommands."""
+    """Create CLI parser with scrape, ingest, train, predict, and backtest subcommands."""
     parser = argparse.ArgumentParser(description="FPAI command line interface")
     subparsers = parser.add_subparsers(dest="command", required=True)
+    subparsers.add_parser("scrape", help="Download latest multi-season CSV files to raw directory")
     subparsers.add_parser("ingest", help="Ingest CSV data and pre-compute features")
-    subparsers.add_parser("train", help="Train model and save artifact")
-    subparsers.add_parser("predict", help="Load latest model and print value bets")
+    train_parser = subparsers.add_parser("train", help="Train model and save artifact")
+    train_parser.add_argument(
+        "--model",
+        type=str,
+        default="lr",
+        choices=sorted(MODEL_REGISTRY.keys()),
+        help="Model type to train (default: lr).",
+    )
+    predict_parser = subparsers.add_parser("predict", help="Load latest model and print value bets")
+    predict_parser.add_argument(
+        "--league",
+        type=str,
+        default="E0",
+        help="League code filter for prediction output (default: E0).",
+    )
     backtest_parser = subparsers.add_parser("backtest", help="Run historical strategy backtest")
     backtest_parser.add_argument(
         "--ev_threshold",
         type=float,
         default=0.05,
         help="Minimum EV threshold to place bets (default: 0.05).",
+    )
+    backtest_parser.add_argument(
+        "--league",
+        type=str,
+        default="E0",
+        help="League code filter for backtest (default: E0).",
+    )
+    backtest_parser.add_argument(
+        "--test_season",
+        type=str,
+        required=True,
+        help="Test season in YYZZ format (example: 2425 for 2024/2025).",
+    )
+    backtest_parser.add_argument(
+        "--rolling_retrain",
+        action="store_true",
+        help="Retrain model before each backtest match using all prior data.",
+    )
+    experiment_parser = subparsers.add_parser("experiment", help="Run MLflow experiment grid search")
+    experiment_parser.add_argument(
+        "--experiment_name",
+        type=str,
+        default="XGB_Optimization",
+        help="MLflow experiment name (default: XGB_Optimization).",
+    )
+    experiment_parser.add_argument(
+        "--config_path",
+        type=str,
+        default="experiments/xgb_search.yaml",
+        help="Path to experiment config YAML (default: experiments/xgb_search.yaml).",
+    )
+    experiment_parser.add_argument(
+        "--test_season",
+        type=str,
+        default="time_split",
+        help="Tag value for test season used (default: time_split).",
     )
     return parser
 
@@ -60,6 +131,7 @@ def _fetch_feature_joined_matches(db_manager: DuckDBManager, days: int | None = 
         )
         SELECT
             r.match_id,
+            r.league,
             r.home_team,
             r.away_team,
             r.odds_h,
@@ -69,7 +141,12 @@ def _fetch_feature_joined_matches(db_manager: DuckDBManager, days: int | None = 
             f.home_avg_goals_scored,
             f.home_avg_goals_conceded,
             f.away_avg_goals_scored,
-            f.away_avg_goals_conceded
+            f.away_avg_goals_conceded,
+            f.is_cold_start,
+            f.relative_tier_change,
+            f.market_prob_h,
+            f.elo_rating_diff,
+            f.home_advantage_trend
         FROM raw_matches r
         INNER JOIN feature_store f ON r.match_id = f.match_id
         CROSS JOIN max_date_cte m
@@ -85,7 +162,7 @@ def _build_prediction_frame(model: LRModel, source_df: pd.DataFrame) -> pd.DataF
     inference_df = source_df.dropna(subset=FEATURE_COLUMNS + ["odds_h"]).copy()
     if inference_df.empty:
         return pd.DataFrame(
-            columns=["match_id", "home_team", "away_team", "predicted_home_win_prob", "odds_h"]
+            columns=["match_id", "league", "home_team", "away_team", "predicted_home_win_prob", "odds_h"]
         )
 
     probabilities = model.predict_proba(inference_df[FEATURE_COLUMNS])
@@ -94,6 +171,7 @@ def _build_prediction_frame(model: LRModel, source_df: pd.DataFrame) -> pd.DataF
     return pd.DataFrame(
         {
             "match_id": inference_df["match_id"].values,
+            "league": inference_df["league"].values if "league" in inference_df.columns else "",
             "home_team": inference_df["home_team"].values,
             "away_team": inference_df["away_team"].values,
             "predicted_home_win_prob": predicted_home_win_prob,
@@ -102,17 +180,71 @@ def _build_prediction_frame(model: LRModel, source_df: pd.DataFrame) -> pd.DataF
     )
 
 
+def _parse_season_bounds(test_season: str) -> tuple[pd.Timestamp, pd.Timestamp]:
+    """Parse YYZZ season code into [start, end] timestamps for July-to-June season windows."""
+    normalized = test_season.strip()
+    if len(normalized) != 4 or not normalized.isdigit():
+        raise ValueError("test_season must be a 4-digit code like '2425'.")
+
+    start_suffix = int(normalized[:2])
+    end_suffix = int(normalized[2:])
+    expected_end = (start_suffix + 1) % 100
+    if end_suffix != expected_end:
+        raise ValueError(f"Invalid season code '{test_season}'. Expected trailing year {expected_end:02d}.")
+
+    start_year = 2000 + start_suffix
+    end_year = 2000 + end_suffix
+    start = pd.Timestamp(datetime(start_year, 7, 1, 0, 0, 0))
+    end = pd.Timestamp(datetime(end_year, 6, 30, 23, 59, 59))
+    return start, end
+
+
+def _prepare_backtest_frame(source_df: pd.DataFrame) -> pd.DataFrame:
+    """Return cleaned supervised frame with target for backtesting."""
+    if source_df.empty:
+        return pd.DataFrame()
+
+    required = FEATURE_COLUMNS + ["match_id", "league", "home_team", "away_team", "date", "fthg", "ftag", "odds_h"]
+    df = source_df.dropna(subset=required).copy()
+    if df.empty:
+        return pd.DataFrame()
+
+    df["date"] = pd.to_datetime(df["date"], errors="coerce")
+    df = df.dropna(subset=["date"])
+    if df.empty:
+        return pd.DataFrame()
+
+    df["target"] = (df["fthg"].astype(int) > df["ftag"].astype(int)).astype(int)
+    df = df.sort_values(["date", "match_id"]).reset_index(drop=True)
+    return df
+
+
+def run_scrape(app_settings: AppSettings) -> None:
+    """Run scraping only: download season CSV files to data/raw directory."""
+    LOGGER.info("Executing command: scrape")
+    scraper = FootballDataScraper(
+        league_page_url=app_settings.scraper.league_page_url,
+        timeout_seconds=app_settings.scraper.timeout_seconds,
+    )
+    downloaded = scraper.download_all(
+        limit_seasons=app_settings.scraper.limit_seasons,
+        leagues=app_settings.scraper.leagues,
+        start_year=app_settings.scraper.start_year,
+    )
+    LOGGER.info("Scrape complete | files_downloaded=%s", downloaded)
+
+
 def run_ingest(app_settings: AppSettings, db_manager: DuckDBManager) -> None:
-    """Run ingestion and feature pre-computation pipeline."""
+    """Run directory batch ingestion and feature pre-computation pipeline."""
     LOGGER.info("Executing command: ingest")
 
-    csv_path = Path(app_settings.paths.raw_data_dir) / "E0.csv"
-    if not csv_path.exists():
-        LOGGER.error("CSV file not found at %s", csv_path)
+    raw_dir = Path(app_settings.paths.raw_data_dir)
+    if not raw_dir.exists():
+        LOGGER.error("Raw data directory not found: %s", raw_dir)
         return
 
     loader = CSVLoader()
-    loader.process_v1_csv(file_path=str(csv_path), league_code="E0")
+    loader.process_directory(pattern="*.csv")
 
     factory = FeatureFactory()
     features_df = factory.compute_rolling_stats(window=app_settings.settings.rolling_window)
@@ -127,18 +259,30 @@ def run_ingest(app_settings: AppSettings, db_manager: DuckDBManager) -> None:
     LOGGER.info("Ingest complete | raw_matches=%s | feature_store=%s", total_raw, total_features)
 
 
-def run_train() -> None:
-    """Train model and persist artifact."""
+def run_train(model_name: str) -> None:
+    """Train selected model and persist artifact."""
     LOGGER.info("Executing command: train")
+    normalized = model_name.strip().lower()
+    model_cls = MODEL_REGISTRY.get(normalized)
+    if model_cls is None:
+        valid_models = ", ".join(sorted(MODEL_REGISTRY.keys()))
+        raise ValueError(f"Unsupported model '{model_name}'. Available options: {valid_models}")
+    LOGGER.info("Selected model type: %s", normalized)
 
-    model_manager = ModelManager(model=LRModel())
+    model_manager = ModelManager(model=model_cls())
     model_path = model_manager.run_pipeline()
     LOGGER.info("Model saved to %s", model_path)
 
 
-def run_predict(app_settings: AppSettings, db_manager: DuckDBManager) -> None:
+def run_predict(app_settings: AppSettings, db_manager: DuckDBManager, league: str) -> None:
     """Load latest model and output value-bet recommendations for recent matches."""
     LOGGER.info("Executing command: predict")
+    league_code = league.upper()
+    LOGGER.info(
+        "Running prediction for %s (%s) only.",
+        LEAGUE_LABELS.get(league_code, "Selected League"),
+        league_code,
+    )
 
     model_dir = Path(app_settings.paths.model_dir)
     model_path = _get_latest_model_path(model_dir)
@@ -154,6 +298,10 @@ def run_predict(app_settings: AppSettings, db_manager: DuckDBManager) -> None:
     if predictions_df.empty:
         LOGGER.warning("No recent matches with complete features for prediction.")
         return
+    predictions_df = predictions_df[predictions_df["league"].str.upper() == league_code].copy()
+    if predictions_df.empty:
+        LOGGER.warning("No recent matches found for league %s.", league_code)
+        return
 
     strategy = StrategyEngine()
     recommendations = strategy.get_recommendations(predictions_df, ev_threshold=0.05)
@@ -161,24 +309,116 @@ def run_predict(app_settings: AppSettings, db_manager: DuckDBManager) -> None:
     strategy.report_recommendations(recommendations)
 
 
-def run_backtest(app_settings: AppSettings, db_manager: DuckDBManager, ev_threshold: float) -> None:
-    """Load latest model and run historical backtest with configurable EV threshold."""
+def run_backtest(
+    app_settings: AppSettings,
+    db_manager: DuckDBManager,
+    ev_threshold: float,
+    league: str,
+    test_season: str,
+    rolling_retrain: bool,
+) -> None:
+    """Run a strict season-isolated backtest with optional rolling retraining."""
     LOGGER.info("Executing command: backtest")
+    league_code = league.upper()
+    LOGGER.info(
+        "Running backtest for %s (%s) only.",
+        LEAGUE_LABELS.get(league_code, "Selected League"),
+        league_code,
+    )
 
-    model_dir = Path(app_settings.paths.model_dir)
-    model_path = _get_latest_model_path(model_dir)
-    model = LRModel.load(str(model_path))
-    LOGGER.info("Loaded model artifact: %s", model_path)
+    try:
+        start_date, end_date = _parse_season_bounds(test_season)
+    except ValueError as exc:
+        LOGGER.error("Invalid --test_season value: %s", exc)
+        return
+    LOGGER.info(
+        "Backtest period for season %s | Start Date=%s | End Date=%s",
+        test_season,
+        start_date.date().isoformat(),
+        end_date.date().isoformat(),
+    )
 
     historical_df = _fetch_feature_joined_matches(db_manager)
     if historical_df.empty:
         LOGGER.warning("No historical matches available for backtesting.")
         return
-
-    predictions_df = _build_prediction_frame(model, historical_df)
-    if predictions_df.empty:
+    prepared_df = _prepare_backtest_frame(historical_df)
+    if prepared_df.empty:
         LOGGER.warning("No historical matches with complete features for backtesting.")
         return
+    prepared_df = prepared_df[prepared_df["league"].str.upper() == league_code].copy()
+    if prepared_df.empty:
+        LOGGER.warning("No historical matches found for league %s.", league_code)
+        return
+
+    training_pool_df = prepared_df[prepared_df["date"] < start_date].copy()
+    test_df = prepared_df[(prepared_df["date"] >= start_date) & (prepared_df["date"] <= end_date)].copy()
+    if test_df.empty:
+        LOGGER.warning("No matches found in league %s for season %s.", league_code, test_season)
+        return
+    LOGGER.info(
+        "Strict split counts | training_matches=%s | backtest_matches=%s",
+        len(training_pool_df),
+        len(test_df),
+    )
+
+    prediction_rows: list[dict[str, object]] = []
+    if rolling_retrain:
+        LOGGER.info("Using rolling retrain mode for backtest.")
+        train_sizes: list[int] = []
+        for row in test_df.itertuples(index=False):
+            train_slice = prepared_df[prepared_df["date"] < row.date]
+            if train_slice.empty or train_slice["target"].nunique() < 2:
+                continue
+
+            train_sizes.append(int(len(train_slice)))
+            model = LRModel()
+            model.train(train_slice[FEATURE_COLUMNS], train_slice["target"])
+            probability = float(model.predict_proba(pd.DataFrame([row._asdict()])[FEATURE_COLUMNS])[0][1])
+
+            prediction_rows.append(
+                {
+                    "match_id": row.match_id,
+                    "league": row.league,
+                    "home_team": row.home_team,
+                    "away_team": row.away_team,
+                    "predicted_home_win_prob": probability,
+                    "odds_h": float(row.odds_h),
+                }
+            )
+
+        if not prediction_rows:
+            LOGGER.warning("No backtest predictions were generated in rolling mode.")
+            return
+        LOGGER.info(
+            "Rolling retrain sample sizes | min=%s | max=%s",
+            min(train_sizes),
+            max(train_sizes),
+        )
+        predictions_df = pd.DataFrame(prediction_rows)
+    else:
+        if training_pool_df.empty:
+            LOGGER.warning("No training matches exist before start of season %s.", test_season)
+            return
+        if training_pool_df["target"].nunique() < 2:
+            LOGGER.warning("Training data before %s has a single target class; backtest cannot run.", start_date.date())
+            return
+
+        model = LRModel()
+        model.train(training_pool_df[FEATURE_COLUMNS], training_pool_df["target"])
+        probabilities = model.predict_proba(test_df[FEATURE_COLUMNS])
+        predicted_home_win_prob = probabilities[:, 1] if probabilities.ndim == 2 else probabilities.ravel()
+
+        predictions_df = pd.DataFrame(
+            {
+                "match_id": test_df["match_id"].values,
+                "league": test_df["league"].values,
+                "home_team": test_df["home_team"].values,
+                "away_team": test_df["away_team"].values,
+                "predicted_home_win_prob": predicted_home_win_prob,
+                "odds_h": test_df["odds_h"].astype(float).values,
+            }
+        )
 
     backtester = Backtester(initial_bankroll=app_settings.settings.initial_bankroll, bet_size=10.0)
     backtester.run_simulation(predictions_df, ev_threshold=ev_threshold)
@@ -193,6 +433,93 @@ def run_backtest(app_settings: AppSettings, db_manager: DuckDBManager, ev_thresh
     )
 
 
+def run_experiment(
+    app_settings: AppSettings, experiment_name: str, test_season: str, config_path: str
+) -> None:
+    """Run a YAML-configured grid search with MLflow tracking and backtest metrics."""
+    LOGGER.info("Executing command: experiment")
+    mlflow.set_experiment(experiment_name)
+
+    config_file = Path(config_path)
+    if not config_file.exists():
+        LOGGER.error("Experiment config not found: %s", config_file)
+        return
+    with config_file.open("r", encoding="utf-8") as handle:
+        config = yaml.safe_load(handle) or {}
+
+    grid = config.get("grid_search")
+    if not isinstance(grid, dict) or not grid:
+        LOGGER.error("Experiment config missing grid_search parameters.")
+        return
+
+    results: list[dict[str, float | int | str]] = []
+    param_keys = list(grid.keys())
+    for values in itertools.product(*(grid[key] for key in param_keys)):
+        params = dict(zip(param_keys, values))
+        model_type = str(config.get("model_type", "xgboost")).strip().lower()
+        run_name = f"{model_type}_" + "_".join(f"{key}{value}" for key, value in params.items())
+        with mlflow.start_run(run_name=run_name, nested=True):
+            mlflow.log_params(params)
+            mlflow.log_dict(config, "experiment_config.yaml")
+            mlflow.set_tag("model_type", model_type)
+            mlflow.set_tag("test_season", test_season)
+
+            model = ModelFactory.get_model(model_type, params)
+            manager = ModelManager(
+                model=model,
+                league_tier="all",
+                test_season=test_season,
+                feature_version="v1",
+            )
+            _, test_meta, positive_proba = manager.train()
+
+            predictions_df = pd.DataFrame(
+                {
+                    "match_id": test_meta["match_id"].values,
+                    "predicted_home_win_prob": positive_proba.values,
+                    "odds_h": test_meta["odds_h"].astype(float).values,
+                }
+            )
+            backtester = Backtester(
+                initial_bankroll=app_settings.settings.initial_bankroll,
+                bet_size=10.0,
+                config_path="config.yaml",
+            )
+            backtester.run_simulation(predictions_df, ev_threshold=0.05)
+            metrics = backtester.get_metrics()
+            mlflow.log_metric("roi", float(metrics.total_roi))
+            mlflow.log_metric("win_rate", float(metrics.win_rate))
+            mlflow.log_metric("max_drawdown", float(metrics.max_drawdown))
+
+            with TemporaryDirectory() as tmpdir:
+                plot_path = Path(tmpdir) / "bankroll_curve.png"
+                plt.figure(figsize=(8, 4))
+                if backtester.bet_history.empty:
+                    plt.plot([0, 1], [backtester.initial_bankroll, backtester.initial_bankroll])
+                else:
+                    plt.plot(backtester.bet_history["bankroll"].values)
+                plt.title("Bankroll Curve")
+                plt.xlabel("Bet Index")
+                plt.ylabel("Bankroll")
+                plt.tight_layout()
+                plt.savefig(plot_path)
+                plt.close()
+                mlflow.log_artifact(str(plot_path))
+
+            results.append(
+                {
+                    **params,
+                    "roi": float(metrics.total_roi),
+                    "win_rate": float(metrics.win_rate),
+                    "max_drawdown": float(metrics.max_drawdown),
+                }
+            )
+
+    if results:
+        summary_df = pd.DataFrame(results).sort_values("roi", ascending=False).head(3)
+        LOGGER.info("Top 3 parameter sets by ROI:\n%s", summary_df.to_string(index=False))
+
+
 def main() -> None:
     """Parse CLI args and dispatch the requested command."""
     configure_logger()
@@ -202,14 +529,30 @@ def main() -> None:
     app_settings = settings
     db_manager = DuckDBManager()
 
-    if args.command == "ingest":
+    if args.command == "scrape":
+        run_scrape(app_settings)
+    elif args.command == "ingest":
         run_ingest(app_settings, db_manager)
     elif args.command == "train":
-        run_train()
+        run_train(model_name=str(args.model))
     elif args.command == "predict":
-        run_predict(app_settings, db_manager)
+        run_predict(app_settings, db_manager, league=str(args.league))
     elif args.command == "backtest":
-        run_backtest(app_settings, db_manager, ev_threshold=float(args.ev_threshold))
+        run_backtest(
+            app_settings,
+            db_manager,
+            ev_threshold=float(args.ev_threshold),
+            league=str(args.league),
+            test_season=str(args.test_season),
+            rolling_retrain=bool(args.rolling_retrain),
+        )
+    elif args.command == "experiment":
+        run_experiment(
+            app_settings,
+            experiment_name=str(args.experiment_name),
+            test_season=str(args.test_season),
+            config_path=str(args.config_path),
+        )
 
 
 if __name__ == "__main__":

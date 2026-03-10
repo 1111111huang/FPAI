@@ -27,6 +27,16 @@ class RuntimeConfig(BaseModel):
     initial_bankroll: float = 1000.0
 
 
+class ScraperConfig(BaseModel):
+    """Scraper settings for automated data collection."""
+
+    league_page_url: str = "https://www.football-data.co.uk/englandm.php"
+    limit_seasons: int = 10
+    timeout_seconds: int = 30
+    leagues: list[str] = Field(default_factory=lambda: ["E0"])
+    start_year: int = 2015
+
+
 class AppSettings(BaseModel):
     """Top-level application settings parsed from config.yaml."""
 
@@ -34,6 +44,7 @@ class AppSettings(BaseModel):
     version: str = "1.0.0"
     paths: PathsConfig = Field(default_factory=PathsConfig)
     settings: RuntimeConfig = Field(default_factory=RuntimeConfig)
+    scraper: ScraperConfig = Field(default_factory=ScraperConfig)
 
 
 @lru_cache(maxsize=32)

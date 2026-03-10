@@ -18,3 +18,10 @@ settings:
   min_matches_required: 10
   test_size: 0.2
   initial_bankroll: 1000
+
+scraper:
+  league_page_url: "https://www.football-data.co.uk/englandm.php"
+  limit_seasons: 10
+  timeout_seconds: 30
+  leagues: ["E0"]
+  start_year: 2015

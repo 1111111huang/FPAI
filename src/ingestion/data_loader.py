@@ -3,14 +3,16 @@
 from __future__ import annotations
 
 from datetime import datetime
+import hashlib
+from pathlib import Path
 
 import duckdb
 import pandas as pd
 from pydantic import ValidationError
 
-from src.ingestion.schema import MatchSchema
+from src.ingestion.match_schema import MatchSchema
 from src.utils.db_manager import DuckDBManager
-from src.utils.helpers import generate_match_id
+from src.utils.helpers import generate_match_id, standardize_team_name
 from src.utils.logger import get_logger
 
 LOGGER = get_logger(__name__)
@@ -22,10 +24,16 @@ class CSVLoader:
     def __init__(self, config_path: str = "config.yaml") -> None:
         """Initialize loader using database settings from YAML config."""
         self.db_manager = DuckDBManager(config_path=config_path)
+        self.raw_data_dir = Path(self.db_manager.settings.paths.raw_data_dir)
+        self.raw_data_dir.mkdir(parents=True, exist_ok=True)
 
-    def process_v1_csv(self, file_path: str, league_code: str) -> None:
-        """Ingest a v1 football CSV file and insert validated rows into DuckDB."""
-        df = pd.read_csv(file_path)
+    def process_v1_csv(self, file_path: str, league_code: str) -> int:
+        """Ingest a v1 football CSV file and return how many matches were added."""
+        try:
+            df = pd.read_csv(file_path)
+        except Exception as exc:
+            LOGGER.warning("Skipping unreadable CSV file %s (%s)", file_path, exc)
+            return 0
 
         renamed = df.rename(
             columns={
@@ -38,6 +46,15 @@ class CSVLoader:
                 "B365A": "odds_a",
             }
         )
+        required_columns = {"Date", "home_team", "away_team", "fthg", "ftag", "odds_h", "odds_d", "odds_a"}
+        missing_required = required_columns.difference(renamed.columns)
+        if missing_required:
+            LOGGER.warning(
+                "Skipping file %s due to missing required columns: %s",
+                file_path,
+                ", ".join(sorted(missing_required)),
+            )
+            return 0
 
         if "BbAv>2.5" in renamed.columns:
             over25_series = renamed["BbAv>2.5"]
@@ -49,6 +66,8 @@ class CSVLoader:
         working = renamed[
             ["Date", "home_team", "away_team", "fthg", "ftag", "odds_h", "odds_d", "odds_a"]
         ].copy()
+        working["home_team"] = working["home_team"].astype(str).map(standardize_team_name)
+        working["away_team"] = working["away_team"].astype(str).map(standardize_team_name)
         working["over25_odds_avg"] = over25_series
 
         # PRD rule: skip rows with missing critical odds inputs.
@@ -66,7 +85,7 @@ class CSVLoader:
         ]
 
         records_to_insert: list[
-            tuple[str, str, datetime, str, str, int, int, float, float, float]
+            tuple[str, str, int, datetime, str, str, int, int, float, float, float]
         ] = []
         skipped_validation = 0
 
@@ -80,6 +99,7 @@ class CSVLoader:
                         "FTHG": row.get("fthg"),
                         "FTAG": row.get("ftag"),
                         "BbAv>2.5": row.get("over25_odds_avg"),
+                        "LeagueCode": league_code,
                     }
                 )
             except ValidationError:
@@ -97,6 +117,7 @@ class CSVLoader:
                 (
                     match_id,
                     league_code,
+                    validated.tier,
                     match_datetime,
                     validated.home_team,
                     validated.away_team,
@@ -118,23 +139,59 @@ class CSVLoader:
         try:
             with self.db_manager.connection() as conn:
                 self._create_raw_matches_table(conn)
+                before_row = conn.execute("SELECT COUNT(*) FROM raw_matches").fetchone()
+                before_count = int(before_row[0]) if before_row is not None else 0
                 if records_to_insert:
                     conn.executemany(
                         """
                         INSERT OR IGNORE INTO raw_matches
-                        (match_id, league, date, home_team, away_team, fthg, ftag, odds_h, odds_d, odds_a)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        (match_id, league, tier, date, home_team, away_team, fthg, ftag, odds_h, odds_d, odds_a)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                         """,
                         records_to_insert,
                     )
+                after_row = conn.execute("SELECT COUNT(*) FROM raw_matches").fetchone()
+                after_count = int(after_row[0]) if after_row is not None else before_count
+                added_matches = max(0, after_count - before_count)
                 LOGGER.info(
-                    "CSV ingestion completed for league %s with %s valid records.",
+                    "CSV ingestion completed for league %s with %s valid records, %s new matches added.",
                     league_code,
                     len(records_to_insert),
+                    added_matches,
                 )
+                return added_matches
         except duckdb.Error:
             LOGGER.exception("Database failure while ingesting %s.", file_path)
             raise
+
+    def process_directory(self, pattern: str = "E0_*.csv") -> int:
+        """Process all matching CSV files in raw data directory with change detection."""
+        files = sorted(self.raw_data_dir.glob(pattern))
+        if not files:
+            LOGGER.warning("No files found for pattern %s in %s", pattern, self.raw_data_dir)
+            return 0
+
+        total_added = 0
+        with self.db_manager.connection() as conn:
+            self._create_processed_files_table(conn)
+
+        for file_path in files:
+            file_hash = self._compute_file_hash(file_path)
+            if self._is_file_unchanged(file_path=file_path, file_hash=file_hash):
+                LOGGER.info("Skipping unchanged file: %s", file_path.name)
+                continue
+
+            league_code = file_path.stem.split("_")[0]
+            added = self.process_v1_csv(file_path=str(file_path), league_code=league_code)
+            total_added += added
+            self._mark_file_processed(file_path=file_path, file_hash=file_hash)
+
+        LOGGER.info(
+            "Batch ingestion finished for pattern %s | total_new_matches_added=%s",
+            pattern,
+            total_added,
+        )
+        return total_added
 
     @staticmethod
     def _create_raw_matches_table(conn: duckdb.DuckDBPyConnection) -> None:
@@ -144,6 +201,7 @@ class CSVLoader:
             CREATE TABLE IF NOT EXISTS raw_matches (
                 match_id TEXT PRIMARY KEY,
                 league TEXT,
+                tier INTEGER,
                 date TIMESTAMP,
                 home_team TEXT,
                 away_team TEXT,
@@ -155,3 +213,50 @@ class CSVLoader:
             )
             """
         )
+        columns = {row[1] for row in conn.execute("PRAGMA table_info('raw_matches')").fetchall()}
+        if "tier" not in columns:
+            conn.execute("ALTER TABLE raw_matches ADD COLUMN tier INTEGER")
+
+    @staticmethod
+    def _create_processed_files_table(conn: duckdb.DuckDBPyConnection) -> None:
+        """Create metadata table to track processed input files."""
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS processed_files (
+                file_path TEXT PRIMARY KEY,
+                file_hash TEXT NOT NULL,
+                processed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+
+    def _is_file_unchanged(self, file_path: Path, file_hash: str) -> bool:
+        """Check if the file has already been processed with the same hash."""
+        with self.db_manager.connection() as conn:
+            self._create_processed_files_table(conn)
+            row = conn.execute(
+                "SELECT file_hash FROM processed_files WHERE file_path = ?",
+                [str(file_path.resolve())],
+            ).fetchone()
+        return row is not None and str(row[0]) == file_hash
+
+    def _mark_file_processed(self, file_path: Path, file_hash: str) -> None:
+        """Upsert processed file metadata after successful ingestion."""
+        with self.db_manager.connection() as conn:
+            self._create_processed_files_table(conn)
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO processed_files (file_path, file_hash, processed_at)
+                VALUES (?, ?, CURRENT_TIMESTAMP)
+                """,
+                [str(file_path.resolve()), file_hash],
+            )
+
+    @staticmethod
+    def _compute_file_hash(file_path: Path) -> str:
+        """Compute SHA-256 checksum for a local file."""
+        hasher = hashlib.sha256()
+        with file_path.open("rb") as infile:
+            for chunk in iter(lambda: infile.read(8192), b""):
+                hasher.update(chunk)
+        return hasher.hexdigest()

@@ -6,6 +6,8 @@ from datetime import date, datetime
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from src.ingestion.schema import map_league_code_to_tier
+
 
 class MatchSchema(BaseModel):
     """Minimal raw-match schema required by the FPAI ingestion layer."""
@@ -18,6 +20,7 @@ class MatchSchema(BaseModel):
     fthg: int = Field(alias="FTHG", ge=0)
     ftag: int = Field(alias="FTAG", ge=0)
     over25_odds_avg: float = Field(alias="BbAv>2.5", gt=1.0)
+    tier: int = Field(alias="LeagueCode", ge=1, le=4)
 
     @model_validator(mode="before")
     @classmethod
@@ -38,3 +41,13 @@ class MatchSchema(BaseModel):
         if isinstance(value, str):
             return date.fromisoformat(value) if "-" in value else datetime.strptime(value, "%d/%m/%Y").date()
         raise TypeError("Date must be a date object or string")
+
+    @field_validator("tier", mode="before")
+    @classmethod
+    def parse_tier(cls, value: object) -> int:
+        """Convert league code into a numeric tier level."""
+        if isinstance(value, int):
+            return value
+        if isinstance(value, str):
+            return map_league_code_to_tier(value)
+        raise TypeError("LeagueCode must be a league code string or integer tier")

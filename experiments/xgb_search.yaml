@@ -1,0 +1,30 @@
+# 实验基本信息
+experiment_name: "XGBoost_Hyperparameter_Search_V1"
+model_type: "xgboost"
+
+# 数据与回测范围
+league: "E0"
+test_season: "2526"
+training_start_year: 2015
+
+# 网格搜索参数空间 (Grid Search)
+# 每一个列表中的组合都会生成一个独立的 MLflow Run
+grid_search:
+  n_estimators: [100, 300, 500]
+  max_depth: [3, 4, 5]
+  learning_rate: [0.01, 0.05, 0.1]
+  subsample: [0.8, 1.0]
+  colsample_bytree: [0.8, 1.0]
+
+# 固定不变的超参数
+fixed_params:
+  random_state: 42
+  tree_method: "hist" # 提高训练速度
+  early_stopping_rounds: 10
+  eval_metric: "logloss"
+
+# 策略与回测设置
+backtest_config:
+  ev_threshold: 0.05
+  initial_bankroll: 1000
+  bet_size: 10 # 固定额度下注
