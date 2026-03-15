@@ -451,20 +451,38 @@ def run_experiment(
     if not isinstance(grid, dict) or not grid:
         LOGGER.error("Experiment config missing grid_search parameters.")
         return
+    grid_params = config.get("grid_search_params", {})
+    if not isinstance(grid_params, dict):
+        LOGGER.warning("grid_search_params is not a dict; skipping.")
+        grid_params = {}
+    fixed_params = config.get("fixed_params", {})
+    if not isinstance(fixed_params, dict):
+        LOGGER.warning("fixed_params is not a dict; skipping.")
+        fixed_params = {}
+    league_tag = str(config.get("league", "E0"))
+    season_tag = str(config.get("test_season", test_season))
+    backtest_config = config.get("backtest_config", {})
+    if not isinstance(backtest_config, dict):
+        LOGGER.warning("backtest_config is not a dict; skipping.")
+        backtest_config = {}
 
     results: list[dict[str, float | int | str]] = []
     param_keys = list(grid.keys())
     for values in itertools.product(*(grid[key] for key in param_keys)):
         params = dict(zip(param_keys, values))
         model_type = str(config.get("model_type", "xgboost")).strip().lower()
+        merged_params = {**fixed_params, **params}
         run_name = f"{model_type}_" + "_".join(f"{key}{value}" for key, value in params.items())
         with mlflow.start_run(run_name=run_name, nested=True):
-            mlflow.log_params(params)
+            mlflow.log_params(grid_params)
+            mlflow.log_param("features", ",".join(FEATURE_COLUMNS))
+            mlflow.log_params(merged_params)
             mlflow.log_dict(config, "experiment_config.yaml")
             mlflow.set_tag("model_type", model_type)
             mlflow.set_tag("test_season", test_season)
+            mlflow.set_tags({"league": league_tag, "season": season_tag})
 
-            model = ModelFactory.get_model(model_type, params)
+            model = ModelFactory.get_model(model_type, merged_params)
             manager = ModelManager(
                 model=model,
                 league_tier="all",
@@ -480,16 +498,30 @@ def run_experiment(
                     "odds_h": test_meta["odds_h"].astype(float).values,
                 }
             )
+            initial_bankroll = float(
+                backtest_config.get("initial_bankroll", app_settings.settings.initial_bankroll)
+            )
+            bet_size = float(backtest_config.get("bet_size", 10.0))
+            ev_threshold = float(backtest_config.get("ev_threshold", 0.05))
             backtester = Backtester(
-                initial_bankroll=app_settings.settings.initial_bankroll,
-                bet_size=10.0,
+                initial_bankroll=initial_bankroll,
+                bet_size=bet_size,
                 config_path="config.yaml",
             )
-            backtester.run_simulation(predictions_df, ev_threshold=0.05)
+            backtester.run_simulation(predictions_df, ev_threshold=ev_threshold)
             metrics = backtester.get_metrics()
-            mlflow.log_metric("roi", float(metrics.total_roi))
-            mlflow.log_metric("win_rate", float(metrics.win_rate))
-            mlflow.log_metric("max_drawdown", float(metrics.max_drawdown))
+            mlflow.log_metrics(
+                {
+                    "roi": float(metrics.total_roi),
+                    "win_rate": float(metrics.win_rate),
+                    "max_drawdown": float(metrics.max_drawdown),
+                }
+            )
+
+            if model_type == "xgboost":
+                mlflow.xgboost.log_model(model.model, "model")
+            else:
+                mlflow.sklearn.log_model(model.model, "model")
 
             with TemporaryDirectory() as tmpdir:
                 plot_path = Path(tmpdir) / "bankroll_curve.png"
@@ -505,6 +537,23 @@ def run_experiment(
                 plt.savefig(plot_path)
                 plt.close()
                 mlflow.log_artifact(str(plot_path))
+
+            plots_dir = Path("plots")
+            plots_dir.mkdir(parents=True, exist_ok=True)
+            stable_plot_path = plots_dir / "bankroll.png"
+            plt.figure(figsize=(8, 4))
+            if backtester.bet_history.empty:
+                plt.plot([0, 1], [backtester.initial_bankroll, backtester.initial_bankroll])
+            else:
+                plt.plot(backtester.bet_history["bankroll"].values)
+            plt.title("Bankroll Curve")
+            plt.xlabel("Bet Index")
+            plt.ylabel("Bankroll")
+            plt.tight_layout()
+            plt.savefig(stable_plot_path)
+            plt.close()
+            if stable_plot_path.exists():
+                mlflow.log_artifact(str(stable_plot_path))
 
             results.append(
                 {
