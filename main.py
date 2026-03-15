@@ -9,6 +9,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 import mlflow
+from mlflow.exceptions import MlflowException
 import pandas as pd
 import matplotlib.pyplot as plt
 import yaml
@@ -65,6 +66,12 @@ def _build_parser() -> argparse.ArgumentParser:
         default="E0",
         help="League code filter for prediction output (default: E0).",
     )
+    predict_parser.add_argument(
+        "--run_id",
+        type=str,
+        default=None,
+        help="Optional MLflow run ID to load a specific model.",
+    )
     backtest_parser = subparsers.add_parser("backtest", help="Run historical strategy backtest")
     backtest_parser.add_argument(
         "--ev_threshold",
@@ -88,6 +95,12 @@ def _build_parser() -> argparse.ArgumentParser:
         "--rolling_retrain",
         action="store_true",
         help="Retrain model before each backtest match using all prior data.",
+    )
+    backtest_parser.add_argument(
+        "--run_id",
+        type=str,
+        default=None,
+        help="Optional MLflow run ID to load a specific model.",
     )
     experiment_parser = subparsers.add_parser("experiment", help="Run MLflow experiment grid search")
     experiment_parser.add_argument(
@@ -117,6 +130,52 @@ def _get_latest_model_path(model_dir: Path) -> Path:
     if not candidates:
         raise FileNotFoundError(f"No saved model found in {model_dir}")
     return candidates[-1]
+
+
+def _get_model_uri(league: str, run_id: str | None = None) -> tuple[str, mlflow.entities.Run]:
+    """Resolve model URI and run metadata for a given league and optional run_id."""
+    league_code = league.upper()
+    if run_id:
+        try:
+            run = mlflow.get_run(run_id)
+        except MlflowException as exc:
+            raise ValueError(f"MLflow run_id not found: {run_id}") from exc
+        run_league = (run.data.tags or {}).get("league", "").upper()
+        if run_league and run_league != league_code:
+            raise ValueError(
+                f"Run {run_id} is tagged for league {run_league}, not {league_code}."
+            )
+        run_model_type = (run.data.tags or {}).get("model_type", "").lower()
+        if run_model_type and run_model_type not in {"xgboost", "logistic_regression", "random_forest", "lr", "xgb"}:
+            raise ValueError(f"Run {run_id} uses unsupported model_type '{run_model_type}'.")
+        return f"runs:/{run_id}/model", run
+
+    runs_df = mlflow.search_runs(order_by=["metrics.roi DESC"])
+    if runs_df.empty:
+        raise ValueError("No MLflow runs found.")
+    if "metrics.roi" in runs_df.columns:
+        runs_df = runs_df[runs_df["metrics.roi"].notna()]
+    if "tags.league" in runs_df.columns:
+        runs_df = runs_df[runs_df["tags.league"].str.upper() == league_code]
+    if runs_df.empty:
+        raise ValueError(f"No MLflow runs found for league {league_code}.")
+
+    best_run_id = runs_df.iloc[0]["run_id"]
+    run = mlflow.get_run(best_run_id)
+    return f"runs:/{best_run_id}/model", run
+
+
+def _check_feature_consistency(run: mlflow.entities.Run) -> None:
+    """Ensure model features recorded in MLflow match current FEATURE_COLUMNS."""
+    features_param = run.data.params.get("features", "")
+    recorded = [item.strip() for item in features_param.split(",") if item.strip()]
+    if not recorded:
+        raise ValueError("Run does not record 'features' metadata; cannot verify consistency.")
+    if recorded != FEATURE_COLUMNS:
+        raise ValueError(
+            "Feature mismatch between model metadata and current pipeline. "
+            f"Recorded={recorded}, Current={FEATURE_COLUMNS}"
+        )
 
 
 def _fetch_feature_joined_matches(db_manager: DuckDBManager, days: int | None = None) -> pd.DataFrame:
@@ -274,7 +333,9 @@ def run_train(model_name: str) -> None:
     LOGGER.info("Model saved to %s", model_path)
 
 
-def run_predict(app_settings: AppSettings, db_manager: DuckDBManager, league: str) -> None:
+def run_predict(
+    app_settings: AppSettings, db_manager: DuckDBManager, league: str, run_id: str | None
+) -> None:
     """Load latest model and output value-bet recommendations for recent matches."""
     LOGGER.info("Executing command: predict")
     league_code = league.upper()
@@ -284,10 +345,16 @@ def run_predict(app_settings: AppSettings, db_manager: DuckDBManager, league: st
         league_code,
     )
 
-    model_dir = Path(app_settings.paths.model_dir)
-    model_path = _get_latest_model_path(model_dir)
-    model = LRModel.load(str(model_path))
-    LOGGER.info("Loaded model artifact: %s", model_path)
+    model_uri, run = _get_model_uri(league=league_code, run_id=run_id)
+    _check_feature_consistency(run)
+    model = mlflow.sklearn.load_model(model_uri)
+    LOGGER.info(
+        "Loaded model from MLflow | run_id=%s | roi=%.4f",
+        run.info.run_id,
+        run.data.metrics.get("roi", 0.0),
+    )
+    if run_id:
+        LOGGER.info("Run parameters: %s", run.data.params)
 
     recent_df = _fetch_feature_joined_matches(db_manager, days=7)
     if recent_df.empty:
@@ -316,6 +383,7 @@ def run_backtest(
     league: str,
     test_season: str,
     rolling_retrain: bool,
+    run_id: str | None,
 ) -> None:
     """Run a strict season-isolated backtest with optional rolling retraining."""
     LOGGER.info("Executing command: backtest")
@@ -365,6 +433,8 @@ def run_backtest(
     prediction_rows: list[dict[str, object]] = []
     if rolling_retrain:
         LOGGER.info("Using rolling retrain mode for backtest.")
+        if run_id:
+            raise ValueError("--run_id is not supported with --rolling_retrain.")
         train_sizes: list[int] = []
         for row in test_df.itertuples(index=False):
             train_slice = prepared_df[prepared_df["date"] < row.date]
@@ -404,8 +474,17 @@ def run_backtest(
             LOGGER.warning("Training data before %s has a single target class; backtest cannot run.", start_date.date())
             return
 
-        model = LRModel()
-        model.train(training_pool_df[FEATURE_COLUMNS], training_pool_df["target"])
+        model_uri, run = _get_model_uri(league=league_code, run_id=run_id)
+        _check_feature_consistency(run)
+        model = mlflow.sklearn.load_model(model_uri)
+        LOGGER.info(
+            "Loaded model from MLflow | run_id=%s | roi=%.4f",
+            run.info.run_id,
+            run.data.metrics.get("roi", 0.0),
+        )
+        if run_id:
+            LOGGER.info("Run parameters: %s", run.data.params)
+
         probabilities = model.predict_proba(test_df[FEATURE_COLUMNS])
         predicted_home_win_prob = probabilities[:, 1] if probabilities.ndim == 2 else probabilities.ravel()
 
@@ -585,7 +664,7 @@ def main() -> None:
     elif args.command == "train":
         run_train(model_name=str(args.model))
     elif args.command == "predict":
-        run_predict(app_settings, db_manager, league=str(args.league))
+        run_predict(app_settings, db_manager, league=str(args.league), run_id=args.run_id)
     elif args.command == "backtest":
         run_backtest(
             app_settings,
@@ -594,6 +673,7 @@ def main() -> None:
             league=str(args.league),
             test_season=str(args.test_season),
             rolling_retrain=bool(args.rolling_retrain),
+            run_id=args.run_id,
         )
     elif args.command == "experiment":
         run_experiment(
