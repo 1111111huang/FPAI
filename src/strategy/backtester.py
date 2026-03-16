@@ -5,7 +5,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 import pandas as pd
+import mlflow
 
+from src.logic.target_resolver import TargetResolver
 from src.utils.db_manager import DuckDBManager
 from src.utils.logger import get_logger
 
@@ -39,8 +41,14 @@ class Backtester:
         self.bankroll = float(initial_bankroll)
         self.bet_history = pd.DataFrame()
 
-    def run_simulation(self, predictions_df: pd.DataFrame, ev_threshold: float = 0.05) -> pd.DataFrame:
+    def run(
+        self,
+        predictions_df: pd.DataFrame,
+        ev_threshold: float = 0.05,
+        target_config: dict[str, float | int | str] | None = None,
+    ) -> pd.DataFrame:
         """Run a backtest using EV-filtered predictions and match outcomes from DuckDB."""
+        target_config = target_config or {"target_type": "home_win", "stake": self.bet_size}
         required_columns = {"match_id", "predicted_home_win_prob", "odds_h"}
         missing = required_columns.difference(predictions_df.columns)
         if missing:
@@ -72,6 +80,18 @@ class Backtester:
             ).fetchdf()
 
         merged = df.merge(outcomes, on="match_id", how="inner")
+        merged["FTR"] = merged.apply(
+            lambda row: "H" if int(row.fthg) > int(row.ftag) else ("A" if int(row.fthg) < int(row.ftag) else "D"),
+            axis=1,
+        )
+        target_type = str(target_config.get("target_type", "home_win")).strip().lower()
+        if target_type == "home_win":
+            if "AvgH" in merged.columns:
+                merged["AvgH"] = pd.to_numeric(merged["AvgH"], errors="coerce")
+            elif "B365H" in merged.columns:
+                merged["AvgH"] = pd.to_numeric(merged["B365H"], errors="coerce")
+            else:
+                merged["AvgH"] = pd.to_numeric(merged["odds_h"], errors="coerce")
         merged = merged[merged["ev"] > ev_threshold].copy()
         if merged.empty:
             self.bet_history = pd.DataFrame()
@@ -83,14 +103,10 @@ class Backtester:
         bankroll = self.initial_bankroll
         history_rows: list[dict[str, float | int | str]] = []
 
-        for row in merged.itertuples(index=False):
-            is_home_win = int(row.fthg) > int(row.ftag)
-            if is_home_win:
-                pnl = self.bet_size * (float(row.odds_h) - 1.0)
-                result = "WIN"
-            else:
-                pnl = -self.bet_size
-                result = "LOSS"
+        for row_index, row in enumerate(merged.itertuples(index=False)):
+            prediction = 1
+            pnl = TargetResolver.get_payout(merged, row_index, prediction, target_config)
+            result = "WIN" if pnl > 0 else ("LOSS" if pnl < 0 else "PUSH")
 
             bankroll += pnl
             history_row = {
@@ -122,6 +138,9 @@ class Backtester:
         self.bankroll = bankroll
         self.bet_history = pd.DataFrame(history_rows)
         metrics = self.get_metrics()
+        active_run = mlflow.active_run()
+        if active_run is not None:
+            mlflow.log_metrics({"roi": metrics.total_roi, "win_rate": metrics.win_rate})
         LOGGER.info(
             "BACKTEST SUMMARY | Bets=%s | Final Bankroll=%.2f | ROI=%.4f | Win Rate=%.4f | Max Drawdown=%.4f",
             metrics.bets_placed,
@@ -131,6 +150,12 @@ class Backtester:
             metrics.max_drawdown,
         )
         return self.bet_history
+
+    def run_simulation(
+        self, predictions_df: pd.DataFrame, ev_threshold: float = 0.05
+    ) -> pd.DataFrame:
+        """Backward-compatible wrapper for run()."""
+        return self.run(predictions_df, ev_threshold=ev_threshold)
 
     def get_metrics(self) -> BacktestMetrics:
         """Calculate ROI, win rate, and maximum drawdown from the latest simulation."""

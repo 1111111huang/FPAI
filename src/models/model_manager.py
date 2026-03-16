@@ -10,8 +10,9 @@ import mlflow
 import mlflow.sklearn
 import mlflow.xgboost
 import pandas as pd
-from sklearn.metrics import accuracy_score, log_loss
+from sklearn.metrics import accuracy_score, log_loss, precision_score
 
+from src.logic.target_resolver import TargetResolver
 from src.models.base_model import FPAIBaseModel, XGBoostModel
 from src.strategy.backtester import Backtester
 from src.utils.config_loader import AppSettings, load_settings
@@ -31,6 +32,7 @@ class ModelManager:
         league_tier: str = "all",
         test_season: str = "time_split",
         feature_version: str = "v1",
+        target_config: dict[str, str | float | int] | None = None,
     ) -> None:
         """Initialize manager with a model instance and YAML config path."""
         self.model = model
@@ -44,7 +46,9 @@ class ModelManager:
             "league_tier": league_tier,
             "test_season": test_season,
             "feature_version": feature_version,
+            "target": (target_config or {}).get("target_type", "home_win"),
         }
+        self.target_config = target_config or {"target_type": "home_win"}
         mlflow.set_experiment("FPAI_Evolution")
 
     def prepare_training_data(
@@ -78,8 +82,7 @@ class ModelManager:
         if df.empty:
             raise ValueError("No joined training data found in raw_matches and feature_store.")
 
-        # Binary baseline target: 1 if home win, else 0.
-        df["target"] = (df["fthg"] > df["ftag"]).astype(int)
+        df["target"] = TargetResolver.get_label(df, self.target_config)
         df = df.dropna(
             subset=[
                 "home_avg_goals_scored",
@@ -151,6 +154,7 @@ class ModelManager:
             def _run_training() -> Path:
                 mlflow.set_tags(self.mlflow_tags)
                 mlflow.set_tag("primary_metrics", "roi,win_rate,max_drawdown")
+                mlflow.log_param("target_type", self.target_config.get("target_type", "home_win"))
                 self.model.train(X_train, y_train)
                 probabilities = self.model.predict_proba(X_test)
 
@@ -161,11 +165,15 @@ class ModelManager:
 
                 predictions = (positive_proba >= 0.5).astype(int)
                 accuracy = accuracy_score(y_test, predictions)
+                precision = precision_score(y_test, predictions, zero_division=0)
                 loss = log_loss(y_test, positive_proba, labels=[0, 1])
-                mlflow.log_metric("accuracy", float(accuracy))
+                target_name = str(self.target_config.get("target_type", "home_win")).strip().lower()
+                mlflow.log_metric(f"{target_name}_accuracy", float(accuracy))
+                mlflow.log_metric(f"{target_name}_precision", float(precision))
                 mlflow.log_metric("log_loss", float(loss))
 
                 LOGGER.info("Accuracy: %.4f", accuracy)
+                LOGGER.info("Precision: %.4f", precision)
                 LOGGER.info("Log Loss: %.4f", loss)
 
                 predictions_df = pd.DataFrame(

@@ -59,6 +59,12 @@ def _build_parser() -> argparse.ArgumentParser:
         choices=sorted(MODEL_REGISTRY.keys()),
         help="Model type to train (default: lr).",
     )
+    train_parser.add_argument(
+        "--target_type",
+        type=str,
+        default="home_win",
+        help="Target type for training labels (default: home_win).",
+    )
     predict_parser = subparsers.add_parser("predict", help="Load latest model and print value bets")
     predict_parser.add_argument(
         "--league",
@@ -120,6 +126,12 @@ def _build_parser() -> argparse.ArgumentParser:
         type=str,
         default="time_split",
         help="Tag value for test season used (default: time_split).",
+    )
+    experiment_parser.add_argument(
+        "--target_type",
+        type=str,
+        default="home_win",
+        help="Target type for training labels (default: home_win).",
     )
     return parser
 
@@ -318,7 +330,7 @@ def run_ingest(app_settings: AppSettings, db_manager: DuckDBManager) -> None:
     LOGGER.info("Ingest complete | raw_matches=%s | feature_store=%s", total_raw, total_features)
 
 
-def run_train(model_name: str) -> None:
+def run_train(model_name: str, target_type: str) -> None:
     """Train selected model and persist artifact."""
     LOGGER.info("Executing command: train")
     normalized = model_name.strip().lower()
@@ -328,7 +340,7 @@ def run_train(model_name: str) -> None:
         raise ValueError(f"Unsupported model '{model_name}'. Available options: {valid_models}")
     LOGGER.info("Selected model type: %s", normalized)
 
-    model_manager = ModelManager(model=model_cls())
+    model_manager = ModelManager(model=model_cls(), target_config={"target_type": target_type})
     model_path = model_manager.run_pipeline()
     LOGGER.info("Model saved to %s", model_path)
 
@@ -513,7 +525,11 @@ def run_backtest(
 
 
 def run_experiment(
-    app_settings: AppSettings, experiment_name: str, test_season: str, config_path: str
+    app_settings: AppSettings,
+    experiment_name: str,
+    test_season: str,
+    config_path: str,
+    target_type: str,
 ) -> None:
     """Run a YAML-configured grid search with MLflow tracking and backtest metrics."""
     LOGGER.info("Executing command: experiment")
@@ -556,6 +572,7 @@ def run_experiment(
             mlflow.log_params(grid_params)
             mlflow.log_param("features", ",".join(FEATURE_COLUMNS))
             mlflow.log_params(merged_params)
+            mlflow.log_param("target_type", target_type)
             mlflow.log_dict(config, "experiment_config.yaml")
             mlflow.set_tag("model_type", model_type)
             mlflow.set_tag("test_season", test_season)
@@ -567,6 +584,7 @@ def run_experiment(
                 league_tier="all",
                 test_season=test_season,
                 feature_version="v1",
+                target_config={"target_type": target_type},
             )
             _, test_meta, positive_proba = manager.train()
 
@@ -662,7 +680,7 @@ def main() -> None:
     elif args.command == "ingest":
         run_ingest(app_settings, db_manager)
     elif args.command == "train":
-        run_train(model_name=str(args.model))
+        run_train(model_name=str(args.model), target_type=str(args.target_type))
     elif args.command == "predict":
         run_predict(app_settings, db_manager, league=str(args.league), run_id=args.run_id)
     elif args.command == "backtest":
@@ -681,6 +699,7 @@ def main() -> None:
             experiment_name=str(args.experiment_name),
             test_season=str(args.test_season),
             config_path=str(args.config_path),
+            target_type=str(args.target_type),
         )
 
 
