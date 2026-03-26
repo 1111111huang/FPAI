@@ -53,7 +53,10 @@ def load_settings(config_path: str = "config.yaml") -> AppSettings:
     path = Path(config_path)
     with path.open("r", encoding="utf-8") as config_file:
         raw_config = yaml.safe_load(config_file) or {}
-    return AppSettings.model_validate(raw_config)
+    # Support both Pydantic v2 (model_validate) and v1 (parse_obj).
+    if hasattr(AppSettings, "model_validate"):
+        return AppSettings.model_validate(raw_config)
+    return AppSettings.parse_obj(raw_config)
 
 
 settings = load_settings()

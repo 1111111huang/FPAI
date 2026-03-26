@@ -102,10 +102,19 @@ class FootballDataScraper:
         limit_seasons: int = 5,
         leagues: list[str] | None = None,
         start_year: int = 2015,
+        force: bool = False,
     ) -> int:
-        """Download selected leagues and seasons; overwrite current season and skip unchanged history."""
+        """Download selected leagues and seasons; optionally overwrite existing files."""
         target_leagues = [league.upper() for league in (leagues or ["E0"])]
-        self.cleanup_old_raw_files(start_year=start_year)
+        if force:
+            removed = 0
+            for csv_file in self.raw_data_dir.glob("*.csv"):
+                csv_file.unlink(missing_ok=True)
+                removed += 1
+            if removed > 0:
+                LOGGER.info("Force enabled: removed %s existing CSV files in %s", removed, self.raw_data_dir)
+        else:
+            self.cleanup_old_raw_files(start_year=start_year)
 
         all_urls = self.fetch_csv_urls(self.league_page_url)
         if not all_urls:
@@ -150,7 +159,7 @@ class FootballDataScraper:
             local_name = f"{league_code}_{season}.csv"
             local_path = self.raw_data_dir / local_name
 
-            should_overwrite = season == current_season
+            should_overwrite = force or season == current_season
             if local_path.exists() and not should_overwrite:
                 LOGGER.info("Skipping existing historical file: %s", local_name)
                 skipped_files += 1
@@ -167,7 +176,7 @@ class FootballDataScraper:
                 downloaded_files += 1
                 LOGGER.info(
                     "Downloaded%s %s (%s) from %s",
-                    " (overwritten current season)" if should_overwrite else "",
+                    " (overwritten)" if should_overwrite else "",
                     local_name,
                     LEAGUE_LABELS.get(league_code, league_code),
                     link,

@@ -27,7 +27,7 @@ class CSVLoader:
         self.raw_data_dir = Path(self.db_manager.settings.paths.raw_data_dir)
         self.raw_data_dir.mkdir(parents=True, exist_ok=True)
 
-    def process_v1_csv(self, file_path: str, league_code: str) -> int:
+    def process_v1_csv(self, file_path: str, league_code: str, overwrite: bool = False) -> int:
         """Ingest a v1 football CSV file and return how many matches were added."""
         try:
             df = pd.read_csv(file_path)
@@ -75,6 +75,27 @@ class CSVLoader:
             over25_series = renamed["Avg>2.5"]
         else:
             over25_series = pd.Series([None] * len(renamed), index=renamed.index)
+
+        # Some historical CSVs do not ship AvgH/AvgD/AvgA or discipline/shot metrics.
+        # Ensure optional columns exist so downstream selection doesn't crash.
+        optional_columns = [
+            "hs",
+            "as",
+            "hst",
+            "ast",
+            "hc",
+            "ac",
+            "hy",
+            "ay",
+            "hr",
+            "ar",
+            "avgh",
+            "avgd",
+            "avga",
+        ]
+        for col in optional_columns:
+            if col not in renamed.columns:
+                renamed[col] = None
 
         working = renamed[
             [
@@ -215,9 +236,10 @@ class CSVLoader:
                 before_row = conn.execute("SELECT COUNT(*) FROM raw_matches").fetchone()
                 before_count = int(before_row[0]) if before_row is not None else 0
                 if records_to_insert:
+                    insert_clause = "INSERT OR REPLACE" if overwrite else "INSERT OR IGNORE"
                     conn.executemany(
-                        """
-                        INSERT OR IGNORE INTO raw_matches
+                        f"""
+                        {insert_clause} INTO raw_matches
                         (match_id, league, tier, date, home_team, away_team, fthg, ftag, odds_h, odds_d, odds_a,
                          hs, "as", hst, ast, hc, ac, hy, ay, hr, ar, avgh, avgd, avga)
                         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -238,7 +260,7 @@ class CSVLoader:
             LOGGER.exception("Database failure while ingesting %s.", file_path)
             raise
 
-    def process_directory(self, pattern: str = "E0_*.csv") -> int:
+    def process_directory(self, pattern: str = "E0_*.csv", force: bool = False) -> int:
         """Process all matching CSV files in raw data directory with change detection."""
         files = sorted(self.raw_data_dir.glob(pattern))
         if not files:
@@ -251,12 +273,16 @@ class CSVLoader:
 
         for file_path in files:
             file_hash = self._compute_file_hash(file_path)
-            if self._is_file_unchanged(file_path=file_path, file_hash=file_hash):
+            if not force and self._is_file_unchanged(file_path=file_path, file_hash=file_hash):
                 LOGGER.info("Skipping unchanged file: %s", file_path.name)
                 continue
 
             league_code = file_path.stem.split("_")[0]
-            added = self.process_v1_csv(file_path=str(file_path), league_code=league_code)
+            added = self.process_v1_csv(
+                file_path=str(file_path),
+                league_code=league_code,
+                overwrite=force,
+            )
             total_added += added
             self._mark_file_processed(file_path=file_path, file_hash=file_hash)
 

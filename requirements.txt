@@ -20,3 +20,5 @@ pytest
 ipykernel     # 方便你在VS Code里用Jupyter Notebook调试
 beautifulsoup4
 mlflow
+
+seaborn

@@ -49,8 +49,18 @@ def _build_parser() -> argparse.ArgumentParser:
     """Create CLI parser with scrape, ingest, train, predict, and backtest subcommands."""
     parser = argparse.ArgumentParser(description="FPAI command line interface")
     subparsers = parser.add_subparsers(dest="command", required=True)
-    subparsers.add_parser("scrape", help="Download latest multi-season CSV files to raw directory")
-    subparsers.add_parser("ingest", help="Ingest CSV data and pre-compute features")
+    scrape_parser = subparsers.add_parser("scrape", help="Download latest multi-season CSV files to raw directory")
+    scrape_parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Re-download and overwrite all selected CSV files (ignore existing files).",
+    )
+    ingest_parser = subparsers.add_parser("ingest", help="Ingest CSV data and pre-compute features")
+    ingest_parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Re-ingest all CSV files and overwrite existing database rows.",
+    )
     train_parser = subparsers.add_parser("train", help="Train model and save artifact")
     train_parser.add_argument(
         "--model",
@@ -290,7 +300,7 @@ def _prepare_backtest_frame(source_df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-def run_scrape(app_settings: AppSettings) -> None:
+def run_scrape(app_settings: AppSettings, force: bool = False) -> None:
     """Run scraping only: download season CSV files to data/raw directory."""
     LOGGER.info("Executing command: scrape")
     scraper = FootballDataScraper(
@@ -301,11 +311,12 @@ def run_scrape(app_settings: AppSettings) -> None:
         limit_seasons=app_settings.scraper.limit_seasons,
         leagues=app_settings.scraper.leagues,
         start_year=app_settings.scraper.start_year,
+        force=force,
     )
     LOGGER.info("Scrape complete | files_downloaded=%s", downloaded)
 
 
-def run_ingest(app_settings: AppSettings, db_manager: DuckDBManager) -> None:
+def run_ingest(app_settings: AppSettings, db_manager: DuckDBManager, force: bool = False) -> None:
     """Run directory batch ingestion and feature pre-computation pipeline."""
     LOGGER.info("Executing command: ingest")
 
@@ -314,8 +325,15 @@ def run_ingest(app_settings: AppSettings, db_manager: DuckDBManager) -> None:
         LOGGER.error("Raw data directory not found: %s", raw_dir)
         return
 
+    if force:
+        with db_manager.connection() as conn:
+            conn.execute("DELETE FROM processed_files")
+            conn.execute("DELETE FROM feature_store")
+            conn.execute("DELETE FROM raw_matches")
+        LOGGER.info("Force enabled: cleared processed_files, feature_store, and raw_matches.")
+
     loader = CSVLoader()
-    loader.process_directory(pattern="*.csv")
+    loader.process_directory(pattern="*.csv", force=force)
 
     factory = FeatureFactory()
     features_df = factory.compute_rolling_stats(window=app_settings.settings.rolling_window)
@@ -676,9 +694,9 @@ def main() -> None:
     db_manager = DuckDBManager()
 
     if args.command == "scrape":
-        run_scrape(app_settings)
+        run_scrape(app_settings, force=getattr(args, "force", False))
     elif args.command == "ingest":
-        run_ingest(app_settings, db_manager)
+        run_ingest(app_settings, db_manager, force=getattr(args, "force", False))
     elif args.command == "train":
         run_train(model_name=str(args.model), target_type=str(args.target_type))
     elif args.command == "predict":
