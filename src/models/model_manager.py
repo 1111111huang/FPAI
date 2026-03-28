@@ -9,6 +9,7 @@ import duckdb
 import mlflow
 import mlflow.sklearn
 import mlflow.xgboost
+import numpy as np
 import pandas as pd
 from sklearn.metrics import accuracy_score, log_loss, precision_score
 
@@ -83,23 +84,10 @@ class ModelManager:
             raise ValueError("No joined training data found in raw_matches and feature_store.")
 
         df["target"] = TargetResolver.get_label(df, self.target_config)
-        df = df.dropna(
-            subset=[
-                "home_avg_goals_scored",
-                "home_avg_goals_conceded",
-                "away_avg_goals_scored",
-                "away_avg_goals_conceded",
-                "is_cold_start",
-                "relative_tier_change",
-                "market_prob_h",
-                "elo_rating_diff",
-                "home_advantage_trend",
-                "odds_h",
-            ]
-        ).reset_index(drop=True)
+        df = df.dropna(subset=["odds_h"]).reset_index(drop=True)
 
         if df.empty:
-            raise ValueError("No rows left after dropping records with missing feature values.")
+            raise ValueError("No rows left after dropping records with missing odds.")
 
         feature_columns = [
             "home_avg_goals_scored",
@@ -124,6 +112,19 @@ class ModelManager:
         y_train = y.iloc[:split_index].copy()
         y_test = y.iloc[split_index:].copy()
         test_meta = df.iloc[split_index:][["match_id", "odds_h"]].copy()
+
+        # Coerce features to numeric and ensure missing values are np.nan (XGBoost-compatible).
+        X_train = X_train.apply(pd.to_numeric, errors="coerce").astype(float)
+        X_test = X_test.apply(pd.to_numeric, errors="coerce").astype(float)
+        X_train = X_train.replace({pd.NA: np.nan})
+        X_test = X_test.replace({pd.NA: np.nan})
+
+        if not isinstance(self.model, XGBoostModel):
+            if X_train.isna().any().any() or X_test.isna().any().any():
+                raise ValueError(
+                    "Missing values detected in features. "
+                    "Current model does not support NaNs; use XGBoost or add imputation."
+                )
 
         if y_train.nunique() < 2:
             raise ValueError("Training split has a single class; cannot train Logistic Regression.")
