@@ -11,6 +11,7 @@ import mlflow.sklearn
 import mlflow.xgboost
 import numpy as np
 import pandas as pd
+import yaml
 from sklearn.metrics import accuracy_score, log_loss, precision_score
 
 from src.logic.target_resolver import TargetResolver
@@ -52,28 +53,46 @@ class ModelManager:
         self.target_config = target_config or {"target_type": "home_win"}
         mlflow.set_experiment("FPAI_Evolution")
 
+    def _load_selected_features(self) -> list[str]:
+        schema_path = self.config_path.parent / "config" / "schema.yaml"
+        if not schema_path.exists():
+            raise FileNotFoundError(f"Missing schema file: {schema_path}")
+        with schema_path.open("r", encoding="utf-8") as handle:
+            schema = yaml.safe_load(handle) or {}
+        training_setup = schema.get("training_setup", {})
+        selected = training_setup.get("selected_features")
+        if not isinstance(selected, list) or not selected:
+            raise ValueError("training_setup.selected_features must be a non-empty list in config/schema.yaml.")
+        if not all(isinstance(item, str) and item.strip() for item in selected):
+            raise ValueError("training_setup.selected_features must contain only non-empty strings.")
+        return [item.strip() for item in selected]
+
+    @staticmethod
+    def _log_selected_features(selected_features: list[str]) -> None:
+        active_run = mlflow.active_run()
+        if active_run is None:
+            return
+        mlflow.log_param("selected_features", ",".join(selected_features))
+
     def prepare_training_data(
         self,
     ) -> tuple[pd.DataFrame, pd.DataFrame, pd.Series, pd.Series, pd.DataFrame]:
         """Build feature matrix and labels, then apply a time-based train/test split."""
+        feature_columns = self._load_selected_features()
+        for feature_name in feature_columns:
+            if not feature_name.replace("_", "").isalnum():
+                raise ValueError(f"Invalid feature name in selected_features: {feature_name}")
+        feature_select = ",\n                    ".join(f"f.{name}" for name in feature_columns)
         with self.db_manager.connection() as conn:
             df = conn.execute(
-                """
+                f"""
                 SELECT
                     r.match_id,
                     r.date,
                     r.fthg,
                     r.ftag,
                     r.odds_h,
-                    f.home_avg_goals_scored,
-                    f.home_avg_goals_conceded,
-                    f.away_avg_goals_scored,
-                    f.away_avg_goals_conceded,
-                    f.is_cold_start,
-                    f.relative_tier_change,
-                    f.market_prob_h,
-                    f.elo_rating_diff,
-                    f.home_advantage_trend
+                    {feature_select}
                 FROM raw_matches r
                 INNER JOIN feature_store f ON r.match_id = f.match_id
                 ORDER BY r.date, r.match_id
@@ -89,17 +108,9 @@ class ModelManager:
         if df.empty:
             raise ValueError("No rows left after dropping records with missing odds.")
 
-        feature_columns = [
-            "home_avg_goals_scored",
-            "home_avg_goals_conceded",
-            "away_avg_goals_scored",
-            "away_avg_goals_conceded",
-            "is_cold_start",
-            "relative_tier_change",
-            "market_prob_h",
-            "elo_rating_diff",
-            "home_advantage_trend",
-        ]
+        for feature_name in feature_columns:
+            if feature_name not in df.columns:
+                raise ValueError(f"Missing selected feature in training data: {feature_name}")
 
         X = df[feature_columns]
         y = df["target"]
@@ -133,6 +144,8 @@ class ModelManager:
 
     def train(self) -> tuple[pd.Series, pd.DataFrame, pd.Series]:
         """Train the model and return targets, metadata, and positive-class probabilities."""
+        selected_features = self._load_selected_features()
+        self._log_selected_features(selected_features)
         X_train, X_test, y_train, y_test, test_meta = self.prepare_training_data()
         self.model.train(X_train, y_train)
         probabilities = self.model.predict_proba(X_test)
@@ -145,6 +158,8 @@ class ModelManager:
     def run_pipeline(self, external_run: bool = False) -> Path:
         """Train model, evaluate it, and save a timestamped artifact path."""
         try:
+            selected_features = self._load_selected_features()
+            self._log_selected_features(selected_features)
             X_train, X_test, y_train, y_test, test_meta = self.prepare_training_data()
 
             if isinstance(self.model, XGBoostModel):

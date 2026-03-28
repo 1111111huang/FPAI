@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
+from tempfile import TemporaryDirectory
 
 import pandas as pd
 import mlflow
@@ -124,22 +126,16 @@ class Backtester:
             }
             history_rows.append(history_row)
 
-            LOGGER.info(
-                "BET | %s vs %s | EV=%.4f | Odds=%.2f | Result=%s | PnL=%.2f | Bankroll=%.2f",
-                row.home_team,
-                row.away_team,
-                float(row.ev),
-                float(row.odds_h),
-                result,
-                float(pnl),
-                float(bankroll),
-            )
-
         self.bankroll = bankroll
         self.bet_history = pd.DataFrame(history_rows)
         metrics = self.get_metrics()
         active_run = mlflow.active_run()
         if active_run is not None:
+            if not self.bet_history.empty:
+                with TemporaryDirectory() as tmpdir:
+                    bets_path = Path(tmpdir) / "backtest_bets.csv"
+                    self.bet_history.to_csv(bets_path, index=False)
+                    mlflow.log_artifact(str(bets_path))
             mlflow.log_metrics({"roi": metrics.total_roi, "win_rate": metrics.win_rate})
         LOGGER.info(
             "BACKTEST SUMMARY | Bets=%s | Final Bankroll=%.2f | ROI=%.4f | Win Rate=%.4f | Max Drawdown=%.4f",

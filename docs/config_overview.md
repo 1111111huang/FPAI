@@ -67,3 +67,11 @@ Experiment configuration for XGBoost hyperparameter grid search.
 - `initial_bankroll`: Starting bankroll.
 - `bet_size`: Fixed bet amount per wager.
 
+## `config/schema.yaml`
+Training schema configuration used to explicitly select features for model training.
+
+**Top-level keys**
+- `training_setup`: Group for training-related schema settings.
+
+**`training_setup`**
+- `selected_features`: Ordered whitelist of feature column names to use in training. Any missing feature in the training DataFrame will raise a `ValueError`.

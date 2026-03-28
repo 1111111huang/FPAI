@@ -588,7 +588,6 @@ def run_experiment(
         run_name = f"{model_type}_" + "_".join(f"{key}{value}" for key, value in params.items())
         with mlflow.start_run(run_name=run_name, nested=True):
             mlflow.log_params(grid_params)
-            mlflow.log_param("features", ",".join(FEATURE_COLUMNS))
             mlflow.log_params(merged_params)
             mlflow.log_param("target_type", target_type)
             mlflow.log_dict(config, "experiment_config.yaml")
