@@ -1,0 +1,21 @@
+experiment_family: forecast_target
+sweep_stage: broad
+version: v1
+model_type: lr
+feature_schema_version: v1
+league: E0
+test_season: time_split
+
+grid_search:
+  C: [0.01, 0.1, 1.0, 10.0]
+  penalty: [l2]
+  solver: [lbfgs]
+  class_weight: [null, balanced]
+
+fixed_params:
+  max_iter: 2000
+  random_state: 42
+
+tags:
+  experiment_methodology: target_model_broad_grid
+  split_policy: chronological_70_15_15

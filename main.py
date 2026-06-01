@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 from datetime import datetime
 import itertools
+import json
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
@@ -15,11 +16,26 @@ import matplotlib.pyplot as plt
 import yaml
 
 from src.features.feature_factory import FeatureFactory
+from src.evaluation import run_diagnostics
+from src.evaluation.mlflow_cleanup import MLflowStoreCleanup, save_cleanup_report
+from src.forecast import ForecastService
 from src.ingestion import CSVLoader, FootballDataScraper
-from src.models import LRModel, ModelFactory, ModelManager, XGBoostModel
+from src.logic.target_registry import get_target_definition, list_target_definitions
+from src.models import (
+    LRModel,
+    ModelFactory,
+    ModelManager,
+    RandomForestModel,
+    RandomForestRegressorModel,
+    XGBoostModel,
+    XGBoostRegressorModel,
+)
 from src.strategy import Backtester, StrategyEngine
 from src.utils import DuckDBManager, configure_logger, get_logger
 from src.utils.config_loader import AppSettings, settings
+from src.utils.feature_importance import PermutationImportanceAnalyzer
+from src.utils.model_comparison import ModelComparison
+from src.utils.sweep_runner import SweepRunner
 
 LOGGER = get_logger(__name__)
 FEATURE_COLUMNS = [
@@ -40,9 +56,32 @@ LEAGUE_LABELS = {
 }
 MODEL_REGISTRY = {
     "lr": LRModel,
+    "random_forest": RandomForestModel,
     "xgb": XGBoostModel,
     "xgboost": XGBoostModel,
+    "xgb_regressor": XGBoostRegressorModel,
+    "xgboost_regressor": XGBoostRegressorModel,
+    "rf_regressor": RandomForestRegressorModel,
 }
+
+
+def _mlflow_log_model_compat(model, flavor: str, name: str = "model") -> None:
+    """Log MLflow model with name= (new) or artifact_path (legacy) compatibility."""
+    if flavor == "xgboost":
+        try:
+            mlflow.xgboost.log_model(model, name=name)
+            return
+        except TypeError:
+            mlflow.xgboost.log_model(model, name)
+            return
+    if flavor == "sklearn":
+        try:
+            mlflow.sklearn.log_model(model, name=name)
+            return
+        except TypeError:
+            mlflow.sklearn.log_model(model, name)
+            return
+    raise ValueError(f"Unsupported MLflow model flavor: {flavor}")
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -75,7 +114,59 @@ def _build_parser() -> argparse.ArgumentParser:
         default="home_win",
         help="Target type for training labels (default: home_win).",
     )
-    predict_parser = subparsers.add_parser("predict", help="Load latest model and print value bets")
+    train_target_parser = subparsers.add_parser("train-target", help="Train one forecast target model")
+    train_target_parser.add_argument(
+        "--target",
+        type=str,
+        required=True,
+        choices=sorted(definition.name for definition in list_target_definitions()),
+        help="Forecast target to train.",
+    )
+    train_target_parser.add_argument(
+        "--model",
+        type=str,
+        default=None,
+        choices=sorted(MODEL_REGISTRY.keys()),
+        help="Optional model override. Defaults to lr for classification and rf_regressor for regression.",
+    )
+    train_suite_parser = subparsers.add_parser("train-forecast-suite", help="Train all registered forecast target models")
+    train_suite_parser.add_argument(
+        "--targets",
+        type=str,
+        nargs="*",
+        default=None,
+        choices=sorted(definition.name for definition in list_target_definitions()),
+        help="Optional subset of forecast targets to train.",
+    )
+    forecast_parser = subparsers.add_parser("forecast", help="Emit structured forecast JSON")
+    forecast_parser.add_argument(
+        "--league",
+        type=str,
+        default=None,
+        help="Optional league code filter.",
+    )
+    forecast_parser.add_argument(
+        "--match_id",
+        type=str,
+        nargs="*",
+        default=None,
+        help="Optional match_id values to forecast.",
+    )
+    forecast_parser.add_argument(
+        "--target",
+        type=str,
+        nargs="*",
+        default=None,
+        choices=sorted(definition.name for definition in list_target_definitions() if definition.name != "home_win"),
+        help="Optional forecast target subset.",
+    )
+    forecast_parser.add_argument(
+        "--limit",
+        type=int,
+        default=None,
+        help="Optional maximum number of matches to return.",
+    )
+    predict_parser = subparsers.add_parser("predict", help="[legacy] Load latest model and print value bets")
     predict_parser.add_argument(
         "--league",
         type=str,
@@ -88,7 +179,7 @@ def _build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Optional MLflow run ID to load a specific model.",
     )
-    backtest_parser = subparsers.add_parser("backtest", help="Run historical strategy backtest")
+    backtest_parser = subparsers.add_parser("backtest", help="[legacy] Run historical strategy backtest")
     backtest_parser.add_argument(
         "--ev_threshold",
         type=float,
@@ -118,7 +209,7 @@ def _build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Optional MLflow run ID to load a specific model.",
     )
-    experiment_parser = subparsers.add_parser("experiment", help="Run MLflow experiment grid search")
+    experiment_parser = subparsers.add_parser("experiment", help="[legacy] Run MLflow experiment grid search")
     experiment_parser.add_argument(
         "--experiment_name",
         type=str,
@@ -142,6 +233,185 @@ def _build_parser() -> argparse.ArgumentParser:
         type=str,
         default="home_win",
         help="Target type for training labels (default: home_win).",
+    )
+    experiment_target_parser = subparsers.add_parser(
+        "experiment-target",
+        help="Run registry-aware MLflow forecast experiments for one target",
+    )
+    experiment_target_parser.add_argument(
+        "--target",
+        type=str,
+        required=True,
+        choices=sorted(definition.name for definition in list_target_definitions()),
+        help="Forecast target to experiment on.",
+    )
+    experiment_target_parser.add_argument(
+        "--config_path",
+        type=str,
+        required=True,
+        help="Path to target experiment YAML config.",
+    )
+    experiment_target_parser.add_argument(
+        "--experiment_name",
+        type=str,
+        default=None,
+        help="Optional MLflow experiment name override.",
+    )
+    experiment_target_parser.add_argument(
+        "--max_runs",
+        type=int,
+        default=None,
+        help="Optional cap for smoke-testing broad grids.",
+    )
+    compare_parser = subparsers.add_parser(
+        "compare-models",
+        help="Compare MLflow forecast model runs for one target",
+    )
+    compare_parser.add_argument(
+        "--target",
+        type=str,
+        required=True,
+        choices=sorted(definition.name for definition in list_target_definitions()),
+        help="Forecast target to compare.",
+    )
+    compare_parser.add_argument(
+        "--experiment_name",
+        type=str,
+        default=None,
+        help="Optional MLflow experiment name. Defaults to all experiments.",
+    )
+    compare_parser.add_argument(
+        "--output_path",
+        type=str,
+        default=None,
+        help="Optional output report path.",
+    )
+    compare_parser.add_argument(
+        "--format",
+        type=str,
+        default="csv",
+        choices=["csv", "json", "html"],
+        help="Report format.",
+    )
+    sweep_parser = subparsers.add_parser(
+        "sweep-target",
+        help="Run a systematic target sweep with MLflow logging",
+    )
+    sweep_parser.add_argument(
+        "--target",
+        type=str,
+        required=True,
+        choices=sorted(definition.name for definition in list_target_definitions()),
+        help="Forecast target to sweep.",
+    )
+    sweep_parser.add_argument(
+        "--config_path",
+        type=str,
+        required=True,
+        help="Path to target experiment YAML config.",
+    )
+    sweep_parser.add_argument(
+        "--sweep_stage",
+        type=str,
+        default=None,
+        choices=["smoke", "broad", "narrow", "final"],
+        help="Override sweep stage tag.",
+    )
+    sweep_parser.add_argument(
+        "--experiment_name",
+        type=str,
+        default=None,
+        help="Optional MLflow experiment name override.",
+    )
+    sweep_parser.add_argument(
+        "--max_runs",
+        type=int,
+        default=None,
+        help="Optional cap for smoke-testing broad grids.",
+    )
+    diagnose_parser = subparsers.add_parser(
+        "diagnose-model",
+        help="Generate evaluation diagnostics for one model artifact",
+    )
+    diagnose_parser.add_argument(
+        "--target",
+        type=str,
+        required=True,
+        choices=sorted(definition.name for definition in list_target_definitions()),
+        help="Forecast target to diagnose.",
+    )
+    diagnose_parser.add_argument(
+        "--model_path",
+        type=str,
+        required=True,
+        help="Path to local model artifact.",
+    )
+    diagnose_parser.add_argument(
+        "--output_path",
+        type=str,
+        default="reports/diagnostics.json",
+        help="Path for diagnostics JSON output.",
+    )
+    
+    # Permutation importance analysis
+    importance_parser = subparsers.add_parser(
+        "permutation-importance",
+        help="Run permutation importance analysis on a trained model",
+    )
+    importance_parser.add_argument(
+        "--target",
+        type=str,
+        required=True,
+        choices=sorted(definition.name for definition in list_target_definitions()),
+        help="Forecast target to analyze.",
+    )
+    importance_parser.add_argument(
+        "--model_path",
+        type=str,
+        required=True,
+        help="Path to trained model artifact.",
+    )
+    importance_parser.add_argument(
+        "--n_repeats",
+        type=int,
+        default=10,
+        help="Number of permutation repeats.",
+    )
+    importance_parser.add_argument(
+        "--output_dir",
+        type=str,
+        default="reports",
+        help="Directory for importance reports.",
+    )
+    
+    # MLflow cleanup
+    cleanup_parser = subparsers.add_parser(
+        "cleanup-mlflow",
+        help="Clean up malformed MLflow experiments in local file store",
+    )
+    cleanup_parser.add_argument(
+        "--strategy",
+        type=str,
+        choices=["recover", "remove", "backup_and_remove"],
+        default="recover",
+        help="How to handle malformed experiments.",
+    )
+    cleanup_parser.add_argument(
+        "--backup",
+        action="store_true",
+        default=True,
+        help="Backup before destructive operations.",
+    )
+    cleanup_parser.add_argument(
+        "--mlruns_dir",
+        type=str,
+        default="mlruns",
+        help="Path to MLflow runs directory.",
+    )
+    cleanup_parser.add_argument(
+        "--report_only",
+        action="store_true",
+        help="Only report malformed experiments without fixing them.",
     )
     return parser
 
@@ -361,6 +631,56 @@ def run_train(model_name: str, target_type: str) -> None:
     model_manager = ModelManager(model=model_cls(), target_config={"target_type": target_type})
     model_path = model_manager.run_pipeline()
     LOGGER.info("Model saved to %s", model_path)
+
+
+def _default_model_for_target(target_name: str) -> str:
+    """Return the default model key for a target definition."""
+    definition = get_target_definition(target_name)
+    if definition.task_type == "regression":
+        return "rf_regressor"
+    return "lr"
+
+
+def run_train_target(target_name: str, model_name: str | None = None) -> Path:
+    """Train one registry-backed forecast target model."""
+    definition = get_target_definition(target_name)
+    selected_model = (model_name or _default_model_for_target(definition.name)).strip().lower()
+    model_cls = MODEL_REGISTRY.get(selected_model)
+    if model_cls is None:
+        valid_models = ", ".join(sorted(MODEL_REGISTRY.keys()))
+        raise ValueError(f"Unsupported model '{selected_model}'. Available options: {valid_models}")
+    LOGGER.info(
+        "Training forecast target | target=%s | task_type=%s | model=%s",
+        definition.name,
+        definition.task_type,
+        selected_model,
+    )
+    model_manager = ModelManager(model=model_cls(), target_config={"target": definition.name})
+    model_path = model_manager.run_pipeline()
+    LOGGER.info("Target model saved to %s", model_path)
+    return model_path
+
+
+def run_train_forecast_suite(targets: list[str] | None = None) -> None:
+    """Train the full forecast model suite or a selected target subset."""
+    selected_targets = targets or [
+        definition.name for definition in list_target_definitions() if definition.name != "home_win"
+    ]
+    LOGGER.info("Training forecast suite targets: %s", ", ".join(selected_targets))
+    for target_name in selected_targets:
+        run_train_target(target_name)
+
+
+def run_forecast(
+    league: str | None = None,
+    match_ids: list[str] | None = None,
+    targets: list[str] | None = None,
+    limit: int | None = None,
+) -> None:
+    """Emit forecast JSON for requested matches."""
+    service = ForecastService(targets=targets)
+    payloads = service.forecast(match_ids=match_ids, league=league, limit=limit)
+    print(json.dumps(payloads, indent=2, sort_keys=True))
 
 
 def run_predict(
@@ -633,9 +953,9 @@ def run_experiment(
             )
 
             if model_type == "xgboost":
-                mlflow.xgboost.log_model(model.model, "model")
+                _mlflow_log_model_compat(model.model, "xgboost", name="model")
             else:
-                mlflow.sklearn.log_model(model.model, "model")
+                _mlflow_log_model_compat(model.model, "sklearn", name="model")
 
             with TemporaryDirectory() as tmpdir:
                 plot_path = Path(tmpdir) / "bankroll_curve.png"
@@ -683,6 +1003,248 @@ def run_experiment(
         LOGGER.info("Top 3 parameter sets by ROI:\n%s", summary_df.to_string(index=False))
 
 
+def _iter_grid_params(grid: dict[str, list[object]]) -> list[dict[str, object]]:
+    """Expand a YAML grid into a stable list of parameter dictionaries."""
+    param_keys = list(grid.keys())
+    return [dict(zip(param_keys, values)) for values in itertools.product(*(grid[key] for key in param_keys))]
+
+
+def _forecast_experiment_name(target_name: str, model_type: str, stage: str, version: str) -> str:
+    """Return the default MLflow experiment name for forecast model sweeps."""
+    return f"FPAI_{target_name}_{model_type}_{stage}_{version}"
+
+
+def _mlflow_flavor_for_model_type(model_type: str) -> str:
+    normalized = model_type.strip().lower()
+    if normalized in {"xgb", "xgboost", "xgb_regressor", "xgboost_regressor"}:
+        return "xgboost"
+    return "sklearn"
+
+
+def run_experiment_target(
+    target_name: str,
+    config_path: str,
+    experiment_name: str | None = None,
+    max_runs: int | None = None,
+    sweep_stage: str | None = None,
+) -> None:
+    """Run a target-aware MLflow parameter sweep with forecast metrics."""
+    SweepRunner(
+        target_name=target_name,
+        config_path=config_path,
+        experiment_name=experiment_name,
+        max_runs=max_runs,
+        sweep_stage=sweep_stage,
+    ).run()
+    return
+
+    definition = get_target_definition(target_name)
+    config_file = Path(config_path)
+    if not config_file.exists():
+        raise FileNotFoundError(f"Experiment config not found: {config_file}")
+    with config_file.open("r", encoding="utf-8") as handle:
+        config = yaml.safe_load(handle) or {}
+
+    model_type = str(config.get("model_type", _default_model_for_target(definition.name))).strip().lower()
+    grid = config.get("grid_search", {})
+    if not isinstance(grid, dict) or not grid:
+        raise ValueError("Experiment config must contain a non-empty grid_search mapping.")
+    for key, values in grid.items():
+        if not isinstance(values, list) or not values:
+            raise ValueError(f"grid_search.{key} must be a non-empty list.")
+    fixed_params = config.get("fixed_params", {})
+    if not isinstance(fixed_params, dict):
+        raise ValueError("fixed_params must be a mapping when provided.")
+
+    if sweep_stage is not None:
+        config["sweep_stage"] = sweep_stage
+    stage = str(config.get("sweep_stage", "broad")).strip().lower()
+    version = str(config.get("version", "v1")).strip().lower()
+    resolved_experiment_name = experiment_name or _forecast_experiment_name(
+        definition.name,
+        model_type,
+        stage,
+        version,
+    )
+    mlflow.set_experiment(resolved_experiment_name)
+    run_params = _iter_grid_params(grid)
+    if max_runs is not None:
+        run_params = run_params[: max(0, int(max_runs))]
+    LOGGER.info(
+        "Running target experiment | experiment=%s | target=%s | model=%s | runs=%s",
+        resolved_experiment_name,
+        definition.name,
+        model_type,
+        len(run_params),
+    )
+
+    results: list[dict[str, object]] = []
+    for index, params in enumerate(run_params, start=1):
+        merged_params = {**fixed_params, **params}
+        if model_type in {"xgb", "xgboost"}:
+            if definition.task_type == "multiclass_classification":
+                merged_params.setdefault("objective", "multi:softprob")
+                merged_params.setdefault("eval_metric", "mlogloss")
+                merged_params.setdefault("num_class", len(definition.classes))
+            elif definition.task_type == "binary_classification":
+                merged_params.setdefault("objective", "binary:logistic")
+                merged_params.setdefault("eval_metric", "logloss")
+        elif model_type in {"xgb_regressor", "xgboost_regressor"}:
+            merged_params.setdefault("objective", "reg:squarederror")
+            merged_params.setdefault("eval_metric", "rmse")
+        run_name = f"{definition.name}_{model_type}_{stage}_{index:04d}"
+        with mlflow.start_run(run_name=run_name):
+            mlflow.log_dict(config, "experiment_config.yaml")
+            mlflow.log_params(merged_params)
+            mlflow.log_param("target", definition.name)
+            mlflow.log_param("model_type", model_type)
+            mlflow.set_tags(
+                {
+                    "target": definition.name,
+                    "task_type": definition.task_type,
+                    "model_family": model_type,
+                    "feature_schema_version": str(config.get("feature_schema_version", "v1")),
+                    "split_policy": "chronological_70_15_15",
+                    "league": str(config.get("league", "all")),
+                    "sweep_stage": stage,
+                    "experiment_version": version,
+                }
+            )
+            extra_tags = config.get("tags", {})
+            if isinstance(extra_tags, dict):
+                mlflow.set_tags({str(key): str(value) for key, value in extra_tags.items()})
+
+            model = ModelFactory.get_model(model_type, merged_params)
+            manager = ModelManager(
+                model=model,
+                league_tier=str(config.get("league_tier", "all")),
+                test_season=str(config.get("test_season", "time_split")),
+                feature_version=str(config.get("feature_schema_version", "v1")),
+                target_config={"target": definition.name},
+            )
+            X_train, X_val, X_test, y_train, y_val, y_test, _ = manager.prepare_training_data()
+            eval_set = [(X_val, y_val)] if isinstance(model, (XGBoostModel, XGBoostRegressorModel)) else None
+            model.train(X_train, y_train, eval_set=eval_set)
+            manager._log_feature_importance(list(X_train.columns), model)
+            metrics, _ = manager._evaluate_target(X_test, y_test, X_train, y_train, X_val, y_val)
+            mlflow.log_metrics({metric_name: float(value) for metric_name, value in metrics.items()})
+            mlflow.set_tag("training_cutoff", getattr(manager, "training_cutoff", ""))
+            _mlflow_log_model_compat(
+                model.model,
+                _mlflow_flavor_for_model_type(model_type),
+                name="model",
+            )
+            results.append({**params, **metrics})
+
+    if results:
+        primary_metric = definition.primary_metric
+        ascending = primary_metric in {"log_loss", "mae", "rmse"}
+        summary_df = pd.DataFrame(results).sort_values(primary_metric, ascending=ascending).head(5)
+        LOGGER.info("Top 5 parameter sets by %s:\n%s", primary_metric, summary_df.to_string(index=False))
+
+
+
+
+def run_permutation_importance(
+    target_name: str,
+    model_path: str,
+    n_repeats: int = 10,
+    output_dir: str = "reports",
+) -> Path:
+    """Analyze permutation importance for a trained model.
+    
+    Args:
+        target_name: Forecast target name
+        model_path: Path to trained model artifact
+        n_repeats: Number of permutation repeats
+        output_dir: Directory for output reports
+    
+    Returns:
+        Path to saved importance report
+    """
+    definition = get_target_definition(target_name)
+    LOGGER.info(f"Analyzing permutation importance for {target_name}")
+    
+    # Load model
+    analyzer = PermutationImportanceAnalyzer(
+        model_path=model_path,
+        target_name=target_name,
+        output_dir=output_dir,
+    )
+    
+    # Prepare evaluation data
+    manager = ModelManager(
+        model=analyzer.model,
+        target_config={"target": target_name},
+    )
+    X_train, X_val, X_test, y_train, y_val, y_test, _ = manager.prepare_training_data()
+    
+    # Use validation set for importance analysis
+    LOGGER.info(f"Computing importance on validation set ({len(X_val)} samples)")
+    importance_df = analyzer.compute_importance(X_val, y_val, n_repeats=n_repeats)
+    
+    # Save report
+    report_path = analyzer.save_report(importance_df, top_n=30)
+    print(f"✓ Permutation importance report: {report_path}")
+    
+    # Print top 10
+    top_10 = importance_df.head(10)
+    print("\nTop 10 Important Features:")
+    print(top_10[["rank", "feature", "importance_mean", "importance_pct"]].to_string(index=False))
+    
+    return report_path
+
+
+def run_mlflow_cleanup(
+    strategy: str = "recover",
+    backup: bool = True,
+    mlruns_dir: str = "mlruns",
+    report_only: bool = False,
+) -> None:
+    """Clean up malformed MLflow experiments.
+    
+    Args:
+        strategy: How to handle malformed experiments (recover, remove, backup_and_remove)
+        backup: Whether to backup before destructive operations
+        mlruns_dir: Path to MLflow runs directory
+        report_only: If True, only report malformed experiments without fixing
+    """
+    LOGGER.info("MLflow store cleanup initiated")
+    
+    cleanup = MLflowStoreCleanup(mlruns_dir=mlruns_dir)
+    summary = cleanup.get_cleanup_summary()
+    
+    print("\n" + "=" * 60)
+    print("MLflow Store Status:")
+    print("=" * 60)
+    print(f"Total experiments: {summary['total_experiments']}")
+    print(f"Valid experiments: {summary['valid_experiments']}")
+    print(f"Malformed experiments: {summary['malformed_experiments']}")
+    print(f"Total runs: {summary['total_runs']}")
+    print(f"Runs in malformed experiments: {summary['runs_in_malformed']}")
+    
+    if summary["malformed_exp_ids"]:
+        print(f"\nMalformed experiment IDs: {', '.join(summary['malformed_exp_ids'])}")
+    
+    if report_only:
+        print("\n[Report Only] No changes made.")
+        save_cleanup_report(summary)
+        return
+    
+    print(f"\nApplying strategy: {strategy}")
+    results = cleanup.cleanup_malformed(strategy=strategy, backup=backup)
+    
+    # Print results
+    print("\nCleanup Results:")
+    for exp_id, result in results.items():
+        status = "✓" if result in {"recovered", "removed", "backed_up_and_removed"} else "✗"
+        print(f"  {status} {exp_id}: {result}")
+    
+    # Save report
+    save_cleanup_report(summary)
+    print(f"\n✓ Cleanup report saved to documents/mlflow_cleanup_report.txt")
+
+
 def main() -> None:
     """Parse CLI args and dispatch the requested command."""
     configure_logger()
@@ -698,6 +1260,17 @@ def main() -> None:
         run_ingest(app_settings, db_manager, force=getattr(args, "force", False))
     elif args.command == "train":
         run_train(model_name=str(args.model), target_type=str(args.target_type))
+    elif args.command == "train-target":
+        run_train_target(target_name=str(args.target), model_name=args.model)
+    elif args.command == "train-forecast-suite":
+        run_train_forecast_suite(targets=args.targets)
+    elif args.command == "forecast":
+        run_forecast(
+            league=args.league,
+            match_ids=args.match_id,
+            targets=args.target,
+            limit=args.limit,
+        )
     elif args.command == "predict":
         run_predict(app_settings, db_manager, league=str(args.league), run_id=args.run_id)
     elif args.command == "backtest":
@@ -718,6 +1291,51 @@ def main() -> None:
             config_path=str(args.config_path),
             target_type=str(args.target_type),
         )
+    elif args.command == "experiment-target":
+        run_experiment_target(
+            target_name=str(args.target),
+            config_path=str(args.config_path),
+            experiment_name=args.experiment_name,
+            max_runs=args.max_runs,
+        )
+    elif args.command == "compare-models":
+        comparer = ModelComparison(experiment_name=args.experiment_name)
+        output_path = args.output_path or f"reports/model_comparison/{args.target}_comparison.{args.format}"
+        report_path = comparer.export_comparison_report(args.target, output_path, format=args.format)
+        best = comparer.identify_best_model(str(args.target))
+        print(f"Comparison report written to {report_path}")
+        if best:
+            print(json.dumps(best, indent=2, sort_keys=True, default=str))
+    elif args.command == "sweep-target":
+        run_experiment_target(
+            target_name=str(args.target),
+            config_path=str(args.config_path),
+            experiment_name=args.experiment_name,
+            max_runs=args.max_runs,
+            sweep_stage=args.sweep_stage,
+        )
+    elif args.command == "diagnose-model":
+        report_path = run_diagnostics(
+            target_name=str(args.target),
+            model_path=str(args.model_path),
+            output_path=str(args.output_path),
+        )
+        print(f"Diagnostics report written to {report_path}")
+    elif args.command == "permutation-importance":
+        report_path = run_permutation_importance(
+            target_name=str(args.target),
+            model_path=str(args.model_path),
+            n_repeats=args.n_repeats,
+            output_dir=str(args.output_dir),
+        )
+    elif args.command == "cleanup-mlflow":
+        run_mlflow_cleanup(
+            strategy=str(args.strategy),
+            backup=args.backup,
+            mlruns_dir=str(args.mlruns_dir),
+            report_only=args.report_only,
+        )
+
 
 
 if __name__ == "__main__":

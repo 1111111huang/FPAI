@@ -28,6 +28,9 @@ Global runtime configuration used by ingestion, features, training, and scraping
 - `min_matches_required`: Minimum matches required for certain logic.
 - `test_size`: Fraction of data reserved for the test split.
 - `initial_bankroll`: Default bankroll for backtesting.
+- `train_split`: Fraction of data reserved for the training split (chronological).
+- `val_split`: Fraction of data reserved for the validation split (chronological).
+- `test_split`: Fraction of data reserved for the test split (chronological).
 
 **`scraper`**
 - `league_page_url`: Root page used to discover season CSV links.
@@ -75,3 +78,6 @@ Training schema configuration used to explicitly select features for model train
 
 **`training_setup`**
 - `selected_features`: Ordered whitelist of feature column names to use in training. Any missing feature in the training DataFrame will raise a `ValueError`.
+  - Market probability features now include the margin-removed odds probabilities: `MKT_Home_Prob_Real`, `MKT_Draw_Prob_Real`, `MKT_Away_Prob_Real`.
+  - EMA features available for shots on target and goals: `OFF_HOME_FTHG_EMA5`, `DEF_HOME_FTAG_EMA5`, `OFF_HOME_HST_EMA5`, `OFF_AWAY_FTAG_EMA5`, `DEF_AWAY_FTHG_EMA5`, `OFF_AWAY_AST_EMA5`.
+  - Rest context includes the differential feature: `CTX_REST_DAYS_DIFF`.

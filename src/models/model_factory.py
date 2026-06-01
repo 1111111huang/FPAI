@@ -4,16 +4,29 @@ from __future__ import annotations
 
 from typing import Any
 
-from src.models.base_model import FPAIBaseModel, LRModel, RandomForestModel, XGBoostModel
+from src.models.base_model import (
+    FPAIBaseModel,
+    LRModel,
+    RandomForestModel,
+    RandomForestRegressorModel,
+    XGBoostModel,
+    XGBoostRegressorModel,
+)
 
 
 class ModelFactory:
     """Factory for FPAIBaseModel implementations."""
 
     _REGISTRY = {
+        "lr": LRModel,
+        "xgb": XGBoostModel,
         "xgboost": XGBoostModel,
         "logistic_regression": LRModel,
         "random_forest": RandomForestModel,
+        "random_forest_regressor": RandomForestRegressorModel,
+        "rf_regressor": RandomForestRegressorModel,
+        "xgb_regressor": XGBoostRegressorModel,
+        "xgboost_regressor": XGBoostRegressorModel,
     }
 
     @staticmethod

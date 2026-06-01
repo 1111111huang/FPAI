@@ -10,11 +10,18 @@ training_start_year: 2015
 # 网格搜索参数空间 (Grid Search)
 # 每一个列表中的组合都会生成一个独立的 MLflow Run
 grid_search:
-  n_estimators: [100, 300, 500]
-  max_depth: [3, 4, 5]
-  learning_rate: [0.01, 0.05, 0.1]
-  subsample: [0.8, 1.0]
-  colsample_bytree: [0.8, 1.0]
+  # 采用更细致的步长
+  n_estimators: [500, 1000, 2000]
+  max_depth: [3, 4, 6]
+  learning_rate: [0.005, 0.01, 0.05]
+  
+  # 增加采样随机性以破坏特征间的硬相关
+  subsample: [0.6, 0.8] 
+  colsample_bytree: [0.6, 0.8]
+  
+  # 核心：引入正则化（解决结果雷同的问题）
+  gamma: [0, 0.1, 0.5]
+  min_child_weight: [1, 5]
 
 # 固定不变的超参数
 fixed_params:

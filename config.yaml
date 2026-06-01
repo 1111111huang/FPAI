@@ -18,6 +18,9 @@ settings:
   min_matches_required: 10
   test_size: 0.2
   initial_bankroll: 1000
+  train_split: 0.7
+  val_split: 0.15
+  test_split: 0.15
 
 scraper:
   league_page_url: "https://www.football-data.co.uk/englandm.php"

@@ -1,0 +1,26 @@
+[
+  {
+    "run_id":"d1790e4d0c964639b984d0a754c1b6db",
+    "experiment_id":"409423351756769102",
+    "model_name":"unknown",
+    "model_type":"lr",
+    "target":"btts",
+    "feature_schema_version":"v1",
+    "sweep_stage":"smoke",
+    "log_loss_train":0.6769906916,
+    "accuracy_train":0.5665334095,
+    "precision_train":0.570035461,
+    "log_loss_val":0.6821666765,
+    "accuracy_val":0.592,
+    "precision_val":0.6012269939,
+    "log_loss_test":0.6816498616,
+    "accuracy_test":0.5425531915,
+    "precision_test":0.5670498084,
+    "param_C":"0.01",
+    "param_class_weight":"None",
+    "param_max_iter":"2000",
+    "param_penalty":"l2",
+    "param_random_state":"42",
+    "param_solver":"lbfgs"
+  }
+]

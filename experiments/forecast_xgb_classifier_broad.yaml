@@ -1,0 +1,27 @@
+experiment_family: forecast_target
+sweep_stage: broad
+version: v1
+model_type: xgboost
+feature_schema_version: v1
+league: E0
+test_season: time_split
+
+grid_search:
+  n_estimators: [300, 800]
+  max_depth: [2, 3, 5]
+  learning_rate: [0.01, 0.05, 0.1]
+  subsample: [0.7, 0.9]
+  colsample_bytree: [0.7, 0.9]
+  min_child_weight: [1, 5]
+  gamma: [0, 0.2]
+
+fixed_params:
+  random_state: 42
+  n_jobs: -1
+  tree_method: hist
+  eval_metric: logloss
+  early_stopping_rounds: 30
+
+tags:
+  experiment_methodology: target_model_broad_grid
+  split_policy: chronological_70_15_15

@@ -24,6 +24,11 @@ The `src/` package contains the data ingestion, feature engineering, model train
 - **`feature_inventory.md`**: Human-readable catalog of engineered features and their definitions.
 - **`__init__.py`**: Exposes feature utilities.
 
+### `src/forecast/`
+- **`forecast_service.py`**: Loads feature rows and latest target artifacts, runs predictions, and assembles validated forecast JSON payloads.
+- **`uncertainty.py`**: Provides entropy uncertainty, validation-residual prediction intervals, and count distribution buckets.
+- **`schema.py`**: Defines and validates the stable forecast payload contract.
+
 ### `src/models/`
 - **`base_model.py`**: Model interfaces and concrete implementations (Logistic Regression, Random Forest, XGBoost). XGBoost supports early stopping with a validation split.
 - **`model_factory.py`**: Factory for constructing models by type name.
@@ -36,7 +41,8 @@ The `src/` package contains the data ingestion, feature engineering, model train
 - **`__init__.py`**: Exposes strategy utilities.
 
 ### `src/logic/`
-- **`target_resolver.py`**: Defines label creation and payout logic for supported targets (currently `home_win`).
+- **`target_registry.py`**: Central registry for forecast target definitions, task types, label columns, metrics, class labels, and artifact naming.
+- **`target_resolver.py`**: Defines label creation for registry-backed forecast targets and legacy payout logic for `home_win`.
 
 ### `src/utils/`
 - **`config_loader.py`**: Loads and validates `config.yaml` into typed settings with caching.
@@ -52,4 +58,3 @@ The `src/` package contains the data ingestion, feature engineering, model train
 
 ## Entry Points (Outside `src/`)
 - **`main.py`**: CLI that wires together scraping, ingestion, feature building, training, prediction, and backtesting.
-

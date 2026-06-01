@@ -20,6 +20,9 @@ This document lists the engineered features produced by `FeatureFactory` and sto
 ## Market Bias
 
 - `market_prob_h`: Implied home win probability from odds: `1 / odds_h`.
+- `MKT_H_Prob_Clean`: Margin-free home win probability from AvgH/AvgD/AvgA (normalized implied odds).
+- `MKT_D_Prob_Clean`: Margin-free draw probability from AvgH/AvgD/AvgA.
+- `MKT_A_Prob_Clean`: Margin-free away win probability from AvgH/AvgD/AvgA.
 
 ## Form/Strength Signals
 
@@ -28,3 +31,10 @@ This document lists the engineered features produced by `FeatureFactory` and sto
   - Feature is `home_score_before - away_score_before`.
 - `home_advantage_trend`: Home team’s average points at home (last 10 home games)
   minus their overall average points (last 10 total games).
+
+## Efficiency & Strength Additions
+
+- `OFF_Shot_Quality_R5`: Rolling 5-match average of `HST / HS` for the home team.
+- `DEF_Save_Rate_R5`: Rolling 5-match average of `(AST - FTAG) / AST` for the home team.
+- `STRENGTH_Goal_Diff`: `OFF_HOME_FTHG_R5 - DEF_AWAY_FTHG_R5`.
+- `STRENGTH_SoT_Diff`: `OFF_HOME_HST_R5 - DEF_AWAY_HST_R5`.

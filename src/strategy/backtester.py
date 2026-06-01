@@ -49,7 +49,7 @@ class Backtester:
         ev_threshold: float = 0.05,
         target_config: dict[str, float | int | str] | None = None,
     ) -> pd.DataFrame:
-        """Run a backtest using EV-filtered predictions and match outcomes from DuckDB."""
+        """Run a backtest on the held-out test segment only (no train/val leakage)."""
         target_config = target_config or {"target_type": "home_win", "stake": self.bet_size}
         required_columns = {"match_id", "predicted_home_win_prob", "odds_h"}
         missing = required_columns.difference(predictions_df.columns)

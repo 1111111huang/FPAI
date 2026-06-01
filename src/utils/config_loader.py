@@ -25,6 +25,9 @@ class RuntimeConfig(BaseModel):
     min_matches_required: int = 10
     test_size: float = 0.2
     initial_bankroll: float = 1000.0
+    train_split: float = 0.7
+    val_split: float = 0.15
+    test_split: float = 0.15
 
 
 class ScraperConfig(BaseModel):

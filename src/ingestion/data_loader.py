@@ -57,6 +57,10 @@ class CSVLoader:
                 "AvgH": "avgh",
                 "AvgD": "avgd",
                 "AvgA": "avga",
+                "xG_H": "xg_h",
+                "xG_A": "xg_a",
+                "xGA_H": "xga_h",
+                "xGA_A": "xga_a",
             }
         )
         required_columns = {"Date", "home_team", "away_team", "fthg", "ftag", "odds_h", "odds_d", "odds_a"}
@@ -92,6 +96,10 @@ class CSVLoader:
             "avgh",
             "avgd",
             "avga",
+            "xg_h",
+            "xg_a",
+            "xga_h",
+            "xga_a",
         ]
         for col in optional_columns:
             if col not in renamed.columns:
@@ -120,6 +128,10 @@ class CSVLoader:
                 "avgh",
                 "avgd",
                 "avga",
+                "xg_h",
+                "xg_a",
+                "xga_h",
+                "xga_a",
             ]
         ].copy()
         working["home_team"] = working["home_team"].astype(str).map(standardize_team_name)
@@ -153,6 +165,10 @@ class CSVLoader:
                 float,
                 float,
                 float,
+                float | None,
+                float | None,
+                float | None,
+                float | None,
                 float | None,
                 float | None,
                 float | None,
@@ -220,6 +236,10 @@ class CSVLoader:
                     float(row["avgh"]) if pd.notna(row["avgh"]) else None,
                     float(row["avgd"]) if pd.notna(row["avgd"]) else None,
                     float(row["avga"]) if pd.notna(row["avga"]) else None,
+                    float(row["xg_h"]) if pd.notna(row["xg_h"]) else None,
+                    float(row["xg_a"]) if pd.notna(row["xg_a"]) else None,
+                    float(row["xga_h"]) if pd.notna(row["xga_h"]) else None,
+                    float(row["xga_a"]) if pd.notna(row["xga_a"]) else None,
                 )
             )
 
@@ -241,8 +261,8 @@ class CSVLoader:
                         f"""
                         {insert_clause} INTO raw_matches
                         (match_id, league, tier, date, home_team, away_team, fthg, ftag, odds_h, odds_d, odds_a,
-                         hs, "as", hst, ast, hc, ac, hy, ay, hr, ar, avgh, avgd, avga)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                         hs, "as", hst, ast, hc, ac, hy, ay, hr, ar, avgh, avgd, avga, xg_h, xg_a, xga_h, xga_a)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                         """,
                         records_to_insert,
                     )
@@ -322,7 +342,11 @@ class CSVLoader:
                 ar FLOAT,
                 avgh FLOAT,
                 avgd FLOAT,
-                avga FLOAT
+                avga FLOAT,
+                xg_h FLOAT,
+                xg_a FLOAT,
+                xga_h FLOAT,
+                xga_a FLOAT
             )
             """
         )
@@ -343,6 +367,10 @@ class CSVLoader:
             "avgh",
             "avgd",
             "avga",
+            "xg_h",
+            "xg_a",
+            "xga_h",
+            "xga_a",
         ]:
             if col not in columns:
                 if col == "as":
