@@ -14,11 +14,15 @@ import mlflow.xgboost
 import numpy as np
 import pandas as pd
 import yaml
+import joblib
+from sklearn.calibration import CalibratedClassifierCV
+from sklearn.isotonic import IsotonicRegression
 from sklearn.metrics import accuracy_score, log_loss, mean_absolute_error, mean_squared_error, precision_score
 
 from src.logic.target_resolver import TargetResolver
 from src.logic.target_registry import TargetDefinition, get_target_definition
 from src.models.base_model import FPAIBaseModel, XGBoostModel, XGBoostRegressorModel
+from src.models.goal_stacker import GoalStackerModel
 from src.strategy.backtester import Backtester
 from src.utils.config_loader import AppSettings, load_settings
 from src.utils.db_manager import DuckDBManager
@@ -38,6 +42,7 @@ class ModelManager:
         test_season: str = "time_split",
         feature_version: str = "v1",
         target_config: dict[str, str | float | int] | None = None,
+        feature_subset: list[str] | None = None,
     ) -> None:
         """Initialize manager with a model instance and YAML config path."""
         self.model = model
@@ -57,6 +62,8 @@ class ModelManager:
         self.target_definition = get_target_definition(
             str(self.target_config.get("target") or self.target_config.get("target_type", "home_win"))
         )
+        # US#62: optional override to train on a subset of selected_features
+        self.feature_subset: list[str] | None = feature_subset
         mlflow.set_experiment("FPAI_Evolution")
 
     def _load_selected_features(self) -> list[str]:
@@ -71,7 +78,98 @@ class ModelManager:
             raise ValueError("training_setup.selected_features must be a non-empty list in config/schema.yaml.")
         if not all(isinstance(item, str) and item.strip() for item in selected):
             raise ValueError("training_setup.selected_features must contain only non-empty strings.")
-        return [item.strip() for item in selected]
+        all_features = [item.strip() for item in selected]
+        # US#62: if a feature_subset is specified, filter to intersection with schema list
+        if self.feature_subset:
+            schema_set = set(all_features)
+            subset = [f for f in self.feature_subset if f in schema_set]
+            if not subset:
+                raise ValueError(
+                    f"feature_subset contains no features present in schema.yaml: {self.feature_subset[:5]}"
+                )
+            LOGGER.info("Feature subset active: %d/%d features", len(subset), len(all_features))
+            if mlflow.active_run() is not None:
+                mlflow.log_param("feature_subset_size", len(subset))
+            return subset
+        # US#66: check for per-target feature lists in schema.yaml
+        target_name = self.target_definition.name
+        target_features_map = schema.get("target_features", {})
+        if target_name in target_features_map:
+            target_list = target_features_map[target_name]
+            if isinstance(target_list, list) and target_list:
+                all_set = set(all_features)
+                subset = [f for f in target_list if f in all_set]
+                if subset:
+                    LOGGER.info(
+                        "Using per-target feature list for '%s': %d features", target_name, len(subset)
+                    )
+                    if mlflow.active_run() is not None:
+                        mlflow.log_param("target_feature_count", len(subset))
+                    return subset
+        return all_features
+
+    @staticmethod
+    def _fit_and_save_calibrator(
+        model: FPAIBaseModel,
+        X_val: pd.DataFrame,
+        y_val: pd.Series,
+        model_path: Path,
+    ) -> dict[str, float] | None:
+        """Fit isotonic regression calibrator on val-set probabilities and save as sidecar.
+
+        Returns a dict with log_loss before/after calibration, or None for regressors.
+        """
+        if not hasattr(model, "predict_proba"):
+            return None
+        try:
+            raw_proba = np.asarray(model.predict_proba(X_val))
+            y_val_arr = pd.to_numeric(y_val, errors="coerce").astype(float).to_numpy()
+
+            if raw_proba.ndim == 2 and raw_proba.shape[1] == 2:
+                # Binary classifier: calibrate positive-class probability
+                pos_proba = raw_proba[:, 1]
+                calibrator = IsotonicRegression(out_of_bounds="clip")
+                calibrator.fit(pos_proba, y_val_arr)
+                cal_pos = calibrator.predict(pos_proba)
+                cal_proba = np.stack([1 - cal_pos, cal_pos], axis=1)
+                ll_before = float(log_loss(y_val_arr, raw_proba))
+                ll_after = float(log_loss(y_val_arr, cal_proba))
+                sidecar = {"type": "binary", "calibrator": calibrator}
+            elif raw_proba.ndim == 2 and raw_proba.shape[1] > 2:
+                # Multi-class: fit one calibrator per class using one-vs-rest probabilities
+                n_classes = raw_proba.shape[1]
+                calibrators = []
+                cal_proba = np.zeros_like(raw_proba)
+                for c in range(n_classes):
+                    y_bin = (y_val_arr == c).astype(float)
+                    cal = IsotonicRegression(out_of_bounds="clip")
+                    cal.fit(raw_proba[:, c], y_bin)
+                    cal_proba[:, c] = cal.predict(raw_proba[:, c])
+                    calibrators.append(cal)
+                # Re-normalise rows so they sum to 1
+                row_sums = cal_proba.sum(axis=1, keepdims=True).clip(min=1e-9)
+                cal_proba /= row_sums
+                ll_before = float(log_loss(y_val_arr, raw_proba))
+                ll_after = float(log_loss(y_val_arr, cal_proba))
+                sidecar = {"type": "multiclass", "calibrator": calibrators}
+            else:
+                return None
+
+            cal_path = model_path.with_suffix(model_path.suffix + ".calibration.pkl")
+            joblib.dump(sidecar, str(cal_path))
+            if mlflow.active_run() is not None:
+                mlflow.log_artifact(str(cal_path))
+                mlflow.log_metric("val_log_loss_uncalibrated", ll_before)
+                mlflow.log_metric("val_log_loss_calibrated", ll_after)
+                mlflow.log_metric("calibration_improvement", ll_before - ll_after)
+            LOGGER.info(
+                "Calibration saved | before=%.4f after=%.4f delta=%.4f | %s",
+                ll_before, ll_after, ll_before - ll_after, cal_path.name,
+            )
+            return {"log_loss_before": ll_before, "log_loss_after": ll_after}
+        except Exception as exc:
+            LOGGER.warning("Calibration skipped: %s", exc)
+            return None
 
     @staticmethod
     def _log_selected_features(selected_features: list[str]) -> None:
@@ -360,7 +458,7 @@ class ModelManager:
         selected_features = self._load_selected_features()
         self._log_selected_features(selected_features)
         X_train, X_val, X_test, y_train, y_val, y_test, test_meta = self.prepare_training_data()
-        eval_set = [(X_val, y_val)] if isinstance(self.model, (XGBoostModel, XGBoostRegressorModel)) else None
+        eval_set = [(X_val, y_val)] if isinstance(self.model, (XGBoostModel, XGBoostRegressorModel, GoalStackerModel)) else None
         self.model.train(X_train, y_train, eval_set=eval_set)
         self._log_feature_importance(list(X_train.columns), self.model)
         if isinstance(self.model, (XGBoostModel, XGBoostRegressorModel)):
@@ -398,7 +496,7 @@ class ModelManager:
                 mlflow.set_tag("primary_metric", self.target_definition.primary_metric)
                 mlflow.set_tag("secondary_metrics", ",".join(self.target_definition.secondary_metrics))
                 mlflow.log_param("target_type", self.target_definition.name)
-                eval_set = [(X_val, y_val)] if isinstance(self.model, (XGBoostModel, XGBoostRegressorModel)) else None
+                eval_set = [(X_val, y_val)] if isinstance(self.model, (XGBoostModel, XGBoostRegressorModel, GoalStackerModel)) else None
                 self.model.train(X_train, y_train, eval_set=eval_set)
                 self._log_feature_importance(list(X_train.columns), self.model)
                 if isinstance(self.model, (XGBoostModel, XGBoostRegressorModel)):
@@ -445,6 +543,11 @@ class ModelManager:
                 self.model.save(str(save_path))
                 metadata = self._build_artifact_metadata(save_path, selected_features, X_val, y_val)
                 metadata["metrics"] = {metric_name: float(value) for metric_name, value in metrics.items()}
+                # US#61: fit isotonic calibrator on val set for classifiers
+                if self.target_definition.task_type != "regression":
+                    cal_metrics = self._fit_and_save_calibrator(self.model, X_val, y_val, save_path)
+                    if cal_metrics:
+                        metadata["calibration"] = cal_metrics
                 self._write_artifact_metadata(save_path, metadata)
                 mlflow.log_artifact(str(save_path))
                 return save_path

@@ -4,12 +4,15 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Iterable
+from typing import TYPE_CHECKING, Iterable
 
 import pandas as pd
 
 from src.utils.helpers import standardize_team_name
 from src.utils.logger import get_logger
+
+if TYPE_CHECKING:
+    from src.utils.db_manager import DuckDBManager
 
 LOGGER = get_logger(__name__)
 
@@ -259,3 +262,79 @@ def merge_understat_data(
         LOGGER.warning("FTHG/FTAG columns missing; luck features not computed.")
 
     return merged.drop(columns=["_match_date", "_home_team", "_away_team", "xg_h", "xg_a", "xga_h", "xga_a"], errors="ignore")
+
+
+def update_raw_matches_xg(
+    understat_df: pd.DataFrame,
+    db_manager: "DuckDBManager",
+    mapping_path: str = "config/team_mapping.json",
+) -> dict[str, int]:
+    """Match Understat xG rows to raw_matches by date+team and UPDATE the database.
+
+    Args:
+        understat_df: DataFrame with columns date, home_team, away_team, xg_h, xg_a.
+        db_manager: DuckDBManager instance for database access.
+        mapping_path: Path to team_mapping.json for name normalisation.
+
+    Returns:
+        Dict with keys 'matched', 'updated', 'unmatched'.
+    """
+    if understat_df.empty:
+        return {"matched": 0, "updated": 0, "unmatched": 0}
+
+    with db_manager.connection() as conn:
+        raw = conn.execute(
+            "SELECT match_id, date, home_team, away_team FROM raw_matches"
+        ).fetchdf()
+
+    if raw.empty:
+        return {"matched": 0, "updated": 0, "unmatched": len(understat_df)}
+
+    mapper = TeamNameMapper(mapping_path=mapping_path)
+    team_pool = set(raw["home_team"]).union(set(raw["away_team"]))
+
+    work = understat_df.copy()
+    work["_home"] = work["home_team"].map(lambda n: mapper.map_team(n, team_pool))
+    work["_away"] = work["away_team"].map(lambda n: mapper.map_team(n, team_pool))
+    work["_date"] = pd.to_datetime(work["date"]).dt.normalize()
+
+    raw["_date"] = pd.to_datetime(raw["date"]).dt.normalize()
+
+    merged = raw.merge(
+        work[["_date", "_home", "_away", "xg_h", "xg_a"]],
+        left_on=["_date", "home_team", "away_team"],
+        right_on=["_date", "_home", "_away"],
+        how="left",
+    )
+
+    has_xg = merged["xg_h"].notna()
+    unmatched = int((~has_xg).sum())
+    if unmatched:
+        LOGGER.warning(
+            "%d raw_matches rows had no Understat match — xG left as NULL.", unmatched
+        )
+
+    to_update = merged.loc[has_xg, ["match_id", "xg_h", "xg_a"]].copy()
+    to_update["xga_h"] = to_update["xg_a"]
+    to_update["xga_a"] = to_update["xg_h"]
+
+    if to_update.empty:
+        return {"matched": 0, "updated": 0, "unmatched": unmatched}
+
+    with db_manager.connection() as conn:
+        conn.register("_xg_upd", to_update)
+        conn.execute("""
+            UPDATE raw_matches
+            SET xg_h  = u.xg_h,
+                xg_a  = u.xg_a,
+                xga_h = u.xga_h,
+                xga_a = u.xga_a
+            FROM _xg_upd u
+            WHERE raw_matches.match_id = u.match_id
+        """)
+        conn.unregister("_xg_upd")
+
+    LOGGER.info(
+        "xG update complete | updated=%d | unmatched=%d", len(to_update), unmatched
+    )
+    return {"matched": int(has_xg.sum()), "updated": len(to_update), "unmatched": unmatched}

@@ -8,11 +8,13 @@ from .base_model import (
     XGBoostModel,
     XGBoostRegressorModel,
 )
+from .goal_stacker import GoalStackerModel
 from .model_factory import ModelFactory
 from .model_manager import ModelManager
 
 __all__ = [
     "FPAIBaseModel",
+    "GoalStackerModel",
     "LRModel",
     "RandomForestModel",
     "RandomForestRegressorModel",

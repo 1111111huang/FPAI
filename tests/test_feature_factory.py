@@ -95,7 +95,21 @@ def test_compute_rolling_stats_and_save_features(tmp_path: Path) -> None:
         "EFFICIENCY_AWAY_ATTACK_VS_HOME_DEF_R5",
         "EFFICIENCY_ATTACK_MATCHUP_DIFF_R5",
     }
-    assert expected_columns.issubset(set(features.columns))
+    opp_adj_columns = {
+        "OPP_ADJ_HOME_GOALS_SCORED_R3",
+        "OPP_ADJ_HOME_GOALS_SCORED_R5",
+        "OPP_ADJ_HOME_GOALS_CONCEDED_R3",
+        "OPP_ADJ_HOME_GOALS_CONCEDED_R5",
+        "OPP_ADJ_AWAY_GOALS_SCORED_R3",
+        "OPP_ADJ_AWAY_GOALS_SCORED_R5",
+        "OPP_ADJ_AWAY_GOALS_CONCEDED_R3",
+        "OPP_ADJ_AWAY_GOALS_CONCEDED_R5",
+        "OPP_ADJ_GOAL_MATCHUP_HOME_R5",
+        "OPP_ADJ_GOAL_MATCHUP_AWAY_R5",
+        "OPP_ADJ_CORNER_MATCHUP_HOME_R5",
+        "OPP_ADJ_CORNER_MATCHUP_AWAY_R5",
+    }
+    assert (expected_columns | opp_adj_columns).issubset(set(features.columns))
     assert len(features) == 2
 
     match_1 = features.loc[features["match_id"] == "m1"].iloc[0]
@@ -303,3 +317,73 @@ def test_rest_day_features_are_shifted_by_team_and_venue(tmp_path: Path) -> None
     assert second_match["CTX_REST_DAYS_DIFF"] == pytest.approx(0.0)
     assert third_match["CTX_HOME_REST_DAYS"] == pytest.approx(12.0)
     assert third_match["CTX_AWAY_REST_DAYS"] == pytest.approx(12.0)
+
+
+def test_opp_adjusted_features_no_leakage(tmp_path: Path) -> None:
+    """OPP_ADJ rolling for m6 must use only m1-m5 results, not m6's outcome."""
+    db_path = tmp_path / "test_fpai.db"
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        yaml.safe_dump({"paths": {"database_path": str(db_path)}}),
+        encoding="utf-8",
+    )
+
+    with duckdb.connect(str(db_path)) as conn:
+        _create_raw_matches_table(conn)
+        _insert_raw_matches(
+            conn,
+            [
+                ("m1", "E0", 1, "2025-08-01 20:00:00", "Alpha FC", "Opp1", 1, 0, 1.8, 3.4, 4.2, 1.8, 3.4, 4.2),
+                ("m2", "E0", 1, "2025-08-08 20:00:00", "Alpha FC", "Opp2", 2, 1, 1.8, 3.4, 4.2, 1.8, 3.4, 4.2),
+                ("m3", "E0", 1, "2025-08-15 20:00:00", "Alpha FC", "Opp3", 3, 0, 1.8, 3.4, 4.2, 1.8, 3.4, 4.2),
+                ("m4", "E0", 1, "2025-08-22 20:00:00", "Alpha FC", "Opp4", 4, 1, 1.8, 3.4, 4.2, 1.8, 3.4, 4.2),
+                ("m5", "E0", 1, "2025-08-29 20:00:00", "Alpha FC", "Opp5", 5, 0, 1.8, 3.4, 4.2, 1.8, 3.4, 4.2),
+                ("m6", "E0", 1, "2025-09-05 20:00:00", "Alpha FC", "Opp6", 10, 10, 1.8, 3.4, 4.2, 1.8, 3.4, 4.2),
+            ],
+        )
+
+    feature_factory = FeatureFactory(config_path=str(config_path))
+    features = feature_factory.compute_rolling_stats(window=5)
+    match_6 = features.loc[features["match_id"] == "m6"].iloc[0]
+
+    # R5 should average m1-m5 goals scored (1+2+3+4+5)/5, not include m6's 10
+    assert match_6["OPP_ADJ_HOME_GOALS_SCORED_R5"] == pytest.approx(3.0)
+    # R3 should average m3-m5 goals scored (3+4+5)/3
+    assert match_6["OPP_ADJ_HOME_GOALS_SCORED_R3"] == pytest.approx(4.0)
+    # Goals conceded R5: (0+1+0+1+0)/5
+    assert match_6["OPP_ADJ_HOME_GOALS_CONCEDED_R5"] == pytest.approx(0.4)
+
+
+def test_opp_adjusted_features_combine_home_and_away_venues(tmp_path: Path) -> None:
+    """OPP_ADJ rolling must aggregate a team's stats across both home and away matches."""
+    db_path = tmp_path / "test_fpai.db"
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        yaml.safe_dump({"paths": {"database_path": str(db_path)}}),
+        encoding="utf-8",
+    )
+
+    with duckdb.connect(str(db_path)) as conn:
+        _create_raw_matches_table(conn)
+        _insert_raw_matches(
+            conn,
+            [
+                # Alpha FC plays at home (scoring 2)
+                ("h1", "E0", 1, "2025-08-01 20:00:00", "Alpha FC", "Opp1", 2, 0, 2.0, 3.2, 3.8, 2.0, 3.2, 3.8),
+                # Alpha FC plays away (scoring 3)
+                ("a1", "E0", 1, "2025-08-08 20:00:00", "Opp2", "Alpha FC", 1, 3, 2.0, 3.2, 3.8, 2.0, 3.2, 3.8),
+                # Alpha FC plays at home again (scoring 1)
+                ("h2", "E0", 1, "2025-08-15 20:00:00", "Alpha FC", "Opp3", 1, 0, 2.0, 3.2, 3.8, 2.0, 3.2, 3.8),
+                # Match under test: Alpha FC at home vs Beta FC
+                ("target", "E0", 1, "2025-08-22 20:00:00", "Alpha FC", "Beta FC", 9, 9, 2.0, 3.2, 3.8, 2.0, 3.2, 3.8),
+            ],
+        )
+
+    feature_factory = FeatureFactory(config_path=str(config_path))
+    features = feature_factory.compute_rolling_stats(window=5)
+    target = features.loc[features["match_id"] == "target"].iloc[0]
+
+    # Alpha FC's combined-venue goals scored R3: h1=2, a1=3, h2=1 → (2+3+1)/3 = 2.0
+    assert target["OPP_ADJ_HOME_GOALS_SCORED_R3"] == pytest.approx(2.0)
+    # Alpha FC's combined-venue goals conceded R3: h1=0, a1=1 (opponent fthg), h2=0 → (0+1+0)/3
+    assert target["OPP_ADJ_HOME_GOALS_CONCEDED_R3"] == pytest.approx(1 / 3)

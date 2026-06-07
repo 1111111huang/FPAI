@@ -42,8 +42,14 @@ class PermutationImportanceAnalyzer:
         if not self.model_path.exists():
             raise FileNotFoundError(f"Model not found: {self.model_path}")
         
-        self.model: FPAIBaseModel = joblib.load(str(self.model_path))
-        LOGGER.info(f"Loaded model from {self.model_path}")
+        if self.target_definition.task_type == "regression":
+            self.model: FPAIBaseModel = XGBoostRegressorModel.load(str(self.model_path))
+        else:
+            try:
+                self.model = XGBoostModel.load(str(self.model_path))
+            except Exception:
+                self.model = joblib.load(str(self.model_path))
+        LOGGER.info("Loaded model from %s", self.model_path)
 
     def compute_importance(
         self,

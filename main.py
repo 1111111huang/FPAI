@@ -34,8 +34,9 @@ from src.strategy import Backtester, StrategyEngine
 from src.utils import DuckDBManager, configure_logger, get_logger
 from src.utils.config_loader import AppSettings, settings
 from src.utils.feature_importance import PermutationImportanceAnalyzer
+from src.utils.learning_curve import LearningCurveAnalyzer, run_all_targets, summarise_findings
 from src.utils.model_comparison import ModelComparison
-from src.utils.sweep_runner import SweepRunner
+from src.utils.sweep_runner import OptunaRunner, SweepRunner
 
 LOGGER = get_logger(__name__)
 FEATURE_COLUMNS = [
@@ -62,6 +63,8 @@ MODEL_REGISTRY = {
     "xgb_regressor": XGBoostRegressorModel,
     "xgboost_regressor": XGBoostRegressorModel,
     "rf_regressor": RandomForestRegressorModel,
+    "goal_stacker": None,  # handled via ModelFactory
+    "stacker": None,
 }
 
 
@@ -384,6 +387,104 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Directory for importance reports.",
     )
     
+    # Understat xG fetch
+    understat_parser = subparsers.add_parser(
+        "fetch-understat",
+        help="Fetch xG data from understat.com and update raw_matches",
+    )
+    understat_parser.add_argument(
+        "--league",
+        type=str,
+        default="E0",
+        help="Football-Data league code (default: E0 = English Premier League).",
+    )
+    understat_parser.add_argument(
+        "--from_season",
+        type=int,
+        default=None,
+        help="First season start year to fetch (default: auto-detected from raw_matches).",
+    )
+    understat_parser.add_argument(
+        "--to_season",
+        type=int,
+        default=None,
+        help="Last season start year to fetch (default: auto-detected from raw_matches).",
+    )
+    understat_parser.add_argument(
+        "--delay",
+        type=float,
+        default=1.5,
+        help="Polite delay in seconds between requests (default: 1.5).",
+    )
+    understat_parser.add_argument(
+        "--rebuild_features",
+        action="store_true",
+        default=True,
+        help="Rebuild feature store after updating xG (default: True).",
+    )
+
+    # Learning curve analysis
+    lc_parser = subparsers.add_parser(
+        "learning-curve",
+        help="Train on growing data subsets to diagnose feature ceiling vs. data ceiling",
+    )
+    lc_target_group = lc_parser.add_mutually_exclusive_group(required=True)
+    lc_target_group.add_argument(
+        "--target",
+        type=str,
+        choices=sorted(definition.name for definition in list_target_definitions() if definition.name != "home_win"),
+        help="Single forecast target to analyse.",
+    )
+    lc_target_group.add_argument(
+        "--all_targets",
+        action="store_true",
+        help="Run analysis for all 8 forecast targets and produce a combined chart.",
+    )
+    lc_parser.add_argument(
+        "--output_dir",
+        type=str,
+        default="reports/learning_curves",
+        help="Directory for output CSVs and charts (default: reports/learning_curves).",
+    )
+
+    # Optuna Bayesian sweep (US#70)
+    optuna_parser = subparsers.add_parser(
+        "optuna-sweep",
+        help="Run a Bayesian hyperparameter sweep using Optuna TPE sampler",
+    )
+    optuna_parser.add_argument(
+        "--target",
+        type=str,
+        required=True,
+        choices=sorted(definition.name for definition in list_target_definitions()),
+        help="Forecast target to sweep.",
+    )
+    optuna_parser.add_argument(
+        "--config_path",
+        type=str,
+        required=True,
+        help="Path to experiment YAML config (use optuna_search instead of grid_search).",
+    )
+    optuna_parser.add_argument(
+        "--n_trials",
+        type=int,
+        default=None,
+        help="Number of Optuna trials (overrides config n_trials, default 50).",
+    )
+    optuna_parser.add_argument(
+        "--sweep_stage",
+        type=str,
+        default=None,
+        choices=["smoke", "broad", "narrow", "final", "optuna"],
+        help="Override sweep stage tag.",
+    )
+    optuna_parser.add_argument(
+        "--experiment_name",
+        type=str,
+        default=None,
+        help="Optional MLflow experiment name override.",
+    )
+
     # MLflow cleanup
     cleanup_parser = subparsers.add_parser(
         "cleanup-mlflow",
@@ -586,6 +687,71 @@ def run_scrape(app_settings: AppSettings, force: bool = False) -> None:
     LOGGER.info("Scrape complete | files_downloaded=%s", downloaded)
 
 
+def run_fetch_understat(
+    app_settings: AppSettings,
+    db_manager: DuckDBManager,
+    league: str = "E0",
+    from_season: int | None = None,
+    to_season: int | None = None,
+    delay: float = 1.5,
+    rebuild_features: bool = True,
+) -> None:
+    """Fetch xG from understat.com, update raw_matches, and optionally rebuild features."""
+    from src.ingestion.understat import update_raw_matches_xg
+    from src.ingestion.understat_fetcher import fetch_seasons_range
+
+    LOGGER.info("Executing command: fetch-understat | league=%s", league)
+
+    # Auto-detect season range from raw_matches dates if not provided.
+    with db_manager.connection() as conn:
+        bounds = conn.execute(
+            "SELECT YEAR(MIN(date)), YEAR(MAX(date)) FROM raw_matches"
+        ).fetchone()
+
+    if bounds is None or bounds[0] is None:
+        LOGGER.error("raw_matches is empty — run ingest first.")
+        return
+
+    # Season start year = calendar year of August (EPL seasons start Aug-May).
+    # A match in Jan 2024 belongs to season 2023; match in Aug 2023 also belongs to 2023.
+    # Simple heuristic: min_year - 1 to max_year - 1 covers all start years.
+    detected_from = (from_season or bounds[0]) - 1
+    detected_to = to_season or (bounds[1] - 1)
+    LOGGER.info(
+        "Fetching seasons %d – %d for league %s", detected_from, detected_to, league
+    )
+
+    understat_df = fetch_seasons_range(
+        league=league,
+        from_season=detected_from,
+        to_season=detected_to,
+        delay=delay,
+    )
+
+    if understat_df.empty:
+        LOGGER.error("No Understat data returned — check league/season args and network.")
+        return
+
+    LOGGER.info("Fetched %d Understat match records total.", len(understat_df))
+
+    result = update_raw_matches_xg(understat_df, db_manager)
+    LOGGER.info(
+        "xG update | matched=%d | updated=%d | unmatched=%d",
+        result["matched"],
+        result["updated"],
+        result["unmatched"],
+    )
+
+    if rebuild_features:
+        LOGGER.info("Rebuilding feature store with xG data...")
+        factory = FeatureFactory()
+        features_df = factory.compute_rolling_stats(
+            window=app_settings.settings.rolling_window
+        )
+        factory.save_features(features_df)
+        LOGGER.info("Feature store rebuilt with xG features.")
+
+
 def run_ingest(app_settings: AppSettings, db_manager: DuckDBManager, force: bool = False) -> None:
     """Run directory batch ingestion and feature pre-computation pipeline."""
     LOGGER.info("Executing command: ingest")
@@ -641,12 +807,26 @@ def _default_model_for_target(target_name: str) -> str:
     return "lr"
 
 
+def _xgb_params_for_target(target_name: str, model_key: str) -> dict:
+    """Return XGBoost objective/eval_metric params appropriate for the target."""
+    definition = get_target_definition(target_name)
+    if model_key not in {"xgb", "xgboost"}:
+        return {}
+    if definition.task_type == "multiclass_classification":
+        return {
+            "objective": "multi:softprob",
+            "eval_metric": "mlogloss",
+            "num_class": len(definition.classes),
+        }
+    return {"objective": "binary:logistic", "eval_metric": "logloss"}
+
+
 def run_train_target(target_name: str, model_name: str | None = None) -> Path:
     """Train one registry-backed forecast target model."""
+    from src.models import ModelFactory
     definition = get_target_definition(target_name)
     selected_model = (model_name or _default_model_for_target(definition.name)).strip().lower()
-    model_cls = MODEL_REGISTRY.get(selected_model)
-    if model_cls is None:
+    if selected_model not in MODEL_REGISTRY:
         valid_models = ", ".join(sorted(MODEL_REGISTRY.keys()))
         raise ValueError(f"Unsupported model '{selected_model}'. Available options: {valid_models}")
     LOGGER.info(
@@ -655,7 +835,14 @@ def run_train_target(target_name: str, model_name: str | None = None) -> Path:
         definition.task_type,
         selected_model,
     )
-    model_manager = ModelManager(model=model_cls(), target_config={"target": definition.name})
+    model_cls = MODEL_REGISTRY.get(selected_model)
+    if model_cls is None:
+        # Use ModelFactory for models not directly in registry (e.g. goal_stacker)
+        model = ModelFactory.get_model(selected_model)
+    else:
+        xgb_params = _xgb_params_for_target(target_name, selected_model)
+        model = model_cls(**xgb_params)
+    model_manager = ModelManager(model=model, target_config={"target": definition.name})
     model_path = model_manager.run_pipeline()
     LOGGER.info("Target model saved to %s", model_path)
     return model_path
@@ -1195,6 +1382,61 @@ def run_permutation_importance(
     return report_path
 
 
+def run_learning_curve(
+    target: str | None,
+    all_targets: bool,
+    output_dir: str,
+) -> None:
+    """Run learning curve analysis for one or all forecast targets."""
+    if all_targets:
+        LOGGER.info("Running learning curve analysis for all targets...")
+        all_results = run_all_targets(output_dir=output_dir)
+        summary = summarise_findings(all_results)
+        print(summary)
+        print(f"\nCharts and CSVs saved to: {output_dir}/")
+    else:
+        analyzer = LearningCurveAnalyzer(target, output_dir=output_dir)
+        result = analyzer.run()
+        csv_path = analyzer.save_results(result)
+        chart_path = analyzer.save_chart(result)
+        metric = result["metric"]
+        rows = result["results"]
+        print(f"\nLearning Curve — {target} ({metric})")
+        print(f"{'Fraction':>10} {'Train N':>10} {metric.upper():>12}")
+        for row in rows:
+            print(f"{row['fraction']:>10.0%} {row['train_n']:>10d} {row[metric]:>12.4f}")
+        print(f"\nCSV: {csv_path}")
+        if chart_path:
+            print(f"Chart: {chart_path}")
+
+
+def run_optuna_sweep(
+    target_name: str,
+    config_path: str,
+    n_trials: int | None,
+    experiment_name: str | None,
+    sweep_stage: str | None,
+) -> None:
+    """Run a Bayesian hyperparameter sweep using Optuna TPE sampler."""
+    runner = OptunaRunner(
+        target_name=target_name,
+        config_path=config_path,
+        experiment_name=experiment_name,
+        n_trials=n_trials,
+        sweep_stage=sweep_stage,
+    )
+    results = runner.run()
+    if results:
+        from src.logic.target_registry import get_target_definition
+        definition = get_target_definition(target_name)
+        primary_metric = definition.primary_metric
+        ascending = primary_metric in {"log_loss", "mae", "rmse"}
+        import pandas as pd
+        df = pd.DataFrame(results).sort_values(primary_metric, ascending=ascending)
+        print(f"\nOptuna Sweep Results — {target_name} (best by {primary_metric}):")
+        print(df.head(5).to_string(index=False))
+
+
 def run_mlflow_cleanup(
     strategy: str = "recover",
     backup: bool = True,
@@ -1328,12 +1570,36 @@ def main() -> None:
             n_repeats=args.n_repeats,
             output_dir=str(args.output_dir),
         )
+    elif args.command == "learning-curve":
+        run_learning_curve(
+            target=getattr(args, "target", None),
+            all_targets=getattr(args, "all_targets", False),
+            output_dir=str(args.output_dir),
+        )
+    elif args.command == "optuna-sweep":
+        run_optuna_sweep(
+            target_name=str(args.target),
+            config_path=str(args.config_path),
+            n_trials=args.n_trials,
+            experiment_name=args.experiment_name,
+            sweep_stage=args.sweep_stage,
+        )
     elif args.command == "cleanup-mlflow":
         run_mlflow_cleanup(
             strategy=str(args.strategy),
             backup=args.backup,
             mlruns_dir=str(args.mlruns_dir),
             report_only=args.report_only,
+        )
+    elif args.command == "fetch-understat":
+        run_fetch_understat(
+            app_settings=app_settings,
+            db_manager=db_manager,
+            league=str(args.league),
+            from_season=args.from_season,
+            to_season=args.to_season,
+            delay=float(args.delay),
+            rebuild_features=args.rebuild_features,
         )
 
 

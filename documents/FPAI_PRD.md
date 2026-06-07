@@ -156,6 +156,24 @@ Regression/count targets:
 
 All evaluation must use chronological splits. Random cross-validation is not acceptable for pre-match forecasting.
 
+### 6.1 Performance Targets (Phase 2: Enhanced Model Performance)
+
+The following performance targets have been established as improvement goals to maximize forecast quality:
+
+**Classification Targets:**
+- `result_3way`: Test set accuracy **≥ 60%** (baseline: 51.15%)
+- `btts`: Test set log loss **≤ 0.68** (baseline: 0.6813)
+
+**Regression Targets:**
+- `home_goals`: Test set MAE **< 0.5** (baseline: 0.9428)
+- `away_goals`: Test set MAE **< 0.5** (baseline: 0.8263)
+- `total_goals`: Test set MAE **< 0.75** (baseline: 1.3047)
+- `home_corners`: Test set MAE **< 1.5** (baseline: 2.1399)
+- `away_corners`: Test set MAE **< 1.5** (baseline: 2.1133)
+- `total_corners`: Test set MAE **< 1.5** (baseline: 2.6659)
+
+These targets represent ~50% improvement over current baseline models and require advanced feature engineering, ensemble methods, or domain-specific optimization.
+
 ## 7. Data Requirements
 The system must preserve the pre-match boundary. A forecast may only use information that would have been available before kickoff.
 

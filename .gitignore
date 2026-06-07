@@ -17,3 +17,5 @@ data/*.db
 .DS_Store
 
 mlruns/
+.continue/rules/role-definition.md
+CLAUDE.md

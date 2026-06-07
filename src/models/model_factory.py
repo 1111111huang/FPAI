@@ -12,6 +12,7 @@ from src.models.base_model import (
     XGBoostModel,
     XGBoostRegressorModel,
 )
+from src.models.goal_stacker import GoalStackerModel
 
 
 class ModelFactory:
@@ -27,6 +28,8 @@ class ModelFactory:
         "rf_regressor": RandomForestRegressorModel,
         "xgb_regressor": XGBoostRegressorModel,
         "xgboost_regressor": XGBoostRegressorModel,
+        "goal_stacker": GoalStackerModel,
+        "stacker": GoalStackerModel,
     }
 
     @staticmethod

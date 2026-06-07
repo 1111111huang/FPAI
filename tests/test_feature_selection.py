@@ -164,19 +164,20 @@ class TestFeatureSelectionStudy:
             np.random.randn(n_train, n_features),
             columns=[f"feature_{i}" for i in range(n_features)],
         )
-        y_train = pd.Series(np.random.randint(0, 2, n_train))
+        # Use string labels matching btts target definition ('no', 'yes')
+        y_train = pd.Series(np.random.choice(['no', 'yes'], n_train))
         
         X_val = pd.DataFrame(
             np.random.randn(n_val, n_features),
             columns=[f"feature_{i}" for i in range(n_features)],
         )
-        y_val = pd.Series(np.random.randint(0, 2, n_val))
+        y_val = pd.Series(np.random.choice(['no', 'yes'], n_val))
         
         X_test = pd.DataFrame(
             np.random.randn(n_test, n_features),
             columns=[f"feature_{i}" for i in range(n_features)],
         )
-        y_test = pd.Series(np.random.randint(0, 2, n_test))
+        y_test = pd.Series(np.random.choice(['no', 'yes'], n_test))
         
         return X_train, X_val, X_test, y_train, y_val, y_test
 

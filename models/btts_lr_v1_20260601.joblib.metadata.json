@@ -5,207 +5,207 @@
     "no",
     "yes"
   ],
-  "created_at": "2026-06-01T15:09:48Z",
+  "created_at": "2026-06-01T15:13:31Z",
   "feature_importance": [
     {
       "feature": "DIS_HOME_HY_R5",
-      "importance": 0.5742459085057965
+      "importance": 0.553165575152905
     },
     {
       "feature": "MKT_A_Prob_Clean",
-      "importance": 0.5641461242101924
+      "importance": 0.5393534589907184
     },
     {
       "feature": "MKT_Away_Prob_Real",
-      "importance": 0.5641461242101924
+      "importance": 0.5393534589907184
     },
     {
       "feature": "MKT_IMPLIED_AWAY",
-      "importance": 0.5641461242101924
+      "importance": 0.5393534589907184
     },
     {
       "feature": "MKT_H_Prob_Clean",
-      "importance": 0.4897789148291198
+      "importance": 0.4727772146118214
     },
     {
       "feature": "MKT_Home_Prob_Real",
-      "importance": 0.4897789148291198
+      "importance": 0.4727772146118214
     },
     {
       "feature": "MKT_IMPLIED_HOME",
-      "importance": 0.4897789148291198
+      "importance": 0.4727772146118214
     },
     {
       "feature": "OFF_AWAY_SHOT_ACCURACY_R3",
-      "importance": 0.4670248416149982
+      "importance": 0.45847744478124686
     },
     {
       "feature": "DIS_HOME_HY_R3",
-      "importance": 0.43164837533455785
+      "importance": 0.41250386539083805
     },
     {
       "feature": "DEF_HOME_FTAG_EMA5",
-      "importance": 0.3782030390348992
-    },
-    {
-      "feature": "DIS_HOME_DISCIPLINE_SCORE_R5",
-      "importance": 0.32627434508953157
+      "importance": 0.3884062586839681
     },
     {
       "feature": "DIS_AWAY_HR_R5",
-      "importance": 0.3103578242404529
+      "importance": 0.31049116182759223
+    },
+    {
+      "feature": "DIS_HOME_DISCIPLINE_SCORE_R5",
+      "importance": 0.30642522042530373
     },
     {
       "feature": "DIS_HOME_HR_R5",
-      "importance": 0.30017349848143826
+      "importance": 0.2865303444156158
     },
     {
       "feature": "DEF_AWAY_FTHG_EMA5",
-      "importance": 0.254797597423436
+      "importance": 0.2561946429207316
     },
     {
       "feature": "DIS_HOME_DISCIPLINE_SCORE_R3",
-      "importance": 0.23537067336876424
-    },
-    {
-      "feature": "DIS_HOME_HR_R3",
-      "importance": 0.2223397932209263
+      "importance": 0.21879826296252153
     },
     {
       "feature": "OFF_HOME_FTHG_EMA5",
-      "importance": 0.21938098247993099
+      "importance": 0.2134216176384817
     },
     {
-      "feature": "DEF_HOME_AST_R5",
-      "importance": 0.20117627691371975
-    },
-    {
-      "feature": "DIS_HOME_AY_R5",
-      "importance": 0.19927353348734683
+      "feature": "DIS_HOME_HR_R3",
+      "importance": 0.2104341506978268
     },
     {
       "feature": "DEF_HOME_FTAG_R5",
-      "importance": 0.1937762561616952
+      "importance": 0.19266544572815
     },
     {
       "feature": "OFF_HOME_HST_R3",
-      "importance": 0.19264548353080077
+      "importance": 0.18887854717072258
     },
     {
-      "feature": "DIS_AWAY_HY_R5",
-      "importance": 0.18763596949257463
+      "feature": "DEF_HOME_AST_R5",
+      "importance": 0.18796598447378693
+    },
+    {
+      "feature": "DIS_HOME_AY_R5",
+      "importance": 0.18625704540179144
     },
     {
       "feature": "OFF_AWAY_AC_R3",
-      "importance": 0.1804272802675201
+      "importance": 0.17917956459934187
     },
     {
-      "feature": "INTERACTION_DEFENSE_GOALS_DIFF_R5",
-      "importance": 0.17055928070218335
+      "feature": "DIS_AWAY_HY_R5",
+      "importance": 0.1758309368638839
     },
     {
       "feature": "OFF_HOME_FTHG_R3",
-      "importance": 0.16824076049002187
+      "importance": 0.16471010723033097
+    },
+    {
+      "feature": "INTERACTION_DEFENSE_GOALS_DIFF_R5",
+      "importance": 0.16167160769779518
     },
     {
       "feature": "OFF_AWAY_AC_R5",
-      "importance": 0.15559215066049079
+      "importance": 0.15295878189706286
     },
     {
       "feature": "DEF_HOME_AST_R3",
-      "importance": 0.14598732294075503
+      "importance": 0.1413408180403742
     },
     {
       "feature": "DIS_AWAY_HY_R3",
-      "importance": 0.1442630920365702
+      "importance": 0.14106653968522237
     },
     {
       "feature": "OFF_HOME_SHOT_ACCURACY_R5",
-      "importance": 0.12826384395514662
+      "importance": 0.12786626965048287
     },
     {
       "feature": "OFF_Shot_Quality_R5",
-      "importance": 0.12826384395514662
+      "importance": 0.12786626965048287
     },
     {
       "feature": "OFF_AWAY_FTAG_R5",
-      "importance": 0.11963742313934421
-    },
-    {
-      "feature": "OFF_HOME_HST_EMA5",
-      "importance": 0.11576487509661264
-    },
-    {
-      "feature": "OFF_AWAY_AS_R3",
-      "importance": 0.11330702965968059
+      "importance": 0.11987908040685119
     },
     {
       "feature": "OFF_HOME_HST_R5",
-      "importance": 0.11181030355458738
+      "importance": 0.11711865523223255
     },
     {
-      "feature": "MKT_Draw_Prob_Real",
-      "importance": 0.10970300580413374
-    },
-    {
-      "feature": "MKT_IMPLIED_DRAW",
-      "importance": 0.10970300580413374
-    },
-    {
-      "feature": "MKT_D_Prob_Clean",
-      "importance": 0.10970300580413374
+      "feature": "OFF_AWAY_AS_R3",
+      "importance": 0.11267805227818282
     },
     {
       "feature": "DIS_AWAY_DISCIPLINE_SCORE_R5",
-      "importance": 0.10822142836713627
-    },
-    {
-      "feature": "OFF_AWAY_FTAG_EMA5",
-      "importance": 0.10632859598030743
+      "importance": 0.11078268176892206
     },
     {
       "feature": "DIS_HOME_AR_R3",
-      "importance": 0.10509135225812265
+      "importance": 0.10749846284583844
+    },
+    {
+      "feature": "OFF_HOME_HST_EMA5",
+      "importance": 0.10678317805864845
+    },
+    {
+      "feature": "OFF_AWAY_FTAG_EMA5",
+      "importance": 0.10340331616778828
+    },
+    {
+      "feature": "MKT_Draw_Prob_Real",
+      "importance": 0.10085191732445917
+    },
+    {
+      "feature": "MKT_IMPLIED_DRAW",
+      "importance": 0.10085191732445917
+    },
+    {
+      "feature": "MKT_D_Prob_Clean",
+      "importance": 0.10085191732445917
     },
     {
       "feature": "OFF_HOME_HS_R5",
-      "importance": 0.09331273608621615
+      "importance": 0.0919450929121935
     },
     {
       "feature": "DEF_HOME_FTAG_R3",
-      "importance": 0.093035036856189
-    },
-    {
-      "feature": "OFF_AWAY_AST_R3",
-      "importance": 0.08766788537525023
+      "importance": 0.08994333543677535
     },
     {
       "feature": "OFF_HOME_FTHG_R5",
-      "importance": 0.08562277305238805
+      "importance": 0.0876135936875084
+    },
+    {
+      "feature": "OFF_AWAY_AST_R3",
+      "importance": 0.08539391962261728
     },
     {
       "feature": "OFF_AWAY_AST_R5",
-      "importance": 0.07967095874795029
-    },
-    {
-      "feature": "DIS_HOME_AY_R3",
-      "importance": 0.07791259105809162
-    },
-    {
-      "feature": "STRENGTH_SoT_Diff",
-      "importance": 0.07147953128340911
+      "importance": 0.08244564053600627
     },
     {
       "feature": "OFF_AWAY_FTAG_R3",
-      "importance": 0.07079611928129886
+      "importance": 0.07462393281473265
+    },
+    {
+      "feature": "DIS_HOME_AY_R3",
+      "importance": 0.06869121055278302
+    },
+    {
+      "feature": "STRENGTH_SoT_Diff",
+      "importance": 0.06796422751081117
+    },
+    {
+      "feature": "EFFICIENCY_HOME_ATTACK_VS_AWAY_DEF_R5",
+      "importance": 0.06566647944102096
     },
     {
       "feature": "OFF_AWAY_SHOT_ACCURACY_R5",
-      "importance": 0.06324963265395508
-    },
-    {
-      "feature": "STRENGTH_Goal_Diff",
-      "importance": 0.0624065477317399
+      "importance": 0.060670379286508334
     }
   ],
   "feature_names": [
@@ -299,8 +299,8 @@
   "feature_schema_version": "v1",
   "metrics": {
     "accuracy": 0.5345744680851063,
-    "log_loss": 0.6915195025186438,
-    "precision": 0.564
+    "log_loss": 0.6903333953066153,
+    "precision": 0.5634920634920635
   },
   "model_type": "LRModel",
   "primary_metric": "log_loss",

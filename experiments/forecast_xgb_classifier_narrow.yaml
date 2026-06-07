@@ -1,0 +1,28 @@
+experiment_family: forecast_target
+sweep_stage: narrow
+version: v1
+model_type: xgboost
+feature_schema_version: v1
+league: E0
+test_season: time_split
+
+# US#69: Narrow grid — ±20% around Phase 7 best classifier params
+# n_estimators centred on 500, max_depth on 3, lr on 0.05
+grid_search:
+  n_estimators: [400, 500, 600]
+  max_depth: [3, 4]
+  learning_rate: [0.03, 0.05, 0.08]
+  subsample: [0.75, 0.85]
+  colsample_bytree: [0.75, 0.85]
+  min_child_weight: [3, 5]
+  gamma: [0.0, 0.1]
+
+fixed_params:
+  random_state: 42
+  n_jobs: -1
+  tree_method: hist
+  early_stopping_rounds: 50
+
+tags:
+  experiment_methodology: target_model_narrow_grid
+  split_policy: chronological_70_15_15

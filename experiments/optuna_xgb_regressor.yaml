@@ -1,0 +1,34 @@
+experiment_family: forecast_target
+sweep_stage: optuna
+version: v1
+model_type: xgb_regressor
+feature_schema_version: v1
+league: E0
+test_season: time_split
+
+# US#70: Optuna TPE sampler — continuous search space for XGBoost regressors (goals/corners)
+# Run via: python main.py optuna-sweep --target <name> --config_path experiments/optuna_xgb_regressor.yaml
+n_trials: 60
+direction: minimize  # optimises MAE
+
+optuna_search:
+  n_estimators: {type: int, low: 200, high: 800}
+  max_depth: {type: int, low: 2, high: 6}
+  learning_rate: {type: float, low: 0.01, high: 0.15, log: true}
+  subsample: {type: float, low: 0.6, high: 1.0}
+  colsample_bytree: {type: float, low: 0.6, high: 1.0}
+  min_child_weight: {type: int, low: 1, high: 10}
+  reg_alpha: {type: float, low: 0.0, high: 1.0}
+  reg_lambda: {type: float, low: 0.5, high: 5.0}
+
+fixed_params:
+  random_state: 42
+  n_jobs: -1
+  tree_method: hist
+  objective: reg:squarederror
+  eval_metric: rmse
+  early_stopping_rounds: 50
+
+tags:
+  experiment_methodology: bayesian_tpe
+  split_policy: chronological_70_15_15
