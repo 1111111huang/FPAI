@@ -708,7 +708,12 @@ def run_agent_recommend(
     try:
         recommendation = run_agent(match_info=match_info, config=cfg)
     except Exception as exc:
+        from src.agent.schema import RecommendationParseError
         print(f"[ERROR] Agent failed: {exc}", file=sys.stderr)
+        if isinstance(exc, RecommendationParseError):
+            print("\n--- Raw agent output ---", file=sys.stderr)
+            print(exc.raw_text, file=sys.stderr)
+            print("--- End raw output ---\n", file=sys.stderr)
         sys.exit(1)
 
     if recommendation is None:

@@ -40,28 +40,42 @@ class RecommendationParseError(Exception):
 
 
 def extract_recommendation(text: str) -> MatchRecommendation:
-    """Extract and validate a MatchRecommendation JSON block from agent output text."""
-    # Prefer explicit ```json ... ``` fenced block
-    fenced = re.search(r"```json\s*(.*?)\s*```", text, re.DOTALL)
-    if fenced:
-        json_str = fenced.group(1)
-    else:
-        # Fall back to outermost { ... } object
-        obj = re.search(r"\{.*\}", text, re.DOTALL)
-        if not obj:
-            raise RecommendationParseError(text, "no JSON object found")
-        json_str = obj.group(0)
+    """Extract and validate a MatchRecommendation JSON block from agent output text.
 
-    try:
-        data = json.loads(json_str)
-    except json.JSONDecodeError as exc:
-        raise RecommendationParseError(text, f"invalid JSON: {exc}") from exc
+    Tries all fenced ```json blocks last-to-first (the final block is the recommendation),
+    then falls back to the outermost bare JSON object.
+    """
+    candidates: list[str] = []
 
-    missing = _REQUIRED_KEYS - data.keys()
-    if missing:
-        raise RecommendationParseError(text, f"missing fields: {sorted(missing)}")
+    # Collect all fenced ```json blocks, reversed so we try the last one first
+    fenced_blocks = re.findall(r"```json\s*(.*?)\s*```", text, re.DOTALL)
+    candidates.extend(reversed(fenced_blocks))
 
-    if data["overall"] not in _VALID_OVERALL:
-        raise RecommendationParseError(text, f"invalid overall value: {data['overall']!r}")
+    # Fall back to outermost { ... } object
+    bare = re.search(r"\{.*\}", text, re.DOTALL)
+    if bare:
+        candidates.append(bare.group(0))
 
-    return data  # type: ignore[return-value]
+    if not candidates:
+        raise RecommendationParseError(text, "no JSON object found")
+
+    last_error = ""
+    for json_str in candidates:
+        try:
+            data = json.loads(json_str)
+        except json.JSONDecodeError as exc:
+            last_error = f"invalid JSON: {exc}"
+            continue
+
+        missing = _REQUIRED_KEYS - data.keys()
+        if missing:
+            last_error = f"missing fields: {sorted(missing)}"
+            continue
+
+        if data["overall"] not in _VALID_OVERALL:
+            last_error = f"invalid overall value: {data['overall']!r}"
+            continue
+
+        return data  # type: ignore[return-value]
+
+    raise RecommendationParseError(text, f"no valid MatchRecommendation found ({last_error})")

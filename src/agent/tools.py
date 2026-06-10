@@ -57,20 +57,23 @@ def forecast_league(
 
     Returns JSON with probabilities for result_3way, btts, goals, and corners targets.
     Includes data_quality.prediction_basis to indicate which features were used."""
-    from src.forecast.forecast_service import ForecastService
-
-    svc = ForecastService()
-    result = svc.forecast_upcoming(
-        home_team=home_team,
-        away_team=away_team,
-        date=date,
-        league=league,
-        odds_h=odds_h,
-        odds_d=odds_d,
-        odds_a=odds_a,
-        match_type="league",
-    )
-    return json.dumps(result, default=str)
+    try:
+        from src.forecast.forecast_service import ForecastService
+        svc = ForecastService()
+        result = svc.forecast_upcoming(
+            home_team=home_team,
+            away_team=away_team,
+            date=date,
+            league=league,
+            odds_h=odds_h,
+            odds_d=odds_d,
+            odds_a=odds_a,
+            match_type="league",
+        )
+        return json.dumps(result, default=str)
+    except Exception as exc:
+        return json.dumps({"error": str(exc), "status": "tool_error",
+                           "hint": "Try forecast_international if league history is unavailable."})
 
 
 @tool
@@ -97,20 +100,22 @@ def forecast_international(
 
     Returns JSON with market-implied probability forecasts.
     data_quality.prediction_basis will be 'market_odds_only'."""
-    from src.forecast.forecast_service import ForecastService
-
-    svc = ForecastService()
-    result = svc.forecast_upcoming(
-        home_team=home_team,
-        away_team=away_team,
-        date=date,
-        league="",
-        odds_h=odds_h,
-        odds_d=odds_d,
-        odds_a=odds_a,
-        match_type="international",
-    )
-    return json.dumps(result, default=str)
+    try:
+        from src.forecast.forecast_service import ForecastService
+        svc = ForecastService()
+        result = svc.forecast_upcoming(
+            home_team=home_team,
+            away_team=away_team,
+            date=date,
+            league="",
+            odds_h=odds_h,
+            odds_d=odds_d,
+            odds_a=odds_a,
+            match_type="international",
+        )
+        return json.dumps(result, default=str)
+    except Exception as exc:
+        return json.dumps({"error": str(exc), "status": "tool_error"})
 
 
 def get_default_tools() -> list:
