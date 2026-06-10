@@ -57,7 +57,19 @@ def build_graph(config: AgentConfig, tools: list):
     def output_node(state: AgentState) -> dict:
         last = state["messages"][-1]
         text = last.content if isinstance(last.content, str) else str(last.content)
-        recommendation = extract_recommendation(text)
+        try:
+            recommendation = extract_recommendation(text)
+        except RecommendationParseError:
+            # Agent got stuck (wrote text instead of JSON) — return insufficient_data
+            recommendation = {
+                "match": state["match_info"],
+                "overall": "insufficient_data",
+                "markets": [],
+                "explanation": f"Agent did not produce a parseable recommendation. Raw output: {text[:400]}",
+                "confidence": "low",
+                "limitations": ["Agent output could not be parsed as a structured recommendation"],
+                "prediction_basis": "unknown",
+            }
         return {"recommendation": recommendation}
 
     graph = StateGraph(AgentState)
