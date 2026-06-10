@@ -60,20 +60,34 @@ def forecast_league(
     try:
         from src.forecast.forecast_service import ForecastService
         svc = ForecastService()
-        result = svc.forecast_upcoming(
-            home_team=home_team,
-            away_team=away_team,
-            date=date,
-            league=league,
-            odds_h=odds_h,
-            odds_d=odds_d,
-            odds_a=odds_a,
-            match_type="league",
-        )
-        return json.dumps(result, default=str)
+        try:
+            result = svc.forecast_upcoming(
+                home_team=home_team,
+                away_team=away_team,
+                date=date,
+                league=league,
+                odds_h=odds_h,
+                odds_d=odds_d,
+                odds_a=odds_a,
+                match_type="league",
+            )
+            return json.dumps(result, default=str)
+        except FileNotFoundError:
+            # League-context models not yet trained — use international (market-odds-only) path
+            result = svc.forecast_upcoming(
+                home_team=home_team,
+                away_team=away_team,
+                date=date,
+                league=league,
+                odds_h=odds_h,
+                odds_d=odds_d,
+                odds_a=odds_a,
+                match_type="international",
+            )
+            result.setdefault("data_quality", {})["prediction_basis"] = "market_odds_only_league_fallback"
+            return json.dumps(result, default=str)
     except Exception as exc:
-        return json.dumps({"error": str(exc), "status": "tool_error",
-                           "hint": "Try forecast_international if league history is unavailable."})
+        return json.dumps({"error": str(exc), "status": "tool_error"})
 
 
 @tool

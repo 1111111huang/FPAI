@@ -85,6 +85,32 @@ def test_should_continue_routes_to_output_when_budget_exceeded():
     assert route == "output"
 
 
+def test_forecast_league_falls_back_to_international_when_no_league_models():
+    """forecast_league returns data (not error) via international fallback when no league context."""
+    from unittest.mock import patch, MagicMock
+    import json as _json
+
+    mock_result = {"result_3way": {"probabilities": {"home": 0.55}}, "data_quality": {}}
+
+    with patch("src.forecast.forecast_service.ForecastService") as MockSvc:
+        instance = MagicMock()
+        MockSvc.return_value = instance
+        # First call (league) raises FileNotFoundError; second call (international) succeeds
+        instance.forecast_upcoming.side_effect = [FileNotFoundError("no league models"), mock_result]
+
+        from src.agent.tools import forecast_league
+        result_str = forecast_league.invoke({
+            "home_team": "Manchester City", "away_team": "Arsenal",
+            "date": "2026-06-21", "league": "E0",
+            "odds_h": 2.1, "odds_d": 3.4, "odds_a": 3.6,
+        })
+
+    result = _json.loads(result_str)
+    assert "result_3way" in result
+    assert result["data_quality"]["prediction_basis"] == "market_odds_only_league_fallback"
+    assert instance.forecast_upcoming.call_count == 2
+
+
 def _route_for_state(cfg: AgentConfig, state: AgentState) -> str:
     """Helper: extract the routing logic without building the full graph."""
     last = state["messages"][-1]
