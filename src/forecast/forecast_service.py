@@ -23,6 +23,14 @@ from src.logic.target_registry import TargetDefinition, get_target_definition, l
 from src.utils.config_loader import AppSettings, load_settings
 from src.utils.db_manager import DuckDBManager
 
+# MKT_* features used for international-context inference (US#85/US#86)
+_MKT_FEATURES = [
+    "MKT_IMPLIED_HOME", "MKT_IMPLIED_DRAW", "MKT_IMPLIED_AWAY",
+    "MKT_OVERROUND", "MKT_LAMBDA_TOTAL", "MKT_LAMBDA_HOME", "MKT_LAMBDA_AWAY",
+    "MKT_POISSON_BTTS_PROB", "MKT_LAMBDA_AH_DIFF",
+    "MKT_AH_LINE", "MKT_AH_HOME_ODDS", "MKT_AH_AWAY_ODDS", "MKT_IMPLIED_OVER25",
+]
+
 
 class ForecastService:
     """Load features and target artifacts to assemble forecast payloads."""
@@ -105,14 +113,28 @@ class ForecastService:
 
     @staticmethod
     def _load_model(model_path: Path, metadata: dict[str, Any]) -> Any:
-        if metadata.get("model_type") == "XGBoostModel":
+        model_type = metadata.get("model_type", "")
+        if model_type == "XGBoostModel":
             model = XGBClassifier()
             model.load_model(str(model_path))
             return model
-        if metadata.get("model_type") == "XGBoostRegressorModel":
+        if model_type == "XGBoostRegressorModel":
             model = XGBRegressor()
             model.load_model(str(model_path))
             return model
+        # Sniff file format: XGBoost native UBJSON starts with b'{'
+        with open(model_path, "rb") as _f:
+            _magic = _f.read(1)
+        if _magic == b"{":
+            # Regressor targets have "_regressor" or "_goals"/"_corners" in name
+            _name = model_path.stem.lower()
+            _regressor_hints = ("corner", "goal", "regressor", "xgb_regressor")
+            if any(h in _name for h in _regressor_hints):
+                _m = XGBRegressor()
+            else:
+                _m = XGBClassifier()
+            _m.load_model(str(model_path))
+            return _m
         return joblib.load(model_path)
 
     @staticmethod
@@ -131,6 +153,10 @@ class ForecastService:
     def _class_labels(definition: TargetDefinition, model: Any, probabilities: np.ndarray) -> list[str]:
         model_classes = getattr(model, "classes_", None)
         if model_classes is not None and len(model_classes) == len(probabilities):
+            # If classes are integers and we have named classes, reconstruct the label encoder mapping.
+            # sklearn LabelEncoder assigns integers in alphabetical order, so sort definition.classes.
+            if all(isinstance(c, (int, np.integer)) for c in model_classes) and definition.classes:
+                return list(sorted(definition.classes))
             if definition.name in {"btts", "home_win"} and set(model_classes) == {0, 1}:
                 return list(definition.classes)
             return [str(label) for label in model_classes]
@@ -214,6 +240,224 @@ class ForecastService:
                 coverage=float(interval_config.get("coverage", 0.8)),
             )
         return payload
+
+    def _load_context_models(self, context: str) -> dict[str, tuple[TargetDefinition, Any, dict[str, Any]]]:
+        """Load models from model_selection.yaml for a given context.
+
+        Returns an empty dict (not a glob fallback) when the context has no entries —
+        this lets the caller raise FileNotFoundError cleanly rather than loading
+        models from the wrong context (which causes XGBoost feature-name mismatches).
+        """
+        selection_path = self.config_path.parent / "config" / "model_selection.yaml"
+        if selection_path.exists():
+            with selection_path.open("r", encoding="utf-8") as fh:
+                sel_config = yaml.safe_load(fh) or {}
+            ctx_data = sel_config.get("contexts", {}).get(context, {})
+            if ctx_data:
+                loaded: dict[str, tuple[TargetDefinition, Any, dict[str, Any]]] = {}
+                for target in self.targets:
+                    entry = ctx_data.get(target)
+                    if entry is None:
+                        continue
+                    definition = get_target_definition(target)
+                    model_path = Path(entry["model_path"])
+                    if not model_path.is_absolute():
+                        model_path = self.config_path.parent / model_path
+                    if not model_path.exists():
+                        continue
+                    metadata: dict[str, Any] = {
+                        "target": target,
+                        "model_type": entry.get("model_type", "unknown"),
+                        "artifact_name": model_path.name,
+                        "feature_names": entry.get("feature_subset") or self.feature_names,
+                        "feature_subset": entry.get("feature_subset"),
+                    }
+                    loaded[target] = (definition, self._load_model(model_path, metadata), metadata)
+                if loaded:
+                    return loaded
+
+        return {}
+
+    def _score_targets(
+        self,
+        feature_frame: pd.DataFrame,
+        loaded: dict[str, tuple[TargetDefinition, Any, dict[str, Any]]],
+        row: pd.Series,
+        feature_names: list[str],
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        """Run prediction across all loaded targets for a single feature row."""
+        forecast: dict[str, Any] = {}
+        metadata_by_target = {t: data[2] for t, data in loaded.items()}
+        for target, (definition, model, metadata) in loaded.items():
+            forecast[target] = self._predict_target(definition, model, metadata, feature_frame)
+        return forecast, metadata_by_target
+
+    def forecast_upcoming(
+        self,
+        home_team: str,
+        away_team: str,
+        date: str,
+        league: str,
+        odds_h: float,
+        odds_d: float,
+        odds_a: float,
+        match_type: str = "league",
+        over25_odds: float | None = None,
+        ah_line: float | None = None,
+        ah_home_odds: float | None = None,
+        ah_away_odds: float | None = None,
+        targets: list[str] | None = None,
+    ) -> dict[str, Any]:
+        """Produce a forecast for a named upcoming match without requiring it in the feature store.
+
+        US#84: league path — full rolling features via FeatureFactory.build_for_match.
+        US#86: international path — MKT_* features only from supplied odds.
+        """
+        from src.features.feature_factory import FeatureFactory
+
+        generated_at = datetime.utcnow().replace(microsecond=0).isoformat() + "Z"
+        active_targets = targets or self.targets
+
+        if match_type == "international":
+            # US#86: compute MKT features from odds only, no team history needed
+            prediction_basis = "market_odds_only"
+            mkt_row = self._compute_mkt_features_from_odds(odds_h, odds_d, odds_a, over25_odds, ah_line, ah_home_odds, ah_away_odds)
+            feature_row = mkt_row
+            feature_names_used = [f for f in _MKT_FEATURES if f in feature_row.columns]
+            feature_count = feature_row[feature_names_used].notna().sum().sum()
+            context = "international"
+        else:
+            # US#84: full feature computation
+            prediction_basis = "team_history_and_market"
+            factory = FeatureFactory(config_path=str(self.config_path))
+            feature_row = factory.build_for_match(
+                home_team=home_team, away_team=away_team, match_date=date,
+                league=league, odds_h=odds_h, odds_d=odds_d, odds_a=odds_a,
+                over25_odds=over25_odds, ah_line=ah_line, ah_home_odds=ah_home_odds, ah_away_odds=ah_away_odds,
+            )
+            feature_names_used = self.feature_names
+            feature_count = feature_row[feature_names_used].notna().sum().sum() if feature_names_used else 0
+            context = "league"
+
+        # Align feature frame to expected columns (fill missing with NaN)
+        for col in feature_names_used:
+            if col not in feature_row.columns:
+                feature_row[col] = float("nan")
+        feature_frame = feature_row[feature_names_used].apply(pd.to_numeric, errors="coerce").astype(float)
+
+        # Impute column means for any remaining NaN (cold-start)
+        for col in feature_frame.columns:
+            if feature_frame[col].isna().any():
+                feature_frame[col] = feature_frame[col].fillna(0.0)
+
+        loaded = self._load_context_models(context)
+        if not loaded:
+            raise FileNotFoundError(f"No target model artifacts found for context '{context}'.")
+
+        # Filter loaded to active_targets
+        loaded = {t: v for t, v in loaded.items() if t in active_targets}
+
+        row_series = feature_frame.iloc[0]
+        forecast_result, metadata_by_target = self._score_targets(feature_frame, loaded, row_series, feature_names_used)
+
+        completeness = round(float(feature_count) / max(len(feature_names_used), 1), 6)
+        caveat = (
+            "Market-odds-only prediction; team history not used."
+            if match_type == "international"
+            else "Full team history and market features used."
+        )
+
+        payload: dict[str, Any] = {
+            "match_id": f"__spot__{home_team}__{away_team}__{date}".replace(" ", "_"),
+            "date": date,
+            "league": league,
+            "home_team": home_team,
+            "away_team": away_team,
+            "forecast": forecast_result,
+            "explainability": {
+                "top_features": self._top_features(row_series, metadata_by_target),
+            },
+            "diagnostics": {
+                "model_version": f"forecast_suite_{context}_v1",
+                "target_versions": {
+                    target: {
+                        "artifact": meta.get("artifact_name"),
+                        "created_at": meta.get("created_at"),
+                        "model_type": meta.get("model_type"),
+                    }
+                    for target, (_, __, meta) in loaded.items()
+                },
+                "feature_completeness": completeness,
+                "cold_start_risk": completeness < 0.85,
+                "generated_at": generated_at,
+            },
+            "data_quality": {
+                "prediction_basis": prediction_basis,
+                "feature_count": int(feature_count),
+                "caveat": caveat,
+            },
+        }
+        validate_forecast_payload(payload)
+        return payload
+
+    @staticmethod
+    def _compute_mkt_features_from_odds(
+        odds_h: float,
+        odds_d: float,
+        odds_a: float,
+        over25_odds: float | None = None,
+        ah_line: float | None = None,
+        ah_home_odds: float | None = None,
+        ah_away_odds: float | None = None,
+    ) -> pd.DataFrame:
+        """Compute MKT_* features from raw odds (US#86 — international inference)."""
+        import numpy as np
+        from scipy.optimize import brentq
+
+        inv_h = 1.0 / odds_h
+        inv_d = 1.0 / odds_d
+        inv_a = 1.0 / odds_a
+        total = inv_h + inv_d + inv_a
+        mkt_h = inv_h / total
+        mkt_d = inv_d / total
+        mkt_a = inv_a / total
+        overround = total
+
+        mkt_over25 = (1.0 / over25_odds) if over25_odds and over25_odds > 1.0 else np.nan
+
+        def _poisson_cdf2(lam: float) -> float:
+            return np.exp(-lam) * (1.0 + lam + lam * lam / 2.0)
+
+        def _solve_lambda(p_over: float) -> float:
+            if np.isnan(p_over) or p_over <= 0.0 or p_over >= 1.0:
+                return np.nan
+            try:
+                return brentq(lambda lam: _poisson_cdf2(lam) - (1.0 - p_over), 0.01, 20.0)
+            except ValueError:
+                return np.nan
+
+        lam_total = _solve_lambda(mkt_over25)
+        ah_abs = abs(ah_line) if ah_line is not None else np.nan
+        lam_home = (lam_total + ah_abs) / 2.0 if not np.isnan(lam_total) and not np.isnan(ah_abs) else np.nan
+        lam_away = max((lam_total - ah_abs) / 2.0, 0.0) if not np.isnan(lam_total) and not np.isnan(ah_abs) else np.nan
+        btts_prob = (1.0 - np.exp(-lam_home)) * (1.0 - np.exp(-lam_away)) if not np.isnan(lam_home) else np.nan
+        lam_ah_diff = (lam_total - ah_abs) if not np.isnan(lam_total) and not np.isnan(ah_abs) else np.nan
+
+        return pd.DataFrame([{
+            "MKT_IMPLIED_HOME": mkt_h,
+            "MKT_IMPLIED_DRAW": mkt_d,
+            "MKT_IMPLIED_AWAY": mkt_a,
+            "MKT_OVERROUND": overround,
+            "MKT_LAMBDA_TOTAL": lam_total,
+            "MKT_LAMBDA_HOME": lam_home,
+            "MKT_LAMBDA_AWAY": lam_away,
+            "MKT_POISSON_BTTS_PROB": btts_prob,
+            "MKT_LAMBDA_AH_DIFF": lam_ah_diff,
+            "MKT_AH_LINE": ah_line if ah_line is not None else np.nan,
+            "MKT_AH_HOME_ODDS": ah_home_odds if ah_home_odds is not None else np.nan,
+            "MKT_AH_AWAY_ODDS": ah_away_odds if ah_away_odds is not None else np.nan,
+            "MKT_IMPLIED_OVER25": mkt_over25,
+        }])
 
     def forecast(
         self,
