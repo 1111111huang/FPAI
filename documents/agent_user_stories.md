@@ -43,7 +43,7 @@ PHASE 6 (Batch Recommendation — Future)
 ## PHASE 1: Foundation
 
 ### A01 — Set Up Development Environment
-**Size:** M | **Status:** active | **Milestone:** M1
+**Size:** M | **Status:** completed | **Milestone:** M1
 
 Set up all dependencies required to run a LangGraph agent locally.
 

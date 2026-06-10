@@ -1,0 +1,21 @@
+# Betting agent configuration — all tunable knobs.
+# Swap model/provider to change the LLM tier without touching code.
+
+model: "qwen2.5-coder:7b"      # local Ollama model (free, good tool use)
+provider: "ollama"              # "ollama" | "anthropic"
+temperature: 0.1                # lower = more deterministic; use 0.0 for backtesting
+max_tool_calls: 10              # per-match tool budget
+
+# Value detection thresholds
+min_odds_threshold: 2.0         # never recommend below this (decimal) / +100 American
+min_value_edge: 0.05            # model prob must exceed implied prob by at least this
+
+# Markets the agent evaluates per match
+markets:
+  - result_3way
+  - btts
+  - total_goals
+  - home_corners
+  - away_corners
+
+system_prompt_version: "v1"     # maps to config/prompts/agent_v1.txt

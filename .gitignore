@@ -19,3 +19,7 @@ data/*.db
 mlruns/
 .continue/rules/role-definition.md
 CLAUDE.md
+
+# Environment / secrets
+.env
+.env.*

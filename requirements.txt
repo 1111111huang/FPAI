@@ -9,11 +9,19 @@ requests
 beautifulsoup4
 firecrawl-py  # 2026年主流的AI抓取工具
 
+# Agent
+langgraph
+langchain
+langchain-anthropic
+langchain-ollama
+tavily-python
+
 # Machine Learning
 scikit-learn
 xgboost
 mlflow
 matplotlib
+scipy
 
 # Testing & Quality
 pytest
@@ -22,3 +30,4 @@ beautifulsoup4
 mlflow
 
 seaborn
+mcp
