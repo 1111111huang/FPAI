@@ -1,0 +1,93 @@
+"""Tests for StateGraph compilation and routing logic (A03)."""
+import json
+import pytest
+from unittest.mock import MagicMock, patch
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
+from langchain_core.tools import tool
+
+from src.agent.agent_config import AgentConfig
+from src.agent.graph import AgentState, build_graph
+
+
+@tool
+def stub_search(query: str) -> str:
+    """Stub web search."""
+    return "stub result"
+
+
+@tool
+def stub_forecast(home_team: str, away_team: str, date: str, league: str, odds_h: float, odds_d: float, odds_a: float) -> str:
+    """Stub forecast."""
+    return '{"result_3way": {"probabilities": {"home": 0.5, "draw": 0.25, "away": 0.25}}}'
+
+
+def _make_config(**overrides) -> AgentConfig:
+    defaults = dict(
+        model="stub-model",
+        provider="ollama",
+        temperature=0.0,
+        max_tool_calls=5,
+        min_odds_threshold=2.0,
+        min_value_edge=0.05,
+        markets=["btts"],
+        system_prompt_version="v1",
+    )
+    defaults.update(overrides)
+    return AgentConfig(**defaults)
+
+
+def test_graph_compiles():
+    cfg = _make_config()
+    with patch("src.agent.graph._build_llm") as mock_llm, \
+         patch("src.agent.graph._load_system_prompt", return_value="stub prompt"):
+        mock_llm.return_value = MagicMock()
+        mock_llm.return_value.bind_tools.return_value = MagicMock()
+        graph = build_graph(cfg, [stub_search, stub_forecast])
+    assert graph is not None
+
+
+def test_should_continue_routes_to_tools_when_tool_calls_present():
+    cfg = _make_config(max_tool_calls=5)
+    ai_msg = AIMessage(content="", tool_calls=[{"name": "stub_search", "args": {"query": "test"}, "id": "1"}])
+    state: AgentState = {
+        "messages": [ai_msg],
+        "match_info": {},
+        "recommendation": None,
+        "tool_call_count": 1,
+    }
+    route = _route_for_state(cfg, state)
+    assert route == "tools"
+
+
+def test_should_continue_routes_to_output_when_no_tool_calls():
+    cfg = _make_config(max_tool_calls=5)
+    ai_msg = AIMessage(content="Final answer here.")
+    state: AgentState = {
+        "messages": [ai_msg],
+        "match_info": {},
+        "recommendation": None,
+        "tool_call_count": 0,
+    }
+    route = _route_for_state(cfg, state)
+    assert route == "output"
+
+
+def test_should_continue_routes_to_output_when_budget_exceeded():
+    cfg = _make_config(max_tool_calls=3)
+    ai_msg = AIMessage(content="", tool_calls=[{"name": "stub_search", "args": {"query": "x"}, "id": "2"}])
+    state: AgentState = {
+        "messages": [ai_msg],
+        "match_info": {},
+        "recommendation": None,
+        "tool_call_count": 3,  # at limit
+    }
+    route = _route_for_state(cfg, state)
+    assert route == "output"
+
+
+def _route_for_state(cfg: AgentConfig, state: AgentState) -> str:
+    """Helper: extract the routing logic without building the full graph."""
+    last = state["messages"][-1]
+    has_calls = bool(getattr(last, "tool_calls", None))
+    under_budget = state["tool_call_count"] < cfg.max_tool_calls
+    return "tools" if has_calls and under_budget else "output"

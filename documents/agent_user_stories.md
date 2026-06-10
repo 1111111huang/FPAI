@@ -56,7 +56,7 @@ Set up all dependencies required to run a LangGraph agent locally.
 ---
 
 ### A02 — Implement AgentConfig
-**Size:** S | **Status:** active | **Milestone:** M1 | **Depends on:** A01
+**Size:** S | **Status:** completed | **Milestone:** M1 | **Depends on:** A01
 
 Create a typed configuration object and its corresponding YAML file covering all agent tuning knobs.
 
@@ -68,7 +68,7 @@ Create a typed configuration object and its corresponding YAML file covering all
 ---
 
 ### A03 — Build Stub StateGraph
-**Size:** M | **Status:** active | **Milestone:** M1 | **Depends on:** A01, A02
+**Size:** M | **Status:** completed | **Milestone:** M1 | **Depends on:** A01, A02
 
 Implement the LangGraph `StateGraph` skeleton with the correct node structure and stub tools so the agent loop can be exercised end-to-end before real tools exist.
 
@@ -84,7 +84,7 @@ Implement the LangGraph `StateGraph` skeleton with the correct node structure an
 ## PHASE 2: Live Recommendation
 
 ### A04 — Implement web_search Tool
-**Size:** M | **Status:** active | **Milestone:** M2 | **Depends on:** A03
+**Size:** M | **Status:** completed | **Milestone:** M2 | **Depends on:** A03
 
 Connect the Tavily search API as the agent's primary web search tool.
 
@@ -98,7 +98,7 @@ Connect the Tavily search API as the agent's primary web search tool.
 ---
 
 ### A05 — Implement forecast_league and forecast_international Tools
-**Size:** M | **Status:** active | **Milestone:** M2 | **Depends on:** A03
+**Size:** M | **Status:** completed | **Milestone:** M2 | **Depends on:** A03
 
 Expose the two ML model contexts as distinct, named tools so the agent cannot accidentally call the wrong one.
 
@@ -112,7 +112,7 @@ Expose the two ML model contexts as distinct, named tools so the agent cannot ac
 ---
 
 ### A06 — Write System Prompt v1 and MatchRecommendation Output Schema
-**Size:** M | **Status:** active | **Milestone:** M2 | **Depends on:** A03
+**Size:** M | **Status:** completed | **Milestone:** M2 | **Depends on:** A03
 
 Define the agent's betting philosophy in the system prompt and enforce a structured JSON output at the end of every run.
 
@@ -128,7 +128,7 @@ Define the agent's betting philosophy in the system prompt and enforce a structu
 ---
 
 ### A07 — Wire Full Agent Graph and Validate End-to-End
-**Size:** M | **Status:** active | **Milestone:** M2 | **Depends on:** A04, A05, A06
+**Size:** M | **Status:** completed | **Milestone:** M2 | **Depends on:** A04, A05, A06
 
 Connect all real tools into the graph and validate the full live recommendation workflow.
 
@@ -142,7 +142,7 @@ Connect all real tools into the graph and validate the full live recommendation 
 ---
 
 ### A08 — Add agent-recommend CLI Command
-**Size:** S | **Status:** active | **Milestone:** M2 | **Depends on:** A07
+**Size:** S | **Status:** completed | **Milestone:** M2 | **Depends on:** A07
 
 Expose the live recommendation workflow as a CLI command.
 

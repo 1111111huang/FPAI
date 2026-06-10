@@ -4,15 +4,11 @@ from __future__ import annotations
 
 import argparse
 from datetime import datetime
-import itertools
 import json
 from pathlib import Path
-from tempfile import TemporaryDirectory
 
 import mlflow
-from mlflow.exceptions import MlflowException
 import pandas as pd
-import matplotlib.pyplot as plt
 import yaml
 
 from src.features.feature_factory import FeatureFactory
@@ -30,31 +26,16 @@ from src.models import (
     XGBoostModel,
     XGBoostRegressorModel,
 )
-from src.strategy import Backtester, StrategyEngine
 from src.utils import DuckDBManager, configure_logger, get_logger
 from src.utils.config_loader import AppSettings, settings
 from src.utils.feature_importance import PermutationImportanceAnalyzer
 from src.utils.learning_curve import LearningCurveAnalyzer, run_all_targets, summarise_findings
 from src.utils.model_comparison import ModelComparison
-from src.utils.sweep_runner import OptunaRunner, SweepRunner
+from src.utils.sweep_runner import OptunaRunner, StagedOptunaRunner, SweepRunner
+from src.models.dixon_coles import DixonColesModel
+from src.models.mlp_model import MLPModel, MLPRegressorModel
 
 LOGGER = get_logger(__name__)
-FEATURE_COLUMNS = [
-    "home_avg_goals_scored",
-    "home_avg_goals_conceded",
-    "away_avg_goals_scored",
-    "away_avg_goals_conceded",
-    "is_cold_start",
-    "relative_tier_change",
-    "market_prob_h",
-    "elo_rating_diff",
-    "home_advantage_trend",
-]
-LEAGUE_LABELS = {
-    "E0": "Premier League",
-    "E1": "Championship",
-    "E2": "League One",
-}
 MODEL_REGISTRY = {
     "lr": LRModel,
     "random_forest": RandomForestModel,
@@ -65,614 +46,214 @@ MODEL_REGISTRY = {
     "rf_regressor": RandomForestRegressorModel,
     "goal_stacker": None,  # handled via ModelFactory
     "stacker": None,
+    "mlp": None,
+    "mlp_regressor": None,
 }
 
 
-def _mlflow_log_model_compat(model, flavor: str, name: str = "model") -> None:
-    """Log MLflow model with name= (new) or artifact_path (legacy) compatibility."""
-    if flavor == "xgboost":
-        try:
-            mlflow.xgboost.log_model(model, name=name)
-            return
-        except TypeError:
-            mlflow.xgboost.log_model(model, name)
-            return
-    if flavor == "sklearn":
-        try:
-            mlflow.sklearn.log_model(model, name=name)
-            return
-        except TypeError:
-            mlflow.sklearn.log_model(model, name)
-            return
-    raise ValueError(f"Unsupported MLflow model flavor: {flavor}")
-
-
 def _build_parser() -> argparse.ArgumentParser:
-    """Create CLI parser with scrape, ingest, train, predict, and backtest subcommands."""
+    """Create CLI parser."""
     parser = argparse.ArgumentParser(description="FPAI command line interface")
     subparsers = parser.add_subparsers(dest="command", required=True)
+
+    # scrape
     scrape_parser = subparsers.add_parser("scrape", help="Download latest multi-season CSV files to raw directory")
-    scrape_parser.add_argument(
-        "--force",
-        action="store_true",
-        help="Re-download and overwrite all selected CSV files (ignore existing files).",
-    )
+    scrape_parser.add_argument("--force", action="store_true", help="Re-download and overwrite all selected CSV files.")
+
+    # ingest
     ingest_parser = subparsers.add_parser("ingest", help="Ingest CSV data and pre-compute features")
-    ingest_parser.add_argument(
-        "--force",
-        action="store_true",
-        help="Re-ingest all CSV files and overwrite existing database rows.",
+    ingest_parser.add_argument("--force", action="store_true", help="Re-ingest all CSV files and overwrite existing database rows.")
+
+    # refresh-data (US#81)
+    refresh_parser = subparsers.add_parser(
+        "refresh-data",
+        help="Run scrape → ingest → fetch-understat in sequence (standard data update journey)",
     )
-    train_parser = subparsers.add_parser("train", help="Train model and save artifact")
-    train_parser.add_argument(
-        "--model",
-        type=str,
-        default="lr",
-        choices=sorted(MODEL_REGISTRY.keys()),
-        help="Model type to train (default: lr).",
-    )
-    train_parser.add_argument(
-        "--target_type",
-        type=str,
-        default="home_win",
-        help="Target type for training labels (default: home_win).",
-    )
+    refresh_parser.add_argument("--league", type=str, default="E0", help="League code for understat fetch (default: E0).")
+    refresh_parser.add_argument("--force", action="store_true", help="Force re-download and re-ingest of all files.")
+
+    # train-target
     train_target_parser = subparsers.add_parser("train-target", help="Train one forecast target model")
     train_target_parser.add_argument(
-        "--target",
-        type=str,
-        required=True,
+        "--target", type=str, required=True,
         choices=sorted(definition.name for definition in list_target_definitions()),
         help="Forecast target to train.",
     )
     train_target_parser.add_argument(
-        "--model",
-        type=str,
-        default=None,
+        "--model", type=str, default=None,
         choices=sorted(MODEL_REGISTRY.keys()),
         help="Optional model override. Defaults to lr for classification and rf_regressor for regression.",
     )
+    train_target_parser.add_argument(
+        "--context", type=str, default="league", choices=["league", "international"],
+        help="Training context: league (all features) or international (MKT_* only).",
+    )
+
+    # train-forecast-suite
     train_suite_parser = subparsers.add_parser("train-forecast-suite", help="Train all registered forecast target models")
     train_suite_parser.add_argument(
-        "--targets",
-        type=str,
-        nargs="*",
-        default=None,
+        "--targets", type=str, nargs="*", default=None,
         choices=sorted(definition.name for definition in list_target_definitions()),
         help="Optional subset of forecast targets to train.",
     )
+    train_suite_parser.add_argument(
+        "--context", type=str, default="league", choices=["league", "international"],
+        help="Training context: league (all features) or international (MKT_* only).",
+    )
+
+    # forecast
     forecast_parser = subparsers.add_parser("forecast", help="Emit structured forecast JSON")
+    forecast_parser.add_argument("--league", type=str, default=None, help="Optional league code filter.")
+    forecast_parser.add_argument("--match_id", type=str, nargs="*", default=None, help="Optional match_id values to forecast.")
     forecast_parser.add_argument(
-        "--league",
-        type=str,
-        default=None,
-        help="Optional league code filter.",
-    )
-    forecast_parser.add_argument(
-        "--match_id",
-        type=str,
-        nargs="*",
-        default=None,
-        help="Optional match_id values to forecast.",
-    )
-    forecast_parser.add_argument(
-        "--target",
-        type=str,
-        nargs="*",
-        default=None,
+        "--target", type=str, nargs="*", default=None,
         choices=sorted(definition.name for definition in list_target_definitions() if definition.name != "home_win"),
         help="Optional forecast target subset.",
     )
+    forecast_parser.add_argument("--limit", type=int, default=None, help="Optional maximum number of matches to return.")
+    # Spot-inference flags (US#84 / US#86)
+    forecast_parser.add_argument("--home", type=str, default=None, help="Home team name for spot inference.")
+    forecast_parser.add_argument("--away", type=str, default=None, help="Away team name for spot inference.")
+    forecast_parser.add_argument("--date", type=str, default=None, help="Match date (YYYY-MM-DD) for spot inference.")
+    forecast_parser.add_argument("--odds_h", type=float, default=None, help="Home win odds.")
+    forecast_parser.add_argument("--odds_d", type=float, default=None, help="Draw odds.")
+    forecast_parser.add_argument("--odds_a", type=float, default=None, help="Away win odds.")
     forecast_parser.add_argument(
-        "--limit",
-        type=int,
-        default=None,
-        help="Optional maximum number of matches to return.",
+        "--match_type", type=str, default="league", choices=["league", "international"],
+        help="Match type: league (full features) or international (market odds only).",
     )
-    predict_parser = subparsers.add_parser("predict", help="[legacy] Load latest model and print value bets")
-    predict_parser.add_argument(
-        "--league",
-        type=str,
-        default="E0",
-        help="League code filter for prediction output (default: E0).",
-    )
-    predict_parser.add_argument(
-        "--run_id",
-        type=str,
-        default=None,
-        help="Optional MLflow run ID to load a specific model.",
-    )
-    backtest_parser = subparsers.add_parser("backtest", help="[legacy] Run historical strategy backtest")
-    backtest_parser.add_argument(
-        "--ev_threshold",
-        type=float,
-        default=0.05,
-        help="Minimum EV threshold to place bets (default: 0.05).",
-    )
-    backtest_parser.add_argument(
-        "--league",
-        type=str,
-        default="E0",
-        help="League code filter for backtest (default: E0).",
-    )
-    backtest_parser.add_argument(
-        "--test_season",
-        type=str,
-        required=True,
-        help="Test season in YYZZ format (example: 2425 for 2024/2025).",
-    )
-    backtest_parser.add_argument(
-        "--rolling_retrain",
-        action="store_true",
-        help="Retrain model before each backtest match using all prior data.",
-    )
-    backtest_parser.add_argument(
-        "--run_id",
-        type=str,
-        default=None,
-        help="Optional MLflow run ID to load a specific model.",
-    )
-    experiment_parser = subparsers.add_parser("experiment", help="[legacy] Run MLflow experiment grid search")
-    experiment_parser.add_argument(
-        "--experiment_name",
-        type=str,
-        default="XGB_Optimization",
-        help="MLflow experiment name (default: XGB_Optimization).",
-    )
-    experiment_parser.add_argument(
-        "--config_path",
-        type=str,
-        default="experiments/xgb_search.yaml",
-        help="Path to experiment config YAML (default: experiments/xgb_search.yaml).",
-    )
-    experiment_parser.add_argument(
-        "--test_season",
-        type=str,
-        default="time_split",
-        help="Tag value for test season used (default: time_split).",
-    )
-    experiment_parser.add_argument(
-        "--target_type",
-        type=str,
-        default="home_win",
-        help="Target type for training labels (default: home_win).",
-    )
-    experiment_target_parser = subparsers.add_parser(
-        "experiment-target",
-        help="Run registry-aware MLflow forecast experiments for one target",
-    )
-    experiment_target_parser.add_argument(
-        "--target",
-        type=str,
-        required=True,
-        choices=sorted(definition.name for definition in list_target_definitions()),
-        help="Forecast target to experiment on.",
-    )
-    experiment_target_parser.add_argument(
-        "--config_path",
-        type=str,
-        required=True,
-        help="Path to target experiment YAML config.",
-    )
-    experiment_target_parser.add_argument(
-        "--experiment_name",
-        type=str,
-        default=None,
-        help="Optional MLflow experiment name override.",
-    )
-    experiment_target_parser.add_argument(
-        "--max_runs",
-        type=int,
-        default=None,
-        help="Optional cap for smoke-testing broad grids.",
-    )
-    compare_parser = subparsers.add_parser(
-        "compare-models",
-        help="Compare MLflow forecast model runs for one target",
-    )
+
+    # compare-models
+    compare_parser = subparsers.add_parser("compare-models", help="Compare MLflow forecast model runs for one target")
     compare_parser.add_argument(
-        "--target",
-        type=str,
-        required=True,
+        "--target", type=str, required=True,
         choices=sorted(definition.name for definition in list_target_definitions()),
         help="Forecast target to compare.",
     )
+    compare_parser.add_argument("--experiment_name", type=str, default=None, help="Optional MLflow experiment name.")
+    compare_parser.add_argument("--output_path", type=str, default=None, help="Optional output report path.")
+    compare_parser.add_argument("--format", type=str, default="csv", choices=["csv", "json", "html"], help="Report format.")
     compare_parser.add_argument(
-        "--experiment_name",
-        type=str,
-        default=None,
-        help="Optional MLflow experiment name. Defaults to all experiments.",
+        "--context", type=str, default=None, choices=["league", "international"],
+        help="Filter MLflow runs by context tag (league or international).",
     )
-    compare_parser.add_argument(
-        "--output_path",
-        type=str,
-        default=None,
-        help="Optional output report path.",
-    )
-    compare_parser.add_argument(
-        "--format",
-        type=str,
-        default="csv",
-        choices=["csv", "json", "html"],
-        help="Report format.",
-    )
-    sweep_parser = subparsers.add_parser(
-        "sweep-target",
-        help="Run a systematic target sweep with MLflow logging",
-    )
+
+    # sweep-target
+    sweep_parser = subparsers.add_parser("sweep-target", help="Run a systematic target sweep with MLflow logging")
     sweep_parser.add_argument(
-        "--target",
-        type=str,
-        required=True,
+        "--target", type=str, required=True,
         choices=sorted(definition.name for definition in list_target_definitions()),
         help="Forecast target to sweep.",
     )
-    sweep_parser.add_argument(
-        "--config_path",
-        type=str,
-        required=True,
-        help="Path to target experiment YAML config.",
-    )
-    sweep_parser.add_argument(
-        "--sweep_stage",
-        type=str,
-        default=None,
-        choices=["smoke", "broad", "narrow", "final"],
-        help="Override sweep stage tag.",
-    )
-    sweep_parser.add_argument(
-        "--experiment_name",
-        type=str,
-        default=None,
-        help="Optional MLflow experiment name override.",
-    )
-    sweep_parser.add_argument(
-        "--max_runs",
-        type=int,
-        default=None,
-        help="Optional cap for smoke-testing broad grids.",
-    )
-    diagnose_parser = subparsers.add_parser(
-        "diagnose-model",
-        help="Generate evaluation diagnostics for one model artifact",
-    )
+    sweep_parser.add_argument("--config_path", type=str, required=True, help="Path to target experiment YAML config.")
+    sweep_parser.add_argument("--sweep_stage", type=str, default=None, choices=["smoke", "broad", "narrow", "final"], help="Override sweep stage tag.")
+    sweep_parser.add_argument("--experiment_name", type=str, default=None, help="Optional MLflow experiment name override.")
+    sweep_parser.add_argument("--max_runs", type=int, default=None, help="Optional cap for smoke-testing broad grids.")
+
+    # diagnose-model
+    diagnose_parser = subparsers.add_parser("diagnose-model", help="Generate evaluation diagnostics for one model artifact")
     diagnose_parser.add_argument(
-        "--target",
-        type=str,
-        required=True,
+        "--target", type=str, required=True,
         choices=sorted(definition.name for definition in list_target_definitions()),
         help="Forecast target to diagnose.",
     )
-    diagnose_parser.add_argument(
-        "--model_path",
-        type=str,
-        required=True,
-        help="Path to local model artifact.",
-    )
-    diagnose_parser.add_argument(
-        "--output_path",
-        type=str,
-        default="reports/diagnostics.json",
-        help="Path for diagnostics JSON output.",
-    )
-    
-    # Permutation importance analysis
-    importance_parser = subparsers.add_parser(
-        "permutation-importance",
-        help="Run permutation importance analysis on a trained model",
-    )
+    diagnose_parser.add_argument("--model_path", type=str, required=True, help="Path to local model artifact.")
+    diagnose_parser.add_argument("--output_path", type=str, default="reports/diagnostics.json", help="Path for diagnostics JSON output.")
+
+    # permutation-importance
+    importance_parser = subparsers.add_parser("permutation-importance", help="Run permutation importance analysis on a trained model")
     importance_parser.add_argument(
-        "--target",
-        type=str,
-        required=True,
+        "--target", type=str, required=True,
         choices=sorted(definition.name for definition in list_target_definitions()),
         help="Forecast target to analyze.",
     )
-    importance_parser.add_argument(
-        "--model_path",
-        type=str,
-        required=True,
-        help="Path to trained model artifact.",
-    )
-    importance_parser.add_argument(
-        "--n_repeats",
-        type=int,
-        default=10,
-        help="Number of permutation repeats.",
-    )
-    importance_parser.add_argument(
-        "--output_dir",
-        type=str,
-        default="reports",
-        help="Directory for importance reports.",
-    )
-    
-    # Understat xG fetch
-    understat_parser = subparsers.add_parser(
-        "fetch-understat",
-        help="Fetch xG data from understat.com and update raw_matches",
-    )
-    understat_parser.add_argument(
-        "--league",
-        type=str,
-        default="E0",
-        help="Football-Data league code (default: E0 = English Premier League).",
-    )
-    understat_parser.add_argument(
-        "--from_season",
-        type=int,
-        default=None,
-        help="First season start year to fetch (default: auto-detected from raw_matches).",
-    )
-    understat_parser.add_argument(
-        "--to_season",
-        type=int,
-        default=None,
-        help="Last season start year to fetch (default: auto-detected from raw_matches).",
-    )
-    understat_parser.add_argument(
-        "--delay",
-        type=float,
-        default=1.5,
-        help="Polite delay in seconds between requests (default: 1.5).",
-    )
-    understat_parser.add_argument(
-        "--rebuild_features",
-        action="store_true",
-        default=True,
-        help="Rebuild feature store after updating xG (default: True).",
-    )
+    importance_parser.add_argument("--model_path", type=str, required=True, help="Path to trained model artifact.")
+    importance_parser.add_argument("--n_repeats", type=int, default=10, help="Number of permutation repeats.")
+    importance_parser.add_argument("--output_dir", type=str, default="reports", help="Directory for importance reports.")
 
-    # Learning curve analysis
-    lc_parser = subparsers.add_parser(
-        "learning-curve",
-        help="Train on growing data subsets to diagnose feature ceiling vs. data ceiling",
-    )
+    # fetch-understat
+    understat_parser = subparsers.add_parser("fetch-understat", help="Fetch xG data from understat.com and update raw_matches")
+    understat_parser.add_argument("--league", type=str, default="E0", help="Football-Data league code (default: E0).")
+    understat_parser.add_argument("--from_season", type=int, default=None, help="First season start year to fetch.")
+    understat_parser.add_argument("--to_season", type=int, default=None, help="Last season start year to fetch.")
+    understat_parser.add_argument("--delay", type=float, default=1.5, help="Polite delay in seconds between requests.")
+    understat_parser.add_argument("--rebuild_features", action="store_true", default=True, help="Rebuild feature store after updating xG.")
+
+    # learning-curve
+    lc_parser = subparsers.add_parser("learning-curve", help="Train on growing data subsets to diagnose feature ceiling vs. data ceiling")
     lc_target_group = lc_parser.add_mutually_exclusive_group(required=True)
     lc_target_group.add_argument(
-        "--target",
-        type=str,
+        "--target", type=str,
         choices=sorted(definition.name for definition in list_target_definitions() if definition.name != "home_win"),
         help="Single forecast target to analyse.",
     )
-    lc_target_group.add_argument(
-        "--all_targets",
-        action="store_true",
-        help="Run analysis for all 8 forecast targets and produce a combined chart.",
-    )
-    lc_parser.add_argument(
-        "--output_dir",
-        type=str,
-        default="reports/learning_curves",
-        help="Directory for output CSVs and charts (default: reports/learning_curves).",
-    )
+    lc_target_group.add_argument("--all_targets", action="store_true", help="Run analysis for all 8 forecast targets.")
+    lc_parser.add_argument("--output_dir", type=str, default="reports/learning_curves", help="Directory for output CSVs and charts.")
 
-    # Optuna Bayesian sweep (US#70)
-    optuna_parser = subparsers.add_parser(
-        "optuna-sweep",
-        help="Run a Bayesian hyperparameter sweep using Optuna TPE sampler",
-    )
+    # optuna-sweep
+    optuna_parser = subparsers.add_parser("optuna-sweep", help="Run a Bayesian hyperparameter sweep using Optuna TPE sampler")
     optuna_parser.add_argument(
-        "--target",
-        type=str,
-        required=True,
+        "--target", type=str, required=True,
         choices=sorted(definition.name for definition in list_target_definitions()),
         help="Forecast target to sweep.",
     )
-    optuna_parser.add_argument(
-        "--config_path",
-        type=str,
-        required=True,
-        help="Path to experiment YAML config (use optuna_search instead of grid_search).",
-    )
-    optuna_parser.add_argument(
-        "--n_trials",
-        type=int,
-        default=None,
-        help="Number of Optuna trials (overrides config n_trials, default 50).",
-    )
-    optuna_parser.add_argument(
-        "--sweep_stage",
-        type=str,
-        default=None,
-        choices=["smoke", "broad", "narrow", "final", "optuna"],
-        help="Override sweep stage tag.",
-    )
-    optuna_parser.add_argument(
-        "--experiment_name",
-        type=str,
-        default=None,
-        help="Optional MLflow experiment name override.",
-    )
+    optuna_parser.add_argument("--config_path", type=str, required=True, help="Path to experiment YAML config.")
+    optuna_parser.add_argument("--n_trials", type=int, default=None, help="Number of Optuna trials.")
+    optuna_parser.add_argument("--sweep_stage", type=str, default=None, choices=["smoke", "broad", "narrow", "final", "optuna"], help="Override sweep stage tag.")
+    optuna_parser.add_argument("--experiment_name", type=str, default=None, help="Optional MLflow experiment name override.")
 
-    # MLflow cleanup
-    cleanup_parser = subparsers.add_parser(
-        "cleanup-mlflow",
-        help="Clean up malformed MLflow experiments in local file store",
+    # dixon-coles-baseline
+    dc_parser = subparsers.add_parser("dixon-coles-baseline", help="Fit Dixon-Coles model and compare against ML results")
+    dc_parser.add_argument("--config_path", type=str, default="config/schema.yaml", help="Path to schema config.")
+    dc_parser.add_argument("--experiment_name", type=str, default="dixon_coles_baseline", help="MLflow experiment name.")
+    dc_parser.add_argument("--output_path", type=str, default="reports/model_comparison/dixon_coles_comparison.csv", help="Where to write the comparison CSV.")
+
+    # cleanup-mlflow
+    cleanup_parser = subparsers.add_parser("cleanup-mlflow", help="Clean up malformed MLflow experiments in local file store")
+    cleanup_parser.add_argument("--strategy", type=str, choices=["recover", "remove", "backup_and_remove"], default="recover", help="How to handle malformed experiments.")
+    cleanup_parser.add_argument("--backup", action="store_true", default=True, help="Backup before destructive operations.")
+    cleanup_parser.add_argument("--mlruns_dir", type=str, default="mlruns", help="Path to MLflow runs directory.")
+    cleanup_parser.add_argument("--report_only", action="store_true", help="Only report malformed experiments without fixing them.")
+
+    # select-best-models (US#78)
+    select_parser = subparsers.add_parser("select-best-models", help="Select best-performing model per target from MLflow and record in model_selection.yaml")
+    select_parser.add_argument(
+        "--target", type=str, default=None,
+        choices=sorted(definition.name for definition in list_target_definitions() if definition.name != "home_win"),
+        help="Restrict selection to one target.",
     )
-    cleanup_parser.add_argument(
-        "--strategy",
-        type=str,
-        choices=["recover", "remove", "backup_and_remove"],
-        default="recover",
-        help="How to handle malformed experiments.",
+    select_parser.add_argument(
+        "--context", type=str, default=None, choices=["league", "international"],
+        help="Restrict selection to one context.",
     )
-    cleanup_parser.add_argument(
-        "--backup",
-        action="store_true",
-        default=True,
-        help="Backup before destructive operations.",
+    select_parser.add_argument("--dry-run", action="store_true", help="Print proposed changes without writing.")
+    select_parser.add_argument("--min_improvement", type=float, default=0.005, help="Minimum metric improvement required to replace current selection.")
+
+    # status (US#80)
+    subparsers.add_parser("status", help="Show data freshness, feature store stats, and selected models per context")
+
+    # agent-recommend
+    agent_recommend_parser = subparsers.add_parser(
+        "agent-recommend",
+        help="Run the betting agent to produce a recommendation for an upcoming match",
     )
-    cleanup_parser.add_argument(
-        "--mlruns_dir",
-        type=str,
-        default="mlruns",
-        help="Path to MLflow runs directory.",
-    )
-    cleanup_parser.add_argument(
-        "--report_only",
-        action="store_true",
-        help="Only report malformed experiments without fixing them.",
-    )
+    agent_recommend_parser.add_argument("--home", required=True, help="Home team name")
+    agent_recommend_parser.add_argument("--away", required=True, help="Away team name")
+    agent_recommend_parser.add_argument("--date", required=True, help="Match date YYYY-MM-DD")
+    agent_recommend_parser.add_argument("--league", default=None, help="League code (e.g. E0). Omit for international matches.")
+    agent_recommend_parser.add_argument("--config", default=None, help="Path to agent_config.yaml (default: config/agent_config.yaml)")
+
     return parser
 
 
 def _get_latest_model_path(model_dir: Path) -> Path:
-    """Return the latest LR model artifact from disk."""
     candidates = sorted(model_dir.glob("lr_v*_*.joblib"), key=lambda path: path.stat().st_mtime)
     if not candidates:
         raise FileNotFoundError(f"No saved model found in {model_dir}")
     return candidates[-1]
 
 
-def _get_model_uri(league: str, run_id: str | None = None) -> tuple[str, mlflow.entities.Run]:
-    """Resolve model URI and run metadata for a given league and optional run_id."""
-    league_code = league.upper()
-    if run_id:
-        try:
-            run = mlflow.get_run(run_id)
-        except MlflowException as exc:
-            raise ValueError(f"MLflow run_id not found: {run_id}") from exc
-        run_league = (run.data.tags or {}).get("league", "").upper()
-        if run_league and run_league != league_code:
-            raise ValueError(
-                f"Run {run_id} is tagged for league {run_league}, not {league_code}."
-            )
-        run_model_type = (run.data.tags or {}).get("model_type", "").lower()
-        if run_model_type and run_model_type not in {"xgboost", "logistic_regression", "random_forest", "lr", "xgb"}:
-            raise ValueError(f"Run {run_id} uses unsupported model_type '{run_model_type}'.")
-        return f"runs:/{run_id}/model", run
-
-    runs_df = mlflow.search_runs(order_by=["metrics.roi DESC"])
-    if runs_df.empty:
-        raise ValueError("No MLflow runs found.")
-    if "metrics.roi" in runs_df.columns:
-        runs_df = runs_df[runs_df["metrics.roi"].notna()]
-    if "tags.league" in runs_df.columns:
-        runs_df = runs_df[runs_df["tags.league"].str.upper() == league_code]
-    if runs_df.empty:
-        raise ValueError(f"No MLflow runs found for league {league_code}.")
-
-    best_run_id = runs_df.iloc[0]["run_id"]
-    run = mlflow.get_run(best_run_id)
-    return f"runs:/{best_run_id}/model", run
-
-
-def _check_feature_consistency(run: mlflow.entities.Run) -> None:
-    """Ensure model features recorded in MLflow match current FEATURE_COLUMNS."""
-    features_param = run.data.params.get("features", "")
-    recorded = [item.strip() for item in features_param.split(",") if item.strip()]
-    if not recorded:
-        raise ValueError("Run does not record 'features' metadata; cannot verify consistency.")
-    if recorded != FEATURE_COLUMNS:
-        raise ValueError(
-            "Feature mismatch between model metadata and current pipeline. "
-            f"Recorded={recorded}, Current={FEATURE_COLUMNS}"
-        )
-
-
-def _fetch_feature_joined_matches(db_manager: DuckDBManager, days: int | None = None) -> pd.DataFrame:
-    """Fetch matches joined with feature_store, optionally limited to recent days."""
-    date_filter = ""
-    if days is not None:
-        date_filter = f"WHERE r.date >= m.max_date - INTERVAL {int(days)} DAY"
-
-    query = f"""
-        WITH max_date_cte AS (
-            SELECT MAX(date) AS max_date FROM raw_matches
-        )
-        SELECT
-            r.match_id,
-            r.league,
-            r.home_team,
-            r.away_team,
-            r.odds_h,
-            r.date,
-            r.fthg,
-            r.ftag,
-            f.home_avg_goals_scored,
-            f.home_avg_goals_conceded,
-            f.away_avg_goals_scored,
-            f.away_avg_goals_conceded,
-            f.is_cold_start,
-            f.relative_tier_change,
-            f.market_prob_h,
-            f.elo_rating_diff,
-            f.home_advantage_trend
-        FROM raw_matches r
-        INNER JOIN feature_store f ON r.match_id = f.match_id
-        CROSS JOIN max_date_cte m
-        {date_filter}
-        ORDER BY r.date, r.match_id
-    """
-    with db_manager.connection() as conn:
-        return conn.execute(query).fetchdf()
-
-
-def _build_prediction_frame(model: LRModel, source_df: pd.DataFrame) -> pd.DataFrame:
-    """Generate prediction DataFrame required by StrategyEngine and Backtester."""
-    inference_df = source_df.dropna(subset=FEATURE_COLUMNS + ["odds_h"]).copy()
-    if inference_df.empty:
-        return pd.DataFrame(
-            columns=["match_id", "league", "home_team", "away_team", "predicted_home_win_prob", "odds_h"]
-        )
-
-    probabilities = model.predict_proba(inference_df[FEATURE_COLUMNS])
-    predicted_home_win_prob = probabilities[:, 1] if probabilities.ndim == 2 else probabilities.ravel()
-
-    return pd.DataFrame(
-        {
-            "match_id": inference_df["match_id"].values,
-            "league": inference_df["league"].values if "league" in inference_df.columns else "",
-            "home_team": inference_df["home_team"].values,
-            "away_team": inference_df["away_team"].values,
-            "predicted_home_win_prob": predicted_home_win_prob,
-            "odds_h": inference_df["odds_h"].values,
-        }
-    )
-
-
-def _parse_season_bounds(test_season: str) -> tuple[pd.Timestamp, pd.Timestamp]:
-    """Parse YYZZ season code into [start, end] timestamps for July-to-June season windows."""
-    normalized = test_season.strip()
-    if len(normalized) != 4 or not normalized.isdigit():
-        raise ValueError("test_season must be a 4-digit code like '2425'.")
-
-    start_suffix = int(normalized[:2])
-    end_suffix = int(normalized[2:])
-    expected_end = (start_suffix + 1) % 100
-    if end_suffix != expected_end:
-        raise ValueError(f"Invalid season code '{test_season}'. Expected trailing year {expected_end:02d}.")
-
-    start_year = 2000 + start_suffix
-    end_year = 2000 + end_suffix
-    start = pd.Timestamp(datetime(start_year, 7, 1, 0, 0, 0))
-    end = pd.Timestamp(datetime(end_year, 6, 30, 23, 59, 59))
-    return start, end
-
-
-def _prepare_backtest_frame(source_df: pd.DataFrame) -> pd.DataFrame:
-    """Return cleaned supervised frame with target for backtesting."""
-    if source_df.empty:
-        return pd.DataFrame()
-
-    required = FEATURE_COLUMNS + ["match_id", "league", "home_team", "away_team", "date", "fthg", "ftag", "odds_h"]
-    df = source_df.dropna(subset=required).copy()
-    if df.empty:
-        return pd.DataFrame()
-
-    df["date"] = pd.to_datetime(df["date"], errors="coerce")
-    df = df.dropna(subset=["date"])
-    if df.empty:
-        return pd.DataFrame()
-
-    df["target"] = (df["fthg"].astype(int) > df["ftag"].astype(int)).astype(int)
-    df = df.sort_values(["date", "match_id"]).reset_index(drop=True)
-    return df
-
-
 def run_scrape(app_settings: AppSettings, force: bool = False) -> None:
-    """Run scraping only: download season CSV files to data/raw directory."""
     LOGGER.info("Executing command: scrape")
     scraper = FootballDataScraper(
         league_page_url=app_settings.scraper.league_page_url,
@@ -696,111 +277,68 @@ def run_fetch_understat(
     delay: float = 1.5,
     rebuild_features: bool = True,
 ) -> None:
-    """Fetch xG from understat.com, update raw_matches, and optionally rebuild features."""
     from src.ingestion.understat import update_raw_matches_xg
     from src.ingestion.understat_fetcher import fetch_seasons_range
 
     LOGGER.info("Executing command: fetch-understat | league=%s", league)
-
-    # Auto-detect season range from raw_matches dates if not provided.
     with db_manager.connection() as conn:
-        bounds = conn.execute(
-            "SELECT YEAR(MIN(date)), YEAR(MAX(date)) FROM raw_matches"
-        ).fetchone()
-
+        bounds = conn.execute("SELECT YEAR(MIN(date)), YEAR(MAX(date)) FROM raw_matches").fetchone()
     if bounds is None or bounds[0] is None:
         LOGGER.error("raw_matches is empty — run ingest first.")
         return
-
-    # Season start year = calendar year of August (EPL seasons start Aug-May).
-    # A match in Jan 2024 belongs to season 2023; match in Aug 2023 also belongs to 2023.
-    # Simple heuristic: min_year - 1 to max_year - 1 covers all start years.
     detected_from = (from_season or bounds[0]) - 1
     detected_to = to_season or (bounds[1] - 1)
-    LOGGER.info(
-        "Fetching seasons %d – %d for league %s", detected_from, detected_to, league
-    )
-
-    understat_df = fetch_seasons_range(
-        league=league,
-        from_season=detected_from,
-        to_season=detected_to,
-        delay=delay,
-    )
-
+    LOGGER.info("Fetching seasons %d – %d for league %s", detected_from, detected_to, league)
+    understat_df = fetch_seasons_range(league=league, from_season=detected_from, to_season=detected_to, delay=delay)
     if understat_df.empty:
         LOGGER.error("No Understat data returned — check league/season args and network.")
         return
-
     LOGGER.info("Fetched %d Understat match records total.", len(understat_df))
-
     result = update_raw_matches_xg(understat_df, db_manager)
-    LOGGER.info(
-        "xG update | matched=%d | updated=%d | unmatched=%d",
-        result["matched"],
-        result["updated"],
-        result["unmatched"],
-    )
-
+    LOGGER.info("xG update | matched=%d | updated=%d | unmatched=%d", result["matched"], result["updated"], result["unmatched"])
     if rebuild_features:
         LOGGER.info("Rebuilding feature store with xG data...")
         factory = FeatureFactory()
-        features_df = factory.compute_rolling_stats(
-            window=app_settings.settings.rolling_window
-        )
+        features_df = factory.compute_rolling_stats(window=app_settings.settings.rolling_window)
         factory.save_features(features_df)
         LOGGER.info("Feature store rebuilt with xG features.")
 
 
 def run_ingest(app_settings: AppSettings, db_manager: DuckDBManager, force: bool = False) -> None:
-    """Run directory batch ingestion and feature pre-computation pipeline."""
     LOGGER.info("Executing command: ingest")
-
     raw_dir = Path(app_settings.paths.raw_data_dir)
     if not raw_dir.exists():
         LOGGER.error("Raw data directory not found: %s", raw_dir)
         return
-
     if force:
         with db_manager.connection() as conn:
             conn.execute("DELETE FROM processed_files")
             conn.execute("DELETE FROM feature_store")
             conn.execute("DELETE FROM raw_matches")
         LOGGER.info("Force enabled: cleared processed_files, feature_store, and raw_matches.")
-
     loader = CSVLoader()
     loader.process_directory(pattern="*.csv", force=force)
-
     factory = FeatureFactory()
     features_df = factory.compute_rolling_stats(window=app_settings.settings.rolling_window)
     factory.save_features(features_df)
-
     with db_manager.connection() as conn:
         raw_count = conn.execute("SELECT COUNT(*) FROM raw_matches").fetchone()
         feature_count = conn.execute("SELECT COUNT(*) FROM feature_store").fetchone()
-
     total_raw = int(raw_count[0]) if raw_count is not None else 0
     total_features = int(feature_count[0]) if feature_count is not None else 0
     LOGGER.info("Ingest complete | raw_matches=%s | feature_store=%s", total_raw, total_features)
 
 
-def run_train(model_name: str, target_type: str) -> None:
-    """Train selected model and persist artifact."""
-    LOGGER.info("Executing command: train")
-    normalized = model_name.strip().lower()
-    model_cls = MODEL_REGISTRY.get(normalized)
-    if model_cls is None:
-        valid_models = ", ".join(sorted(MODEL_REGISTRY.keys()))
-        raise ValueError(f"Unsupported model '{model_name}'. Available options: {valid_models}")
-    LOGGER.info("Selected model type: %s", normalized)
-
-    model_manager = ModelManager(model=model_cls(), target_config={"target_type": target_type})
-    model_path = model_manager.run_pipeline()
-    LOGGER.info("Model saved to %s", model_path)
+def run_refresh_data(app_settings: AppSettings, db_manager: DuckDBManager, league: str = "E0", force: bool = False) -> None:
+    """Run scrape → ingest → fetch-understat in sequence (US#81)."""
+    LOGGER.info("Executing command: refresh-data | league=%s | force=%s", league, force)
+    run_scrape(app_settings, force=force)
+    run_ingest(app_settings, db_manager, force=force)
+    run_fetch_understat(app_settings, db_manager, league=league, rebuild_features=True)
+    LOGGER.info("refresh-data complete.")
 
 
 def _default_model_for_target(target_name: str) -> str:
-    """Return the default model key for a target definition."""
     definition = get_target_definition(target_name)
     if definition.task_type == "regression":
         return "rf_regressor"
@@ -808,54 +346,69 @@ def _default_model_for_target(target_name: str) -> str:
 
 
 def _xgb_params_for_target(target_name: str, model_key: str) -> dict:
-    """Return XGBoost objective/eval_metric params appropriate for the target."""
     definition = get_target_definition(target_name)
     if model_key not in {"xgb", "xgboost"}:
         return {}
     if definition.task_type == "multiclass_classification":
-        return {
-            "objective": "multi:softprob",
-            "eval_metric": "mlogloss",
-            "num_class": len(definition.classes),
-        }
+        return {"objective": "multi:softprob", "eval_metric": "mlogloss", "num_class": len(definition.classes)}
     return {"objective": "binary:logistic", "eval_metric": "logloss"}
 
 
-def run_train_target(target_name: str, model_name: str | None = None) -> Path:
+# MKT_* features used for international context models (US#85)
+MKT_FEATURES = [
+    "MKT_IMPLIED_HOME",
+    "MKT_IMPLIED_DRAW",
+    "MKT_IMPLIED_AWAY",
+    "MKT_OVERROUND",
+    "MKT_LAMBDA_TOTAL",
+    "MKT_LAMBDA_HOME",
+    "MKT_LAMBDA_AWAY",
+    "MKT_POISSON_BTTS_PROB",
+    "MKT_LAMBDA_AH_DIFF",
+    "MKT_AH_LINE",
+    "MKT_AH_HOME_ODDS",
+    "MKT_AH_AWAY_ODDS",
+    "MKT_IMPLIED_OVER25",
+]
+
+
+def run_train_target(target_name: str, model_name: str | None = None, context: str = "league") -> Path:
     """Train one registry-backed forecast target model."""
-    from src.models import ModelFactory
     definition = get_target_definition(target_name)
     selected_model = (model_name or _default_model_for_target(definition.name)).strip().lower()
     if selected_model not in MODEL_REGISTRY:
         valid_models = ", ".join(sorted(MODEL_REGISTRY.keys()))
         raise ValueError(f"Unsupported model '{selected_model}'. Available options: {valid_models}")
-    LOGGER.info(
-        "Training forecast target | target=%s | task_type=%s | model=%s",
-        definition.name,
-        definition.task_type,
-        selected_model,
-    )
+    LOGGER.info("Training forecast target | target=%s | task_type=%s | model=%s | context=%s", definition.name, definition.task_type, selected_model, context)
     model_cls = MODEL_REGISTRY.get(selected_model)
     if model_cls is None:
-        # Use ModelFactory for models not directly in registry (e.g. goal_stacker)
         model = ModelFactory.get_model(selected_model)
     else:
         xgb_params = _xgb_params_for_target(target_name, selected_model)
         model = model_cls(**xgb_params)
-    model_manager = ModelManager(model=model, target_config={"target": definition.name})
+
+    feature_subset = MKT_FEATURES if context == "international" else None
+    model_manager = ModelManager(
+        model=model,
+        target_config={"target": definition.name},
+        feature_subset=feature_subset,
+    )
+    if context == "international":
+        mlflow.set_tag("context", "international")
+        mlflow.set_tag("experiment_name", f"FPAI_{definition.name}_international_xgb_mkt_only_v1")
     model_path = model_manager.run_pipeline()
     LOGGER.info("Target model saved to %s", model_path)
     return model_path
 
 
-def run_train_forecast_suite(targets: list[str] | None = None) -> None:
+def run_train_forecast_suite(targets: list[str] | None = None, context: str = "league") -> None:
     """Train the full forecast model suite or a selected target subset."""
     selected_targets = targets or [
         definition.name for definition in list_target_definitions() if definition.name != "home_win"
     ]
-    LOGGER.info("Training forecast suite targets: %s", ", ".join(selected_targets))
+    LOGGER.info("Training forecast suite targets: %s | context=%s", ", ".join(selected_targets), context)
     for target_name in selected_targets:
-        run_train_target(target_name)
+        run_train_target(target_name, context=context)
 
 
 def run_forecast(
@@ -863,349 +416,37 @@ def run_forecast(
     match_ids: list[str] | None = None,
     targets: list[str] | None = None,
     limit: int | None = None,
+    home: str | None = None,
+    away: str | None = None,
+    date: str | None = None,
+    odds_h: float | None = None,
+    odds_d: float | None = None,
+    odds_a: float | None = None,
+    match_type: str = "league",
 ) -> None:
-    """Emit forecast JSON for requested matches."""
+    """Emit forecast JSON for requested matches or a spot-inference match."""
+    if home is not None:
+        # Spot inference path (US#84 / US#86)
+        if odds_h is None or odds_d is None or odds_a is None:
+            raise ValueError("--odds_h, --odds_d, and --odds_a are required for spot inference.")
+        if match_type == "league" and league is None:
+            raise ValueError("--league is required when --match_type league.")
+        service = ForecastService(targets=targets)
+        payload = service.forecast_upcoming(
+            home_team=home,
+            away_team=away,
+            date=date or datetime.utcnow().date().isoformat(),
+            league=league or "",
+            odds_h=odds_h,
+            odds_d=odds_d,
+            odds_a=odds_a,
+            match_type=match_type,
+        )
+        print(json.dumps(payload, indent=2, sort_keys=True))
+        return
     service = ForecastService(targets=targets)
     payloads = service.forecast(match_ids=match_ids, league=league, limit=limit)
     print(json.dumps(payloads, indent=2, sort_keys=True))
-
-
-def run_predict(
-    app_settings: AppSettings, db_manager: DuckDBManager, league: str, run_id: str | None
-) -> None:
-    """Load latest model and output value-bet recommendations for recent matches."""
-    LOGGER.info("Executing command: predict")
-    league_code = league.upper()
-    LOGGER.info(
-        "Running prediction for %s (%s) only.",
-        LEAGUE_LABELS.get(league_code, "Selected League"),
-        league_code,
-    )
-
-    model_uri, run = _get_model_uri(league=league_code, run_id=run_id)
-    _check_feature_consistency(run)
-    model = mlflow.sklearn.load_model(model_uri)
-    LOGGER.info(
-        "Loaded model from MLflow | run_id=%s | roi=%.4f",
-        run.info.run_id,
-        run.data.metrics.get("roi", 0.0),
-    )
-    if run_id:
-        LOGGER.info("Run parameters: %s", run.data.params)
-
-    recent_df = _fetch_feature_joined_matches(db_manager, days=7)
-    if recent_df.empty:
-        LOGGER.warning("No recent matches available for prediction.")
-        return
-
-    predictions_df = _build_prediction_frame(model, recent_df)
-    if predictions_df.empty:
-        LOGGER.warning("No recent matches with complete features for prediction.")
-        return
-    predictions_df = predictions_df[predictions_df["league"].str.upper() == league_code].copy()
-    if predictions_df.empty:
-        LOGGER.warning("No recent matches found for league %s.", league_code)
-        return
-
-    strategy = StrategyEngine()
-    recommendations = strategy.get_recommendations(predictions_df, ev_threshold=0.05)
-    LOGGER.info("Value Bets (Current Week):")
-    strategy.report_recommendations(recommendations)
-
-
-def run_backtest(
-    app_settings: AppSettings,
-    db_manager: DuckDBManager,
-    ev_threshold: float,
-    league: str,
-    test_season: str,
-    rolling_retrain: bool,
-    run_id: str | None,
-) -> None:
-    """Run a strict season-isolated backtest with optional rolling retraining."""
-    LOGGER.info("Executing command: backtest")
-    league_code = league.upper()
-    LOGGER.info(
-        "Running backtest for %s (%s) only.",
-        LEAGUE_LABELS.get(league_code, "Selected League"),
-        league_code,
-    )
-
-    try:
-        start_date, end_date = _parse_season_bounds(test_season)
-    except ValueError as exc:
-        LOGGER.error("Invalid --test_season value: %s", exc)
-        return
-    LOGGER.info(
-        "Backtest period for season %s | Start Date=%s | End Date=%s",
-        test_season,
-        start_date.date().isoformat(),
-        end_date.date().isoformat(),
-    )
-
-    historical_df = _fetch_feature_joined_matches(db_manager)
-    if historical_df.empty:
-        LOGGER.warning("No historical matches available for backtesting.")
-        return
-    prepared_df = _prepare_backtest_frame(historical_df)
-    if prepared_df.empty:
-        LOGGER.warning("No historical matches with complete features for backtesting.")
-        return
-    prepared_df = prepared_df[prepared_df["league"].str.upper() == league_code].copy()
-    if prepared_df.empty:
-        LOGGER.warning("No historical matches found for league %s.", league_code)
-        return
-
-    training_pool_df = prepared_df[prepared_df["date"] < start_date].copy()
-    test_df = prepared_df[(prepared_df["date"] >= start_date) & (prepared_df["date"] <= end_date)].copy()
-    if test_df.empty:
-        LOGGER.warning("No matches found in league %s for season %s.", league_code, test_season)
-        return
-    LOGGER.info(
-        "Strict split counts | training_matches=%s | backtest_matches=%s",
-        len(training_pool_df),
-        len(test_df),
-    )
-
-    prediction_rows: list[dict[str, object]] = []
-    if rolling_retrain:
-        LOGGER.info("Using rolling retrain mode for backtest.")
-        if run_id:
-            raise ValueError("--run_id is not supported with --rolling_retrain.")
-        train_sizes: list[int] = []
-        for row in test_df.itertuples(index=False):
-            train_slice = prepared_df[prepared_df["date"] < row.date]
-            if train_slice.empty or train_slice["target"].nunique() < 2:
-                continue
-
-            train_sizes.append(int(len(train_slice)))
-            model = LRModel()
-            model.train(train_slice[FEATURE_COLUMNS], train_slice["target"])
-            probability = float(model.predict_proba(pd.DataFrame([row._asdict()])[FEATURE_COLUMNS])[0][1])
-
-            prediction_rows.append(
-                {
-                    "match_id": row.match_id,
-                    "league": row.league,
-                    "home_team": row.home_team,
-                    "away_team": row.away_team,
-                    "predicted_home_win_prob": probability,
-                    "odds_h": float(row.odds_h),
-                }
-            )
-
-        if not prediction_rows:
-            LOGGER.warning("No backtest predictions were generated in rolling mode.")
-            return
-        LOGGER.info(
-            "Rolling retrain sample sizes | min=%s | max=%s",
-            min(train_sizes),
-            max(train_sizes),
-        )
-        predictions_df = pd.DataFrame(prediction_rows)
-    else:
-        if training_pool_df.empty:
-            LOGGER.warning("No training matches exist before start of season %s.", test_season)
-            return
-        if training_pool_df["target"].nunique() < 2:
-            LOGGER.warning("Training data before %s has a single target class; backtest cannot run.", start_date.date())
-            return
-
-        model_uri, run = _get_model_uri(league=league_code, run_id=run_id)
-        _check_feature_consistency(run)
-        model = mlflow.sklearn.load_model(model_uri)
-        LOGGER.info(
-            "Loaded model from MLflow | run_id=%s | roi=%.4f",
-            run.info.run_id,
-            run.data.metrics.get("roi", 0.0),
-        )
-        if run_id:
-            LOGGER.info("Run parameters: %s", run.data.params)
-
-        probabilities = model.predict_proba(test_df[FEATURE_COLUMNS])
-        predicted_home_win_prob = probabilities[:, 1] if probabilities.ndim == 2 else probabilities.ravel()
-
-        predictions_df = pd.DataFrame(
-            {
-                "match_id": test_df["match_id"].values,
-                "league": test_df["league"].values,
-                "home_team": test_df["home_team"].values,
-                "away_team": test_df["away_team"].values,
-                "predicted_home_win_prob": predicted_home_win_prob,
-                "odds_h": test_df["odds_h"].astype(float).values,
-            }
-        )
-
-    backtester = Backtester(initial_bankroll=app_settings.settings.initial_bankroll, bet_size=10.0)
-    backtester.run_simulation(predictions_df, ev_threshold=ev_threshold)
-    metrics = backtester.get_metrics()
-    LOGGER.info(
-        "Backtest Report | EV Threshold=%.4f | Total ROI=%.4f | Win Rate=%.4f | Max Drawdown=%.4f | Final Bankroll=%.2f",
-        ev_threshold,
-        metrics.total_roi,
-        metrics.win_rate,
-        metrics.max_drawdown,
-        metrics.final_bankroll,
-    )
-
-
-def run_experiment(
-    app_settings: AppSettings,
-    experiment_name: str,
-    test_season: str,
-    config_path: str,
-    target_type: str,
-) -> None:
-    """Run a YAML-configured grid search with MLflow tracking and backtest metrics."""
-    LOGGER.info("Executing command: experiment")
-    mlflow.set_experiment(experiment_name)
-
-    config_file = Path(config_path)
-    if not config_file.exists():
-        LOGGER.error("Experiment config not found: %s", config_file)
-        return
-    with config_file.open("r", encoding="utf-8") as handle:
-        config = yaml.safe_load(handle) or {}
-
-    grid = config.get("grid_search")
-    if not isinstance(grid, dict) or not grid:
-        LOGGER.error("Experiment config missing grid_search parameters.")
-        return
-    grid_params = config.get("grid_search_params", {})
-    if not isinstance(grid_params, dict):
-        LOGGER.warning("grid_search_params is not a dict; skipping.")
-        grid_params = {}
-    fixed_params = config.get("fixed_params", {})
-    if not isinstance(fixed_params, dict):
-        LOGGER.warning("fixed_params is not a dict; skipping.")
-        fixed_params = {}
-    league_tag = str(config.get("league", "E0"))
-    season_tag = str(config.get("test_season", test_season))
-    backtest_config = config.get("backtest_config", {})
-    if not isinstance(backtest_config, dict):
-        LOGGER.warning("backtest_config is not a dict; skipping.")
-        backtest_config = {}
-
-    results: list[dict[str, float | int | str]] = []
-    param_keys = list(grid.keys())
-    for values in itertools.product(*(grid[key] for key in param_keys)):
-        params = dict(zip(param_keys, values))
-        model_type = str(config.get("model_type", "xgboost")).strip().lower()
-        merged_params = {**fixed_params, **params}
-        run_name = f"{model_type}_" + "_".join(f"{key}{value}" for key, value in params.items())
-        with mlflow.start_run(run_name=run_name, nested=True):
-            mlflow.log_params(grid_params)
-            mlflow.log_params(merged_params)
-            mlflow.log_param("target_type", target_type)
-            mlflow.log_dict(config, "experiment_config.yaml")
-            mlflow.set_tag("model_type", model_type)
-            mlflow.set_tag("test_season", test_season)
-            mlflow.set_tags({"league": league_tag, "season": season_tag})
-
-            model = ModelFactory.get_model(model_type, merged_params)
-            manager = ModelManager(
-                model=model,
-                league_tier="all",
-                test_season=test_season,
-                feature_version="v1",
-                target_config={"target_type": target_type},
-            )
-            _, test_meta, positive_proba = manager.train()
-
-            predictions_df = pd.DataFrame(
-                {
-                    "match_id": test_meta["match_id"].values,
-                    "predicted_home_win_prob": positive_proba.values,
-                    "odds_h": test_meta["odds_h"].astype(float).values,
-                }
-            )
-            initial_bankroll = float(
-                backtest_config.get("initial_bankroll", app_settings.settings.initial_bankroll)
-            )
-            bet_size = float(backtest_config.get("bet_size", 10.0))
-            ev_threshold = float(backtest_config.get("ev_threshold", 0.05))
-            backtester = Backtester(
-                initial_bankroll=initial_bankroll,
-                bet_size=bet_size,
-                config_path="config.yaml",
-            )
-            backtester.run_simulation(predictions_df, ev_threshold=ev_threshold)
-            metrics = backtester.get_metrics()
-            mlflow.log_metrics(
-                {
-                    "roi": float(metrics.total_roi),
-                    "win_rate": float(metrics.win_rate),
-                    "max_drawdown": float(metrics.max_drawdown),
-                }
-            )
-
-            if model_type == "xgboost":
-                _mlflow_log_model_compat(model.model, "xgboost", name="model")
-            else:
-                _mlflow_log_model_compat(model.model, "sklearn", name="model")
-
-            with TemporaryDirectory() as tmpdir:
-                plot_path = Path(tmpdir) / "bankroll_curve.png"
-                plt.figure(figsize=(8, 4))
-                if backtester.bet_history.empty:
-                    plt.plot([0, 1], [backtester.initial_bankroll, backtester.initial_bankroll])
-                else:
-                    plt.plot(backtester.bet_history["bankroll"].values)
-                plt.title("Bankroll Curve")
-                plt.xlabel("Bet Index")
-                plt.ylabel("Bankroll")
-                plt.tight_layout()
-                plt.savefig(plot_path)
-                plt.close()
-                mlflow.log_artifact(str(plot_path))
-
-            plots_dir = Path("plots")
-            plots_dir.mkdir(parents=True, exist_ok=True)
-            stable_plot_path = plots_dir / "bankroll.png"
-            plt.figure(figsize=(8, 4))
-            if backtester.bet_history.empty:
-                plt.plot([0, 1], [backtester.initial_bankroll, backtester.initial_bankroll])
-            else:
-                plt.plot(backtester.bet_history["bankroll"].values)
-            plt.title("Bankroll Curve")
-            plt.xlabel("Bet Index")
-            plt.ylabel("Bankroll")
-            plt.tight_layout()
-            plt.savefig(stable_plot_path)
-            plt.close()
-            if stable_plot_path.exists():
-                mlflow.log_artifact(str(stable_plot_path))
-
-            results.append(
-                {
-                    **params,
-                    "roi": float(metrics.total_roi),
-                    "win_rate": float(metrics.win_rate),
-                    "max_drawdown": float(metrics.max_drawdown),
-                }
-            )
-
-    if results:
-        summary_df = pd.DataFrame(results).sort_values("roi", ascending=False).head(3)
-        LOGGER.info("Top 3 parameter sets by ROI:\n%s", summary_df.to_string(index=False))
-
-
-def _iter_grid_params(grid: dict[str, list[object]]) -> list[dict[str, object]]:
-    """Expand a YAML grid into a stable list of parameter dictionaries."""
-    param_keys = list(grid.keys())
-    return [dict(zip(param_keys, values)) for values in itertools.product(*(grid[key] for key in param_keys))]
-
-
-def _forecast_experiment_name(target_name: str, model_type: str, stage: str, version: str) -> str:
-    """Return the default MLflow experiment name for forecast model sweeps."""
-    return f"FPAI_{target_name}_{model_type}_{stage}_{version}"
-
-
-def _mlflow_flavor_for_model_type(model_type: str) -> str:
-    normalized = model_type.strip().lower()
-    if normalized in {"xgb", "xgboost", "xgb_regressor", "xgboost_regressor"}:
-        return "xgboost"
-    return "sklearn"
 
 
 def run_experiment_target(
@@ -1215,7 +456,6 @@ def run_experiment_target(
     max_runs: int | None = None,
     sweep_stage: str | None = None,
 ) -> None:
-    """Run a target-aware MLflow parameter sweep with forecast metrics."""
     SweepRunner(
         target_name=target_name,
         config_path=config_path,
@@ -1223,113 +463,6 @@ def run_experiment_target(
         max_runs=max_runs,
         sweep_stage=sweep_stage,
     ).run()
-    return
-
-    definition = get_target_definition(target_name)
-    config_file = Path(config_path)
-    if not config_file.exists():
-        raise FileNotFoundError(f"Experiment config not found: {config_file}")
-    with config_file.open("r", encoding="utf-8") as handle:
-        config = yaml.safe_load(handle) or {}
-
-    model_type = str(config.get("model_type", _default_model_for_target(definition.name))).strip().lower()
-    grid = config.get("grid_search", {})
-    if not isinstance(grid, dict) or not grid:
-        raise ValueError("Experiment config must contain a non-empty grid_search mapping.")
-    for key, values in grid.items():
-        if not isinstance(values, list) or not values:
-            raise ValueError(f"grid_search.{key} must be a non-empty list.")
-    fixed_params = config.get("fixed_params", {})
-    if not isinstance(fixed_params, dict):
-        raise ValueError("fixed_params must be a mapping when provided.")
-
-    if sweep_stage is not None:
-        config["sweep_stage"] = sweep_stage
-    stage = str(config.get("sweep_stage", "broad")).strip().lower()
-    version = str(config.get("version", "v1")).strip().lower()
-    resolved_experiment_name = experiment_name or _forecast_experiment_name(
-        definition.name,
-        model_type,
-        stage,
-        version,
-    )
-    mlflow.set_experiment(resolved_experiment_name)
-    run_params = _iter_grid_params(grid)
-    if max_runs is not None:
-        run_params = run_params[: max(0, int(max_runs))]
-    LOGGER.info(
-        "Running target experiment | experiment=%s | target=%s | model=%s | runs=%s",
-        resolved_experiment_name,
-        definition.name,
-        model_type,
-        len(run_params),
-    )
-
-    results: list[dict[str, object]] = []
-    for index, params in enumerate(run_params, start=1):
-        merged_params = {**fixed_params, **params}
-        if model_type in {"xgb", "xgboost"}:
-            if definition.task_type == "multiclass_classification":
-                merged_params.setdefault("objective", "multi:softprob")
-                merged_params.setdefault("eval_metric", "mlogloss")
-                merged_params.setdefault("num_class", len(definition.classes))
-            elif definition.task_type == "binary_classification":
-                merged_params.setdefault("objective", "binary:logistic")
-                merged_params.setdefault("eval_metric", "logloss")
-        elif model_type in {"xgb_regressor", "xgboost_regressor"}:
-            merged_params.setdefault("objective", "reg:squarederror")
-            merged_params.setdefault("eval_metric", "rmse")
-        run_name = f"{definition.name}_{model_type}_{stage}_{index:04d}"
-        with mlflow.start_run(run_name=run_name):
-            mlflow.log_dict(config, "experiment_config.yaml")
-            mlflow.log_params(merged_params)
-            mlflow.log_param("target", definition.name)
-            mlflow.log_param("model_type", model_type)
-            mlflow.set_tags(
-                {
-                    "target": definition.name,
-                    "task_type": definition.task_type,
-                    "model_family": model_type,
-                    "feature_schema_version": str(config.get("feature_schema_version", "v1")),
-                    "split_policy": "chronological_70_15_15",
-                    "league": str(config.get("league", "all")),
-                    "sweep_stage": stage,
-                    "experiment_version": version,
-                }
-            )
-            extra_tags = config.get("tags", {})
-            if isinstance(extra_tags, dict):
-                mlflow.set_tags({str(key): str(value) for key, value in extra_tags.items()})
-
-            model = ModelFactory.get_model(model_type, merged_params)
-            manager = ModelManager(
-                model=model,
-                league_tier=str(config.get("league_tier", "all")),
-                test_season=str(config.get("test_season", "time_split")),
-                feature_version=str(config.get("feature_schema_version", "v1")),
-                target_config={"target": definition.name},
-            )
-            X_train, X_val, X_test, y_train, y_val, y_test, _ = manager.prepare_training_data()
-            eval_set = [(X_val, y_val)] if isinstance(model, (XGBoostModel, XGBoostRegressorModel)) else None
-            model.train(X_train, y_train, eval_set=eval_set)
-            manager._log_feature_importance(list(X_train.columns), model)
-            metrics, _ = manager._evaluate_target(X_test, y_test, X_train, y_train, X_val, y_val)
-            mlflow.log_metrics({metric_name: float(value) for metric_name, value in metrics.items()})
-            mlflow.set_tag("training_cutoff", getattr(manager, "training_cutoff", ""))
-            _mlflow_log_model_compat(
-                model.model,
-                _mlflow_flavor_for_model_type(model_type),
-                name="model",
-            )
-            results.append({**params, **metrics})
-
-    if results:
-        primary_metric = definition.primary_metric
-        ascending = primary_metric in {"log_loss", "mae", "rmse"}
-        summary_df = pd.DataFrame(results).sort_values(primary_metric, ascending=ascending).head(5)
-        LOGGER.info("Top 5 parameter sets by %s:\n%s", primary_metric, summary_df.to_string(index=False))
-
-
 
 
 def run_permutation_importance(
@@ -1338,56 +471,21 @@ def run_permutation_importance(
     n_repeats: int = 10,
     output_dir: str = "reports",
 ) -> Path:
-    """Analyze permutation importance for a trained model.
-    
-    Args:
-        target_name: Forecast target name
-        model_path: Path to trained model artifact
-        n_repeats: Number of permutation repeats
-        output_dir: Directory for output reports
-    
-    Returns:
-        Path to saved importance report
-    """
-    definition = get_target_definition(target_name)
-    LOGGER.info(f"Analyzing permutation importance for {target_name}")
-    
-    # Load model
-    analyzer = PermutationImportanceAnalyzer(
-        model_path=model_path,
-        target_name=target_name,
-        output_dir=output_dir,
-    )
-    
-    # Prepare evaluation data
-    manager = ModelManager(
-        model=analyzer.model,
-        target_config={"target": target_name},
-    )
+    LOGGER.info("Analyzing permutation importance for %s", target_name)
+    analyzer = PermutationImportanceAnalyzer(model_path=model_path, target_name=target_name, output_dir=output_dir)
+    manager = ModelManager(model=analyzer.model, target_config={"target": target_name})
     X_train, X_val, X_test, y_train, y_val, y_test, _ = manager.prepare_training_data()
-    
-    # Use validation set for importance analysis
-    LOGGER.info(f"Computing importance on validation set ({len(X_val)} samples)")
+    LOGGER.info("Computing importance on validation set (%d samples)", len(X_val))
     importance_df = analyzer.compute_importance(X_val, y_val, n_repeats=n_repeats)
-    
-    # Save report
     report_path = analyzer.save_report(importance_df, top_n=30)
-    print(f"✓ Permutation importance report: {report_path}")
-    
-    # Print top 10
+    print(f"Permutation importance report: {report_path}")
     top_10 = importance_df.head(10)
     print("\nTop 10 Important Features:")
     print(top_10[["rank", "feature", "importance_mean", "importance_pct"]].to_string(index=False))
-    
     return report_path
 
 
-def run_learning_curve(
-    target: str | None,
-    all_targets: bool,
-    output_dir: str,
-) -> None:
-    """Run learning curve analysis for one or all forecast targets."""
+def run_learning_curve(target: str | None, all_targets: bool, output_dir: str) -> None:
     if all_targets:
         LOGGER.info("Running learning curve analysis for all targets...")
         all_results = run_all_targets(output_dir=output_dir)
@@ -1417,24 +515,129 @@ def run_optuna_sweep(
     experiment_name: str | None,
     sweep_stage: str | None,
 ) -> None:
-    """Run a Bayesian hyperparameter sweep using Optuna TPE sampler."""
-    runner = OptunaRunner(
-        target_name=target_name,
-        config_path=config_path,
-        experiment_name=experiment_name,
-        n_trials=n_trials,
-        sweep_stage=sweep_stage,
-    )
+    with open(config_path, "r") as fh:
+        probe = yaml.safe_load(fh) or {}
+    if "stages" in probe:
+        runner: OptunaRunner | StagedOptunaRunner = StagedOptunaRunner(
+            target_name=target_name, config_path=config_path, experiment_name=experiment_name,
+        )
+    else:
+        runner = OptunaRunner(
+            target_name=target_name, config_path=config_path, experiment_name=experiment_name,
+            n_trials=n_trials, sweep_stage=sweep_stage,
+        )
     results = runner.run()
     if results:
-        from src.logic.target_registry import get_target_definition
-        definition = get_target_definition(target_name)
+        from src.logic.target_registry import get_target_definition as _gtd
+        definition = _gtd(target_name)
         primary_metric = definition.primary_metric
         ascending = primary_metric in {"log_loss", "mae", "rmse"}
-        import pandas as pd
         df = pd.DataFrame(results).sort_values(primary_metric, ascending=ascending)
         print(f"\nOptuna Sweep Results — {target_name} (best by {primary_metric}):")
         print(df.head(5).to_string(index=False))
+
+
+def run_dixon_coles_baseline(
+    config_path: str = "config/schema.yaml",
+    experiment_name: str = "dixon_coles_baseline",
+    output_path: str = "reports/model_comparison/dixon_coles_comparison.csv",
+) -> None:
+    from sklearn.metrics import accuracy_score, log_loss, mean_absolute_error
+    import numpy as np
+
+    db_manager_local = DuckDBManager(config_path=config_path)
+    LOGGER.info("Loading match data for Dixon-Coles baseline...")
+    with db_manager_local.connection(read_only=True) as conn:
+        df = conn.execute(
+            """
+            SELECT r.match_id, r.date, r.home_team, r.away_team,
+                   r.fthg, r.ftag, r.hc, r.ac
+            FROM raw_matches r
+            INNER JOIN feature_store f ON r.match_id = f.match_id
+            ORDER BY r.date, r.match_id
+            """
+        ).fetchdf()
+    if df.empty:
+        raise ValueError("No match data found in DB.")
+    df = df.dropna(subset=["fthg", "ftag"]).reset_index(drop=True)
+    total = len(df)
+    train_end = max(1, int(total * 0.70))
+    val_end = max(train_end + 1, int(total * 0.85))
+    val_end = min(val_end, total - 1)
+    train_df = df.iloc[:train_end].copy()
+    test_df = df.iloc[val_end:].copy().reset_index(drop=True)
+    LOGGER.info("Split: train=%d, val=%d, test=%d", train_end, val_end - train_end, total - val_end)
+    model = DixonColesModel()
+    model.fit(train_df)
+    preds = model.predict_batch(test_df)
+    test_df["y_result_3way"] = test_df.apply(
+        lambda r: "home" if r["fthg"] > r["ftag"] else ("draw" if r["fthg"] == r["ftag"] else "away"), axis=1,
+    )
+    test_df["y_btts"] = ((test_df["fthg"] > 0) & (test_df["ftag"] > 0)).astype(int)
+    test_df["y_home_goals"] = test_df["fthg"].astype(float)
+    test_df["y_away_goals"] = test_df["ftag"].astype(float)
+    test_df["y_total_goals"] = test_df["fthg"].astype(float) + test_df["ftag"].astype(float)
+    test_df["y_home_corners"] = test_df["hc"]
+    test_df["y_away_corners"] = test_df["ac"]
+    test_df["y_total_corners"] = test_df["hc"] + test_df["ac"]
+    results: dict[str, dict[str, float]] = {}
+    r3_proba = preds[["result_3way_p_home", "result_3way_p_draw", "result_3way_p_away"]].to_numpy()
+    r3_true = test_df["y_result_3way"].to_numpy()
+    results["result_3way"] = {
+        "accuracy": float(accuracy_score(r3_true, preds["result_3way_pred"])),
+        "log_loss": float(log_loss(r3_true, r3_proba, labels=["home", "draw", "away"])),
+    }
+    btts_proba = np.column_stack([1 - preds["btts_prob"].to_numpy(), preds["btts_prob"].to_numpy()])
+    btts_true = test_df["y_btts"].to_numpy()
+    results["btts"] = {
+        "accuracy": float(accuracy_score(btts_true, preds["btts_pred"])),
+        "log_loss": float(log_loss(btts_true, btts_proba)),
+    }
+    for target_col, pred_col in [
+        ("y_home_goals", "home_goals"), ("y_away_goals", "away_goals"), ("y_total_goals", "total_goals"),
+        ("y_home_corners", "home_corners"), ("y_away_corners", "away_corners"), ("y_total_corners", "total_corners"),
+    ]:
+        valid = test_df[[target_col]].join(preds[[pred_col]]).dropna()
+        if valid.empty:
+            results[pred_col] = {"mae": float("nan"), "rmse": float("nan")}
+            continue
+        y_true = valid[target_col].to_numpy()
+        y_pred = valid[pred_col].to_numpy()
+        results[pred_col] = {
+            "mae": float(mean_absolute_error(y_true, y_pred)),
+            "rmse": float(np.sqrt(np.mean((y_true - y_pred) ** 2))),
+        }
+    mlflow.set_experiment(experiment_name)
+    with mlflow.start_run(run_name="dixon_coles_v1"):
+        mlflow.set_tag("model_type", "dixon_coles")
+        mlflow.log_param("train_matches", train_end)
+        mlflow.log_param("test_matches", total - val_end)
+        mlflow.log_param("rho", round(model._rho, 4))
+        mlflow.log_param("home_adv", round(model._home_adv, 4))
+        for target, metrics in results.items():
+            for metric, value in metrics.items():
+                mlflow.log_metric(f"{target}_{metric}", value)
+    model_path = Path("models/dixon_coles_v1.joblib")
+    model.save(str(model_path))
+    print("\n" + "=" * 70)
+    print("Dixon-Coles Baseline — Test Set Results")
+    print("=" * 70)
+    print(f"{'Target':<22} {'Metric':<12} {'Value':>10}")
+    print("-" * 50)
+    for target, metrics in results.items():
+        for metric, value in metrics.items():
+            print(f"{target:<22} {metric:<12} {value:>10.4f}")
+    rows = []
+    for target, metrics in results.items():
+        for metric, value in metrics.items():
+            rows.append({"target": target, "metric": metric, "dixon_coles": value})
+    out_df = pd.DataFrame(rows)
+    out_path = Path(output_path)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_df.to_csv(str(out_path), index=False)
+    LOGGER.info("Comparison CSV saved to %s", out_path)
+    print(f"\nResults saved to {out_path}")
+    print(f"Model saved to {model_path}")
 
 
 def run_mlflow_cleanup(
@@ -1443,19 +646,9 @@ def run_mlflow_cleanup(
     mlruns_dir: str = "mlruns",
     report_only: bool = False,
 ) -> None:
-    """Clean up malformed MLflow experiments.
-    
-    Args:
-        strategy: How to handle malformed experiments (recover, remove, backup_and_remove)
-        backup: Whether to backup before destructive operations
-        mlruns_dir: Path to MLflow runs directory
-        report_only: If True, only report malformed experiments without fixing
-    """
     LOGGER.info("MLflow store cleanup initiated")
-    
     cleanup = MLflowStoreCleanup(mlruns_dir=mlruns_dir)
     summary = cleanup.get_cleanup_summary()
-    
     print("\n" + "=" * 60)
     print("MLflow Store Status:")
     print("=" * 60)
@@ -1464,35 +657,132 @@ def run_mlflow_cleanup(
     print(f"Malformed experiments: {summary['malformed_experiments']}")
     print(f"Total runs: {summary['total_runs']}")
     print(f"Runs in malformed experiments: {summary['runs_in_malformed']}")
-    
     if summary["malformed_exp_ids"]:
         print(f"\nMalformed experiment IDs: {', '.join(summary['malformed_exp_ids'])}")
-    
     if report_only:
         print("\n[Report Only] No changes made.")
         save_cleanup_report(summary)
         return
-    
     print(f"\nApplying strategy: {strategy}")
     results = cleanup.cleanup_malformed(strategy=strategy, backup=backup)
-    
-    # Print results
     print("\nCleanup Results:")
     for exp_id, result in results.items():
-        status = "✓" if result in {"recovered", "removed", "backed_up_and_removed"} else "✗"
-        print(f"  {status} {exp_id}: {result}")
-    
-    # Save report
+        status = "ok" if result in {"recovered", "removed", "backed_up_and_removed"} else "err"
+        print(f"  [{status}] {exp_id}: {result}")
     save_cleanup_report(summary)
-    print(f"\n✓ Cleanup report saved to documents/mlflow_cleanup_report.txt")
+    print("\nCleanup report saved to documents/mlflow_cleanup_report.txt")
+
+
+def run_select_best_models(
+    target: str | None = None,
+    context: str | None = None,
+    dry_run: bool = False,
+    min_improvement: float = 0.005,
+) -> None:
+    """Select best-performing model per target from MLflow (US#78)."""
+    from src.utils.model_selection import ModelSelector
+    selector = ModelSelector()
+    selector.run(target=target, context=context, dry_run=dry_run, min_improvement=min_improvement)
+
+
+def run_agent_recommend(
+    home_team: str,
+    away_team: str,
+    date: str,
+    league: str | None,
+    config_path: str | None,
+) -> None:
+    """Run the betting agent for a single upcoming match (A08)."""
+    import sys
+    from src.agent.agent_config import AgentConfig
+    from src.agent.graph import run_agent
+
+    cfg = AgentConfig.from_yaml(config_path) if config_path else AgentConfig.default()
+    match_info = {"home_team": home_team, "away_team": away_team, "date": date}
+    if league:
+        match_info["league"] = league
+
+    print(f"\nAnalysing: {home_team} vs {away_team} on {date}" + (f" [{league}]" if league else ""))
+    print(f"Model: {cfg.provider}/{cfg.model} | max_tool_calls={cfg.max_tool_calls}\n")
+
+    try:
+        recommendation = run_agent(match_info=match_info, config=cfg)
+    except Exception as exc:
+        print(f"[ERROR] Agent failed: {exc}", file=sys.stderr)
+        sys.exit(1)
+
+    if recommendation is None:
+        print("[ERROR] Agent returned no recommendation.", file=sys.stderr)
+        sys.exit(1)
+
+    explanation = recommendation.pop("explanation", "")
+    print("=== Explanation ===")
+    print(explanation)
+    print("\n=== Recommendation ===")
+    print(json.dumps(recommendation, indent=2))
+
+
+def run_status(db_manager: DuckDBManager) -> None:
+    """Display data freshness and model selection status (US#80)."""
+    from src.utils.model_selection import ModelSelector
+
+    print("\n" + "=" * 60)
+    print("FPAI System Status")
+    print("=" * 60)
+
+    # Data layer
+    try:
+        with db_manager.connection(read_only=True) as conn:
+            raw_row = conn.execute("SELECT COUNT(*), MAX(date) FROM raw_matches").fetchone()
+            feat_row = conn.execute("SELECT COUNT(*) FROM feature_store").fetchone()
+        raw_count = int(raw_row[0]) if raw_row else 0
+        max_date = raw_row[1] if raw_row else None
+        feat_count = int(feat_row[0]) if feat_row else 0
+        if max_date is not None:
+            max_date_ts = pd.Timestamp(max_date).tz_localize(None)
+            days_since = (pd.Timestamp.now().normalize() - max_date_ts.normalize()).days
+        else:
+            days_since = None
+        print(f"\nData Layer:")
+        print(f"  raw_matches:    {raw_count:,} rows | latest={max_date} | days_since={days_since}")
+        print(f"  feature_store:  {feat_count:,} rows")
+    except Exception as exc:
+        print(f"  [error reading data layer: {exc}]")
+
+    # MLflow experiment count
+    try:
+        experiments = mlflow.search_experiments()
+        print(f"  mlflow_experiments: {len(experiments)}")
+    except Exception:
+        print("  mlflow_experiments: unavailable")
+
+    # Model selections
+    print("\nModel Selections:")
+    selection_path = Path("config/model_selection.yaml")
+    if not selection_path.exists():
+        print("  no selection config (run select-best-models to populate)")
+    else:
+        selector = ModelSelector()
+        config = selector.load_config()
+        contexts_data = config.get("contexts", {})
+        for ctx in ["league", "international"]:
+            ctx_data = contexts_data.get(ctx, {})
+            if not ctx_data:
+                print(f"  [{ctx}] no selections")
+                continue
+            print(f"  [{ctx}]")
+            for tgt, info in ctx_data.items():
+                model_type = info.get("model_type", "?")
+                metric_val = info.get("metric_value", "?")
+                metric_name = info.get("metric_name", "?")
+                selected_at = info.get("selected_at", "?")
+                print(f"    {tgt:<22} {model_type:<18} {metric_name}={metric_val}  selected={selected_at}")
 
 
 def main() -> None:
-    """Parse CLI args and dispatch the requested command."""
     configure_logger()
     parser = _build_parser()
     args = parser.parse_args()
-
     app_settings = settings
     db_manager = DuckDBManager()
 
@@ -1500,51 +790,33 @@ def main() -> None:
         run_scrape(app_settings, force=getattr(args, "force", False))
     elif args.command == "ingest":
         run_ingest(app_settings, db_manager, force=getattr(args, "force", False))
-    elif args.command == "train":
-        run_train(model_name=str(args.model), target_type=str(args.target_type))
+    elif args.command == "refresh-data":
+        run_refresh_data(app_settings, db_manager, league=str(args.league), force=getattr(args, "force", False))
     elif args.command == "train-target":
-        run_train_target(target_name=str(args.target), model_name=args.model)
+        run_train_target(target_name=str(args.target), model_name=args.model, context=str(args.context))
     elif args.command == "train-forecast-suite":
-        run_train_forecast_suite(targets=args.targets)
+        run_train_forecast_suite(targets=args.targets, context=str(args.context))
     elif args.command == "forecast":
         run_forecast(
             league=args.league,
             match_ids=args.match_id,
             targets=args.target,
             limit=args.limit,
-        )
-    elif args.command == "predict":
-        run_predict(app_settings, db_manager, league=str(args.league), run_id=args.run_id)
-    elif args.command == "backtest":
-        run_backtest(
-            app_settings,
-            db_manager,
-            ev_threshold=float(args.ev_threshold),
-            league=str(args.league),
-            test_season=str(args.test_season),
-            rolling_retrain=bool(args.rolling_retrain),
-            run_id=args.run_id,
-        )
-    elif args.command == "experiment":
-        run_experiment(
-            app_settings,
-            experiment_name=str(args.experiment_name),
-            test_season=str(args.test_season),
-            config_path=str(args.config_path),
-            target_type=str(args.target_type),
-        )
-    elif args.command == "experiment-target":
-        run_experiment_target(
-            target_name=str(args.target),
-            config_path=str(args.config_path),
-            experiment_name=args.experiment_name,
-            max_runs=args.max_runs,
+            home=args.home,
+            away=args.away,
+            date=args.date,
+            odds_h=args.odds_h,
+            odds_d=args.odds_d,
+            odds_a=args.odds_a,
+            match_type=str(args.match_type),
         )
     elif args.command == "compare-models":
         comparer = ModelComparison(experiment_name=args.experiment_name)
         output_path = args.output_path or f"reports/model_comparison/{args.target}_comparison.{args.format}"
-        report_path = comparer.export_comparison_report(args.target, output_path, format=args.format)
-        best = comparer.identify_best_model(str(args.target))
+        report_path = comparer.export_comparison_report(
+            args.target, output_path, format=args.format, context=args.context
+        )
+        best = comparer.identify_best_model(str(args.target), context=args.context)
         print(f"Comparison report written to {report_path}")
         if best:
             print(json.dumps(best, indent=2, sort_keys=True, default=str))
@@ -1564,7 +836,7 @@ def main() -> None:
         )
         print(f"Diagnostics report written to {report_path}")
     elif args.command == "permutation-importance":
-        report_path = run_permutation_importance(
+        run_permutation_importance(
             target_name=str(args.target),
             model_path=str(args.model_path),
             n_repeats=args.n_repeats,
@@ -1584,6 +856,12 @@ def main() -> None:
             experiment_name=args.experiment_name,
             sweep_stage=args.sweep_stage,
         )
+    elif args.command == "dixon-coles-baseline":
+        run_dixon_coles_baseline(
+            config_path=str(args.config_path),
+            experiment_name=str(args.experiment_name),
+            output_path=str(args.output_path),
+        )
     elif args.command == "cleanup-mlflow":
         run_mlflow_cleanup(
             strategy=str(args.strategy),
@@ -1601,7 +879,23 @@ def main() -> None:
             delay=float(args.delay),
             rebuild_features=args.rebuild_features,
         )
-
+    elif args.command == "select-best-models":
+        run_select_best_models(
+            target=args.target,
+            context=args.context,
+            dry_run=args.dry_run,
+            min_improvement=args.min_improvement,
+        )
+    elif args.command == "status":
+        run_status(db_manager)
+    elif args.command == "agent-recommend":
+        run_agent_recommend(
+            home_team=args.home,
+            away_team=args.away,
+            date=args.date,
+            league=args.league,
+            config_path=args.config,
+        )
 
 
 if __name__ == "__main__":
