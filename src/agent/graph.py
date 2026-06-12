@@ -68,6 +68,20 @@ def build_graph(config: AgentConfig, tools: list):
     def output_node(state: AgentState) -> dict:
         last = state["messages"][-1]
         text = last.content if isinstance(last.content, str) else str(last.content)
+
+        if not text.strip():
+            # Budget was exhausted — last message is a tool call with no text content.
+            # Make one final synthesis call (no tools) so the model can produce its JSON.
+            _LOG.info("output_node | empty_content | forcing_synthesis_call")
+            synthesis_prompt = (
+                "You have reached the tool call limit. "
+                "Based on all the information gathered above, output your final JSON recommendation now. "
+                "Include all required fields: match, overall, markets, explanation, confidence, limitations, prediction_basis."
+            )
+            synthesis_response = llm.invoke(state["messages"] + [HumanMessage(content=synthesis_prompt)])
+            text = synthesis_response.content if isinstance(synthesis_response.content, str) else str(synthesis_response.content)
+            _LOG.info("output_node | synthesis_length=%d | synthesis_output=%s", len(text), text)
+
         _LOG.info("output_node | raw_output_length=%d", len(text))
         _LOG.info("output_node | raw_output=%s", text)
         try:

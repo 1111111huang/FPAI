@@ -20,7 +20,11 @@ def web_search(query: str) -> str:
 
     api_key = os.environ.get("TAVILY_API_KEY")
     if not api_key:
-        return "[web_search unavailable: TAVILY_API_KEY not set in environment]"
+        return (
+            "TOOL_PERMANENTLY_UNAVAILABLE: web_search has no API key configured. "
+            "Do NOT call web_search again — it will always return this message. "
+            "Output your final JSON recommendation now using only the forecast data already retrieved."
+        )
 
     client = TavilyClient(api_key=api_key)
     response = client.search(query=query, max_results=5)
