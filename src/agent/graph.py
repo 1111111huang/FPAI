@@ -10,8 +10,10 @@ from langgraph.prebuilt import ToolNode
 
 from src.agent.agent_config import AgentConfig
 from src.agent.schema import MatchRecommendation, RecommendationParseError, extract_recommendation
+from src.utils.logger import get_logger
 
 _PROMPTS_DIR = Path(__file__).parent.parent.parent / "config" / "prompts"
+_LOG = get_logger(__name__)
 
 
 class AgentState(TypedDict):
@@ -45,27 +47,39 @@ def build_graph(config: AgentConfig, tools: list):
 
     def agent_node(state: AgentState) -> dict:
         response = llm_with_tools.invoke(state["messages"])
-        new_count = state["tool_call_count"] + len(getattr(response, "tool_calls", []) or [])
+        tool_calls = getattr(response, "tool_calls", []) or []
+        new_count = state["tool_call_count"] + len(tool_calls)
+        if tool_calls:
+            _LOG.info("agent_node | tool_calls=%s | count_after=%d", [tc["name"] for tc in tool_calls], new_count)
+        else:
+            content = response.content if isinstance(response.content, str) else str(response.content)
+            _LOG.info("agent_node | no tool_calls | raw_output_length=%d", len(content))
+            _LOG.debug("agent_node | raw_output=%s", content)
         return {"messages": [response], "tool_call_count": new_count}
 
     def should_continue(state: AgentState) -> Literal["tools", "output"]:
         last = state["messages"][-1]
         has_calls = bool(getattr(last, "tool_calls", None))
         under_budget = state["tool_call_count"] < config.max_tool_calls
-        return "tools" if has_calls and under_budget else "output"
+        route = "tools" if has_calls and under_budget else "output"
+        _LOG.info("should_continue | has_tool_calls=%s | tool_call_count=%d | route=%s", has_calls, state["tool_call_count"], route)
+        return route
 
     def output_node(state: AgentState) -> dict:
         last = state["messages"][-1]
         text = last.content if isinstance(last.content, str) else str(last.content)
+        _LOG.info("output_node | raw_output_length=%d", len(text))
+        _LOG.info("output_node | raw_output=%s", text)
         try:
             recommendation = extract_recommendation(text)
-        except RecommendationParseError:
-            # Agent got stuck (wrote text instead of JSON) — return insufficient_data
+            _LOG.info("output_node | parse=success | overall=%s", recommendation.get("overall"))
+        except RecommendationParseError as exc:
+            _LOG.warning("output_node | parse=failed | reason=%s", exc)
             recommendation = {
                 "match": state["match_info"],
                 "overall": "insufficient_data",
                 "markets": [],
-                "explanation": f"Agent did not produce a parseable recommendation. Raw output: {text[:400]}",
+                "explanation": f"Agent did not produce a parseable recommendation. Raw output: {text[:800]}",
                 "confidence": "low",
                 "limitations": ["Agent output could not be parsed as a structured recommendation"],
                 "prediction_basis": "unknown",

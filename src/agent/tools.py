@@ -4,6 +4,9 @@ import json
 import os
 
 from langchain_core.tools import tool
+from src.utils.logger import get_logger
+
+_LOG = get_logger(__name__)
 
 
 @tool
@@ -74,6 +77,7 @@ def forecast_league(
             return json.dumps(result, default=str)
         except FileNotFoundError:
             # League-context models not yet trained — use international (market-odds-only) path
+            _LOG.info("forecast_league | league_models_absent | falling_back_to_international | home=%s away=%s", home_team, away_team)
             result = svc.forecast_upcoming(
                 home_team=home_team,
                 away_team=away_team,
