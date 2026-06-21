@@ -266,7 +266,7 @@ Allow systematic comparison of agent configurations (model, prompt version, stak
 ---
 
 ### A17 — Create agent_techspec.md
-**Size:** M | **Status:** active | **Milestone:** M5 | **Depends on:** A08, A14
+**Size:** M | **Status:** completed | **Milestone:** M5 | **Depends on:** A08, A14 (partial — see note)
 
 Document the implementation details discovered during M1–M4 in a formal technical specification.
 
@@ -275,6 +275,8 @@ Document the implementation details discovered during M1–M4 in a formal techni
 - Covers: `src/agent/` module structure, `StateGraph` node contracts, `SnapshotStore` file layout, `BacktestHarness` data flow, CLI command reference, LangSmith configuration
 - Reflects actual implementation (written after M4, not before)
 - `agent_prd.md` Extension Points section updated to mark `agent_techspec.md` as complete
+
+**Note:** written against A01–A08 only since A09–A16 (snapshot/backtest/tuning) are not yet implemented. The doc's Implementation Status section documents this gap explicitly and should be revisited once A14 actually lands.
 
 ---
 

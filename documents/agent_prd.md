@@ -211,4 +211,4 @@ Features explicitly deferred. The architecture accommodates them without structu
 | Batch recommendation | M6 — parallel agent runs over weekend fixtures |
 | Additional lookup tools | `lookup_stats` (H2H records, league tables) can be added to the tool layer without graph changes |
 | Automated odds monitoring | Requires integration with a live odds feed |
-| Agent tech spec | `documents/agent_techspec.md` — authoritative implementation reference, created during M1–M2 |
+| Agent tech spec | `documents/agent_techspec.md` — authoritative implementation reference. **Complete** for M1–M2 (live recommendation path); to be extended once M3–M5 (snapshot/backtest/tuning) land. |
