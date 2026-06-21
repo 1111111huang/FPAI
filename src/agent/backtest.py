@@ -57,15 +57,22 @@ def load_outcome(row: pd.Series) -> dict[str, Any]:
 
 
 def _market_correct(market_rec: dict[str, Any], actual: dict[str, Any]) -> bool | None:
+    """Resolve whether a market recommendation matches the actual outcome.
+
+    Returns True/False for resolvable markets (result_3way, btts, total_goals).
+    Returns None — not False — for markets with no programmatic resolution
+    (e.g. home_corners/away_corners). Callers (e.g. staking.py) MUST treat
+    None as "unknown, skip" and never coerce it to a loss.
+    """
     market = market_rec.get("market")
+    if market not in _RESOLVABLE_MARKETS:
+        return None
     selection = market_rec.get("selection")
     if market == "result_3way":
         return selection == actual["result"]
     if market == "btts":
         return selection == actual["btts"]
-    if market == "total_goals":
-        return selection == actual["total_goals_side"]
-    return None
+    return selection == actual["total_goals_side"]  # market == "total_goals"
 
 
 def _date_str(row: pd.Series) -> str:
@@ -93,6 +100,9 @@ def process_match_row(row: pd.Series, config: AgentConfig) -> BacktestRecord:
     error) so a failed match doesn't leave a later, unrelated call in replay
     mode by accident.
     """
+    # Local imports: keep these inside the function — tests patch
+    # src.agent.graph.run_agent and src.agent.tools.configure_snapshot_store,
+    # which only works if these names are resolved at call time, not import time.
     from src.agent.graph import run_agent
     from src.agent import tools as agent_tools
 
@@ -175,9 +185,13 @@ class BacktestHarness:
         per_stratum = max(1, sample // n_strata)
         sampled = (
             matches.groupby("_stratum", group_keys=False)
-            .apply(lambda g: g.sample(min(len(g), per_stratum), random_state=42))
+            .apply(lambda g: g.sample(min(len(g), per_stratum), random_state=42), include_groups=False)
         )
-        return sampled.drop(columns="_stratum").sort_values("date").reset_index(drop=True)
+        # include_groups=False already drops "_stratum" from the result, so only
+        # drop it if it's somehow still present (e.g. future pandas behavior change).
+        if "_stratum" in sampled.columns:
+            sampled = sampled.drop(columns="_stratum")
+        return sampled.sort_values("date").reset_index(drop=True)
 
     def run(
         self,

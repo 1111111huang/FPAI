@@ -124,8 +124,10 @@ def test_backtest_harness_stratified_sample_balances_result_categories():
         return "home" if r["fthg"] > r["ftag"] else ("away" if r["fthg"] < r["ftag"] else "draw")
 
     counts = sampled.apply(_result, axis=1).value_counts()
-    # Roughly balanced: no category should be completely absent given 9 from 3 equal groups of 6
+    # Balanced: 9 requested from 3 equal groups of 6 -> per_stratum = 3, so each
+    # category should contribute exactly 3 rows (not just "present").
     assert set(counts.index) == {"home", "draw", "away"}
+    assert counts.to_dict() == {"home": 3, "draw": 3, "away": 3}
 
 
 def test_backtest_harness_run_uses_process_match_row():
