@@ -1,7 +1,7 @@
 # Betting agent configuration — all tunable knobs.
 # Swap model/provider to change the LLM tier without touching code.
 
-model: "qwen2.5-coder:7b"      # local Ollama model (free, good tool use)
+model: "llama3.1:8b"            # local Ollama model with native tool use support
 provider: "ollama"              # "ollama" | "anthropic"
 temperature: 0.1                # lower = more deterministic; use 0.0 for backtesting
 max_tool_calls: 10              # per-match tool budget
