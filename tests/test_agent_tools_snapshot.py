@@ -21,7 +21,7 @@ def reset_snapshot_store(tmp_path):
 
 def test_web_search_record_then_replay(tmp_path):
     with patch("src.agent.tools.os.environ.get", return_value="fake-key"), \
-         patch("src.agent.tools.TavilyClient") if False else patch("tavily.TavilyClient") as MockClient:
+         patch("tavily.TavilyClient") as MockClient:
         instance = MagicMock()
         MockClient.return_value = instance
         instance.search.return_value = {"results": [{"title": "T", "content": "C", "url": "U"}]}
@@ -54,18 +54,24 @@ def test_web_search_unavailable_message_bypasses_snapshot_key_consistently():
     assert "TOOL_PERMANENTLY_UNAVAILABLE" in result
 
 
-def test_web_search_date_filter_applied_during_record_and_replay():
-    captured_queries = []
+def test_web_search_date_filter_applied_during_record_and_replay(tmp_path):
+    with patch("tavily.TavilyClient") as MockClient:
+        instance = MagicMock()
+        MockClient.return_value = instance
+        instance.search.return_value = {"results": [{"title": "T", "content": "C", "url": "U"}]}
 
-    def fake_impl(query):
-        captured_queries.append(query)
-        return "ok"
+        with patch("src.agent.tools.os.environ.get", return_value="fake-key"):
+            agent_tools.configure_snapshot_store("record", match_id="m5", match_date="2025-03-01")
+            first = agent_tools.web_search.invoke({"query": "team news"})
+            assert instance.search.call_args.kwargs["query"] == "team news before:2025-03-01"
+            assert instance.search.call_count == 1
 
-    with patch.object(agent_tools, "_web_search_impl", side_effect=fake_impl):
-        agent_tools.configure_snapshot_store("record", match_id="m3", match_date="2025-03-01")
-        agent_tools.web_search.invoke({"query": "team news"})
-
-    assert captured_queries == ["team news before:2025-03-01"]
+            # Replay must compute the SAME effective query (so the same SHA-256 key),
+            # find the file record mode wrote, and NOT call Tavily again.
+            agent_tools.configure_snapshot_store("replay", match_id="m5", match_date="2025-03-01")
+            second = agent_tools.web_search.invoke({"query": "team news"})
+            assert second == first
+            assert instance.search.call_count == 1  # unchanged — proves replay didn't hit Tavily
 
 
 def test_forecast_league_record_then_replay():
@@ -85,6 +91,29 @@ def test_forecast_league_record_then_replay():
         agent_tools.configure_snapshot_store("replay", match_id="m4")
         second = agent_tools.forecast_league.invoke({
             "home_team": "A", "away_team": "B", "date": "2025-01-01", "league": "E0",
+            "odds_h": 2.0, "odds_d": 3.0, "odds_a": 3.5,
+        })
+        assert second == first
+        assert instance.forecast_upcoming.call_count == 1  # not called again
+
+
+def test_forecast_international_record_then_replay():
+    fake_result = {"result_3way": {"probabilities": {"home": 0.4}}, "data_quality": {}}
+    with patch("src.forecast.forecast_service.ForecastService") as MockSvc:
+        instance = MagicMock()
+        MockSvc.return_value = instance
+        instance.forecast_upcoming.return_value = fake_result
+
+        agent_tools.configure_snapshot_store("record", match_id="m6")
+        first = agent_tools.forecast_international.invoke({
+            "home_team": "A", "away_team": "B", "date": "2025-01-01",
+            "odds_h": 2.0, "odds_d": 3.0, "odds_a": 3.5,
+        })
+        assert instance.forecast_upcoming.call_count == 1
+
+        agent_tools.configure_snapshot_store("replay", match_id="m6")
+        second = agent_tools.forecast_international.invoke({
+            "home_team": "A", "away_team": "B", "date": "2025-01-01",
             "odds_h": 2.0, "odds_d": 3.0, "odds_a": 3.5,
         })
         assert second == first
