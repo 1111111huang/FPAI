@@ -249,6 +249,17 @@ def _build_parser() -> argparse.ArgumentParser:
     agent_recommend_parser.add_argument("--odds-a", type=float, default=None, help="Away win decimal odds from bookmaker")
     agent_recommend_parser.add_argument("--config", default=None, help="Path to agent_config.yaml (default: config/agent_config.yaml)")
 
+    # agent-snapshot
+    agent_snapshot_parser = subparsers.add_parser(
+        "agent-snapshot",
+        help="Collect tool-call snapshots for historical matches (record mode) for later backtesting",
+    )
+    agent_snapshot_parser.add_argument("--from-date", required=True, help="Start date YYYY-MM-DD (inclusive)")
+    agent_snapshot_parser.add_argument("--to-date", required=True, help="End date YYYY-MM-DD (inclusive)")
+    agent_snapshot_parser.add_argument("--league", default=None, help="League code (e.g. E0). Omit for all leagues.")
+    agent_snapshot_parser.add_argument("--config", default=None, help="Path to agent_config.yaml (default: config/agent_config.yaml)")
+    agent_snapshot_parser.add_argument("--dry-run", action="store_true", help="List matches that would be processed without running the agent")
+
     return parser
 
 
@@ -738,6 +749,85 @@ def run_agent_recommend(
     print(json.dumps(recommendation, indent=2))
 
 
+def run_agent_snapshot(
+    from_date: str,
+    to_date: str,
+    league: str | None,
+    config_path: str | None,
+    dry_run: bool,
+) -> None:
+    """Drive the agent in record mode over historical matches to build a snapshot corpus (A11)."""
+    import sys
+    from datetime import datetime, timezone
+    from pathlib import Path
+
+    from src.agent.agent_config import AgentConfig
+    from src.agent.graph import run_agent
+    from src.agent import tools as agent_tools
+    from src.utils.db_manager import DuckDBManager
+
+    snapshot_addendum = (
+        "## SNAPSHOT COLLECTION MODE\n\n"
+        "You are collecting training data from a historical match. Discard and ignore any "
+        "web_search result that mentions a final score, match result, or post-match analysis — "
+        "treat this match as still upcoming."
+    )
+
+    cfg = AgentConfig.from_yaml(config_path) if config_path else AgentConfig.default()
+    db = DuckDBManager()
+    query = (
+        "SELECT match_id, league, date, home_team, away_team, odds_h, odds_d, odds_a "
+        "FROM raw_matches WHERE date >= ? AND date <= ?"
+    )
+    params: list = [from_date, to_date]
+    if league:
+        query += " AND UPPER(league) = ?"
+        params.append(league.upper())
+    query += " ORDER BY date"
+    with db.connection() as conn:
+        matches = conn.execute(query, params).fetchdf()
+
+    base_dir = Path("data/agent_snapshots")
+    to_process = []
+    skipped = 0
+    for _, row in matches.iterrows():
+        marker = base_dir / row["match_id"] / "_complete.json"
+        if marker.exists():
+            skipped += 1
+            continue
+        to_process.append(row)
+
+    print(f"Matches in range: {len(matches)} | already complete: {skipped} | to process: {len(to_process)}")
+    if dry_run:
+        for row in to_process:
+            date_str = str(row["date"].date()) if hasattr(row["date"], "date") else str(row["date"])
+            print(f"  {date_str} {row['home_team']} vs {row['away_team']} [{row['league']}]")
+        return
+
+    errors = 0
+    for i, row in enumerate(to_process, 1):
+        match_id = row["match_id"]
+        date_str = str(row["date"].date()) if hasattr(row["date"], "date") else str(row["date"])
+        match_info = {"home_team": row["home_team"], "away_team": row["away_team"], "date": date_str, "league": row["league"]}
+        if row["odds_h"] and row["odds_d"] and row["odds_a"]:
+            match_info["odds"] = {"home": row["odds_h"], "draw": row["odds_d"], "away": row["odds_a"]}
+
+        agent_tools.configure_snapshot_store("record", match_id=match_id, match_date=date_str)
+        try:
+            run_agent(match_info=match_info, config=cfg, extra_system_instructions=snapshot_addendum)
+            marker_path = base_dir / match_id / "_complete.json"
+            marker_path.parent.mkdir(parents=True, exist_ok=True)
+            marker_path.write_text(json.dumps({"completed_at": datetime.now(timezone.utc).isoformat()}))
+            print(f"[{i}/{len(to_process)}] OK {match_info['home_team']} vs {match_info['away_team']}")
+        except Exception as exc:
+            errors += 1
+            print(f"[{i}/{len(to_process)}] ERROR {match_info['home_team']} vs {match_info['away_team']}: {exc}", file=sys.stderr)
+        finally:
+            agent_tools.configure_snapshot_store("live")
+
+    print(f"\nDone. Processed: {len(to_process) - errors} | Errors: {errors} | Skipped: {skipped}")
+
+
 def run_status(db_manager: DuckDBManager) -> None:
     """Display data freshness and model selection status (US#80)."""
     from src.utils.model_selection import ModelSelector
@@ -914,6 +1004,14 @@ def main() -> None:
             odds_h=args.odds_h,
             odds_d=args.odds_d,
             odds_a=args.odds_a,
+        )
+    elif args.command == "agent-snapshot":
+        run_agent_snapshot(
+            from_date=args.from_date,
+            to_date=args.to_date,
+            league=args.league,
+            config_path=args.config,
+            dry_run=args.dry_run,
         )
 
 
