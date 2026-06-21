@@ -7,9 +7,12 @@ from datetime import datetime
 import json
 from pathlib import Path
 
+from dotenv import load_dotenv
 import mlflow
 import pandas as pd
 import yaml
+
+load_dotenv()
 
 from src.features.feature_factory import FeatureFactory
 from src.evaluation import run_diagnostics

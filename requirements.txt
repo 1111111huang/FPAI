@@ -3,6 +3,7 @@ pandas
 duckdb
 pydantic
 pyyaml
+python-dotenv
 
 # AI & Scrapers
 requests
