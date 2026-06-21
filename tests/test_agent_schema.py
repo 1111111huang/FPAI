@@ -58,3 +58,10 @@ def test_no_json_raises():
 def test_invalid_json_raises():
     with pytest.raises(RecommendationParseError):
         extract_recommendation("```json\n{bad json here\n```")
+
+
+def test_trailing_brace_tolerated():
+    """Model output with extra }} at end should still parse."""
+    text = json.dumps(_VALID) + "}"  # simulate llama3.2:3b adding an extra }
+    rec = extract_recommendation(text)
+    assert rec["overall"] == "no_bet"

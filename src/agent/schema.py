@@ -59,10 +59,12 @@ def extract_recommendation(text: str) -> MatchRecommendation:
     if not candidates:
         raise RecommendationParseError(text, "no JSON object found")
 
+    _decoder = json.JSONDecoder()
     last_error = ""
     for json_str in candidates:
         try:
-            data = json.loads(json_str)
+            # raw_decode tolerates trailing characters (e.g. duplicate '}' from weak models)
+            data, _ = _decoder.raw_decode(json_str.lstrip())
         except json.JSONDecodeError as exc:
             last_error = f"invalid JSON: {exc}"
             continue
