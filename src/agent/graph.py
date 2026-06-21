@@ -116,6 +116,7 @@ def run_agent(
     match_info: dict,
     config: AgentConfig | None = None,
     tools: list | None = None,
+    extra_system_instructions: str | None = None,
 ) -> MatchRecommendation:
     """Run the betting agent for a single match and return a structured recommendation.
 
@@ -123,6 +124,10 @@ def run_agent(
         match_info: Dict with keys: home_team, away_team, date, and optionally league.
         config: AgentConfig instance. Loads from config/agent_config.yaml if None.
         tools: List of LangChain tools. Loads default tools if None.
+        extra_system_instructions: Appended to the loaded system prompt. Used by
+            agent-snapshot (A11) to inject snapshot-collection-only rules (e.g.
+            "ignore any result mentioning a final score") without forking the
+            whole prompt file.
     """
     if config is None:
         config = AgentConfig.default()
@@ -131,6 +136,8 @@ def run_agent(
         tools = get_default_tools()
 
     system_prompt = _load_system_prompt(config)
+    if extra_system_instructions:
+        system_prompt = f"{system_prompt}\n\n{extra_system_instructions}"
 
     prompt = (
         f"Analyse the upcoming match: {match_info['home_team']} vs {match_info['away_team']}"

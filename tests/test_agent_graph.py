@@ -111,6 +111,66 @@ def test_forecast_league_falls_back_to_international_when_no_league_models():
     assert instance.forecast_upcoming.call_count == 2
 
 
+def test_run_agent_appends_extra_system_instructions():
+    from unittest.mock import patch, MagicMock
+    from src.agent.graph import run_agent
+
+    captured = {}
+
+    def fake_build_graph(config, tools):
+        mock_compiled = MagicMock()
+
+        def fake_invoke(initial_state):
+            captured["system_content"] = initial_state["messages"][0].content
+            return {"recommendation": {"overall": "no_bet"}}
+
+        mock_compiled.invoke.side_effect = fake_invoke
+        return mock_compiled
+
+    cfg = _make_config()
+    with patch("src.agent.graph._build_llm"), \
+         patch("src.agent.graph._load_system_prompt", return_value="BASE PROMPT"), \
+         patch("src.agent.graph.build_graph", side_effect=fake_build_graph):
+        run_agent(
+            match_info={"home_team": "A", "away_team": "B", "date": "2025-01-01"},
+            config=cfg,
+            tools=[],
+            extra_system_instructions="EXTRA INSTRUCTIONS HERE",
+        )
+
+    assert "BASE PROMPT" in captured["system_content"]
+    assert "EXTRA INSTRUCTIONS HERE" in captured["system_content"]
+
+
+def test_run_agent_without_extra_instructions_unchanged():
+    from unittest.mock import patch, MagicMock
+    from src.agent.graph import run_agent
+
+    captured = {}
+
+    def fake_build_graph(config, tools):
+        mock_compiled = MagicMock()
+
+        def fake_invoke(initial_state):
+            captured["system_content"] = initial_state["messages"][0].content
+            return {"recommendation": {"overall": "no_bet"}}
+
+        mock_compiled.invoke.side_effect = fake_invoke
+        return mock_compiled
+
+    cfg = _make_config()
+    with patch("src.agent.graph._build_llm"), \
+         patch("src.agent.graph._load_system_prompt", return_value="BASE PROMPT"), \
+         patch("src.agent.graph.build_graph", side_effect=fake_build_graph):
+        run_agent(
+            match_info={"home_team": "A", "away_team": "B", "date": "2025-01-01"},
+            config=cfg,
+            tools=[],
+        )
+
+    assert captured["system_content"] == "BASE PROMPT"
+
+
 def _route_for_state(cfg: AgentConfig, state: AgentState) -> str:
     """Helper: extract the routing logic without building the full graph."""
     last = state["messages"][-1]
