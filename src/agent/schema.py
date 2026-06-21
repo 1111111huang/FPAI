@@ -4,6 +4,8 @@ import json
 import re
 from typing import Literal, TypedDict
 
+import json_repair
+
 
 class MarketRecommendation(TypedDict):
     market: str
@@ -66,8 +68,15 @@ def extract_recommendation(text: str) -> MatchRecommendation:
             # raw_decode tolerates trailing characters (e.g. duplicate '}' from weak models)
             data, _ = _decoder.raw_decode(json_str.lstrip())
         except json.JSONDecodeError as exc:
-            last_error = f"invalid JSON: {exc}"
-            continue
+            # Fall back to a tolerant repair pass for structurally broken JSON
+            # (e.g. weak models splitting one array into several bracket groups)
+            try:
+                data = json_repair.loads(json_str)
+            except Exception:
+                data = None
+            if not isinstance(data, dict):
+                last_error = f"invalid JSON: {exc}"
+                continue
 
         missing = _REQUIRED_KEYS - data.keys()
         if missing:

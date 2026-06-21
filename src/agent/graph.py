@@ -138,6 +138,12 @@ def run_agent(
     )
     if match_info.get("league"):
         prompt += f" in league {match_info['league']}"
+    odds = match_info.get("odds")
+    if odds:
+        prompt += (
+            f". Bookmaker odds: home={odds['home']}, draw={odds['draw']}, away={odds['away']}. "
+            "Use these exact odds_h/odds_d/odds_a values when calling the forecast tool."
+        )
 
     initial_state: AgentState = {
         "messages": [

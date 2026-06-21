@@ -241,6 +241,9 @@ def _build_parser() -> argparse.ArgumentParser:
     agent_recommend_parser.add_argument("--away", required=True, help="Away team name")
     agent_recommend_parser.add_argument("--date", required=True, help="Match date YYYY-MM-DD")
     agent_recommend_parser.add_argument("--league", default=None, help="League code (e.g. E0). Omit for international matches.")
+    agent_recommend_parser.add_argument("--odds-h", type=float, default=None, help="Home win decimal odds from bookmaker")
+    agent_recommend_parser.add_argument("--odds-d", type=float, default=None, help="Draw decimal odds from bookmaker")
+    agent_recommend_parser.add_argument("--odds-a", type=float, default=None, help="Away win decimal odds from bookmaker")
     agent_recommend_parser.add_argument("--config", default=None, help="Path to agent_config.yaml (default: config/agent_config.yaml)")
 
     return parser
@@ -691,6 +694,9 @@ def run_agent_recommend(
     date: str,
     league: str | None,
     config_path: str | None,
+    odds_h: float | None = None,
+    odds_d: float | None = None,
+    odds_a: float | None = None,
 ) -> None:
     """Run the betting agent for a single upcoming match (A08)."""
     import sys
@@ -701,6 +707,8 @@ def run_agent_recommend(
     match_info = {"home_team": home_team, "away_team": away_team, "date": date}
     if league:
         match_info["league"] = league
+    if odds_h is not None and odds_d is not None and odds_a is not None:
+        match_info["odds"] = {"home": odds_h, "draw": odds_d, "away": odds_a}
 
     print(f"\nAnalysing: {home_team} vs {away_team} on {date}" + (f" [{league}]" if league else ""))
     print(f"Model: {cfg.provider}/{cfg.model} | max_tool_calls={cfg.max_tool_calls}\n")
@@ -900,6 +908,9 @@ def main() -> None:
             date=args.date,
             league=args.league,
             config_path=args.config,
+            odds_h=args.odds_h,
+            odds_d=args.odds_d,
+            odds_a=args.odds_a,
         )
 
 

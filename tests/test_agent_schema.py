@@ -65,3 +65,22 @@ def test_trailing_brace_tolerated():
     text = json.dumps(_VALID) + "}"  # simulate llama3.2:3b adding an extra }
     rec = extract_recommendation(text)
     assert rec["overall"] == "no_bet"
+
+
+def test_malformed_markets_array_repaired():
+    """llama3.1:8b splits a multi-element markets array into separate bracket groups
+    instead of comma-separating objects within one array. json_repair fallback fixes it."""
+    text = (
+        '{"match": {"home": "City", "away": "Arsenal", "date": "2026-06-21", "league": "E0"}, '
+        '"overall": "conditional", '
+        '"markets": [{"market": "result_3way", "selection": "home", "recommendation_type": "conditional", '
+        '"current_odds": 1.95, "min_odds": 1.95, "ml_probability": 0.48, "implied_probability": 0.51, '
+        '"value_edge": -0.03}], ["market": "result_3way", "selection": "away", "recommendation_type": "conditional", '
+        '"current_odds": 4.2, "min_odds": 4.2, "ml_probability": 0.26, "implied_probability": 0.24, '
+        '"value_edge": 0.02]], '
+        '"explanation": "test", "confidence": "medium", "limitations": [], "prediction_basis": "market_odds_only"}'
+    )
+    rec = extract_recommendation(text)
+    assert rec["overall"] == "conditional"
+    assert len(rec["markets"]) == 2
+    assert rec["markets"][1]["selection"] == "away"
