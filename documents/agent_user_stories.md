@@ -156,7 +156,7 @@ Expose the live recommendation workflow as a CLI command.
 ## PHASE 3: Snapshot Infrastructure
 
 ### A09 — Implement SnapshotStore
-**Size:** M | **Status:** active | **Milestone:** M3 | **Depends on:** A01
+**Size:** M | **Status:** completed | **Milestone:** M3 | **Depends on:** A01
 
 Build the record/replay interceptor that isolates backtest runs from live APIs.
 
@@ -170,7 +170,7 @@ Build the record/replay interceptor that isolates backtest runs from live APIs.
 ---
 
 ### A10 — Integrate SnapshotStore with All Tool Functions
-**Size:** S | **Status:** active | **Milestone:** M3 | **Depends on:** A04, A05, A06, A09
+**Size:** S | **Status:** completed | **Milestone:** M3 | **Depends on:** A04, A05, A06, A09
 
 Wrap every tool function with the `SnapshotStore` interceptor and add date-filtering to web search during snapshot collection.
 
@@ -183,7 +183,7 @@ Wrap every tool function with the `SnapshotStore` interceptor and add date-filte
 ---
 
 ### A11 — Add agent-snapshot CLI Command
-**Size:** S | **Status:** active | **Milestone:** M3 | **Depends on:** A10
+**Size:** S | **Status:** completed | **Milestone:** M3 | **Depends on:** A10
 
 Expose snapshot collection as a CLI command that drives the agent in record mode over historical matches.
 
@@ -198,7 +198,7 @@ Expose snapshot collection as a CLI command that drives the agent in record mode
 ## PHASE 4: Backtest Harness
 
 ### A12 — Implement BacktestHarness and Outcome Loader
-**Size:** L | **Status:** active | **Milestone:** M4 | **Depends on:** A11
+**Size:** L | **Status:** completed | **Milestone:** M4 | **Depends on:** A11
 
 Build the core backtest engine that replays snapshot episodes and compares agent recommendations against actual outcomes.
 
@@ -213,7 +213,7 @@ Build the core backtest engine that replays snapshot episodes and compares agent
 ---
 
 ### A13 — Implement Flat-Stake Bankroll Simulation and Evaluation Metrics
-**Size:** M | **Status:** active | **Milestone:** M4 | **Depends on:** A12
+**Size:** M | **Status:** completed | **Milestone:** M4 | **Depends on:** A12
 
 Simulate bankroll evolution over backtest records and compute the evaluation report.
 
@@ -227,7 +227,7 @@ Simulate bankroll evolution over backtest records and compute the evaluation rep
 ---
 
 ### A14 — Add agent-backtest CLI with Parallelism
-**Size:** M | **Status:** active | **Milestone:** M4 | **Depends on:** A12, A13
+**Size:** M | **Status:** completed | **Milestone:** M4 | **Depends on:** A12, A13
 
 Expose the backtest harness as a CLI command with concurrent execution support.
 
@@ -242,7 +242,7 @@ Expose the backtest harness as a CLI command with concurrent execution support.
 ## PHASE 5: Model & Prompt Tuning
 
 ### A15 — Implement Kelly Criterion Staking
-**Size:** S | **Status:** active | **Milestone:** M5 | **Depends on:** A13
+**Size:** S | **Status:** completed | **Milestone:** M5 | **Depends on:** A13
 
 Add Kelly criterion as a second staking mode.
 
@@ -254,7 +254,7 @@ Add Kelly criterion as a second staking mode.
 ---
 
 ### A16 — Build Config Comparison Framework
-**Size:** M | **Status:** active | **Milestone:** M5 | **Depends on:** A14, A15
+**Size:** M | **Status:** completed | **Milestone:** M5 | **Depends on:** A14, A15
 
 Allow systematic comparison of agent configurations (model, prompt version, staking) over the same snapshot set.
 
