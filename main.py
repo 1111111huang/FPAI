@@ -273,6 +273,18 @@ def _build_parser() -> argparse.ArgumentParser:
     agent_backtest_parser.add_argument("--concurrency", type=int, default=5, help="Max concurrent agent runs")
     agent_backtest_parser.add_argument("--config", default=None, help="Path to agent_config.yaml (default: config/agent_config.yaml)")
 
+    # agent-compare
+    agent_compare_parser = subparsers.add_parser(
+        "agent-compare",
+        help="Compare multiple agent configs over the same backtest snapshot set",
+    )
+    agent_compare_parser.add_argument("--configs", nargs="+", required=True, help="Paths to two or more agent_config.yaml files")
+    agent_compare_parser.add_argument("--from-date", required=True)
+    agent_compare_parser.add_argument("--to-date", required=True)
+    agent_compare_parser.add_argument("--league", default=None)
+    agent_compare_parser.add_argument("--sample", type=int, default=None)
+    agent_compare_parser.add_argument("--stake-mode", choices=["flat", "kelly"], default="flat")
+
     return parser
 
 
@@ -918,6 +930,23 @@ def run_agent_backtest(
     print(f"\nReport saved to {path}")
 
 
+def run_agent_compare(
+    config_paths: list[str],
+    from_date: str,
+    to_date: str,
+    league: str | None,
+    sample: int | None,
+    stake_mode: str,
+) -> None:
+    """Compare agent configs over the same backtest snapshot set (A16)."""
+    from src.agent.comparison import compare_configs, print_comparison_table, save_comparison
+
+    results = compare_configs(config_paths, from_date, to_date, league=league, sample=sample, stake_mode=stake_mode)
+    print_comparison_table(results)
+    path = save_comparison(results)
+    print(f"\nComparison saved to {path}")
+
+
 def run_status(db_manager: DuckDBManager) -> None:
     """Display data freshness and model selection status (US#80)."""
     from src.utils.model_selection import ModelSelector
@@ -1112,6 +1141,15 @@ def main() -> None:
             sample=args.sample,
             concurrency=args.concurrency,
             config_path=args.config,
+        )
+    elif args.command == "agent-compare":
+        run_agent_compare(
+            config_paths=args.configs,
+            from_date=args.from_date,
+            to_date=args.to_date,
+            league=args.league,
+            sample=args.sample,
+            stake_mode=args.stake_mode,
         )
 
 
