@@ -17,6 +17,7 @@ langchain-anthropic
 langchain-ollama
 tavily-python
 json-repair
+tqdm
 
 # Machine Learning
 scikit-learn
