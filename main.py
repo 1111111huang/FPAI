@@ -260,6 +260,19 @@ def _build_parser() -> argparse.ArgumentParser:
     agent_snapshot_parser.add_argument("--config", default=None, help="Path to agent_config.yaml (default: config/agent_config.yaml)")
     agent_snapshot_parser.add_argument("--dry-run", action="store_true", help="List matches that would be processed without running the agent")
 
+    # agent-backtest
+    agent_backtest_parser = subparsers.add_parser(
+        "agent-backtest",
+        help="Replay recorded snapshots through the agent and report bankroll performance",
+    )
+    agent_backtest_parser.add_argument("--from-date", required=True, help="Start date YYYY-MM-DD (inclusive)")
+    agent_backtest_parser.add_argument("--to-date", required=True, help="End date YYYY-MM-DD (inclusive)")
+    agent_backtest_parser.add_argument("--league", default=None, help="League code (e.g. E0). Omit for all leagues.")
+    agent_backtest_parser.add_argument("--stake-mode", choices=["flat", "kelly"], default="flat")
+    agent_backtest_parser.add_argument("--sample", type=int, default=None, help="Stratified sample size before running the full set")
+    agent_backtest_parser.add_argument("--concurrency", type=int, default=5, help="Max concurrent agent runs")
+    agent_backtest_parser.add_argument("--config", default=None, help="Path to agent_config.yaml (default: config/agent_config.yaml)")
+
     return parser
 
 
@@ -828,6 +841,66 @@ def run_agent_snapshot(
     print(f"\nDone. Processed: {len(to_process) - errors} | Errors: {errors} | Skipped: {skipped}")
 
 
+async def _run_backtest_concurrent(matches, config, concurrency: int) -> list:
+    """Run process_match_row for every match concurrently, bounded by a semaphore.
+    Each call runs in its own thread via asyncio.to_thread since the agent graph
+    and tools are synchronous; SnapshotStore's thread-local state (A09) keeps
+    concurrent replay contexts from clobbering each other."""
+    import asyncio
+
+    from tqdm import tqdm
+
+    from src.agent.backtest import process_match_row
+
+    semaphore = asyncio.Semaphore(concurrency)
+    progress = tqdm(total=len(matches), desc="Backtesting")
+    rows = [row for _, row in matches.iterrows()]
+
+    async def _run_one(row):
+        async with semaphore:
+            record = await asyncio.to_thread(process_match_row, row, config)
+            progress.update(1)
+            return record
+
+    try:
+        records = await asyncio.gather(*[_run_one(row) for row in rows])
+    finally:
+        progress.close()
+    return list(records)
+
+
+def run_agent_backtest(
+    from_date: str,
+    to_date: str,
+    league: str | None,
+    stake_mode: str,
+    sample: int | None,
+    concurrency: int,
+    config_path: str | None,
+) -> None:
+    """Replay agent recommendations over historical snapshots and report bankroll performance (A14)."""
+    import asyncio
+
+    from src.agent.agent_config import AgentConfig
+    from src.agent.backtest import BacktestHarness
+    from src.agent.evaluation import build_evaluation_report, print_report, save_report
+    from src.agent.staking import simulate_flat_stake, simulate_kelly_stake
+
+    cfg = AgentConfig.from_yaml(config_path) if config_path else AgentConfig.default()
+    harness = BacktestHarness(config=cfg)
+    matches = harness.load_matches(from_date, to_date, league=league, sample=sample)
+    print(f"Running backtest over {len(matches)} matches (concurrency={concurrency})...")
+
+    records = asyncio.run(_run_backtest_concurrent(matches, cfg, concurrency))
+
+    stake_fn = simulate_kelly_stake if stake_mode == "kelly" else simulate_flat_stake
+    bankroll_result = stake_fn(records)
+    report = build_evaluation_report(records, bankroll_result)
+    print_report(report)
+    path = save_report(report, cfg)
+    print(f"\nReport saved to {path}")
+
+
 def run_status(db_manager: DuckDBManager) -> None:
     """Display data freshness and model selection status (US#80)."""
     from src.utils.model_selection import ModelSelector
@@ -1012,6 +1085,16 @@ def main() -> None:
             league=args.league,
             config_path=args.config,
             dry_run=args.dry_run,
+        )
+    elif args.command == "agent-backtest":
+        run_agent_backtest(
+            from_date=args.from_date,
+            to_date=args.to_date,
+            league=args.league,
+            stake_mode=args.stake_mode,
+            sample=args.sample,
+            concurrency=args.concurrency,
+            config_path=args.config,
         )
 
 
