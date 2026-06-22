@@ -845,8 +845,12 @@ async def _run_backtest_concurrent(matches, config, concurrency: int) -> list:
     """Run process_match_row for every match concurrently, bounded by a semaphore.
     Each call runs in its own thread via asyncio.to_thread since the agent graph
     and tools are synchronous; SnapshotStore's thread-local state (A09) keeps
-    concurrent replay contexts from clobbering each other."""
+    concurrent replay contexts from clobbering each other. Per-match failures
+    (e.g. SnapshotMissingError for an unrecorded match) are caught and skipped
+    so one bad match doesn't abort the whole batch — mirrors run_agent_snapshot's
+    error-tolerance pattern."""
     import asyncio
+    import sys
 
     from tqdm import tqdm
 
@@ -858,15 +862,25 @@ async def _run_backtest_concurrent(matches, config, concurrency: int) -> list:
 
     async def _run_one(row):
         async with semaphore:
-            record = await asyncio.to_thread(process_match_row, row, config)
-            progress.update(1)
+            try:
+                record = await asyncio.to_thread(process_match_row, row, config)
+            except Exception as exc:
+                match_id = row.get("match_id", "?") if hasattr(row, "get") else "?"
+                print(f"  SKIP {match_id}: {exc}", file=sys.stderr)
+                record = None
+            finally:
+                progress.update(1)
             return record
 
     try:
-        records = await asyncio.gather(*[_run_one(row) for row in rows])
+        results = await asyncio.gather(*[_run_one(row) for row in rows])
     finally:
         progress.close()
-    return list(records)
+    records = [r for r in results if r is not None]
+    skipped = len(results) - len(records)
+    if skipped:
+        print(f"Skipped {skipped}/{len(results)} matches (see stderr for details)")
+    return records
 
 
 def run_agent_backtest(
@@ -885,6 +899,9 @@ def run_agent_backtest(
     from src.agent.backtest import BacktestHarness
     from src.agent.evaluation import build_evaluation_report, print_report, save_report
     from src.agent.staking import simulate_flat_stake, simulate_kelly_stake
+
+    if concurrency < 1:
+        raise ValueError(f"--concurrency must be >= 1, got {concurrency}")
 
     cfg = AgentConfig.from_yaml(config_path) if config_path else AgentConfig.default()
     harness = BacktestHarness(config=cfg)
