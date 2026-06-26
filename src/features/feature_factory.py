@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pandas as pd
 from src.utils.db_manager import DuckDBManager
 from src.utils.helpers import standardize_team_name
@@ -47,7 +49,8 @@ class FeatureFactory:
                 SELECT match_id, date, home_team, away_team,
                        fthg, ftag, hs, "as", hst, ast, hc, ac, hy, ay, hr, ar,
                        odds_h, odds_d, odds_a,
-                       avgh, avgd, avga, xg_h, xg_a, xga_h, xga_a
+                       avgh, avgd, avga, xg_h, xg_a, xga_h, xga_a,
+                       over25_odds, under25_odds, ah_line, ah_home_odds, ah_away_odds
                 FROM raw_matches
                 ORDER BY date, match_id
                 """
@@ -515,31 +518,105 @@ class FeatureFactory:
 
     @staticmethod
     def _compute_odds_features(raw_df: pd.DataFrame) -> pd.DataFrame:
-        """Compute raw odds, overround, and log-odds features for the current match (US#67).
+        """Compute raw odds, overround, over/under 2.5, AH, and Poisson-decomposed features.
 
-        These differ from the rolling MKT_ features: they encode the market's view
-        of THIS specific fixture, not form derived from past match odds.
+        US#67/BUG-009: market features for THIS specific fixture (not rolling form).
+        US#76: Poisson lambda back-solved from O/U market; decomposed into team-level
+               lambdas via the AH line for use across all 8 forecast targets.
         """
         import numpy as np
+        from scipy.optimize import brentq
 
-        df = raw_df[["match_id", "avgh", "avgd", "avga"]].copy()
-        for col in ["avgh", "avgd", "avga"]:
-            df[col] = pd.to_numeric(df[col], errors="coerce")
+        src_cols = ["match_id", "avgh", "avgd", "avga"]
+        for col in ["over25_odds", "under25_odds", "ah_line", "ah_home_odds", "ah_away_odds"]:
+            if col in raw_df.columns:
+                src_cols.append(col)
 
-        # Overround: sum of raw implied probabilities before normalisation — a proxy for
-        # market confidence (lower overround = market is more decisive).
+        df = raw_df[src_cols].copy()
+        for col in ["avgh", "avgd", "avga", "over25_odds", "under25_odds", "ah_home_odds", "ah_away_odds"]:
+            if col in df.columns:
+                df[col] = pd.to_numeric(df[col], errors="coerce")
+
+        # Overround: sum of raw implied probabilities before normalisation.
         df["MKT_OVERROUND"] = (1.0 / df["avgh"]) + (1.0 / df["avgd"]) + (1.0 / df["avga"])
 
-        # Log-odds are more linearly useful for gradient models than raw decimal odds.
-        df["MKT_LOG_ODDS_H"] = np.log(df["avgh"].clip(lower=1.01))
-        df["MKT_LOG_ODDS_D"] = np.log(df["avgd"].clip(lower=1.01))
-        df["MKT_LOG_ODDS_A"] = np.log(df["avga"].clip(lower=1.01))
+        # Over/under 2.5 goals: implied probabilities from market odds (BUG-009).
+        if "over25_odds" in df.columns:
+            df["MKT_IMPLIED_OVER25"] = (1.0 / df["over25_odds"].clip(lower=1.01)).where(
+                df["over25_odds"].notna()
+            )
+        else:
+            df["MKT_IMPLIED_OVER25"] = np.nan
 
-        # Home-to-away log-odds ratio encodes relative market strength in one value.
-        df["MKT_LOG_ODDS_H_A_RATIO"] = df["MKT_LOG_ODDS_H"] - df["MKT_LOG_ODDS_A"]
+        # Asian handicap: line and implied probabilities from average AH odds (BUG-009).
+        if "ah_line" in df.columns:
+            df["MKT_AH_LINE"] = pd.to_numeric(df["ah_line"], errors="coerce")
+        else:
+            df["MKT_AH_LINE"] = np.nan
 
-        return df[["match_id", "MKT_OVERROUND", "MKT_LOG_ODDS_H", "MKT_LOG_ODDS_D",
-                   "MKT_LOG_ODDS_A", "MKT_LOG_ODDS_H_A_RATIO"]]
+        if "ah_home_odds" in df.columns:
+            df["MKT_AH_HOME_ODDS"] = df["ah_home_odds"]
+        else:
+            df["MKT_AH_HOME_ODDS"] = np.nan
+
+        if "ah_away_odds" in df.columns:
+            df["MKT_AH_AWAY_ODDS"] = df["ah_away_odds"]
+        else:
+            df["MKT_AH_AWAY_ODDS"] = np.nan
+
+        # US#76: Poisson lambda back-solved from P(Poisson(λ)≥3) = implied_over25_prob.
+        # Team-level lambdas via AH line: λ_home = (λ+|AH|)/2, λ_away = (λ-|AH|)/2.
+        def _poisson_cdf2(lam: float) -> float:
+            """P(Poisson(λ) ≤ 2) = e^-λ (1 + λ + λ²/2)."""
+            return np.exp(-lam) * (1.0 + lam + lam * lam / 2.0)
+
+        def _solve_lambda(p_over25: float) -> float:
+            if np.isnan(p_over25) or p_over25 <= 0.0 or p_over25 >= 1.0:
+                return np.nan
+            # P(X≥3) = p_over25  ⟺  _poisson_cdf2(λ) = 1 - p_over25
+            target = 1.0 - p_over25
+            try:
+                return brentq(lambda lam: _poisson_cdf2(lam) - target, 0.01, 20.0)
+            except ValueError:
+                return np.nan
+
+        p_over25_arr = df["MKT_IMPLIED_OVER25"].to_numpy(dtype=float)
+        lambda_total = np.array([_solve_lambda(p) for p in p_over25_arr])
+        df["MKT_LAMBDA_TOTAL"] = lambda_total
+
+        ah_abs = df["MKT_AH_LINE"].abs().to_numpy(dtype=float)
+        lam_home = np.where(
+            np.isnan(lambda_total) | np.isnan(ah_abs),
+            np.nan,
+            (lambda_total + ah_abs) / 2.0,
+        )
+        lam_away = np.where(
+            np.isnan(lambda_total) | np.isnan(ah_abs),
+            np.nan,
+            np.clip((lambda_total - ah_abs) / 2.0, 0.0, None),
+        )
+        df["MKT_LAMBDA_HOME"] = lam_home
+        df["MKT_LAMBDA_AWAY"] = lam_away
+
+        # Market-implied BTTS probability under independent Poisson assumptions.
+        df["MKT_POISSON_BTTS_PROB"] = np.where(
+            np.isnan(lam_home) | np.isnan(lam_away),
+            np.nan,
+            (1.0 - np.exp(-lam_home)) * (1.0 - np.exp(-lam_away)),
+        )
+
+        # Excess-goals signal: how much total scoring exceeds the handicap margin.
+        df["MKT_LAMBDA_AH_DIFF"] = np.where(
+            np.isnan(lambda_total) | np.isnan(ah_abs),
+            np.nan,
+            lambda_total - ah_abs,
+        )
+
+        return df[["match_id", "MKT_OVERROUND",
+                   "MKT_IMPLIED_OVER25",
+                   "MKT_AH_LINE", "MKT_AH_HOME_ODDS", "MKT_AH_AWAY_ODDS",
+                   "MKT_LAMBDA_TOTAL", "MKT_LAMBDA_HOME", "MKT_LAMBDA_AWAY",
+                   "MKT_POISSON_BTTS_PROB", "MKT_LAMBDA_AH_DIFF"]]
 
     @staticmethod
     def _compute_temporal_features(raw_df: pd.DataFrame) -> pd.DataFrame:
@@ -677,6 +754,11 @@ class FeatureFactory:
             "xg_a",
             "xga_h",
             "xga_a",
+            "over25_odds",
+            "under25_odds",
+            "ah_line",
+            "ah_home_odds",
+            "ah_away_odds",
         ]
         for col in required:
             if col not in columns:
@@ -713,6 +795,227 @@ class FeatureFactory:
                 """,
                 rows,
             )
+
+    def build_for_match(
+        self,
+        home_team: str,
+        away_team: str,
+        match_date: str,
+        league: str,
+        odds_h: float,
+        odds_d: float,
+        odds_a: float,
+        over25_odds: float | None = None,
+        ah_line: float | None = None,
+        ah_home_odds: float | None = None,
+        ah_away_odds: float | None = None,
+    ) -> pd.DataFrame:
+        """Compute features for a single upcoming match without writing to DB (US#84).
+
+        Fetches recent raw_matches history for both teams, appends a synthetic row for
+        the requested match, computes all rolling/MKT/derived features, then returns the
+        synthetic row's features as a single-row DataFrame.
+        """
+        import json
+        import numpy as np
+
+        home_norm = standardize_team_name(home_team)
+        away_norm = standardize_team_name(away_team)
+
+        # Apply team_mapping.json fuzzy lookup
+        mapping_path = Path(__file__).parent.parent.parent / "config" / "team_mapping.json"
+        if mapping_path.exists():
+            with mapping_path.open("r", encoding="utf-8") as fh:
+                team_map: dict[str, str] = json.load(fh)
+            # Build reverse map for lookup by canonical name
+            reverse_map = {v: v for v in team_map.values()}
+            reverse_map.update(team_map)
+            home_norm = reverse_map.get(home_norm, home_norm)
+            away_norm = reverse_map.get(away_norm, away_norm)
+
+        LOGGER.info("build_for_match | home=%s away=%s date=%s league=%s", home_norm, away_norm, match_date, league)
+
+        SYNTHETIC_ID = "__spot__"
+
+        with self.db_manager.connection(read_only=True) as conn:
+            self._ensure_raw_matches_schema(conn)
+            raw_df = conn.execute(
+                """
+                SELECT match_id, date, home_team, away_team,
+                       fthg, ftag, hs, "as", hst, ast, hc, ac, hy, ay, hr, ar,
+                       odds_h, odds_d, odds_a,
+                       avgh, avgd, avga, xg_h, xg_a, xga_h, xga_a,
+                       over25_odds, under25_odds, ah_line, ah_home_odds, ah_away_odds
+                FROM raw_matches
+                WHERE home_team = ? OR away_team = ? OR home_team = ? OR away_team = ?
+                ORDER BY date, match_id
+                """,
+                [home_norm, home_norm, away_norm, away_norm],
+            ).fetchdf()
+
+        if raw_df.empty:
+            # No history — build empty history, synthetic row only; cold-start imputation covers NaNs
+            raw_df = pd.DataFrame(columns=[
+                "match_id", "date", "home_team", "away_team", "fthg", "ftag",
+                "hs", "as", "hst", "ast", "hc", "ac", "hy", "ay", "hr", "ar",
+                "odds_h", "odds_d", "odds_a", "avgh", "avgd", "avga",
+                "xg_h", "xg_a", "xga_h", "xga_a",
+                "over25_odds", "under25_odds", "ah_line", "ah_home_odds", "ah_away_odds",
+            ])
+
+        # Build synthetic row (no result/in-match stats; MKT features from supplied odds)
+        avgh_val = odds_h
+        avgd_val = odds_d
+        avga_val = odds_a
+        synthetic_row: dict = {
+            "match_id": SYNTHETIC_ID,
+            "date": pd.Timestamp(match_date),
+            "home_team": home_norm,
+            "away_team": away_norm,
+            "fthg": np.nan, "ftag": np.nan,
+            "hs": np.nan, "as": np.nan,
+            "hst": np.nan, "ast": np.nan,
+            "hc": np.nan, "ac": np.nan,
+            "hy": np.nan, "ay": np.nan,
+            "hr": np.nan, "ar": np.nan,
+            "odds_h": odds_h, "odds_d": odds_d, "odds_a": odds_a,
+            "avgh": avgh_val, "avgd": avgd_val, "avga": avga_val,
+            "xg_h": np.nan, "xg_a": np.nan, "xga_h": np.nan, "xga_a": np.nan,
+            "over25_odds": over25_odds, "under25_odds": np.nan,
+            "ah_line": ah_line, "ah_home_odds": ah_home_odds, "ah_away_odds": ah_away_odds,
+        }
+
+        raw_df["date"] = pd.to_datetime(raw_df["date"], errors="coerce")
+        raw_df = raw_df.dropna(subset=["date"])
+        synthetic_df = pd.DataFrame([synthetic_row])
+        combined = pd.concat([raw_df, synthetic_df], ignore_index=True)
+        combined = combined.sort_values(["date", "match_id"]).reset_index(drop=True)
+        combined["home_team"] = combined["home_team"].astype(str).map(standardize_team_name)
+        combined["away_team"] = combined["away_team"].astype(str).map(standardize_team_name)
+
+        # Run full feature computation on combined data
+        for col in ["xg_h", "xg_a", "xga_h", "xga_a"]:
+            if col in combined.columns:
+                combined[col] = pd.to_numeric(combined[col], errors="coerce")
+        if "xg_a" in combined.columns and "xga_h" in combined.columns:
+            combined["xga_h"] = combined["xga_h"].fillna(combined["xg_a"])
+        if "xg_h" in combined.columns and "xga_a" in combined.columns:
+            combined["xga_a"] = combined["xga_a"].fillna(combined["xg_h"])
+        combined["avgh"] = combined["avgh"].fillna(combined["odds_h"])
+        combined["avgd"] = combined["avgd"].fillna(combined["odds_d"])
+        combined["avga"] = combined["avga"].fillna(combined["odds_a"])
+
+        # Re-use internal computation helpers (same as compute_rolling_stats)
+        def implied_probabilities(frame: pd.DataFrame) -> pd.DataFrame:
+            odds = frame[["avgh", "avgd", "avga"]].apply(pd.to_numeric, errors="coerce")
+            inv = 1.0 / odds
+            total = inv.sum(axis=1)
+            probs = inv.div(total, axis=0)
+            return probs.rename(columns={"avgh": "MKT_IMPLIED_HOME", "avgd": "MKT_IMPLIED_DRAW", "avga": "MKT_IMPLIED_AWAY"})
+
+        market_probs = implied_probabilities(combined)
+        margin_removed = remove_margin(combined["avgh"], combined["avgd"], combined["avga"])
+        margin_removed["MKT_H_Prob_Clean"] = margin_removed["MKT_Home_Prob_Real"]
+        margin_removed["MKT_D_Prob_Clean"] = margin_removed["MKT_Draw_Prob_Real"]
+        margin_removed["MKT_A_Prob_Clean"] = margin_removed["MKT_Away_Prob_Real"]
+
+        home_df = combined[["match_id", "date", "home_team", "fthg", "ftag", "hs", "as", "hst", "ast", "hc", "ac", "hy", "ay", "hr", "ar", "xg_h", "xga_h"]].rename(columns={"home_team": "team"})
+        away_df = combined[["match_id", "date", "away_team", "fthg", "ftag", "hs", "as", "hst", "ast", "hc", "ac", "hy", "ay", "hr", "ar", "xg_a", "xga_a"]].rename(columns={"away_team": "team"})
+
+        home_df["shot_accuracy"] = home_df["hst"] / (home_df["hs"] + 0.1)
+        home_df["discipline_score"] = home_df["hy"] + (home_df["hr"] * 3)
+        home_df["save_rate"] = (home_df["ast"] - home_df["ftag"]) / (home_df["ast"] + 0.1)
+        home_df["home_luck"] = home_df["fthg"] - home_df["xg_h"]
+        away_df["shot_accuracy"] = away_df["ast"] / (away_df["as"] + 0.1)
+        away_df["discipline_score"] = away_df["ay"] + (away_df["ar"] * 3)
+        away_df["away_luck"] = away_df["ftag"] - away_df["xg_a"]
+
+        def add_rollings(frame: pd.DataFrame, prefix: str, stat_map: dict) -> pd.DataFrame:
+            frame = frame.sort_values(["team", "date", "match_id"]).reset_index(drop=True)
+            for stat, (group_prefix, label) in stat_map.items():
+                for win in (3, 5):
+                    col_name = f"{group_prefix}_{prefix}_{label}_R{win}"
+                    frame[col_name] = frame.groupby("team")[stat].transform(lambda s, w=win: s.shift(1).rolling(w).mean())
+            return frame
+
+        def add_ema(frame: pd.DataFrame, prefix: str, ema_map: dict, span: int = 5) -> pd.DataFrame:
+            frame = frame.sort_values(["team", "date", "match_id"]).reset_index(drop=True)
+            for stat, (group_prefix, label) in ema_map.items():
+                col_name = f"{group_prefix}_{prefix}_{label}_EMA{span}"
+                frame[col_name] = frame.groupby("team")[stat].transform(lambda s, sp=span: s.shift(1).ewm(span=sp, adjust=False).mean())
+            return frame
+
+        home_map = {
+            "fthg": ("OFF", "FTHG"), "ftag": ("DEF", "FTAG"), "hs": ("OFF", "HS"), "as": ("DEF", "AS"),
+            "hst": ("OFF", "HST"), "ast": ("DEF", "AST"), "hc": ("OFF", "HC"), "ac": ("DEF", "AC"),
+            "hy": ("DIS", "HY"), "ay": ("DIS", "AY"), "hr": ("DIS", "HR"), "ar": ("DIS", "AR"),
+            "xg_h": ("OFF", "XG"), "xga_h": ("DEF", "XGA"), "home_luck": ("OFF", "LUCK"),
+            "shot_accuracy": ("OFF", "SHOT_ACCURACY"), "discipline_score": ("DIS", "DISCIPLINE_SCORE"), "save_rate": ("DEF", "SAVE_RATE"),
+        }
+        home_ema_map = {"fthg": ("OFF", "FTHG"), "ftag": ("DEF", "FTAG"), "hst": ("OFF", "HST")}
+        away_map = {
+            "ftag": ("OFF", "FTAG"), "fthg": ("DEF", "FTHG"), "as": ("OFF", "AS"), "hs": ("DEF", "HS"),
+            "ast": ("OFF", "AST"), "hst": ("DEF", "HST"), "ac": ("OFF", "AC"), "hc": ("DEF", "HC"),
+            "ay": ("DIS", "AY"), "hy": ("DIS", "HY"), "ar": ("DIS", "AR"), "hr": ("DIS", "HR"),
+            "xg_a": ("OFF", "XG"), "xga_a": ("DEF", "XGA"), "away_luck": ("OFF", "LUCK"),
+            "shot_accuracy": ("OFF", "SHOT_ACCURACY"), "discipline_score": ("DIS", "DISCIPLINE_SCORE"),
+        }
+        away_ema_map = {"ftag": ("OFF", "FTAG"), "fthg": ("DEF", "FTHG"), "ast": ("OFF", "AST")}
+
+        home_df = add_rollings(home_df, "HOME", home_map)
+        away_df = add_rollings(away_df, "AWAY", away_map)
+        home_df = add_ema(home_df, "HOME", home_ema_map, span=5)
+        away_df = add_ema(away_df, "AWAY", away_ema_map, span=5)
+        home_df["CTX_HOME_REST_DAYS"] = home_df.groupby("team")["date"].transform(lambda s: (s - s.shift(1)).dt.days)
+        away_df["CTX_AWAY_REST_DAYS"] = away_df.groupby("team")["date"].transform(lambda s: (s - s.shift(1)).dt.days)
+
+        home_features = home_df[[col for col in home_df.columns if col.startswith(("OFF_", "DEF_", "DIS_", "CTX_"))] + ["match_id"]]
+        away_features = away_df[[col for col in away_df.columns if col.startswith(("OFF_", "DEF_", "DIS_", "CTX_"))] + ["match_id"]]
+
+        features = combined[["match_id"]].merge(home_features, on="match_id", how="left")
+        features = features.merge(away_features, on="match_id", how="left")
+        features["CTX_REST_DAYS_DIFF"] = features.get("CTX_HOME_REST_DAYS", pd.Series(dtype=float)) - features.get("CTX_AWAY_REST_DAYS", pd.Series(dtype=float))
+        features = features.join(market_probs.reset_index(drop=True)).join(margin_removed.reset_index(drop=True))
+
+        if "OFF_HOME_SHOT_ACCURACY_R5" in features.columns:
+            features["OFF_Shot_Quality_R5"] = features["OFF_HOME_SHOT_ACCURACY_R5"]
+        if "DEF_HOME_SAVE_RATE_R5" in features.columns:
+            features["DEF_Save_Rate_R5"] = features["DEF_HOME_SAVE_RATE_R5"]
+        if {"OFF_HOME_FTHG_R5", "DEF_AWAY_FTHG_R5"}.issubset(features.columns):
+            features["STRENGTH_Goal_Diff"] = features["OFF_HOME_FTHG_R5"] - features["DEF_AWAY_FTHG_R5"]
+        if {"OFF_HOME_HST_R5", "DEF_AWAY_HST_R5"}.issubset(features.columns):
+            features["STRENGTH_SoT_Diff"] = features["OFF_HOME_HST_R5"] - features["DEF_AWAY_HST_R5"]
+        if {"OFF_HOME_FTHG_R5", "OFF_AWAY_FTAG_R5"}.issubset(features.columns):
+            features["INTERACTION_ATTACK_GOALS_DIFF_R5"] = features["OFF_HOME_FTHG_R5"] - features["OFF_AWAY_FTAG_R5"]
+        if {"DEF_HOME_FTAG_R5", "DEF_AWAY_FTHG_R5"}.issubset(features.columns):
+            features["INTERACTION_DEFENSE_GOALS_DIFF_R5"] = features["DEF_HOME_FTAG_R5"] - features["DEF_AWAY_FTHG_R5"]
+        if {"OFF_HOME_HST_R5", "OFF_AWAY_AST_R5"}.issubset(features.columns):
+            features["INTERACTION_ATTACK_SOT_DIFF_R5"] = features["OFF_HOME_HST_R5"] - features["OFF_AWAY_AST_R5"]
+        if {"OFF_HOME_FTHG_R5", "DEF_AWAY_FTHG_R5"}.issubset(features.columns):
+            features["EFFICIENCY_HOME_ATTACK_VS_AWAY_DEF_R5"] = features["OFF_HOME_FTHG_R5"] / (features["DEF_AWAY_FTHG_R5"] + 0.1)
+        if {"OFF_AWAY_FTAG_R5", "DEF_HOME_FTAG_R5"}.issubset(features.columns):
+            features["EFFICIENCY_AWAY_ATTACK_VS_HOME_DEF_R5"] = features["OFF_AWAY_FTAG_R5"] / (features["DEF_HOME_FTAG_R5"] + 0.1)
+        if {"EFFICIENCY_HOME_ATTACK_VS_AWAY_DEF_R5", "EFFICIENCY_AWAY_ATTACK_VS_HOME_DEF_R5"}.issubset(features.columns):
+            features["EFFICIENCY_ATTACK_MATCHUP_DIFF_R5"] = features["EFFICIENCY_HOME_ATTACK_VS_AWAY_DEF_R5"] - features["EFFICIENCY_AWAY_ATTACK_VS_HOME_DEF_R5"]
+
+        odds_feats = self._compute_odds_features(combined)
+        features = features.merge(odds_feats, on="match_id", how="left")
+        opp_adj = self._compute_opp_adjusted_rolling(combined)
+        features = features.merge(opp_adj, on="match_id", how="left")
+        league_ctx = self._compute_league_standings(combined)
+        features = features.merge(league_ctx, on="match_id", how="left")
+        h2h = self._compute_h2h_rolling(combined)
+        features = features.merge(h2h, on="match_id", how="left")
+        temporal = self._compute_temporal_features(combined)
+        features = features.merge(temporal, on="match_id", how="left")
+        features = self._apply_cold_start_imputation(features)
+
+        # Return the synthetic match row only
+        row = features[features["match_id"] == SYNTHETIC_ID].copy()
+        if row.empty:
+            raise RuntimeError("build_for_match: synthetic row missing after feature computation.")
+        row = row.drop(columns=["match_id"], errors="ignore")
+        return row.reset_index(drop=True)
 
     def generate_feature_report(self) -> dict[str, object]:
         """Generate a lightweight report describing current engineered features."""

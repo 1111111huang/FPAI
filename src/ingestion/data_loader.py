@@ -80,6 +80,25 @@ class CSVLoader:
         else:
             over25_series = pd.Series([None] * len(renamed), index=renamed.index)
 
+        # Under 2.5: modern CSVs use "Avg<2.5"; older seasons use "BbAv<2.5"
+        under25_series = (
+            renamed["Avg<2.5"] if "Avg<2.5" in renamed.columns
+            else renamed.get("BbAv<2.5", pd.Series([None] * len(renamed), index=renamed.index))
+        )
+        # Asian handicap: modern CSVs use "AHh"/"AvgAHH"/"AvgAHA"; older use "BbAHh"/"BbAvAHH"/"BbAvAHA"
+        ah_line_series = (
+            renamed["AHh"] if "AHh" in renamed.columns
+            else renamed.get("BbAHh", pd.Series([None] * len(renamed), index=renamed.index))
+        )
+        ah_home_series = (
+            renamed["AvgAHH"] if "AvgAHH" in renamed.columns
+            else renamed.get("BbAvAHH", pd.Series([None] * len(renamed), index=renamed.index))
+        )
+        ah_away_series = (
+            renamed["AvgAHA"] if "AvgAHA" in renamed.columns
+            else renamed.get("BbAvAHA", pd.Series([None] * len(renamed), index=renamed.index))
+        )
+
         # Some historical CSVs do not ship AvgH/AvgD/AvgA or discipline/shot metrics.
         # Ensure optional columns exist so downstream selection doesn't crash.
         optional_columns = [
@@ -100,6 +119,11 @@ class CSVLoader:
             "xg_a",
             "xga_h",
             "xga_a",
+            "over25_odds",
+            "under25_odds",
+            "ah_line",
+            "ah_home_odds",
+            "ah_away_odds",
         ]
         for col in optional_columns:
             if col not in renamed.columns:
@@ -132,11 +156,21 @@ class CSVLoader:
                 "xg_a",
                 "xga_h",
                 "xga_a",
+                "over25_odds",
+                "under25_odds",
+                "ah_line",
+                "ah_home_odds",
+                "ah_away_odds",
             ]
         ].copy()
         working["home_team"] = working["home_team"].astype(str).map(standardize_team_name)
         working["away_team"] = working["away_team"].astype(str).map(standardize_team_name)
         working["over25_odds_avg"] = over25_series
+        working["over25_odds"] = over25_series
+        working["under25_odds"] = under25_series
+        working["ah_line"] = ah_line_series
+        working["ah_home_odds"] = ah_home_series
+        working["ah_away_odds"] = ah_away_series
 
         # PRD rule: skip rows with missing critical odds inputs.
         before_drop = len(working)
@@ -152,38 +186,7 @@ class CSVLoader:
             value.to_pydatetime() if not pd.isna(value) else None for value in parsed_dates
         ]
 
-        records_to_insert: list[
-            tuple[
-                str,
-                str,
-                int,
-                datetime,
-                str,
-                str,
-                int,
-                int,
-                float,
-                float,
-                float,
-                float | None,
-                float | None,
-                float | None,
-                float | None,
-                float | None,
-                float | None,
-                float | None,
-                float | None,
-                float | None,
-                float | None,
-                float | None,
-                float | None,
-                float | None,
-                float | None,
-                float | None,
-                float | None,
-                float | None,
-            ]
-        ] = []
+        records_to_insert: list[tuple] = []
         skipped_validation = 0
 
         for row in working.to_dict(orient="records"):
@@ -210,6 +213,9 @@ class CSVLoader:
                 away_team=validated.away_team,
             )
 
+            def _f(v: object) -> float | None:
+                return float(v) if pd.notna(v) else None
+
             records_to_insert.append(
                 (
                     match_id,
@@ -223,23 +229,28 @@ class CSVLoader:
                     float(row["odds_h"]),
                     float(row["odds_d"]),
                     float(row["odds_a"]),
-                    float(row["hs"]) if pd.notna(row["hs"]) else None,
-                    float(row["as"]) if pd.notna(row["as"]) else None,
-                    float(row["hst"]) if pd.notna(row["hst"]) else None,
-                    float(row["ast"]) if pd.notna(row["ast"]) else None,
-                    float(row["hc"]) if pd.notna(row["hc"]) else None,
-                    float(row["ac"]) if pd.notna(row["ac"]) else None,
-                    float(row["hy"]) if pd.notna(row["hy"]) else None,
-                    float(row["ay"]) if pd.notna(row["ay"]) else None,
-                    float(row["hr"]) if pd.notna(row["hr"]) else None,
-                    float(row["ar"]) if pd.notna(row["ar"]) else None,
-                    float(row["avgh"]) if pd.notna(row["avgh"]) else None,
-                    float(row["avgd"]) if pd.notna(row["avgd"]) else None,
-                    float(row["avga"]) if pd.notna(row["avga"]) else None,
-                    float(row["xg_h"]) if pd.notna(row["xg_h"]) else None,
-                    float(row["xg_a"]) if pd.notna(row["xg_a"]) else None,
-                    float(row["xga_h"]) if pd.notna(row["xga_h"]) else None,
-                    float(row["xga_a"]) if pd.notna(row["xga_a"]) else None,
+                    _f(row["hs"]),
+                    _f(row["as"]),
+                    _f(row["hst"]),
+                    _f(row["ast"]),
+                    _f(row["hc"]),
+                    _f(row["ac"]),
+                    _f(row["hy"]),
+                    _f(row["ay"]),
+                    _f(row["hr"]),
+                    _f(row["ar"]),
+                    _f(row["avgh"]),
+                    _f(row["avgd"]),
+                    _f(row["avga"]),
+                    _f(row["xg_h"]),
+                    _f(row["xg_a"]),
+                    _f(row["xga_h"]),
+                    _f(row["xga_a"]),
+                    _f(row["over25_odds"]),
+                    _f(row["under25_odds"]),
+                    _f(row["ah_line"]),
+                    _f(row["ah_home_odds"]),
+                    _f(row["ah_away_odds"]),
                 )
             )
 
@@ -261,8 +272,9 @@ class CSVLoader:
                         f"""
                         {insert_clause} INTO raw_matches
                         (match_id, league, tier, date, home_team, away_team, fthg, ftag, odds_h, odds_d, odds_a,
-                         hs, "as", hst, ast, hc, ac, hy, ay, hr, ar, avgh, avgd, avga, xg_h, xg_a, xga_h, xga_a)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                         hs, "as", hst, ast, hc, ac, hy, ay, hr, ar, avgh, avgd, avga, xg_h, xg_a, xga_h, xga_a,
+                         over25_odds, under25_odds, ah_line, ah_home_odds, ah_away_odds)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                         """,
                         records_to_insert,
                     )
@@ -346,7 +358,12 @@ class CSVLoader:
                 xg_h FLOAT,
                 xg_a FLOAT,
                 xga_h FLOAT,
-                xga_a FLOAT
+                xga_a FLOAT,
+                over25_odds FLOAT,
+                under25_odds FLOAT,
+                ah_line FLOAT,
+                ah_home_odds FLOAT,
+                ah_away_odds FLOAT
             )
             """
         )
@@ -371,6 +388,11 @@ class CSVLoader:
             "xg_a",
             "xga_h",
             "xga_a",
+            "over25_odds",
+            "under25_odds",
+            "ah_line",
+            "ah_home_odds",
+            "ah_away_odds",
         ]:
             if col not in columns:
                 if col == "as":

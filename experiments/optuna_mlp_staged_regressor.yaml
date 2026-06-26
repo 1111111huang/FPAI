@@ -1,0 +1,44 @@
+model_type: mlp_regressor
+version: v1
+feature_schema_version: v3
+enable_pruning: true
+
+stages:
+  - name: architecture
+    n_trials: 20
+    sweep_stage: mlp_stage1_arch
+    fixed_params:
+      max_iter: 30
+      learning_rate_init: 0.001
+      alpha: 0.0001
+      batch_size: 64
+      patience: 8
+    optuna_search:
+      depth:
+        type: int
+        low: 2
+        high: 4
+      hidden_size:
+        type: int
+        low: 64
+        high: 384
+      activation: [relu, tanh]
+
+  - name: training
+    n_trials: 20
+    sweep_stage: mlp_stage2_train
+    fixed_params:
+      max_iter: 100
+      patience: 15
+    optuna_search:
+      alpha:
+        type: float
+        low: 0.000001
+        high: 0.01
+        log: true
+      learning_rate_init:
+        type: float
+        low: 0.0001
+        high: 0.01
+        log: true
+      batch_size: [32, 64, 128, 256]

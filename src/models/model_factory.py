@@ -13,6 +13,7 @@ from src.models.base_model import (
     XGBoostRegressorModel,
 )
 from src.models.goal_stacker import GoalStackerModel
+from src.models.mlp_model import MLPModel, MLPRegressorModel
 
 
 class ModelFactory:
@@ -30,6 +31,8 @@ class ModelFactory:
         "xgboost_regressor": XGBoostRegressorModel,
         "goal_stacker": GoalStackerModel,
         "stacker": GoalStackerModel,
+        "mlp": MLPModel,
+        "mlp_regressor": MLPRegressorModel,
     }
 
     @staticmethod

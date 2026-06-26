@@ -27,6 +27,9 @@ FORECAST_PAYLOAD_SCHEMA: dict[str, Any] = {
         "forecast": {"type": "object"},
         "explainability": {"type": "object"},
         "diagnostics": {"type": "object"},
+        # data_quality is present on spot-inference payloads (US#86) but optional for
+        # historical feature-store forecasts so that existing consumers are unaffected.
+        "data_quality": {"type": "object"},
     },
 }
 
@@ -48,3 +51,13 @@ def validate_forecast_payload(payload: Mapping[str, Any]) -> None:
     for key in ["model_version", "target_versions", "feature_completeness", "cold_start_risk", "generated_at"]:
         if key not in diagnostics:
             raise ValueError(f"Forecast diagnostics missing required key: {key}")
+    # Validate data_quality when present (US#86)
+    if "data_quality" in payload:
+        dq = payload["data_quality"]
+        if not isinstance(dq, Mapping):
+            raise ValueError("data_quality must be an object when present.")
+        if "prediction_basis" not in dq:
+            raise ValueError("data_quality must contain 'prediction_basis'.")
+        valid_bases = {"market_odds_only", "team_history_and_market", "partial"}
+        if dq["prediction_basis"] not in valid_bases:
+            raise ValueError(f"data_quality.prediction_basis must be one of {valid_bases}.")

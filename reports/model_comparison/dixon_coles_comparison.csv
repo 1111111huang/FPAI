@@ -1,0 +1,17 @@
+target,metric,dixon_coles
+result_3way,accuracy,0.45080500894454384
+result_3way,log_loss,1.3160171423661862
+btts,accuracy,0.5098389982110912
+btts,log_loss,0.6940702065851135
+home_goals,mae,0.9997772880939172
+home_goals,rmse,1.2322305310124304
+away_goals,mae,0.9284632038578369
+away_goals,rmse,1.1823825991867216
+total_goals,mae,1.2964279583537068
+total_goals,rmse,1.6275113138848876
+home_corners,mae,2.3557246136537393
+home_corners,rmse,2.891683218746405
+away_corners,mae,2.216471852897958
+away_corners,rmse,2.8408304217641893
+total_corners,mae,2.929860167085378
+total_corners,rmse,3.6410388628158206

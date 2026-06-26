@@ -19,7 +19,7 @@ class MatchSchema(BaseModel):
     away_team: str = Field(alias="AwayTeam", min_length=1)
     fthg: int = Field(alias="FTHG", ge=0)
     ftag: int = Field(alias="FTAG", ge=0)
-    over25_odds_avg: float = Field(alias="BbAv>2.5", gt=1.0)
+    over25_odds_avg: float | None = Field(default=None, alias="BbAv>2.5")
     tier: int = Field(alias="LeagueCode", ge=1, le=4)
 
     @model_validator(mode="before")

@@ -1487,7 +1487,7 @@ git commit -m "feat(agent): add flat-stake and Kelly bankroll simulation (A13, A
 
 **Files:**
 - Create: `src/agent/evaluation.py`
-- Test: `tests/test_evaluation.py`
+- Test: `tests/test_agent_evaluation.py`
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -1585,7 +1585,7 @@ def test_save_report_writes_json_file(tmp_path):
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `python -m pytest tests/test_evaluation.py -v`
+Run: `python -m pytest tests/test_agent_evaluation.py -v`
 Expected: FAIL — `ModuleNotFoundError: No module named 'src.agent.evaluation'`
 
 - [ ] **Step 3: Implement evaluation.py**
@@ -1685,13 +1685,13 @@ def print_report(report: dict[str, Any]) -> None:
 
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run: `python -m pytest tests/test_evaluation.py -v`
+Run: `python -m pytest tests/test_agent_evaluation.py -v`
 Expected: 7 passed
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/agent/evaluation.py tests/test_evaluation.py
+git add src/agent/evaluation.py tests/test_agent_evaluation.py
 git commit -m "feat(agent): add backtest evaluation report computation (A13)"
 ```
 
@@ -2026,7 +2026,7 @@ Run:
 ```bash
 python -m pytest tests/test_agent_config.py tests/test_agent_schema.py tests/test_agent_graph.py \
   tests/test_snapshot_store.py tests/test_agent_tools_snapshot.py tests/test_backtest.py \
-  tests/test_staking.py tests/test_evaluation.py tests/test_comparison.py -v
+  tests/test_staking.py tests/test_agent_evaluation.py tests/test_comparison.py -v
 ```
 Expected: all pass, zero failures. If any test fails, return to the relevant Task above and fix before proceeding — do not edit `agent_user_stories.md` until this is green.
 

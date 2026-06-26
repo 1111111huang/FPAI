@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 import sys
 
+import numpy as np
 import pandas as pd
 import pytest
 import yaml
@@ -31,20 +32,30 @@ def _create_raw_matches_table(conn) -> None:
             odds_a FLOAT,
             avgh FLOAT,
             avgd FLOAT,
-            avga FLOAT
+            avga FLOAT,
+            over25_odds FLOAT,
+            under25_odds FLOAT,
+            ah_line FLOAT,
+            ah_home_odds FLOAT,
+            ah_away_odds FLOAT
         )
         """
     )
 
 
+_FULL_COLS = 19  # match_id + league + tier + date + home + away + fthg + ftag + odds(3) + avg(3) + new(5)
+
+
 def _insert_raw_matches(conn, rows: list[tuple[object, ...]]) -> None:
+    padded = [r + (None,) * (_FULL_COLS - len(r)) if len(r) < _FULL_COLS else r for r in rows]
     conn.executemany(
         """
         INSERT INTO raw_matches
-        (match_id, league, tier, date, home_team, away_team, fthg, ftag, odds_h, odds_d, odds_a, avgh, avgd, avga)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        (match_id, league, tier, date, home_team, away_team, fthg, ftag, odds_h, odds_d, odds_a, avgh, avgd, avga,
+         over25_odds, under25_odds, ah_line, ah_home_odds, ah_away_odds)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
-        rows,
+        padded,
     )
 
 
@@ -61,8 +72,10 @@ def test_compute_rolling_stats_and_save_features(tmp_path: Path) -> None:
         _insert_raw_matches(
             conn,
             [
-                ("m1", "E0", 1, "2025-08-15 20:00:00", "Liverpool", "Bournemouth", 4, 2, 1.3, 6.0, 8.5, 1.3, 6.0, 8.5),
-                ("m2", "E0", 1, "2025-08-16 12:30:00", "Aston Villa", "Liverpool", 0, 1, 2.25, 3.5, 2.9, 2.25, 3.5, 2.9),
+                # (match_id, league, tier, date, home, away, fthg, ftag, odds_h, odds_d, odds_a, avgh, avgd, avga,
+                #  over25_odds, under25_odds, ah_line, ah_home_odds, ah_away_odds)
+                ("m1", "E0", 1, "2025-08-15 20:00:00", "Liverpool", "Bournemouth", 4, 2, 1.3, 6.0, 8.5, 1.3, 6.0, 8.5, 1.44, 2.75, -1.5, 1.85, 1.97),
+                ("m2", "E0", 1, "2025-08-16 12:30:00", "Aston Villa", "Liverpool", 0, 1, 2.25, 3.5, 2.9, 2.25, 3.5, 2.9, 1.80, 2.00, 0.0, 1.92, 1.90),
             ],
         )
 
@@ -88,6 +101,17 @@ def test_compute_rolling_stats_and_save_features(tmp_path: Path) -> None:
         "MKT_Home_Prob_Real",
         "MKT_Draw_Prob_Real",
         "MKT_Away_Prob_Real",
+        "MKT_IMPLIED_OVER25",
+        # MKT_IMPLIED_UNDER25 removed (US#77 Tier 1 — r=0.998 with MKT_IMPLIED_OVER25)
+        "MKT_AH_LINE",
+        "MKT_AH_HOME_ODDS",
+        "MKT_AH_AWAY_ODDS",
+        # US#76: Poisson-decomposed market features
+        "MKT_LAMBDA_TOTAL",
+        "MKT_LAMBDA_HOME",
+        "MKT_LAMBDA_AWAY",
+        "MKT_POISSON_BTTS_PROB",
+        "MKT_LAMBDA_AH_DIFF",
         "INTERACTION_ATTACK_GOALS_DIFF_R5",
         "INTERACTION_DEFENSE_GOALS_DIFF_R5",
         "INTERACTION_ATTACK_SOT_DIFF_R5",
@@ -117,12 +141,19 @@ def test_compute_rolling_stats_and_save_features(tmp_path: Path) -> None:
     assert pd.isna(match_1["OFF_HOME_FTHG_R5"])
     assert match_1["MKT_IMPLIED_HOME"] == pytest.approx((1 / 1.3) / raw_market_total)
     assert match_1["MKT_Home_Prob_Real"] == pytest.approx((1 / 1.3) / raw_market_total)
+    assert match_1["MKT_IMPLIED_OVER25"] == pytest.approx(1 / 1.44)
+    # MKT_IMPLIED_UNDER25 removed (US#77 Tier 1)
+    assert match_1["MKT_AH_LINE"] == pytest.approx(-1.5)
+    assert match_1["MKT_AH_HOME_ODDS"] == pytest.approx(1.85)
+    assert match_1["MKT_AH_AWAY_ODDS"] == pytest.approx(1.97)
 
     match_2 = features.loc[features["match_id"] == "m2"].iloc[0]
     raw_market_total = (1 / 2.25) + (1 / 3.5) + (1 / 2.9)
     assert match_2["MKT_IMPLIED_HOME"] == pytest.approx((1 / 2.25) / raw_market_total)
     assert match_2["MKT_IMPLIED_DRAW"] == pytest.approx((1 / 3.5) / raw_market_total)
     assert match_2["MKT_IMPLIED_AWAY"] == pytest.approx((1 / 2.9) / raw_market_total)
+    assert match_2["MKT_IMPLIED_OVER25"] == pytest.approx(1 / 1.80)
+    assert match_2["MKT_AH_LINE"] == pytest.approx(0.0)
 
     feature_factory.save_features(features)
 
@@ -352,6 +383,61 @@ def test_opp_adjusted_features_no_leakage(tmp_path: Path) -> None:
     assert match_6["OPP_ADJ_HOME_GOALS_SCORED_R3"] == pytest.approx(4.0)
     # Goals conceded R5: (0+1+0+1+0)/5
     assert match_6["OPP_ADJ_HOME_GOALS_CONCEDED_R5"] == pytest.approx(0.4)
+
+
+def test_poisson_decomposed_market_features(tmp_path: Path) -> None:
+    """US#76: MKT_LAMBDA_* and MKT_POISSON_BTTS_PROB are correctly derived from O/U and AH markets."""
+    db_path = tmp_path / "test_fpai.db"
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        yaml.safe_dump({"paths": {"database_path": str(db_path)}}),
+        encoding="utf-8",
+    )
+
+    with duckdb.connect(str(db_path)) as conn:
+        _create_raw_matches_table(conn)
+        _insert_raw_matches(
+            conn,
+            [
+                # over25_odds=1.5 → p_over25=2/3; ah_line=-0.5 (home favourite)
+                ("pm1", "E0", 1, "2025-08-15 20:00:00", "Team A", "Team B", 2, 1,
+                 1.8, 3.4, 4.2, 1.8, 3.4, 4.2, 1.5, 2.5, -0.5, 1.9, 1.9),
+                # over25_odds=None (missing) → all lambda features NaN
+                ("pm2", "E0", 1, "2025-08-22 20:00:00", "Team A", "Team C", 1, 0,
+                 1.8, 3.4, 4.2, 1.8, 3.4, 4.2, None, None, 0.0, 1.9, 1.9),
+            ],
+        )
+
+    feature_factory = FeatureFactory(config_path=str(config_path))
+    features = feature_factory.compute_rolling_stats(window=5)
+
+    # --- pm1: verify lambda inversion and decomposition ---
+    m = features.loc[features["match_id"] == "pm1"].iloc[0]
+    lam = m["MKT_LAMBDA_TOTAL"]
+    assert not pd.isna(lam), "MKT_LAMBDA_TOTAL must not be NaN when over25_odds is present"
+
+    # P(Poisson(λ) ≥ 3) must equal the implied over25 probability (1/1.5)
+    p_check = 1.0 - np.exp(-lam) * (1.0 + lam + lam**2 / 2.0)
+    assert p_check == pytest.approx(1.0 / 1.5, abs=1e-4)
+
+    # Decomposition: home = (λ + |AH|) / 2, away = (λ − |AH|) / 2
+    ah_abs = 0.5
+    assert m["MKT_LAMBDA_HOME"] == pytest.approx((lam + ah_abs) / 2.0, abs=1e-4)
+    assert m["MKT_LAMBDA_AWAY"] == pytest.approx(max((lam - ah_abs) / 2.0, 0.0), abs=1e-4)
+    assert m["MKT_LAMBDA_HOME"] + m["MKT_LAMBDA_AWAY"] == pytest.approx(lam, abs=1e-3)
+
+    # BTTS = (1 − e^−λ_home) × (1 − e^−λ_away)
+    expected_btts = (1.0 - np.exp(-m["MKT_LAMBDA_HOME"])) * (1.0 - np.exp(-m["MKT_LAMBDA_AWAY"]))
+    assert m["MKT_POISSON_BTTS_PROB"] == pytest.approx(expected_btts, abs=1e-4)
+
+    # AH_DIFF = λ_total − |AH|
+    assert m["MKT_LAMBDA_AH_DIFF"] == pytest.approx(lam - ah_abs, abs=1e-4)
+
+    # --- pm2: missing over25_odds → all Poisson features are NaN ---
+    m2 = features.loc[features["match_id"] == "pm2"].iloc[0]
+    for col in ["MKT_LAMBDA_TOTAL", "MKT_LAMBDA_HOME", "MKT_LAMBDA_AWAY",
+                "MKT_POISSON_BTTS_PROB", "MKT_LAMBDA_AH_DIFF"]:
+        assert pd.isna(m2[col]), f"{col} should be NaN when over25_odds is missing"
 
 
 def test_opp_adjusted_features_combine_home_and_away_venues(tmp_path: Path) -> None:

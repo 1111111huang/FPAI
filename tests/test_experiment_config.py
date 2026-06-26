@@ -6,14 +6,13 @@ from types import SimpleNamespace
 
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
-from main import _forecast_experiment_name, _iter_grid_params
 from src.models import LRModel, ModelFactory, XGBoostModel, XGBoostRegressorModel
 from src.utils.sweep_runner import forecast_experiment_name, iter_grid_params
 from src.utils.model_comparison import ModelComparison
 
 
 def test_iter_grid_params_expands_in_stable_order() -> None:
-    params = _iter_grid_params({"C": [0.1, 1.0], "class_weight": [None, "balanced"]})
+    params = iter_grid_params({"C": [0.1, 1.0], "class_weight": [None, "balanced"]})
 
     assert params == [
         {"C": 0.1, "class_weight": None},
@@ -21,14 +20,9 @@ def test_iter_grid_params_expands_in_stable_order() -> None:
         {"C": 1.0, "class_weight": None},
         {"C": 1.0, "class_weight": "balanced"},
     ]
-    assert iter_grid_params({"C": [0.1, 1.0], "class_weight": [None, "balanced"]}) == params
 
 
 def test_forecast_experiment_name_uses_target_model_stage_version() -> None:
-    assert (
-        _forecast_experiment_name("btts", "lr", "broad", "v1")
-        == "FPAI_btts_lr_broad_v1"
-    )
     assert forecast_experiment_name("btts", "lr", "broad", "v1") == "FPAI_btts_lr_broad_v1"
 
 

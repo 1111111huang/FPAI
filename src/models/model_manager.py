@@ -23,7 +23,6 @@ from src.logic.target_resolver import TargetResolver
 from src.logic.target_registry import TargetDefinition, get_target_definition
 from src.models.base_model import FPAIBaseModel, XGBoostModel, XGBoostRegressorModel
 from src.models.goal_stacker import GoalStackerModel
-from src.strategy.backtester import Backtester
 from src.utils.config_loader import AppSettings, load_settings
 from src.utils.db_manager import DuckDBManager
 from src.utils.logger import get_logger
@@ -290,7 +289,7 @@ class ModelManager:
         feature_select = ",\n                    ".join(f"f.{name}" for name in feature_columns)
         label_columns = list(dict.fromkeys(self.target_definition.label_columns))
         label_select = ",\n                    ".join(f"r.{name}" for name in label_columns)
-        with self.db_manager.connection() as conn:
+        with self.db_manager.connection(read_only=True) as conn:
             df = conn.execute(
                 f"""
                 SELECT
@@ -309,9 +308,11 @@ class ModelManager:
             raise ValueError("No joined training data found in raw_matches and feature_store.")
 
         df["target"] = TargetResolver.get_label(df, self.target_config)
-        required_non_null = ["target", *feature_columns]
-        if self.target_definition.name == "home_win":
-            required_non_null.append("odds_h")
+        # XGBoost handles NaN features natively; only require a non-null target.
+        # Non-XGBoost models require all feature columns to be present.
+        required_non_null = ["target"]
+        if not isinstance(self.model, (XGBoostModel, XGBoostRegressorModel)):
+            required_non_null.extend(feature_columns)
         df = df.dropna(subset=required_non_null).reset_index(drop=True)
 
         if df.empty:
@@ -516,26 +517,6 @@ class ModelManager:
                     mlflow.log_metric(metric_name, float(value))
                     mlflow.log_metric(f"{target_name}_{metric_name}", float(value))
                     LOGGER.info("%s %s: %.4f", target_name, metric_name, value)
-
-                if self.target_definition.name == "home_win":
-                    positive_proba = self._positive_probability(np.asarray(prediction_output))
-                    predictions_df = pd.DataFrame(
-                        {
-                            "match_id": test_meta["match_id"].values,
-                            "predicted_home_win_prob": positive_proba,
-                            "odds_h": test_meta["odds_h"].astype(float).values,
-                        }
-                    )
-                    backtester = Backtester(
-                        initial_bankroll=self.config.settings.initial_bankroll,
-                        bet_size=10.0,
-                        config_path=str(self.config_path),
-                    )
-                    backtester.run_simulation(predictions_df, ev_threshold=0.05)
-                    backtest_metrics = backtester.get_metrics()
-                    mlflow.log_metric("roi", float(backtest_metrics.total_roi))
-                    mlflow.log_metric("win_rate", float(backtest_metrics.win_rate))
-                    mlflow.log_metric("max_drawdown", float(backtest_metrics.max_drawdown))
 
                 date_tag = datetime.now().strftime("%Y%m%d")
                 model_prefix = self.model.__class__.__name__.lower().replace("model", "")

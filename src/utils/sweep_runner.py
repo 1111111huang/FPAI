@@ -19,6 +19,8 @@ from src.logic.target_registry import get_target_definition
 from src.models import ModelFactory, ModelManager, XGBoostModel, XGBoostRegressorModel
 from src.utils.logger import get_logger
 
+_METRIC_KEYS = {"log_loss", "accuracy", "mae", "rmse", "precision"}
+
 LOGGER = get_logger(__name__)
 
 
@@ -39,6 +41,17 @@ def mlflow_flavor_for_model_type(model_type: str) -> str:
     if normalized in {"xgb", "xgboost", "xgb_regressor", "xgboost_regressor"}:
         return "xgboost"
     return "sklearn"
+
+
+def _try_log_model(model: Any, model_type: str) -> None:
+    """Log model artifact to MLflow, silently skipping if not supported."""
+    inner = getattr(model, "model", None)
+    if inner is None:
+        return
+    try:
+        log_model_compat(inner, mlflow_flavor_for_model_type(model_type), name="model")
+    except Exception as exc:
+        LOGGER.debug("Skipping MLflow model artifact logging: %s", exc)
 
 
 def log_model_compat(model: Any, flavor: str, name: str = "model") -> None:
@@ -270,6 +283,7 @@ class OptunaRunner:
             raise ValueError("Experiment config must contain 'optuna_search' or 'grid_search'.")
         fixed_params = config.get("fixed_params", {}) or {}
         n_trials = self.n_trials_override or int(config.get("n_trials", 50))
+        enable_pruning = bool(config.get("enable_pruning", False))
 
         stage = str(config.get("sweep_stage", "optuna")).strip().lower()
         version = str(config.get("version", "v1")).strip().lower()
@@ -280,8 +294,8 @@ class OptunaRunner:
         direction = config.get("direction") or ("minimize" if primary_metric in {"log_loss", "mae", "rmse"} else "maximize")
 
         LOGGER.info(
-            "Optuna sweep | experiment=%s | target=%s | model=%s | trials=%d | metric=%s | direction=%s",
-            resolved_experiment_name, self.definition.name, model_type, n_trials, primary_metric, direction,
+            "Optuna sweep | experiment=%s | target=%s | model=%s | trials=%d | metric=%s | direction=%s | pruning=%s",
+            resolved_experiment_name, self.definition.name, model_type, n_trials, primary_metric, direction, enable_pruning,
         )
 
         results: list[dict[str, object]] = []
@@ -315,6 +329,9 @@ class OptunaRunner:
                     mlflow.set_tags({str(k): str(v) for k, v in extra_tags.items()})
 
                 model = ModelFactory.get_model(model_type, merged_params)
+                # Inject Optuna trial for ASHA pruning if model supports it
+                if hasattr(model, "set_optuna_trial"):
+                    model.set_optuna_trial(trial)
                 manager = ModelManager(
                     model=model,
                     league_tier=str(config.get("league_tier", "all")),
@@ -324,18 +341,27 @@ class OptunaRunner:
                 )
                 X_train, X_val, X_test, y_train, y_val, y_test, _ = manager.prepare_training_data()
                 eval_set = [(X_val, y_val)] if isinstance(model, (XGBoostModel, XGBoostRegressorModel)) else None
+                # MLP models always use val set for early stopping
+                if hasattr(model, "set_optuna_trial") and eval_set is None:
+                    eval_set = [(X_val, y_val)]
                 model.train(X_train, y_train, eval_set=eval_set)
                 manager._log_feature_importance(list(X_train.columns), model)
                 metrics, _ = manager._evaluate_target(X_test, y_test, X_train, y_train, X_val, y_val)
                 mlflow.log_metrics({k: float(v) for k, v in metrics.items()})
                 mlflow.set_tag("training_cutoff", getattr(manager, "training_cutoff", ""))
-                log_model_compat(model.model, mlflow_flavor_for_model_type(model_type), name="model")
+                _try_log_model(model, model_type)
                 results.append({**params, **metrics})
                 return float(metrics.get(primary_metric, float("nan")))
 
+        pruner = (
+            optuna.pruners.SuccessiveHalvingPruner(min_resource=5, reduction_factor=3)
+            if enable_pruning
+            else optuna.pruners.NopPruner()
+        )
         study = optuna.create_study(
             direction=direction,
             sampler=optuna.samplers.TPESampler(seed=42),
+            pruner=pruner,
         )
         study.optimize(objective, n_trials=n_trials, show_progress_bar=False)
 
@@ -344,3 +370,117 @@ class OptunaRunner:
             summary_df = pd.DataFrame(results).sort_values(primary_metric, ascending=ascending).head(5)
             LOGGER.info("Top 5 Optuna trials by %s:\n%s", primary_metric, summary_df.to_string(index=False))
         return results
+
+
+class _DictConfigOptunaRunner(OptunaRunner):
+    """Internal subclass that accepts a pre-built config dict instead of a file path."""
+
+    def __init__(self, target_name: str, stage_config: dict[str, Any], experiment_name: str | None = None) -> None:
+        self.definition = get_target_definition(target_name)
+        self._stage_config = stage_config
+        self.experiment_name = experiment_name
+        self.n_trials_override = None
+        self.sweep_stage = None
+        self.config_path = Path("__in_memory__")
+
+    def _load_config(self) -> dict[str, Any]:
+        return self._stage_config
+
+
+class StagedOptunaRunner:
+    """Two-stage Optuna search: architecture first, training hyperparams second.
+
+    Config YAML format (see experiments/optuna_mlp_staged.yaml):
+      model_type: mlp | mlp_regressor | ...
+      stages:
+        - name: architecture
+          n_trials: 20
+          sweep_stage: mlp_stage1_arch
+          fixed_params: {max_iter: 30, ...}
+          optuna_search: {depth: ..., hidden_size: ..., activation: ...}
+        - name: training
+          n_trials: 20
+          sweep_stage: mlp_stage2_train
+          fixed_params: {max_iter: 100}
+          optuna_search: {alpha: ..., learning_rate_init: ..., batch_size: ...}
+
+    Backward compatibility: if the YAML has no 'stages' key, the caller should
+    dispatch to OptunaRunner instead (main.py handles this detection).
+    """
+
+    def __init__(
+        self,
+        target_name: str,
+        config_path: str | Path,
+        experiment_name: str | None = None,
+    ) -> None:
+        self.definition = get_target_definition(target_name)
+        self.config_path = Path(config_path)
+        self.experiment_name = experiment_name
+
+    def run(self) -> list[dict[str, object]]:
+        """Run all stages in sequence, locking best params between stages."""
+        with self.config_path.open("r", encoding="utf-8") as fh:
+            top_config = yaml.safe_load(fh) or {}
+
+        stages = top_config.get("stages", [])
+        if not stages:
+            raise ValueError("StagedOptunaRunner requires a 'stages' list in the config YAML.")
+
+        model_type = str(top_config.get("model_type", "mlp")).strip().lower()
+        primary_metric = self.definition.primary_metric
+        ascending = primary_metric in {"log_loss", "mae", "rmse"}
+
+        locked_params: dict[str, Any] = {}
+        all_results: list[dict[str, object]] = []
+
+        for stage_idx, stage in enumerate(stages):
+            stage_name = stage.get("name", f"stage{stage_idx}")
+            n_trials = int(stage.get("n_trials", 20))
+            sweep_stage_tag = str(stage.get("sweep_stage", f"stage{stage_idx}"))
+            search_space = dict(stage.get("optuna_search", {}))
+            stage_fixed = dict(stage.get("fixed_params", {}))
+
+            # Params locked from all previous stages take precedence over stage fixed_params
+            merged_fixed = {**stage_fixed, **locked_params}
+
+            experiment_name = (
+                self.experiment_name
+                or f"FPAI_{self.definition.name}_{model_type}_{sweep_stage_tag}_v1"
+            )
+
+            stage_config: dict[str, Any] = {
+                **{k: v for k, v in top_config.items() if k != "stages"},
+                "optuna_search": search_space,
+                "fixed_params": merged_fixed,
+                "n_trials": n_trials,
+                "sweep_stage": sweep_stage_tag,
+                "enable_pruning": top_config.get("enable_pruning", True),
+            }
+
+            LOGGER.info(
+                "Staged sweep: stage %d/%d '%s' | target=%s | trials=%d | locked=%s",
+                stage_idx + 1, len(stages), stage_name,
+                self.definition.name, n_trials, list(locked_params.keys()),
+            )
+
+            runner = _DictConfigOptunaRunner(
+                target_name=self.definition.name,
+                stage_config=stage_config,
+                experiment_name=experiment_name,
+            )
+            stage_results = runner.run()
+            all_results.extend(stage_results)
+
+            if stage_results:
+                # Sort by primary metric, pick best; extract search param values to lock
+                valid = [r for r in stage_results if not pd.isna(r.get(primary_metric, float("nan")))]
+                if valid:
+                    best = sorted(valid, key=lambda r: float(r[primary_metric]), reverse=not ascending)[0]
+                    # Lock only the params that were searched in this stage
+                    for key in search_space:
+                        if key in best:
+                            locked_params[key] = best[key]
+                    LOGGER.info("Stage %d best %s=%.4f | locked: %s", stage_idx + 1, primary_metric, float(best[primary_metric]), locked_params)
+
+        return all_results

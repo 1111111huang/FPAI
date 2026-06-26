@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python -m pytest tests/test_agent_config.py tests/test_agent_schema.py tests/test_agent_graph.py -q)",
+      "Bash(git commit -m ' *)"
+    ]
+  }
+}

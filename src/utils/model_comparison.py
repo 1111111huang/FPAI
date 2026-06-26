@@ -23,8 +23,8 @@ class ModelComparison:
         self.experiment_name = experiment_name
         self.client = mlflow.tracking.MlflowClient()
 
-    def get_runs_by_target(self, target_name: str) -> list[Run]:
-        """Fetch all MLflow runs for a specific target."""
+    def get_runs_by_target(self, target_name: str, context: str | None = None) -> list[Run]:
+        """Fetch all MLflow runs for a specific target, optionally filtered by context tag."""
         if self.experiment_name:
             experiment = self.client.get_experiment_by_name(self.experiment_name)
             if experiment is None:
@@ -36,9 +36,12 @@ class ModelComparison:
             if not experiment_ids:
                 return []
 
+        filter_parts = [f"tags.target = '{target_name}'"]
+        if context:
+            filter_parts.append(f"tags.context = '{context}'")
         runs = self.client.search_runs(
             experiment_ids=experiment_ids,
-            filter_string=f"tags.target = '{target_name}'"
+            filter_string=" AND ".join(filter_parts),
         )
         return runs
 
@@ -80,9 +83,9 @@ class ModelComparison:
 
         return result
 
-    def compare_models_by_target(self, target_name: str) -> pd.DataFrame:
+    def compare_models_by_target(self, target_name: str, context: str | None = None) -> pd.DataFrame:
         """Generate a comparison DataFrame for all models trained on a target."""
-        runs = self.get_runs_by_target(target_name)
+        runs = self.get_runs_by_target(target_name, context=context)
         
         if not runs:
             LOGGER.warning(f"No runs found for target: {target_name}")
@@ -103,10 +106,11 @@ class ModelComparison:
     def identify_best_model(
         self,
         target_name: str,
-        metric_name: str | None = None
+        metric_name: str | None = None,
+        context: str | None = None,
     ) -> dict[str, Any] | None:
         """Identify the best-performing model for a target based on a specific metric."""
-        comparison_df = self.compare_models_by_target(target_name)
+        comparison_df = self.compare_models_by_target(target_name, context=context)
 
         if metric_name is None:
             metric_name = "test_log_loss" if "test_log_loss" in comparison_df.columns else "test_mae"
@@ -127,10 +131,11 @@ class ModelComparison:
         self,
         target_name: str,
         output_path: str | Path,
-        format: str = "csv"
+        format: str = "csv",
+        context: str | None = None,
     ) -> Path:
         """Export comparison report to CSV, JSON, or HTML."""
-        comparison_df = self.compare_models_by_target(target_name)
+        comparison_df = self.compare_models_by_target(target_name, context=context)
         
         if comparison_df.empty:
             LOGGER.warning(f"No data to export for target: {target_name}")

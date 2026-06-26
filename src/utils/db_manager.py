@@ -21,9 +21,9 @@ class DuckDBManager:
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
 
     @contextmanager
-    def connection(self) -> Generator[duckdb.DuckDBPyConnection, None, None]:
+    def connection(self, read_only: bool = False) -> Generator[duckdb.DuckDBPyConnection, None, None]:
         """Yield a DuckDB connection and guarantee clean close after use."""
-        conn = duckdb.connect(str(self.db_path))
+        conn = duckdb.connect(str(self.db_path), read_only=read_only)
         try:
             yield conn
         finally:
