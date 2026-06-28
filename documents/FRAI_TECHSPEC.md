@@ -1197,4 +1197,73 @@ All user stories completed through Phase 13. Active and blocked stories are trac
 | total_corners | MAE | 2.9299 | **2.7342** | — | −0.1956 |
 | total_corners | RMSE | 3.6410 | **3.3943** | — | −0.2467 |
 
+## 27. Phase 14: Player-Level Data & Competition Tiers (Planned — US#87–99)
+
+**Status: Phase 14a (tier reorg) implemented — see 27.2 for the design and `config/competitions.yaml` / `src/logic/competition_registry.py` for the implementation. Phase 14b and 14c remain planned.** Story breakdown lives in `documents/user_stories.md` Phase 14.
+
+### 27.1 Motivation
+Current models reason at team/market level only (rolling team stats, market odds). Teams are made of players, and player-level signal (squad form, not just team form) is expected to carry additional predictive information once integrated as a new feature layer — without disturbing the existing team-level pipeline.
+
+### 27.2 Competition Tiers
+Two tiers, declared per competition via a new registry rather than hardcoded:
+
+- `general_purpose`: market-odds-only features (today's 13-feature `MKT_*` subset, see Section 25.6). Works for any competition regardless of data richness.
+- `competition_specific`: full team-form feature set (today's 114 features), extendable with player-level features where a source has been integrated.
+
+**Invariant**: a `competition_specific` feature list must always be a superset of the `general_purpose` feature list for the same target, enforced by a validation check at config-load/training time. If a future tier needs a model architecture where a literal feature superset doesn't apply, the design reserves a seam for the `competition_specific` model to instead consume the `general_purpose` model's own prediction as an input feature (stacking) — not implemented in this phase, but the registry and model-manager interfaces should not preclude it.
+
+**New config**: `config/competitions.yaml`, keyed by `competition_id`, mapping to:
+- `tier`: `general_purpose` | `competition_specific`
+- `league_code`: existing football-data.co.uk code(s) this competition corresponds to (e.g. `E0`)
+- `enabled_feature_groups`: which feature families apply (e.g. `["OFF", "DEF", "DIS", "CTX", "MKT", "STRENGTH", "INTERACTION", "EFFICIENCY", "SQUAD"]`)
+- `player_data_sources`: list of ingestion sources feeding this competition's player features (empty until Phase 14b/c ships)
+
+**Relationship to existing `context`/`match_type`**: the existing `--context league|international` flag (Section 25.6) and `match_type` field (Section 26.3) are kept as-is — no breaking rename. `international` becomes one specific caller of the `general_purpose` tier (ad-hoc matches with no resolvable `competition_id`); named competitions resolve their tier through the new registry instead.
+
+### 27.3 Player Data Sourcing & Ingestion (Phase 14b)
+**Source**: FotMob's internal JSON API (`fotmob.com/api/data/matches?date=YYYYMMDD` for match discovery by date/league, `fotmob.com/api/data/matchDetails?matchId=...` for per-player stats). Verified directly (2026-06-27): plain HTTP JSON, no anti-bot challenge, no auth required. `content.playerStats` gives true per-match granularity with FotMob's own match rating, xG, xA, xGOT, shots, minutes, and a full attack/defense/duels sub-stat breakdown, plus two independent player-ID systems (FotMob's own numeric `id` and Opta's `optaId`).
+
+This supersedes the original plan to use FBref. Verification found FBref now serves a Cloudflare JS challenge to non-browser requests (HTTP 403 "Just a moment..." even with a realistic User-Agent) — scraping it would require a headless browser (Playwright/Selenium), a much larger dependency than a plain HTTP fetcher. Sofascore's API was also tested and returns 403 Forbidden. Extending Understat (which already has a working integration in this repo) was considered, but its `getLeagueData` endpoint's `players` array is season-cumulative only, not per-match, which would require approximating rolling form via periodic-snapshot differencing rather than true match-level windows. FotMob has neither limitation.
+
+**Granularity**: roster-level rolling aggregates only (squad form), not confirmed-starting-XI features. This preserves the current pre-match forecast lead time and avoids a new dependency on lineup-confirmation timing (~1hr pre-kickoff).
+
+**Ingestion restructuring** — `src/ingestion/` moves from flat per-source files to per-source subpackages:
+
+```text
+src/ingestion/
+├── common/
+│   ├── team_mapping.py     # TeamNameMapper, moved out of understat.py (source-agnostic)
+│   └── league_tiers.py     # LEAGUE_TIER_MAP, moved out of schema.py (source-agnostic)
+├── football_data/
+│   ├── scraper.py          # FootballDataScraper (moved, unchanged)
+│   ├── loader.py           # CSVLoader, renamed from data_loader.py
+│   └── match_schema.py     # MatchSchema (moved)
+├── understat/
+│   ├── fetcher.py          # renamed from understat_fetcher.py
+│   └── merge.py            # renamed from understat.py, minus TeamNameMapper
+└── fotmob/                 # new
+    ├── fetcher.py          # FotMob match discovery + matchDetails fetcher
+    └── merge.py            # player identity resolution + upsert
+```
+
+`data/raw/` is namespaced to match (`football_data/`, `fotmob/`). Only 3 call sites import `src.ingestion` today (`main.py` ×3 plus 2 internal cross-imports), so the rename's blast radius is small.
+
+**Migration note**: `processed_files` tracks ingested CSVs by `file_path` (primary key). Moving the existing `E0_*.csv` files under `football_data/` invalidates that tracking, so the next ingest run re-scans all files as "new." This is harmless — `raw_matches` inserts are keyed by `match_id`, so re-ingestion is idempotent — but it is a one-time full re-scan instead of an incremental one.
+
+**DB schema additions** — kept source-agnostic and blended by grain, consistent with the existing `raw_matches` precedent (where Understat's `xg_h`/`xg_a` were added to the same table via `ALTER TABLE` rather than a new table per source):
+
+- `raw_player_match_stats`: per-player-per-match grain. Extensible to future player-data sources by adding columns the same way `raw_matches` absorbed Understat's xG columns.
+- `player_dim`: stable player identity, keyed by FotMob's native player `id` (with Opta's `optaId` carried as a secondary column) rather than fuzzy name matching — the player namespace is far more collision-prone than the ~20–100 team names `TeamNameMapper` already handles well.
+- `config/team_mapping.json` stays a single shared file; FotMob team-name variants are added to it alongside Understat's.
+
+### 27.4 Squad-Level Feature Engineering & Model Integration (Phase 14c)
+- New `SQUAD_*` feature family in `feature_factory.py`, aggregating `raw_player_match_stats` into squad-level rolling form (e.g. `SQUAD_XG_PER90_R5`, `SQUAD_RATING_PROXY_R5`), using the same shifted-window, pre-match-safe convention as existing feature families (Section 3.2).
+- `SQUAD_*` features are enabled only for competitions whose registry entry includes `"SQUAD"` in `enabled_feature_groups` — i.e., `competition_specific` tier only. `general_purpose` tier never sees them, by construction of the feature-superset invariant in 27.2.
+- Competition-specific models are retrained with the expanded feature set once `SQUAD_*` features are available; `select-best-models` re-run to update `model_selection.yaml`.
+
+### 27.5 Dependency Map
+- **Phase 14a** (competition registry + tier reorg, 27.2): no dependency on player data. Buildable now.
+- **Phase 14b** (FotMob sourcing/ingestion, 27.3): no dependency on 14a. Buildable in parallel.
+- **Phase 14c** (squad features + model integration, 27.4): depends on **both** 14a (needs the tier/registry seam to gate `SQUAD_*`) and 14b (needs the ingested data).
+
 **Key findings:** (1) XGB MKT-only outperforms Dixon-Coles on all 8 targets — the improvement is statistically meaningful on `result_3way` (−22% log_loss) and corners (−8–10% MAE). (2) `btts` log_loss is marginally worse than naive market (+0.0058) — calibration at this sample size does not help enough to overcome the small MKT-only feature set; noted but not blocking, as the delta is tiny and DC is still worse. (3) Corners targets benefit most from XGBoost's non-linear capture of AH/Poisson features — DC has no corner model. (4) Naive market accuracy for result_3way (52.8%) exceeds both XGB and DC — market is well-calibrated for top-probability outcomes; XGB log_loss is still better, which is the production-relevant metric. |
