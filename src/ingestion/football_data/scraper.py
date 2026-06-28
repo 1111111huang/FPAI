@@ -34,7 +34,7 @@ class FootballDataScraper:
         settings = load_settings(config_path)
         self.league_page_url = league_page_url
         self.timeout_seconds = timeout_seconds
-        self.raw_data_dir = Path(settings.paths.raw_data_dir)
+        self.raw_data_dir = Path(settings.paths.raw_data_dir) / "football_data"
         self.raw_data_dir.mkdir(parents=True, exist_ok=True)
         self.session = requests.Session()
 

@@ -10,7 +10,7 @@ import duckdb
 import pandas as pd
 from pydantic import ValidationError
 
-from src.ingestion.match_schema import MatchSchema
+from src.ingestion.football_data.match_schema import MatchSchema
 from src.utils.db_manager import DuckDBManager
 from src.utils.helpers import generate_match_id, standardize_team_name
 from src.utils.logger import get_logger
@@ -24,7 +24,7 @@ class CSVLoader:
     def __init__(self, config_path: str = "config.yaml") -> None:
         """Initialize loader using database settings from YAML config."""
         self.db_manager = DuckDBManager(config_path=config_path)
-        self.raw_data_dir = Path(self.db_manager.settings.paths.raw_data_dir)
+        self.raw_data_dir = Path(self.db_manager.settings.paths.raw_data_dir) / "football_data"
         self.raw_data_dir.mkdir(parents=True, exist_ok=True)
 
     def process_v1_csv(self, file_path: str, league_code: str, overwrite: bool = False) -> int:

@@ -6,7 +6,7 @@ from datetime import date, datetime
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from src.ingestion.schema import map_league_code_to_tier
+from src.ingestion.common.league_tiers import map_league_code_to_tier
 
 
 class MatchSchema(BaseModel):
