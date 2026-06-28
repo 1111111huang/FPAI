@@ -20,6 +20,7 @@ from src.evaluation.mlflow_cleanup import MLflowStoreCleanup, save_cleanup_repor
 from src.forecast import ForecastService
 from src.ingestion import CSVLoader, FootballDataScraper
 from src.logic.target_registry import get_target_definition, list_target_definitions
+from src.logic.competition_registry import get_competition_definition, resolve_feature_subset_for_tier
 from src.models import (
     LRModel,
     ModelFactory,
@@ -396,24 +397,6 @@ def _xgb_params_for_target(target_name: str, model_key: str) -> dict:
     return {"objective": "binary:logistic", "eval_metric": "logloss"}
 
 
-# MKT_* features used for international context models (US#85)
-MKT_FEATURES = [
-    "MKT_IMPLIED_HOME",
-    "MKT_IMPLIED_DRAW",
-    "MKT_IMPLIED_AWAY",
-    "MKT_OVERROUND",
-    "MKT_LAMBDA_TOTAL",
-    "MKT_LAMBDA_HOME",
-    "MKT_LAMBDA_AWAY",
-    "MKT_POISSON_BTTS_PROB",
-    "MKT_LAMBDA_AH_DIFF",
-    "MKT_AH_LINE",
-    "MKT_AH_HOME_ODDS",
-    "MKT_AH_AWAY_ODDS",
-    "MKT_IMPLIED_OVER25",
-]
-
-
 def run_train_target(target_name: str, model_name: str | None = None, context: str = "league") -> Path:
     """Train one registry-backed forecast target model."""
     definition = get_target_definition(target_name)
@@ -429,7 +412,12 @@ def run_train_target(target_name: str, model_name: str | None = None, context: s
         xgb_params = _xgb_params_for_target(target_name, selected_model)
         model = model_cls(**xgb_params)
 
-    feature_subset = MKT_FEATURES if context == "international" else None
+    # US#88: resolve tier/feature-subset through the competition registry
+    # instead of a hardcoded context check. "league" has no fixed competition_id
+    # input yet, so it maps to the one currently-registered league competition (E0).
+    competition_id = "international" if context == "international" else "E0"
+    competition_def = get_competition_definition(competition_id)
+    feature_subset = resolve_feature_subset_for_tier(competition_def.tier)
     model_manager = ModelManager(
         model=model,
         target_config={"target": definition.name},
