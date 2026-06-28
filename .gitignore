@@ -8,7 +8,7 @@ __pycache__/
 *.py[cod]
 
 # 忽略数据和数据库（因为我们要的是代码，不是巨大的原始数据文件）
-data/raw/*.csv
+data/raw/football_data/*.csv
 data/*.db
 data/agent_snapshots/
 reports/agent_backtest/

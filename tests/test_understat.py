@@ -12,8 +12,9 @@ import pytest
 
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
-from src.ingestion.understat import TeamNameMapper, update_raw_matches_xg
-from src.ingestion.understat_fetcher import fetch_league_season
+from src.ingestion.common.team_mapping import TeamNameMapper
+from src.ingestion.understat.merge import update_raw_matches_xg
+from src.ingestion.understat.fetcher import fetch_league_season
 
 
 # ---------------------------------------------------------------------------
@@ -55,8 +56,8 @@ def _mock_resp(matches: list[dict]) -> MagicMock:
 
 def test_fetch_league_season_returns_dataframe():
     records = [_match_record(), _match_record(is_result=False)]  # one result, one fixture
-    with patch("src.ingestion.understat_fetcher.requests.get", return_value=_mock_resp(records)), \
-         patch("src.ingestion.understat_fetcher.time.sleep"):
+    with patch("src.ingestion.understat.fetcher.requests.get", return_value=_mock_resp(records)), \
+         patch("src.ingestion.understat.fetcher.time.sleep"):
         df = fetch_league_season("E0", 2023, delay=0)
 
     assert len(df) == 1  # upcoming fixture (isResult=False) excluded
@@ -73,8 +74,8 @@ def test_fetch_league_season_maps_e0_to_epl():
         captured_urls.append(url)
         return _mock_resp([])
 
-    with patch("src.ingestion.understat_fetcher.requests.get", side_effect=fake_get), \
-         patch("src.ingestion.understat_fetcher.time.sleep"):
+    with patch("src.ingestion.understat.fetcher.requests.get", side_effect=fake_get), \
+         patch("src.ingestion.understat.fetcher.time.sleep"):
         fetch_league_season("E0", 2023, delay=0)
 
     assert "EPL" in captured_urls[0]
@@ -89,8 +90,8 @@ def test_fetch_league_season_sends_xhr_header():
         captured_headers.update(headers or {})
         return _mock_resp([])
 
-    with patch("src.ingestion.understat_fetcher.requests.get", side_effect=fake_get), \
-         patch("src.ingestion.understat_fetcher.time.sleep"):
+    with patch("src.ingestion.understat.fetcher.requests.get", side_effect=fake_get), \
+         patch("src.ingestion.understat.fetcher.time.sleep"):
         fetch_league_season("E0", 2023, delay=0)
 
     assert captured_headers.get("X-Requested-With") == "XMLHttpRequest"
@@ -102,8 +103,8 @@ def test_fetch_league_season_skips_malformed_records():
         {"id": "bad", "isResult": True, "datetime": "2024-01-01",
          "h": {}, "a": {}, "xG": {}},
     ]
-    with patch("src.ingestion.understat_fetcher.requests.get", return_value=_mock_resp(records)), \
-         patch("src.ingestion.understat_fetcher.time.sleep"):
+    with patch("src.ingestion.understat.fetcher.requests.get", return_value=_mock_resp(records)), \
+         patch("src.ingestion.understat.fetcher.time.sleep"):
         df = fetch_league_season("E0", 2023, delay=0)
 
     assert len(df) == 1  # malformed record skipped without raising
