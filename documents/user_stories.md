@@ -10,7 +10,7 @@ This document tracks story-level actionable items for the forecast-engine pivot.
 
 **PHASE 13: Agent Tool Layer — All completed** — See Sections 23 and 26 in `documents/FRAI_TECHSPEC.md`.
 
-**PHASE 14: Player-Level Data & Competition Tiers — Planned, not started.** Design recorded in `documents/FRAI_TECHSPEC.md` Section 27. Sub-phases 14a and 14b have no dependency on each other and may be worked in parallel; 14c depends on both.
+**PHASE 14: Player-Level Data & Competition Tiers — In progress (14a completed; 14b/14c not started).** Design recorded in `documents/FRAI_TECHSPEC.md` Section 27. Sub-phases 14a and 14b have no dependency on each other and may be worked in parallel; 14c depends on both.
 
 ### Phase 14a: Model Tier Reorg — Completed
 - **US#87**: Define `config/competitions.yaml` competition registry — `competition_id` mapped to `tier`, `league_code`, `enabled_feature_groups`, `player_data_sources`.
