@@ -319,8 +319,8 @@ def run_fetch_understat(
     delay: float = 1.5,
     rebuild_features: bool = True,
 ) -> None:
-    from src.ingestion.understat import update_raw_matches_xg
-    from src.ingestion.understat_fetcher import fetch_seasons_range
+    from src.ingestion.understat.merge import update_raw_matches_xg
+    from src.ingestion.understat.fetcher import fetch_seasons_range
 
     LOGGER.info("Executing command: fetch-understat | league=%s", league)
     with db_manager.connection() as conn:

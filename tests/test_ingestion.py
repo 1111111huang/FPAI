@@ -10,7 +10,7 @@ sys.path.append(str(Path(__file__).resolve().parents[1]))
 
 duckdb = pytest.importorskip("duckdb")
 
-from src.ingestion.data_loader import CSVLoader
+from src.ingestion.football_data.loader import CSVLoader
 
 
 def test_process_v1_csv_skips_rows_with_missing_odds(tmp_path: Path) -> None:
