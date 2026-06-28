@@ -9,7 +9,7 @@ competitions:
     tier: competition_specific
     league_code: E0
     enabled_feature_groups:
-      - OFF
+      - "OFF"
       - DEF
       - DIS
       - CTX
