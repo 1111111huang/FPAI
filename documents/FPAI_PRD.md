@@ -126,6 +126,14 @@ Example payload shape:
 ## 5. Modeling Requirements
 FPAI should use separate models per target unless a multi-output approach clearly improves validation performance and maintainability.
 
+### 5.1 Model Tiers (Planned)
+Models are organized into two tiers, declared per competition in a competition registry:
+
+- `general_purpose`: market-odds-only features. Usable for any competition regardless of data richness, including matches with no team-history coverage.
+- `competition_specific`: the full team-form feature set, extendable with player-level signals where a data source has been integrated for that competition.
+
+A competition-specific model must never be less informed than the general-purpose model for the same target. Today this is guaranteed by a feature-superset rule (every competition-specific feature list contains the general-purpose feature list). If a future tier needs a model architecture where a literal feature superset doesn't apply, the competition-specific model may instead consume the general-purpose model's own prediction as an input feature.
+
 Initial target candidates:
 
 - `result_3way`: classification from full-time home and away goals.
@@ -184,6 +192,7 @@ Allowed feature categories:
 - Market-implied probabilities where available.
 - Rest days and schedule context.
 - Team and league metadata.
+- Squad-level player performance aggregates (e.g. rolling per-90 expected goals/assists across the roster), computed from data known before kickoff. These describe overall squad form, not the confirmed starting lineup.
 
 Disallowed feature usage:
 
@@ -208,3 +217,6 @@ FPAI does not need to:
 6. Add top feature values and model explanation metadata.
 7. Demote legacy strategy/backtest commands in CLI and documentation.
 8. Add richer data sources such as Understat xG and future corner odds where available.
+9. Formalize general-purpose vs competition-specific model tiers via a competition registry, guaranteeing competition-specific models retain general-purpose capability.
+10. Source and ingest player-level performance data (starting with FBref) to build squad-level form features.
+11. Extend competition-specific models with squad-level features and re-evaluate against current performance targets.
