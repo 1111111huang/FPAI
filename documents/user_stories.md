@@ -10,9 +10,9 @@ This document tracks story-level actionable items for the forecast-engine pivot.
 
 **PHASE 13: Agent Tool Layer — All completed** — See Sections 23 and 26 in `documents/FRAI_TECHSPEC.md`.
 
-**PHASE 14: Player-Level Data & Competition Tiers — Planned, not started.** Design recorded in `documents/FRAI_TECHSPEC.md` Section 27. Sub-phases 14a and 14b have no dependency on each other and may be worked in parallel; 14c depends on both.
+**PHASE 14: Player-Level Data & Competition Tiers — In progress (14a completed; 14b/14c not started).** Design recorded in `documents/FRAI_TECHSPEC.md` Section 27. Sub-phases 14a and 14b have no dependency on each other and may be worked in parallel; 14c depends on both.
 
-### Phase 14a: Model Tier Reorg
+### Phase 14a: Model Tier Reorg — Completed
 - **US#87**: Define `config/competitions.yaml` competition registry — `competition_id` mapped to `tier`, `league_code`, `enabled_feature_groups`, `player_data_sources`.
 - **US#88**: Resolve model tier (`general_purpose` / `competition_specific`) from the competition registry in `model_manager.py`/`model_factory.py`, replacing the hardcoded `league`/`international` context list. Existing `--context`/`match_type` CLI and MCP contracts are unchanged; `international` becomes a caller of `general_purpose`.
 - **US#89**: Add a feature-superset validation check ensuring every `competition_specific` feature list is a superset of `general_purpose` for the same target.

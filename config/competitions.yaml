@@ -1,0 +1,27 @@
+# Competition registry (Phase 14a, US#87).
+# Maps each competition_id to its model tier and feature scope.
+# tier: "general_purpose" (market-odds-only, works for any competition)
+#       or "competition_specific" (full team-form feature set; player
+#       features are added here in Phase 14c, gated by enabled_feature_groups).
+competitions:
+  E0:
+    competition_id: E0
+    tier: competition_specific
+    league_code: E0
+    enabled_feature_groups:
+      - "OFF"
+      - DEF
+      - DIS
+      - CTX
+      - MKT
+      - STRENGTH
+      - INTERACTION
+      - EFFICIENCY
+    player_data_sources: []
+  international:
+    competition_id: international
+    tier: general_purpose
+    league_code: null
+    enabled_feature_groups:
+      - MKT
+    player_data_sources: []
