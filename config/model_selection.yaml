@@ -1,162 +1,219 @@
 contexts:
   international:
-    result_3way:
-      model_path: models/result_3way_xgb_mkt_only_v1_20260608.joblib
-      model_type: XGBoostModel
-      mlflow_run_id: 487b5974470a4c9ab12ea60d8f08d010
-      test_log_loss: 1.028584
-      selected_at: "2026-06-08"
-      feature_subset:
-        - MKT_IMPLIED_HOME
-        - MKT_IMPLIED_DRAW
-        - MKT_IMPLIED_AWAY
-        - MKT_OVERROUND
-        - MKT_LAMBDA_TOTAL
-        - MKT_LAMBDA_HOME
-        - MKT_LAMBDA_AWAY
-        - MKT_POISSON_BTTS_PROB
-        - MKT_LAMBDA_AH_DIFF
-        - MKT_AH_LINE
-        - MKT_AH_HOME_ODDS
-        - MKT_AH_AWAY_ODDS
-        - MKT_IMPLIED_OVER25
-    btts:
-      model_path: models/btts_xgb_mkt_only_v1_20260608.joblib
-      model_type: XGBoostModel
-      mlflow_run_id: f3163bb6173a4c5a83a1654843670198
-      test_log_loss: 0.699891
-      selected_at: "2026-06-08"
-      feature_subset:
-        - MKT_IMPLIED_HOME
-        - MKT_IMPLIED_DRAW
-        - MKT_IMPLIED_AWAY
-        - MKT_OVERROUND
-        - MKT_LAMBDA_TOTAL
-        - MKT_LAMBDA_HOME
-        - MKT_LAMBDA_AWAY
-        - MKT_POISSON_BTTS_PROB
-        - MKT_LAMBDA_AH_DIFF
-        - MKT_AH_LINE
-        - MKT_AH_HOME_ODDS
-        - MKT_AH_AWAY_ODDS
-        - MKT_IMPLIED_OVER25
-    home_goals:
-      model_path: models/home_goals_xgb_mkt_only_v1_20260608.joblib
-      model_type: XGBoostRegressorModel
-      mlflow_run_id: da0e66ad9df44e9cbb01055c3a8b24ca
-      test_mae: 0.953045
-      selected_at: "2026-06-08"
-      feature_subset:
-        - MKT_IMPLIED_HOME
-        - MKT_IMPLIED_DRAW
-        - MKT_IMPLIED_AWAY
-        - MKT_OVERROUND
-        - MKT_LAMBDA_TOTAL
-        - MKT_LAMBDA_HOME
-        - MKT_LAMBDA_AWAY
-        - MKT_POISSON_BTTS_PROB
-        - MKT_LAMBDA_AH_DIFF
-        - MKT_AH_LINE
-        - MKT_AH_HOME_ODDS
-        - MKT_AH_AWAY_ODDS
-        - MKT_IMPLIED_OVER25
-    away_goals:
-      model_path: models/away_goals_xgb_mkt_only_v1_20260608.joblib
-      model_type: XGBoostRegressorModel
-      mlflow_run_id: 1900a62a24464f329680cfcb6ee7dbe5
-      test_mae: 0.856067
-      selected_at: "2026-06-08"
-      feature_subset:
-        - MKT_IMPLIED_HOME
-        - MKT_IMPLIED_DRAW
-        - MKT_IMPLIED_AWAY
-        - MKT_OVERROUND
-        - MKT_LAMBDA_TOTAL
-        - MKT_LAMBDA_HOME
-        - MKT_LAMBDA_AWAY
-        - MKT_POISSON_BTTS_PROB
-        - MKT_LAMBDA_AH_DIFF
-        - MKT_AH_LINE
-        - MKT_AH_HOME_ODDS
-        - MKT_AH_AWAY_ODDS
-        - MKT_IMPLIED_OVER25
-    total_goals:
-      model_path: models/total_goals_xgb_mkt_only_v1_20260608.joblib
-      model_type: XGBoostRegressorModel
-      mlflow_run_id: b7d7fb3622b041929cc20dd92ba10bda
-      test_mae: 1.275716
-      selected_at: "2026-06-08"
-      feature_subset:
-        - MKT_IMPLIED_HOME
-        - MKT_IMPLIED_DRAW
-        - MKT_IMPLIED_AWAY
-        - MKT_OVERROUND
-        - MKT_LAMBDA_TOTAL
-        - MKT_LAMBDA_HOME
-        - MKT_LAMBDA_AWAY
-        - MKT_POISSON_BTTS_PROB
-        - MKT_LAMBDA_AH_DIFF
-        - MKT_AH_LINE
-        - MKT_AH_HOME_ODDS
-        - MKT_AH_AWAY_ODDS
-        - MKT_IMPLIED_OVER25
-    home_corners:
-      model_path: models/home_corners_xgb_mkt_only_v1_20260608.joblib
-      model_type: XGBoostRegressorModel
-      mlflow_run_id: f81f1d2ccf34434b8fec592e90160d0f
-      test_mae: 2.172525
-      selected_at: "2026-06-08"
-      feature_subset:
-        - MKT_IMPLIED_HOME
-        - MKT_IMPLIED_DRAW
-        - MKT_IMPLIED_AWAY
-        - MKT_OVERROUND
-        - MKT_LAMBDA_TOTAL
-        - MKT_LAMBDA_HOME
-        - MKT_LAMBDA_AWAY
-        - MKT_POISSON_BTTS_PROB
-        - MKT_LAMBDA_AH_DIFF
-        - MKT_AH_LINE
-        - MKT_AH_HOME_ODDS
-        - MKT_AH_AWAY_ODDS
-        - MKT_IMPLIED_OVER25
     away_corners:
+      feature_subset:
+      - MKT_IMPLIED_HOME
+      - MKT_IMPLIED_DRAW
+      - MKT_IMPLIED_AWAY
+      - MKT_OVERROUND
+      - MKT_LAMBDA_TOTAL
+      - MKT_LAMBDA_HOME
+      - MKT_LAMBDA_AWAY
+      - MKT_POISSON_BTTS_PROB
+      - MKT_LAMBDA_AH_DIFF
+      - MKT_AH_LINE
+      - MKT_AH_HOME_ODDS
+      - MKT_AH_AWAY_ODDS
+      - MKT_IMPLIED_OVER25
+      mlflow_run_id: 2be793ef5ff54691b169883a0ed11bbf
       model_path: models/away_corners_xgb_mkt_only_v1_20260608.joblib
       model_type: XGBoostRegressorModel
-      mlflow_run_id: 2be793ef5ff54691b169883a0ed11bbf
+      selected_at: '2026-06-08'
       test_mae: 2.112086
-      selected_at: "2026-06-08"
+    away_goals:
       feature_subset:
-        - MKT_IMPLIED_HOME
-        - MKT_IMPLIED_DRAW
-        - MKT_IMPLIED_AWAY
-        - MKT_OVERROUND
-        - MKT_LAMBDA_TOTAL
-        - MKT_LAMBDA_HOME
-        - MKT_LAMBDA_AWAY
-        - MKT_POISSON_BTTS_PROB
-        - MKT_LAMBDA_AH_DIFF
-        - MKT_AH_LINE
-        - MKT_AH_HOME_ODDS
-        - MKT_AH_AWAY_ODDS
-        - MKT_IMPLIED_OVER25
+      - MKT_IMPLIED_HOME
+      - MKT_IMPLIED_DRAW
+      - MKT_IMPLIED_AWAY
+      - MKT_OVERROUND
+      - MKT_LAMBDA_TOTAL
+      - MKT_LAMBDA_HOME
+      - MKT_LAMBDA_AWAY
+      - MKT_POISSON_BTTS_PROB
+      - MKT_LAMBDA_AH_DIFF
+      - MKT_AH_LINE
+      - MKT_AH_HOME_ODDS
+      - MKT_AH_AWAY_ODDS
+      - MKT_IMPLIED_OVER25
+      mlflow_run_id: 1900a62a24464f329680cfcb6ee7dbe5
+      model_path: models/away_goals_xgb_mkt_only_v1_20260608.joblib
+      model_type: XGBoostRegressorModel
+      selected_at: '2026-06-08'
+      test_mae: 0.856067
+    btts:
+      feature_subset:
+      - MKT_IMPLIED_HOME
+      - MKT_IMPLIED_DRAW
+      - MKT_IMPLIED_AWAY
+      - MKT_OVERROUND
+      - MKT_LAMBDA_TOTAL
+      - MKT_LAMBDA_HOME
+      - MKT_LAMBDA_AWAY
+      - MKT_POISSON_BTTS_PROB
+      - MKT_LAMBDA_AH_DIFF
+      - MKT_AH_LINE
+      - MKT_AH_HOME_ODDS
+      - MKT_AH_AWAY_ODDS
+      - MKT_IMPLIED_OVER25
+      mlflow_run_id: f3163bb6173a4c5a83a1654843670198
+      model_path: models/btts_xgb_mkt_only_v1_20260608.joblib
+      model_type: XGBoostModel
+      selected_at: '2026-06-08'
+      test_log_loss: 0.699891
+    home_corners:
+      feature_subset:
+      - MKT_IMPLIED_HOME
+      - MKT_IMPLIED_DRAW
+      - MKT_IMPLIED_AWAY
+      - MKT_OVERROUND
+      - MKT_LAMBDA_TOTAL
+      - MKT_LAMBDA_HOME
+      - MKT_LAMBDA_AWAY
+      - MKT_POISSON_BTTS_PROB
+      - MKT_LAMBDA_AH_DIFF
+      - MKT_AH_LINE
+      - MKT_AH_HOME_ODDS
+      - MKT_AH_AWAY_ODDS
+      - MKT_IMPLIED_OVER25
+      mlflow_run_id: f81f1d2ccf34434b8fec592e90160d0f
+      model_path: models/home_corners_xgb_mkt_only_v1_20260608.joblib
+      model_type: XGBoostRegressorModel
+      selected_at: '2026-06-08'
+      test_mae: 2.172525
+    home_goals:
+      feature_subset:
+      - MKT_IMPLIED_HOME
+      - MKT_IMPLIED_DRAW
+      - MKT_IMPLIED_AWAY
+      - MKT_OVERROUND
+      - MKT_LAMBDA_TOTAL
+      - MKT_LAMBDA_HOME
+      - MKT_LAMBDA_AWAY
+      - MKT_POISSON_BTTS_PROB
+      - MKT_LAMBDA_AH_DIFF
+      - MKT_AH_LINE
+      - MKT_AH_HOME_ODDS
+      - MKT_AH_AWAY_ODDS
+      - MKT_IMPLIED_OVER25
+      mlflow_run_id: da0e66ad9df44e9cbb01055c3a8b24ca
+      model_path: models/home_goals_xgb_mkt_only_v1_20260608.joblib
+      model_type: XGBoostRegressorModel
+      selected_at: '2026-06-08'
+      test_mae: 0.953045
+    result_3way:
+      feature_subset:
+      - MKT_IMPLIED_HOME
+      - MKT_IMPLIED_DRAW
+      - MKT_IMPLIED_AWAY
+      - MKT_OVERROUND
+      - MKT_LAMBDA_TOTAL
+      - MKT_LAMBDA_HOME
+      - MKT_LAMBDA_AWAY
+      - MKT_POISSON_BTTS_PROB
+      - MKT_LAMBDA_AH_DIFF
+      - MKT_AH_LINE
+      - MKT_AH_HOME_ODDS
+      - MKT_AH_AWAY_ODDS
+      - MKT_IMPLIED_OVER25
+      mlflow_run_id: 487b5974470a4c9ab12ea60d8f08d010
+      model_path: models/result_3way_xgb_mkt_only_v1_20260608.joblib
+      model_type: XGBoostModel
+      selected_at: '2026-06-08'
+      test_log_loss: 1.028584
     total_corners:
+      feature_subset:
+      - MKT_IMPLIED_HOME
+      - MKT_IMPLIED_DRAW
+      - MKT_IMPLIED_AWAY
+      - MKT_OVERROUND
+      - MKT_LAMBDA_TOTAL
+      - MKT_LAMBDA_HOME
+      - MKT_LAMBDA_AWAY
+      - MKT_POISSON_BTTS_PROB
+      - MKT_LAMBDA_AH_DIFF
+      - MKT_AH_LINE
+      - MKT_AH_HOME_ODDS
+      - MKT_AH_AWAY_ODDS
+      - MKT_IMPLIED_OVER25
+      mlflow_run_id: 5e3ce6f50030401d9a0ce6b33a21d19e
       model_path: models/total_corners_xgb_mkt_only_v1_20260608.joblib
       model_type: XGBoostRegressorModel
-      mlflow_run_id: 5e3ce6f50030401d9a0ce6b33a21d19e
+      selected_at: '2026-06-08'
       test_mae: 2.734245
-      selected_at: "2026-06-08"
+    total_goals:
       feature_subset:
-        - MKT_IMPLIED_HOME
-        - MKT_IMPLIED_DRAW
-        - MKT_IMPLIED_AWAY
-        - MKT_OVERROUND
-        - MKT_LAMBDA_TOTAL
-        - MKT_LAMBDA_HOME
-        - MKT_LAMBDA_AWAY
-        - MKT_POISSON_BTTS_PROB
-        - MKT_LAMBDA_AH_DIFF
-        - MKT_AH_LINE
-        - MKT_AH_HOME_ODDS
-        - MKT_AH_AWAY_ODDS
-        - MKT_IMPLIED_OVER25
+      - MKT_IMPLIED_HOME
+      - MKT_IMPLIED_DRAW
+      - MKT_IMPLIED_AWAY
+      - MKT_OVERROUND
+      - MKT_LAMBDA_TOTAL
+      - MKT_LAMBDA_HOME
+      - MKT_LAMBDA_AWAY
+      - MKT_POISSON_BTTS_PROB
+      - MKT_LAMBDA_AH_DIFF
+      - MKT_AH_LINE
+      - MKT_AH_HOME_ODDS
+      - MKT_AH_AWAY_ODDS
+      - MKT_IMPLIED_OVER25
+      mlflow_run_id: b7d7fb3622b041929cc20dd92ba10bda
+      model_path: models/total_goals_xgb_mkt_only_v1_20260608.joblib
+      model_type: XGBoostRegressorModel
+      selected_at: '2026-06-08'
+      test_mae: 1.275716
+  league:
+    away_corners:
+      metric_name: test_mae
+      metric_value: 2.125479
+      mlflow_run_id: 4022e53353d94151a6838c47a8a99422
+      model_path: models/away_corners_xgboostregressor_v1_20260627.joblib
+      model_type: xgboostregressor
+      selected_at: '2026-06-27T19:46:23Z'
+    away_goals:
+      metric_name: test_mae
+      metric_value: 0.846922
+      mlflow_run_id: 401fa7e63de34334b5b20d3034637874
+      model_path: models/away_goals_xgboostregressor_v1_20260627.joblib
+      model_type: xgboostregressor
+      selected_at: '2026-06-27T19:49:41Z'
+    btts:
+      metric_name: test_log_loss
+      metric_value: 0.685867
+      mlflow_run_id: 98cb676b5b644d91a8d62eb000671d4d
+      model_path: models/btts_xgboost_v1_20260627.joblib
+      model_type: xgboost
+      selected_at: '2026-06-27T19:52:59Z'
+    home_corners:
+      metric_name: test_mae
+      metric_value: 2.17362
+      mlflow_run_id: 169f2d47efe44b7c83959348182b07f3
+      model_path: models/home_corners_xgboostregressor_v1_20260627.joblib
+      model_type: xgboostregressor
+      selected_at: '2026-06-27T19:56:24Z'
+    home_goals:
+      metric_name: test_mae
+      metric_value: 0.978953
+      mlflow_run_id: 0ff7e9cbd9ee4005a20b0f72c822cc90
+      model_path: models/home_goals_xgboostregressor_v1_20260627.joblib
+      model_type: xgboostregressor
+      selected_at: '2026-06-27T19:59:41Z'
+    result_3way:
+      metric_name: test_log_loss
+      metric_value: 1.009303
+      mlflow_run_id: bc46a6d3069344d78bb1146bbbd4f647
+      model_path: models/result_3way_xgboost_v1_20260627.joblib
+      model_type: xgboost
+      selected_at: '2026-06-27T20:03:10Z'
+    total_corners:
+      metric_name: test_mae
+      metric_value: 2.717004
+      mlflow_run_id: e40b393d73d8428597d326afba9b999a
+      model_path: models/total_corners_xgboostregressor_v1_20260627.joblib
+      model_type: xgboostregressor
+      selected_at: '2026-06-27T20:06:41Z'
+    total_goals:
+      metric_name: test_mae
+      metric_value: 1.27722
+      mlflow_run_id: 098e9d06e7f64ae58a28778c006442f6
+      model_path: models/total_goals_xgboostregressor_v1_20260627.joblib
+      model_type: xgboostregressor
+      selected_at: '2026-06-27T20:10:39Z'

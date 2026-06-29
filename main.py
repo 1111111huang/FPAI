@@ -422,10 +422,8 @@ def run_train_target(target_name: str, model_name: str | None = None, context: s
         model=model,
         target_config={"target": definition.name},
         feature_subset=feature_subset,
+        context=context,
     )
-    if context == "international":
-        mlflow.set_tag("context", "international")
-        mlflow.set_tag("experiment_name", f"FPAI_{definition.name}_international_xgb_mkt_only_v1")
     model_path = model_manager.run_pipeline()
     LOGGER.info("Target model saved to %s", model_path)
     return model_path

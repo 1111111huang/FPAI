@@ -5,6 +5,7 @@ import json
 import threading
 
 import pytest
+from langchain_core.runnables.config import ContextThreadPoolExecutor
 
 from src.agent.snapshot_store import SnapshotMissingError, SnapshotStore
 
@@ -113,3 +114,25 @@ def test_mode_and_match_are_thread_local(tmp_path):
     # Main thread's state must be unaffected by the other thread
     assert store.mode == "record"
     assert store.match_id == "main-thread-match"
+
+
+def test_mode_and_match_propagate_into_context_thread_pool_executor(tmp_path):
+    """LangGraph's ToolNode runs every tool call (even a single one) via
+    get_executor_for_config(), which returns a ContextThreadPoolExecutor —
+    not a plain threading.Thread. That executor explicitly copies the calling
+    thread's contextvars.Context into the worker (langchain_core.runnables.config.
+    ContextThreadPoolExecutor.submit/map use copy_context().run(...)). configure_snapshot_store()
+    is always called on the thread that then invokes graph.invoke(), so the
+    mode/match set there must be visible inside this executor's workers, or
+    every tool call silently runs in "live" mode regardless of what the
+    caller configured (the actual bug: record mode wrote zero snapshot files,
+    and replay mode never raised SnapshotMissingError because it never
+    replayed anything — see agent_techspec.md Section 18)."""
+    store = SnapshotStore(base_dir=tmp_path)
+    store.set_mode("record")
+    store.set_match("main-thread-match")
+
+    with ContextThreadPoolExecutor() as executor:
+        seen_mode, seen_match_id = list(executor.map(lambda _: (store.mode, store.match_id), [None]))[0]
+
+    assert (seen_mode, seen_match_id) == ("record", "main-thread-match")

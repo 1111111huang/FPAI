@@ -77,12 +77,14 @@ class ModelSelector:
         for run in list(runs_optuna) + list(runs_final):
             metrics = run.data.metrics or {}
             tags = run.data.tags or {}
+            params = run.data.params or {}
             results.append({
                 "run_id": run.info.run_id,
                 "model_type": tags.get("model_family", tags.get("model_type", "unknown")),
                 "artifact_uri": run.info.artifact_uri,
+                "artifact_filename": params.get("artifact_filename"),
                 "metrics": metrics,
-                "feature_subset": (run.data.params or {}).get("feature_subset"),
+                "feature_subset": params.get("feature_subset"),
             })
         return results
 
@@ -133,10 +135,19 @@ class ModelSelector:
                 )
                 return None
 
+        # Prefer the plain joblib path (ForecastService.joblib.load-compatible) logged
+        # via the "artifact_filename" param. Fall back to the MLflow-flavor autolog
+        # path for older runs that predate that param — not loadable by ForecastService,
+        # but keeps this function from crashing on legacy run data.
+        model_path = (
+            f"models/{best['artifact_filename']}"
+            if best.get("artifact_filename")
+            else f"{best['artifact_uri']}/model"
+        )
         new_entry: dict[str, Any] = {
             "mlflow_run_id": best["run_id"],
             "model_type": best["model_type"],
-            "model_path": f"{best['artifact_uri']}/model",
+            "model_path": model_path,
             "metric_name": metric,
             "metric_value": round(float(best_metric_val), 6),
             "selected_at": datetime.utcnow().replace(microsecond=0).isoformat() + "Z",

@@ -42,6 +42,7 @@ class ModelManager:
         feature_version: str = "v1",
         target_config: dict[str, str | float | int] | None = None,
         feature_subset: list[str] | None = None,
+        context: str = "league",
     ) -> None:
         """Initialize manager with a model instance and YAML config path."""
         self.model = model
@@ -51,11 +52,17 @@ class ModelManager:
         self.model_dir = Path(self.config.paths.model_dir)
         self.model_dir.mkdir(parents=True, exist_ok=True)
         self.test_size = float(self.config.settings.test_size)
+        # context/sweep_stage tags make this run_pipeline() artifact eligible for
+        # ModelSelector._fetch_eligible_runs() (requires both tags). Sweep-based
+        # training (src/utils/sweep_runner.py) tags sweep_stage itself and never
+        # calls run_pipeline(), so this default doesn't affect sweep runs.
         self.mlflow_tags = {
             "league_tier": league_tier,
             "test_season": test_season,
             "feature_version": feature_version,
             "target": (target_config or {}).get("target") or (target_config or {}).get("target_type", "home_win"),
+            "context": context,
+            "sweep_stage": "final",
         }
         self.target_config = target_config or {"target_type": "home_win"}
         self.target_definition = get_target_definition(
@@ -531,6 +538,11 @@ class ModelManager:
                         metadata["calibration"] = cal_metrics
                 self._write_artifact_metadata(save_path, metadata)
                 mlflow.log_artifact(str(save_path))
+                # ModelSelector reads this param to build a loadable model_path —
+                # the autologged "model" artifact is an MLflow-flavor directory,
+                # not the plain joblib file ForecastService expects.
+                mlflow.log_param("artifact_filename", save_path.name)
+                mlflow.set_tag("model_family", model_prefix)
                 return save_path
 
             if external_run:

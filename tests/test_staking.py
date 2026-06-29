@@ -45,6 +45,25 @@ def test_flat_stake_equity_curve_starts_with_initial_bankroll():
     assert result.equity_curve == [500.0]
 
 
+def test_flat_stake_skips_direct_bet_with_null_odds():
+    # Agent can mark a market direct_bet while current_odds is null (no bookmaker
+    # odds found for that specific market) — must skip, not crash on float(None).
+    markets = [{"market": "btts", "selection": "no", "recommendation_type": "direct_bet", "current_odds": None, "correct": True}]
+    result = simulate_flat_stake([_record("m1", markets)], starting_bankroll=1000.0)
+    assert result.bets == []
+    assert result.ending_bankroll == 1000.0
+
+
+def test_kelly_stake_skips_direct_bet_with_null_odds():
+    markets = [{
+        "market": "btts", "selection": "no", "recommendation_type": "direct_bet",
+        "current_odds": None, "value_edge": 0.1, "correct": True,
+    }]
+    result = simulate_kelly_stake([_record("m1", markets)], starting_bankroll=1000.0)
+    assert result.bets == []
+    assert result.ending_bankroll == 1000.0
+
+
 def test_kelly_stake_sizes_by_value_edge():
     markets = [{
         "market": "result_3way", "selection": "home", "recommendation_type": "direct_bet",

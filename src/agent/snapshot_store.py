@@ -6,17 +6,32 @@ Lets every tool function in src/agent/tools.py run unmodified in three modes:
   - replay: never call the real implementation — load the saved response or
             raise SnapshotMissingError immediately (no silent fallback)
 
-Mode and match context are stored in thread-local state so concurrent backtest
-runs (each on its own thread via asyncio.to_thread) never clobber each other's
-snapshot context. This must not be relaxed to plain instance attributes without
-re-checking A14 (agent-backtest --concurrency).
+Mode and match context are stored in contextvars.ContextVar, NOT threading.local().
+This matters because LangGraph's ToolNode executes every tool call — even a single
+one — via langchain_core's get_executor_for_config(), which returns a
+ContextThreadPoolExecutor. That executor explicitly copies the calling thread's
+contextvars.Context into its worker thread (copy_context().run(...)); it does
+NOT carry over plain threading.local() state, which is strictly per-OS-thread.
+With threading.local(), configure_snapshot_store() on the calling thread was
+invisible inside ToolNode's worker thread, so every tool call silently read the
+default ("live") mode no matter what record/replay mode was actually configured —
+record mode wrote zero snapshot files, and replay mode never replayed anything
+(see agent_techspec.md Section 18 for the full incident writeup).
+
+contextvars.ContextVar still gives the cross-match isolation A09/A14 need:
+asyncio.to_thread() (used by agent-backtest --concurrency) and
+ContextThreadPoolExecutor both copy context on dispatch, so each concurrently
+running match gets its own independent context snapshot — but a bare
+threading.Thread() (not used anywhere in this codebase) would NOT inherit it,
+since plain threads don't copy context automatically. Do not revert to
+threading.local() without re-verifying this propagates through ToolNode.
 """
 
 from __future__ import annotations
 
+import contextvars
 import hashlib
 import json
-import threading
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Literal
@@ -45,28 +60,36 @@ class SnapshotStore:
 
     def __init__(self, base_dir: str | Path = _DEFAULT_BASE_DIR) -> None:
         self.base_dir = Path(base_dir)
-        self._local = threading.local()
+        self._mode_var: contextvars.ContextVar[SnapshotMode] = contextvars.ContextVar(
+            "snapshot_mode", default="live"
+        )
+        self._match_id_var: contextvars.ContextVar[str | None] = contextvars.ContextVar(
+            "snapshot_match_id", default=None
+        )
+        self._match_date_var: contextvars.ContextVar[str | None] = contextvars.ContextVar(
+            "snapshot_match_date", default=None
+        )
 
     @property
     def mode(self) -> SnapshotMode:
-        return getattr(self._local, "mode", "live")
+        return self._mode_var.get()
 
     @property
     def match_id(self) -> str | None:
-        return getattr(self._local, "match_id", None)
+        return self._match_id_var.get()
 
     @property
     def match_date(self) -> str | None:
-        return getattr(self._local, "match_date", None)
+        return self._match_date_var.get()
 
     def set_mode(self, mode: SnapshotMode) -> None:
         if mode not in _VALID_MODES:
             raise ValueError(f"Unknown snapshot mode: {mode!r}")
-        self._local.mode = mode
+        self._mode_var.set(mode)
 
     def set_match(self, match_id: str, match_date: str | None = None) -> None:
-        self._local.match_id = match_id
-        self._local.match_date = match_date
+        self._match_id_var.set(match_id)
+        self._match_date_var.set(match_date)
 
     @staticmethod
     def key_for(inputs: dict[str, Any]) -> str:

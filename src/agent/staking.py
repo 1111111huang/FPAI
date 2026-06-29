@@ -46,6 +46,8 @@ def simulate_flat_stake(
                 continue
             if m.get("correct") is None:
                 continue  # unresolvable market (e.g. corners) — cannot settle, skip
+            if m.get("current_odds") is None:
+                continue  # agent marked direct_bet with no odds found — cannot stake
             odds = float(m["current_odds"])
             won = bool(m["correct"])
             payout = flat_stake * (odds - 1) if won else -flat_stake
@@ -76,6 +78,8 @@ def simulate_kelly_stake(
                 continue
             if m.get("correct") is None:
                 continue
+            if m.get("current_odds") is None:
+                continue  # agent marked direct_bet with no odds found — cannot stake
             odds = float(m["current_odds"])
             value_edge = float(m.get("value_edge", 0.0))
             if odds <= 1.0 or value_edge <= 0:
