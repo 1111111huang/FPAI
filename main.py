@@ -183,6 +183,15 @@ def _build_parser() -> argparse.ArgumentParser:
     understat_parser.add_argument("--delay", type=float, default=1.5, help="Polite delay in seconds between requests.")
     understat_parser.add_argument("--rebuild_features", action="store_true", default=True, help="Rebuild feature store after updating xG.")
 
+    # fetch-fotmob (US#95)
+    fotmob_parser = subparsers.add_parser(
+        "fetch-fotmob", help="Fetch per-match player stats from FotMob and populate raw_player_match_stats"
+    )
+    fotmob_parser.add_argument("--league", type=str, default="E0", help="Football-Data league code (default: E0).")
+    fotmob_parser.add_argument("--from_season", type=int, default=None, help="First season start year to fetch.")
+    fotmob_parser.add_argument("--to_season", type=int, default=None, help="Last season start year to fetch.")
+    fotmob_parser.add_argument("--delay", type=float, default=1.0, help="Polite delay in seconds between requests.")
+
     # learning-curve
     lc_parser = subparsers.add_parser("learning-curve", help="Train on growing data subsets to diagnose feature ceiling vs. data ceiling")
     lc_target_group = lc_parser.add_mutually_exclusive_group(required=True)
@@ -347,6 +356,47 @@ def run_fetch_understat(
         LOGGER.info("Feature store rebuilt with xG features.")
 
 
+def run_fetch_fotmob(
+    app_settings: AppSettings,
+    db_manager: DuckDBManager,
+    league: str = "E0",
+    from_season: int | None = None,
+    to_season: int | None = None,
+    delay: float = 1.0,
+) -> None:
+    from datetime import date as _date
+
+    from src.ingestion.fotmob.fetcher import fetch_player_match_stats
+    from src.ingestion.fotmob.merge import upsert_player_match_stats
+
+    LOGGER.info("Executing command: fetch-fotmob | league=%s", league)
+    with db_manager.connection() as conn:
+        bounds = conn.execute("SELECT YEAR(MIN(date)), YEAR(MAX(date)) FROM raw_matches").fetchone()
+    if bounds is None or bounds[0] is None:
+        LOGGER.error("raw_matches is empty — run ingest first.")
+        return
+    detected_from = (from_season or bounds[0]) - 1
+    detected_to = to_season or (bounds[1] - 1)
+    LOGGER.info("Fetching FotMob player stats | seasons %d-%d | league=%s", detected_from, detected_to, league)
+
+    season_frames = []
+    for season_start in range(detected_from, detected_to + 1):
+        season_from = _date(season_start, 8, 1)
+        season_to = _date(season_start + 1, 7, 31)
+        season_frames.append(fetch_player_match_stats(league, season_from, season_to, delay=delay))
+    fotmob_df = pd.concat(season_frames, ignore_index=True) if season_frames else pd.DataFrame()
+
+    if fotmob_df.empty:
+        LOGGER.error("No FotMob data returned — check league/season args and network.")
+        return
+    LOGGER.info("Fetched %d FotMob player-match rows total.", len(fotmob_df))
+    result = upsert_player_match_stats(fotmob_df, db_manager)
+    LOGGER.info(
+        "FotMob upsert | matched=%d | unmatched=%d | players=%d | rows=%d",
+        result["matched"], result["unmatched"], result["players_upserted"], result["rows_upserted"],
+    )
+
+
 def run_ingest(app_settings: AppSettings, db_manager: DuckDBManager, force: bool = False) -> None:
     LOGGER.info("Executing command: ingest")
     raw_dir = Path(app_settings.paths.raw_data_dir)
@@ -373,11 +423,12 @@ def run_ingest(app_settings: AppSettings, db_manager: DuckDBManager, force: bool
 
 
 def run_refresh_data(app_settings: AppSettings, db_manager: DuckDBManager, league: str = "E0", force: bool = False) -> None:
-    """Run scrape → ingest → fetch-understat in sequence (US#81)."""
+    """Run scrape → ingest → fetch-understat → fetch-fotmob in sequence (US#81, US#95)."""
     LOGGER.info("Executing command: refresh-data | league=%s | force=%s", league, force)
     run_scrape(app_settings, force=force)
     run_ingest(app_settings, db_manager, force=force)
     run_fetch_understat(app_settings, db_manager, league=league, rebuild_features=True)
+    run_fetch_fotmob(app_settings, db_manager, league=league)
     LOGGER.info("refresh-data complete.")
 
 
@@ -1089,6 +1140,11 @@ def main() -> None:
             to_season=args.to_season,
             delay=float(args.delay),
             rebuild_features=args.rebuild_features,
+        )
+    elif args.command == "fetch-fotmob":
+        run_fetch_fotmob(
+            app_settings, db_manager,
+            league=str(args.league), from_season=args.from_season, to_season=args.to_season, delay=float(args.delay),
         )
     elif args.command == "select-best-models":
         run_select_best_models(

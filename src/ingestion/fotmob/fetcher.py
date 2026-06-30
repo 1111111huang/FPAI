@@ -112,7 +112,7 @@ def fetch_match_player_stats(fotmob_match_id: int, delay: float = 1.0) -> list[d
     time.sleep(delay)
 
     payload = resp.json()
-    player_stats = payload.get("content", {}).get("playerStats", {})
+    player_stats = payload.get("content", {}).get("playerStats") or {}
 
     rows: list[dict] = []
     for player_id_str, player in player_stats.items():
