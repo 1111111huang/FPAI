@@ -63,7 +63,17 @@ def resolve_match_ids(
     db_manager: "DuckDBManager",
     mapping_path: str = "config/team_mapping.json",
 ) -> pd.DataFrame:
-    """Join FotMob rows to raw_matches by date+team to recover match_id."""
+    """Join FotMob rows to raw_matches by date+team to recover match_id.
+
+    Args:
+        fotmob_df: DataFrame with columns match_date, home_team, away_team
+            (plus arbitrary per-player stat columns to carry through).
+        db_manager: DuckDBManager instance for database access.
+        mapping_path: Path to team_mapping.json for name normalisation.
+
+    Returns:
+        Copy of fotmob_df with a match_id column added (NaN where unmatched).
+    """
     with db_manager.connection() as conn:
         raw = conn.execute("SELECT match_id, date, home_team, away_team FROM raw_matches").fetchdf()
 
@@ -95,7 +105,17 @@ def upsert_player_match_stats(
     db_manager: "DuckDBManager",
     mapping_path: str = "config/team_mapping.json",
 ) -> dict[str, int]:
-    """Resolve match_id and upsert player_dim + raw_player_match_stats rows."""
+    """Resolve match_id and upsert player_dim + raw_player_match_stats rows.
+
+    Args:
+        fotmob_df: DataFrame of FotMob per-player, per-match rows (see
+            src.ingestion.fotmob.fetcher.PLAYER_MATCH_COLUMNS for schema).
+        db_manager: DuckDBManager instance for database access.
+        mapping_path: Path to team_mapping.json for name normalisation.
+
+    Returns:
+        Dict with keys 'matched', 'unmatched', 'players_upserted', 'rows_upserted'.
+    """
     if fotmob_df.empty:
         return dict(_EMPTY_RESULT)
 
