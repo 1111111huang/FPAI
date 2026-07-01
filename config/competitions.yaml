@@ -17,7 +17,9 @@ competitions:
       - STRENGTH
       - INTERACTION
       - EFFICIENCY
-    player_data_sources: []
+      - SQUAD
+    player_data_sources:
+      - fotmob
   international:
     competition_id: international
     tier: general_purpose

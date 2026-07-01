@@ -89,3 +89,9 @@ def test_general_purpose_features_are_subset_of_full_schema() -> None:
         schema = yaml.safe_load(handle)
     full_feature_set = set(schema["training_setup"]["selected_features"])
     assert set(GENERAL_PURPOSE_FEATURES) <= full_feature_set
+
+
+def test_squad_is_in_e0_enabled_feature_groups_after_phase14c() -> None:
+    """E0 must declare SQUAD once competitions.yaml is updated for Phase 14c."""
+    definition = get_competition_definition("E0")
+    assert "SQUAD" in definition.enabled_feature_groups

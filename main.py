@@ -474,6 +474,7 @@ def run_train_target(target_name: str, model_name: str | None = None, context: s
         target_config={"target": definition.name},
         feature_subset=feature_subset,
         context=context,
+        competition_id=competition_id,
     )
     model_path = model_manager.run_pipeline()
     LOGGER.info("Target model saved to %s", model_path)
