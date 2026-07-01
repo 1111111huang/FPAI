@@ -302,6 +302,11 @@ class FeatureFactory:
         temporal = self._compute_temporal_features(raw_df)
         features = features.merge(temporal, on="match_id", how="left")
 
+        # US#96: squad-level rolling features (skipped when raw_player_match_stats absent)
+        squad = self._compute_squad_features(raw_df)
+        if not squad.empty:
+            features = features.merge(squad, on="match_id", how="left")
+
         # US#59: cold-start imputation — fill NaN rolling values with column means
         features = self._apply_cold_start_imputation(features)
 
@@ -1037,3 +1042,103 @@ class FeatureFactory:
         for column_name in feature_columns:
             if column_name not in existing_columns:
                 conn.execute(f"ALTER TABLE feature_store ADD COLUMN {column_name} FLOAT")
+
+    def _compute_squad_features(self, raw_df: pd.DataFrame) -> pd.DataFrame:
+        """Query raw_player_match_stats and delegate to the pure rolling helper.
+
+        Returns empty DataFrame (with only match_id column) when the table does
+        not exist yet — feature_factory callers must check for emptiness before
+        merging.
+        """
+        import duckdb as _duckdb
+
+        try:
+            with self.db_manager.connection(read_only=True) as conn:
+                player_df = conn.execute(
+                    "SELECT match_id, team_name, xg, xa, rating FROM raw_player_match_stats"
+                ).fetchdf()
+        except _duckdb.CatalogException:
+            return pd.DataFrame(columns=["match_id"])
+        return self._squad_rolling_from_data(player_df, raw_df)
+
+    @staticmethod
+    def _squad_rolling_from_data(
+        player_df: pd.DataFrame, raw_df: pd.DataFrame
+    ) -> pd.DataFrame:
+        """Aggregate per-match player stats to rolling squad-level features.
+
+        Applies shifted R3/R5 windows to ensure all SQUAD_* values reflect
+        information available *before* the current match (pre-match safe).
+
+        Args:
+            player_df: Rows from raw_player_match_stats (match_id, team_name,
+                xg, xa, rating). FotMob-abbreviated team names are normalised
+                via standardize_team_name before joining.
+            raw_df: Rows from raw_matches (match_id, date, home_team, away_team)
+                with already-canonical team names.
+
+        Returns:
+            DataFrame keyed by match_id with 12 SQUAD_* columns, one row per
+            match. Returns a single-column match_id DataFrame (empty) when
+            player_df is empty.
+        """
+        from src.utils.helpers import standardize_team_name
+
+        if player_df.empty:
+            return pd.DataFrame(columns=["match_id"])
+
+        # Normalise FotMob-abbreviated team names (e.g. "Man City" → "Manchester City")
+        player_df = player_df.copy()
+        player_df["team_std"] = player_df["team_name"].map(standardize_team_name)
+
+        # Per-match per-team aggregate (NaN-safe: skip null xg/xa/rating values)
+        agg = (
+            player_df.groupby(["match_id", "team_std"])
+            .agg(squad_xg=("xg", "mean"), squad_xa=("xa", "mean"), squad_rating=("rating", "mean"))
+            .reset_index()
+        )
+
+        match_info = raw_df[["match_id", "date", "home_team", "away_team"]].copy()
+        match_info["date"] = pd.to_datetime(match_info["date"])
+
+        # Join dates for chronological ordering
+        agg = agg.merge(match_info[["match_id", "date"]], on="match_id", how="inner")
+        agg = agg.sort_values(["team_std", "date", "match_id"]).reset_index(drop=True)
+
+        # Shifted rolling windows per team (shift=1 guarantees pre-match safety)
+        for metric in ["squad_xg", "squad_xa", "squad_rating"]:
+            for window in [3, 5]:
+                col = f"_{metric}_r{window}"
+                agg[col] = agg.groupby("team_std")[metric].transform(
+                    lambda s, w=window: s.shift(1).rolling(w, min_periods=1).mean()
+                )
+
+        stat_cols = [
+            "_squad_xg_r3", "_squad_xg_r5",
+            "_squad_xa_r3", "_squad_xa_r5",
+            "_squad_rating_r3", "_squad_rating_r5",
+        ]
+
+        def _join_side(side: str) -> pd.DataFrame:
+            rename_map = {
+                "_squad_xg_r3":     f"SQUAD_{side}_XG_MEAN_R3",
+                "_squad_xg_r5":     f"SQUAD_{side}_XG_MEAN_R5",
+                "_squad_xa_r3":     f"SQUAD_{side}_XA_MEAN_R3",
+                "_squad_xa_r5":     f"SQUAD_{side}_XA_MEAN_R5",
+                "_squad_rating_r3": f"SQUAD_{side}_RATING_MEAN_R3",
+                "_squad_rating_r5": f"SQUAD_{side}_RATING_MEAN_R5",
+            }
+            team_col = "home_team" if side == "HOME" else "away_team"
+            joined = match_info.merge(
+                agg[["match_id", "team_std"] + stat_cols],
+                left_on=["match_id", team_col],
+                right_on=["match_id", "team_std"],
+                how="left",
+            )
+            return joined.rename(columns=rename_map)[
+                ["match_id"] + list(rename_map.values())
+            ]
+
+        home_feats = _join_side("HOME")
+        away_feats = _join_side("AWAY")
+        return home_feats.merge(away_feats, on="match_id", how="left")

@@ -156,6 +156,19 @@ training_setup:
   - CTX_AWAY_SCORE_STREAK
   - CTX_AWAY_WIN_STREAK
   - CTX_AWAY_CS_STREAK
+  # US#96: squad-level rolling features from FotMob player stats (Phase 14c)
+  - SQUAD_HOME_XG_MEAN_R3
+  - SQUAD_HOME_XG_MEAN_R5
+  - SQUAD_HOME_XA_MEAN_R3
+  - SQUAD_HOME_XA_MEAN_R5
+  - SQUAD_HOME_RATING_MEAN_R3
+  - SQUAD_HOME_RATING_MEAN_R5
+  - SQUAD_AWAY_XG_MEAN_R3
+  - SQUAD_AWAY_XG_MEAN_R5
+  - SQUAD_AWAY_XA_MEAN_R3
+  - SQUAD_AWAY_XA_MEAN_R5
+  - SQUAD_AWAY_RATING_MEAN_R3
+  - SQUAD_AWAY_RATING_MEAN_R5
 
 # US#72: Per-target feature subsets (US#66) removed — Phase 8 experiment showed 6/8 targets
 # regressed under hard top-N cutoffs. All targets now train on the full selected_features list
