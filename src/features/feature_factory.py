@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import duckdb
 import pandas as pd
 from src.utils.db_manager import DuckDBManager
 from src.utils.helpers import standardize_team_name
@@ -1050,14 +1051,12 @@ class FeatureFactory:
         not exist yet — feature_factory callers must check for emptiness before
         merging.
         """
-        import duckdb as _duckdb
-
         try:
             with self.db_manager.connection(read_only=True) as conn:
                 player_df = conn.execute(
                     "SELECT match_id, team_name, xg, xa, rating FROM raw_player_match_stats"
                 ).fetchdf()
-        except _duckdb.CatalogException:
+        except duckdb.CatalogException:
             return pd.DataFrame(columns=["match_id"])
         return self._squad_rolling_from_data(player_df, raw_df)
 
