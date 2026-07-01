@@ -10,7 +10,7 @@ This document tracks story-level actionable items for the forecast-engine pivot.
 
 **PHASE 13: Agent Tool Layer — All completed** — See Sections 23 and 26 in `documents/FRAI_TECHSPEC.md`.
 
-**PHASE 14: Player-Level Data & Competition Tiers — In progress (14a and US#91 of 14b completed; US#92-95 of 14b and all of 14c not started).** Design recorded in `documents/FRAI_TECHSPEC.md` Section 27. Sub-phases 14a and 14b have no dependency on each other and may be worked in parallel; 14c depends on both.
+**PHASE 14: Player-Level Data & Competition Tiers — In progress (14a and 14b fully completed; 14c not started).** Design recorded in `documents/FRAI_TECHSPEC.md` Section 27. 14c depends on both 14a and 14b.
 
 ### Phase 14a: Model Tier Reorg — Completed
 - **US#87**: Define `config/competitions.yaml` competition registry — `competition_id` mapped to `tier`, `league_code`, `enabled_feature_groups`, `player_data_sources`.
@@ -18,7 +18,7 @@ This document tracks story-level actionable items for the forecast-engine pivot.
 - **US#89**: Add a feature-superset validation check ensuring every `competition_specific` feature list is a superset of `general_purpose` for the same target.
 - **US#90**: Document the future "general-purpose prediction as a feature" stacking seam in the model-manager interface (no implementation — keeps the door open for tiers whose architectures diverge).
 
-### Phase 14b: Player Data Sourcing & Ingestion
+### Phase 14b: Player Data Sourcing & Ingestion — Completed
 *Source pivoted from FBref to FotMob (2026-06-27) after live verification: FBref now serves a Cloudflare JS challenge (403) to non-browser requests and would require a headless browser; Sofascore's API returns 403 Forbidden; Understat's player data is season-cumulative only. FotMob's internal JSON API (`fotmob.com/api/data/...`) returned real per-match player ratings/xG/xA with no anti-bot wall — see `documents/FRAI_TECHSPEC.md` Section 27.3.*
 - **US#91** (complete): Restructured `src/ingestion/` into per-source subpackages (`football_data/`, `understat/`, `common/`) and namespaced `data/raw/` to match. (Note: the registry now uses `fotmob/` rather than `fbref/` for the player-data source — see US#92.)
 - **US#92**: Build the FotMob fetcher (`src/ingestion/fotmob/fetcher.py`) for per-match player stats (rating, xG, xA, xGOT, shots, minutes).

@@ -1199,7 +1199,7 @@ All user stories completed through Phase 13. Active and blocked stories are trac
 
 ## 27. Phase 14: Player-Level Data & Competition Tiers (Planned — US#87–99)
 
-**Status: Phase 14a (tier reorg) implemented — see 27.2 for the design and `config/competitions.yaml` / `src/logic/competition_registry.py` for the implementation. Phase 14b and 14c remain planned.** Story breakdown lives in `documents/user_stories.md` Phase 14.
+**Status: Phase 14a and Phase 14b (US#87–95) implemented. Phase 14c remains planned.** Phase 14a: `config/competitions.yaml` / `src/logic/competition_registry.py` (see 27.2). Phase 14b: `src/ingestion/fotmob/` for fetch+merge, `raw_player_match_stats` / `player_dim` tables, `fetch-fotmob` CLI command (see 27.3). Story breakdown lives in `documents/user_stories.md` Phase 14.
 
 ### 27.1 Motivation
 Current models reason at team/market level only (rolling team stats, market odds). Teams are made of players, and player-level signal (squad form, not just team form) is expected to carry additional predictive information once integrated as a new feature layer — without disturbing the existing team-level pipeline.
