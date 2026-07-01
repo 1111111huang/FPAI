@@ -10,7 +10,7 @@ This document tracks story-level actionable items for the forecast-engine pivot.
 
 **PHASE 13: Agent Tool Layer — All completed** — See Sections 23 and 26 in `documents/FRAI_TECHSPEC.md`.
 
-**PHASE 14: Player-Level Data & Competition Tiers — In progress (14a and US#91 of 14b completed; US#92-95 of 14b and all of 14c not started).** Design recorded in `documents/FRAI_TECHSPEC.md` Section 27. Sub-phases 14a and 14b have no dependency on each other and may be worked in parallel; 14c depends on both.
+**PHASE 14: Player-Level Data & Competition Tiers — All completed (US#87–99).** Design recorded in `documents/FRAI_TECHSPEC.md` Section 27. All three sub-phases complete: 14a (competition registry), 14b (FotMob player ingestion), and 14c (SQUAD_* squad features with competition-gated model training).
 
 ### Phase 14a: Model Tier Reorg — Completed
 - **US#87**: Define `config/competitions.yaml` competition registry — `competition_id` mapped to `tier`, `league_code`, `enabled_feature_groups`, `player_data_sources`.
@@ -26,9 +26,9 @@ This document tracks story-level actionable items for the forecast-engine pivot.
 - **US#94**: Create `raw_player_match_stats` DuckDB table and merge/upsert logic (`src/ingestion/fotmob/merge.py`) from fetched FotMob data.
 - **US#95**: Add FotMob backfill + incremental refresh support, extending the `refresh-data` CLI command.
 
-### Phase 14c: Squad Feature Engineering & Model Integration
+### Phase 14c: Squad Feature Engineering & Model Integration — Completed
 *Depends on Phase 14a and Phase 14b.*
-- **US#96**: Add `SQUAD_*` rolling feature family to `feature_factory.py`, aggregating `raw_player_match_stats` into pre-match-safe squad-level form (e.g. `SQUAD_XG_PER90_R5`).
-- **US#97**: Gate `SQUAD_*` features to competitions with `"SQUAD"` in `enabled_feature_groups` (i.e. `competition_specific` tier only), via the Phase 14a registry.
-- **US#98**: Retrain `competition_specific` models with the expanded feature set; re-run `select-best-models` to update `model_selection.yaml`.
-- **US#99**: Surface `SQUAD_*` feature contributions in forecast payload explainability output where used.
+- **US#96** (complete): Add `SQUAD_*` rolling feature family to `feature_factory.py`, aggregating `raw_player_match_stats` into pre-match-safe squad-level form (e.g. `SQUAD_XG_PER90_R5`).
+- **US#97** (complete): Gate `SQUAD_*` features to competitions with `"SQUAD"` in `enabled_feature_groups` (i.e. `competition_specific` tier only), via the Phase 14a registry.
+- **US#98** (complete): Retrain `competition_specific` models with the expanded feature set; re-run `select-best-models` to update `model_selection.yaml`.
+- **US#99** (complete): Surface `SQUAD_*` feature contributions in forecast payload explainability output where used.
