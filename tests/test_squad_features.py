@@ -99,3 +99,38 @@ def test_squad_rolling_normalises_abbreviated_team_names() -> None:
     row_m2 = result[result["match_id"] == "m2"].iloc[0]
     # m2 home (Man City) R3 should be m1's Man City mean xg = 0.7 (not NaN / not mismatched)
     assert row_m2["SQUAD_HOME_XG_MEAN_R3"] == pytest.approx(0.7, abs=1e-3)
+
+
+def test_top_features_surfaces_squad_features_when_present() -> None:
+    """ForecastService._top_features must include SQUAD_* when they have importance."""
+    import sys
+    from pathlib import Path as _Path
+    sys.path.append(str(_Path(__file__).resolve().parents[1]))
+    from src.forecast.forecast_service import ForecastService
+    import pandas as pd
+
+    row = pd.Series({
+        "MKT_IMPLIED_HOME": 0.45,
+        "SQUAD_HOME_XG_MEAN_R5": 0.72,
+        "SQUAD_AWAY_RATING_MEAN_R5": 7.1,
+        "OFF_HOME_FTHG_R5": 1.8,
+    })
+    metadata_by_target = {
+        "home_goals": {
+            "feature_importance": [
+                {"feature": "SQUAD_HOME_XG_MEAN_R5", "importance": 0.15},
+                {"feature": "MKT_IMPLIED_HOME", "importance": 0.10},
+                {"feature": "SQUAD_AWAY_RATING_MEAN_R5", "importance": 0.08},
+                {"feature": "OFF_HOME_FTHG_R5", "importance": 0.05},
+            ]
+        }
+    }
+
+    top = ForecastService._top_features(row, metadata_by_target, limit=4)
+
+    names = [f["name"] for f in top]
+    assert "SQUAD_HOME_XG_MEAN_R5" in names
+    assert "SQUAD_AWAY_RATING_MEAN_R5" in names
+    squad_entry = next(f for f in top if f["name"] == "SQUAD_HOME_XG_MEAN_R5")
+    assert squad_entry["value"] == pytest.approx(0.72)
+    assert squad_entry["importance"] == pytest.approx(0.15, abs=1e-5)
