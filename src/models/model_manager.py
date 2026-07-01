@@ -43,6 +43,7 @@ class ModelManager:
         target_config: dict[str, str | float | int] | None = None,
         feature_subset: list[str] | None = None,
         context: str = "league",
+        competition_id: str = "E0",
     ) -> None:
         """Initialize manager with a model instance and YAML config path."""
         self.model = model
@@ -70,6 +71,7 @@ class ModelManager:
         )
         # US#62: optional override to train on a subset of selected_features
         self.feature_subset: list[str] | None = feature_subset
+        self.competition_id: str = competition_id
         mlflow.set_experiment("FPAI_Evolution")
 
     def _load_selected_features(self) -> list[str]:
@@ -112,6 +114,15 @@ class ModelManager:
                     if mlflow.active_run() is not None:
                         mlflow.log_param("target_feature_count", len(subset))
                     return subset
+        # US#97: filter SQUAD_* features for competitions whose registry entry
+        # does not include "SQUAD" in enabled_feature_groups.
+        try:
+            from src.logic.competition_registry import get_competition_definition
+            comp_def = get_competition_definition(self.competition_id)
+            if "SQUAD" not in comp_def.enabled_feature_groups:
+                all_features = [f for f in all_features if not f.startswith("SQUAD_")]
+        except Exception:
+            pass  # Registry unavailable or unknown competition_id — include all features
         return all_features
 
     @staticmethod
