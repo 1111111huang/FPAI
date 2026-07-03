@@ -49,3 +49,31 @@ This document tracks story-level actionable items for the forecast-engine pivot.
 | US#97 | completed | Gate `SQUAD_*` features to competitions with `"SQUAD"` in `enabled_feature_groups` (i.e. `competition_specific` tier only), via the Phase 14a registry. | — |
 | US#98 | completed | Retrain `competition_specific` models with the expanded feature set; re-run `select-best-models` to update `model_selection.yaml`. | — |
 | US#99 | completed | Surface `SQUAD_*` feature contributions in forecast payload explainability output where used. | — |
+
+### Phase 15a: Lineup Data Foundation
+
+> All lineup-gated features (Phase 15b, 15c) depend on this phase. Three features from the original proposal were excluded as blocked: xG Chain Concentration (not exposed by FotMob summary API — requires StatsBomb/FBref event-level data), Deep Completion Share (same — spatial pass data not in FotMob player stats), and Big-League Minutes Ratio (requires multi-league global player history ingestion — separate project-scale effort).
+
+| ID | Status | Description | Comments |
+|---|---|---|---|
+| US#100 | completed | **Explore FotMob lineup API**: verify what pre-match lineup data FotMob exposes (player IDs, positions, timing of announcement relative to kickoff), document the endpoint path and schema, and confirm player IDs join to `player_dim`. Produce a short findings note before any implementation. | **Findings (2026-07-03):** Same `matchDetails` endpoint (`content.lineup`), no new auth. Schema: `homeTeam/awayTeam → starters[]` each with `id` (matches `player_dim`), `name`, `positionId`, `usualPlayingPositionId`; `subs[]` list lacks `positionId`. Position ID ranges: 11=GK, 30–39=DEF, 60–69=MID, 80–89=ATT/WNG, 110+=ST. `lineupType` field distinguishes confirmed vs provisional — must verify pre-match values once PL season resumes (tested only on completed matches). Physical metrics (sprints, distance) confirmed **absent** from all stat groups (Top stats / Attack / Defense / Duels) — see US#105. Interceptions and Recoveries **available** in "Defense" group — feeds US#104. |
+| US#101 | active | **Implement FotMob lineup ingestion**: fetch and store pre-match starting XI — player_id, team_id, position_group (GK/DEF/MID/FWD), match_id — in a new `match_lineups` DuckDB table; extend `refresh-data` CLI to include lineup backfill. Depends on US#100. | Position group (not exact position) is sufficient for feature filters in US#103, US#104, US#106. |
+
+### Phase 15b: General-Purpose Lineup Features
+
+> Depends on Phase 15a. These features are competition-agnostic by design — raw rolling averages are replaced by relative, context-normalised signals that are meaningful for World Cup, Champions League, and mixed cup competitions.
+
+| ID | Status | Description | Comments |
+|---|---|---|---|
+| US#102 | active | **FRDS (FotMob Rating Dominance Share)**: for each match, compute `sum(rolling-avg rating of starting 11) / sum(rolling-avg rating of all players with ≥1 appearance for this team in the last 90 days)`. The denominator proxies the full available squad. Add as a general-purpose feature (home and away). Depends on US#101. | Captures rotation risk: if a national team rests 5 elite players, FRDS drops. Define "last 90 days" as a config constant. |
+| US#103 | active | **xOC (Top-3 Offensive Concentration)**: add `config/league_coefficients.yaml` mapping league_code → UEFA/FIFA coefficient (static config, not FotMob-derived); compute `sum of xG+xA per 90 for top-3 forward starters (by xG+xA rolling avg) / coefficient of their club league`. Add as a general-purpose feature (home and away). Depends on US#101. | Requires a player→club→league join: international players must carry their club's league_code from `player_dim`. Clarify whether FotMob's player data exposes club affiliation. |
+| US#104 | active | **Defensive Interception & Recovery Anchor**: extend `src/ingestion/fotmob/fetcher.py` `_TOP_STAT_FIELDS` to collect `interceptions` and `balls_recovered` per player; compute `max(interceptions + balls_recovered per 90 rolling R5)` among starting CBs and DMs. Add as a general-purpose feature. Depends on US#101 for position filter; fetcher extension is independent. | Use top-2 max (not pure max) to reduce single-game noise. Verify field names in FotMob `content.playerStats` before schema commit. |
+
+### Phase 15c: EPL-Specific Features
+
+> Depends on Phase 15a for lineup-gated variants. US#106 team-level variant is independent and can be built immediately.
+
+| ID | Status | Description | Comments |
+|---|---|---|---|
+| US#105 | blocked | **Physical Performance Intensity Delta**: explore FotMob `matchDetails` for physical metrics (sprints, high-intensity runs, distance covered). | **Blocked (2026-07-03):** FotMob `playerStats` exposes only four stat groups — Top stats, Attack, Defense, Duels — none of which contain sprint count, distance covered, or high-intensity run data. Physical tracking data is not available through FotMob's internal API. Would require a dedicated physical-data provider (e.g. Opta, SkillCorner) as a new source. |
+| US#106 | in_progress | **Luck Burnout (Net Attacking Outperformance)**: compute `(Goals + Assists) − (xG + xA)` rolling 5-match window per team, using existing `raw_player_match_stats` data (no lineup needed). Implement team-level aggregate first and add as an EPL-specific feature. Once US#101 is complete, extend to a forward-only-filtered variant and compare predictive value of both. | Team-level variant shipped (2026-07-03): `LUCK_HOME_BURNOUT_R5` and `LUCK_AWAY_BURNOUT_R5` added to feature_factory.py, schema.yaml (173 features total), and model_manager.py (gated with SQUAD group). 5 tests pass. Forward-filtered variant pending US#101. |

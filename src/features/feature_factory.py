@@ -308,6 +308,11 @@ class FeatureFactory:
         if not squad.empty:
             features = features.merge(squad, on="match_id", how="left")
 
+        # US#106: team-level luck burnout (skipped when raw_player_match_stats absent)
+        luck = self._compute_luck_burnout_features(raw_df)
+        if not luck.empty:
+            features = features.merge(luck, on="match_id", how="left")
+
         # US#59: cold-start imputation — fill NaN rolling values with column means
         features = self._apply_cold_start_imputation(features)
 
@@ -1140,4 +1145,75 @@ class FeatureFactory:
 
         home_feats = _join_side("HOME")
         away_feats = _join_side("AWAY")
+        return home_feats.merge(away_feats, on="match_id", how="left")
+
+    def _compute_luck_burnout_features(self, raw_df: pd.DataFrame) -> pd.DataFrame:
+        """Query raw_player_match_stats and compute team-level luck burnout features.
+
+        Returns empty DataFrame (with only match_id column) when the table does
+        not exist yet — callers must check for emptiness before merging.
+        """
+        try:
+            with self.db_manager.connection(read_only=True) as conn:
+                player_df = conn.execute(
+                    "SELECT match_id, team_name, goals, assists, xg, xa FROM raw_player_match_stats"
+                ).fetchdf()
+        except duckdb.CatalogException:
+            return pd.DataFrame(columns=["match_id"])
+        return self._luck_burnout_from_data(player_df, raw_df)
+
+    @staticmethod
+    def _luck_burnout_from_data(
+        player_df: pd.DataFrame, raw_df: pd.DataFrame
+    ) -> pd.DataFrame:
+        """Compute team-level luck burnout: rolling 5-match (G+A) − (xG+xA) per team.
+
+        Applies shift(1).rolling(5, min_periods=1).mean() so all values reflect
+        information available before the current match (pre-match safe).
+
+        Returns:
+            DataFrame keyed by match_id with columns
+            [match_id, LUCK_HOME_BURNOUT_R5, LUCK_AWAY_BURNOUT_R5].
+            Returns a single-column match_id DataFrame (empty) when player_df is empty.
+        """
+        from src.utils.helpers import standardize_team_name
+
+        if player_df.empty:
+            return pd.DataFrame(columns=["match_id"])
+
+        player_df = player_df.copy()
+        for col in ["goals", "assists", "xg", "xa"]:
+            player_df[col] = pd.to_numeric(player_df[col], errors="coerce").fillna(0.0)
+        player_df["team_std"] = player_df["team_name"].map(standardize_team_name)
+
+        agg = (
+            player_df.groupby(["match_id", "team_std"])[["goals", "assists", "xg", "xa"]]
+            .sum()
+            .eval("luck = goals + assists - xg - xa")[["luck"]]
+            .reset_index()
+        )
+
+        match_info = raw_df[["match_id", "date", "home_team", "away_team"]].copy()
+        match_info["date"] = pd.to_datetime(match_info["date"])
+
+        agg = agg.merge(match_info[["match_id", "date"]], on="match_id", how="inner")
+        agg = agg.sort_values(["team_std", "date", "match_id"]).reset_index(drop=True)
+
+        agg["_luck_r5"] = agg.groupby("team_std")["luck"].transform(
+            lambda s: s.shift(1).rolling(5, min_periods=1).mean()
+        )
+
+        def _join_side(side: str, team_col: str, out_col: str) -> pd.DataFrame:
+            return (
+                match_info.merge(
+                    agg[["match_id", "team_std", "_luck_r5"]],
+                    left_on=["match_id", team_col],
+                    right_on=["match_id", "team_std"],
+                    how="left",
+                )
+                .rename(columns={"_luck_r5": out_col})[["match_id", out_col]]
+            )
+
+        home_feats = _join_side("HOME", "home_team", "LUCK_HOME_BURNOUT_R5")
+        away_feats = _join_side("AWAY", "away_team", "LUCK_AWAY_BURNOUT_R5")
         return home_feats.merge(away_feats, on="match_id", how="left")

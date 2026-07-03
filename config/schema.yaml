@@ -169,6 +169,8 @@ training_setup:
   - SQUAD_AWAY_XA_MEAN_R5
   - SQUAD_AWAY_RATING_MEAN_R3
   - SQUAD_AWAY_RATING_MEAN_R5
+  - LUCK_HOME_BURNOUT_R5
+  - LUCK_AWAY_BURNOUT_R5
 
 # US#72: Per-target feature subsets (US#66) removed — Phase 8 experiment showed 6/8 targets
 # regressed under hard top-N cutoffs. All targets now train on the full selected_features list
