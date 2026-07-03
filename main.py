@@ -192,6 +192,13 @@ def _build_parser() -> argparse.ArgumentParser:
     fotmob_parser.add_argument("--to_season", type=int, default=None, help="Last season start year to fetch.")
     fotmob_parser.add_argument("--delay", type=float, default=1.0, help="Polite delay in seconds between requests.")
 
+    # fetch-lineups (US#101)
+    lineup_p = subparsers.add_parser("fetch-lineups", help="Fetch FotMob pre-match lineups into match_lineups table")
+    lineup_p.add_argument("--date-from", required=True, help="Start date YYYY-MM-DD (inclusive)")
+    lineup_p.add_argument("--date-to", required=True, help="End date YYYY-MM-DD (inclusive)")
+    lineup_p.add_argument("--league", default="E0", help="Football-Data league code (default: E0)")
+    lineup_p.add_argument("--delay", type=float, default=1.0, help="Polite delay in seconds between requests.")
+
     # learning-curve
     lc_parser = subparsers.add_parser("learning-curve", help="Train on growing data subsets to diagnose feature ceiling vs. data ceiling")
     lc_target_group = lc_parser.add_mutually_exclusive_group(required=True)
@@ -422,13 +429,56 @@ def run_ingest(app_settings: AppSettings, db_manager: DuckDBManager, force: bool
     LOGGER.info("Ingest complete | raw_matches=%s | feature_store=%s", total_raw, total_features)
 
 
+def run_fetch_lineups(
+    db_manager: DuckDBManager,
+    date_from: str,
+    date_to: str,
+    league: str = "E0",
+    delay: float = 1.0,
+) -> None:
+    """Fetch FotMob lineups for a date range and upsert into match_lineups (US#101)."""
+    from datetime import date as _date, timedelta
+
+    from src.ingestion.fotmob.fetcher import fetch_finished_match_ids, LEAGUE_IDS
+    from src.ingestion.fotmob.lineup import upsert_match_lineups
+
+    LOGGER.info("Executing command: fetch-lineups | league=%s | %s..%s", league, date_from, date_to)
+    league_id = LEAGUE_IDS.get(league)
+    if league_id is None:
+        LOGGER.error("Unsupported league '%s'. Supported: %s", league, sorted(LEAGUE_IDS))
+        return
+    try:
+        from_d = _date.fromisoformat(date_from)
+        to_d = _date.fromisoformat(date_to)
+    except ValueError as exc:
+        LOGGER.error("Invalid date format: %s", exc)
+        return
+
+    fotmob_ids: list[int] = []
+    current = from_d
+    while current <= to_d:
+        try:
+            matches = fetch_finished_match_ids(current, league_id=league_id, delay=delay)
+            fotmob_ids.extend(m["fotmob_match_id"] for m in matches)
+        except Exception as exc:  # noqa: BLE001
+            LOGGER.warning("Failed to fetch match list for %s: %s", current, exc)
+        current += timedelta(days=1)
+
+    LOGGER.info("fetch-lineups: found %d FotMob match IDs", len(fotmob_ids))
+    total = upsert_match_lineups(fotmob_ids, db_manager, delay=delay)
+    print(f"fetch-lineups complete | matches_scanned={len(fotmob_ids)} | rows_upserted={total}")
+
+
 def run_refresh_data(app_settings: AppSettings, db_manager: DuckDBManager, league: str = "E0", force: bool = False) -> None:
-    """Run scrape → ingest → fetch-understat → fetch-fotmob in sequence (US#81, US#95)."""
+    """Run scrape → ingest → fetch-understat → fetch-fotmob → fetch-lineups in sequence (US#81, US#95, US#101)."""
     LOGGER.info("Executing command: refresh-data | league=%s | force=%s", league, force)
     run_scrape(app_settings, force=force)
     run_ingest(app_settings, db_manager, force=force)
     run_fetch_understat(app_settings, db_manager, league=league, rebuild_features=True)
     run_fetch_fotmob(app_settings, db_manager, league=league)
+    from src.ingestion.fotmob.lineup import backfill_lineups_from_player_stats
+    total = backfill_lineups_from_player_stats(db_manager)
+    LOGGER.info("refresh-data: lineup backfill complete | rows_upserted=%d", total)
     LOGGER.info("refresh-data complete.")
 
 
@@ -1146,6 +1196,14 @@ def main() -> None:
         run_fetch_fotmob(
             app_settings, db_manager,
             league=str(args.league), from_season=args.from_season, to_season=args.to_season, delay=float(args.delay),
+        )
+    elif args.command == "fetch-lineups":
+        run_fetch_lineups(
+            db_manager,
+            date_from=args.date_from,
+            date_to=args.date_to,
+            league=str(args.league),
+            delay=float(args.delay),
         )
     elif args.command == "select-best-models":
         run_select_best_models(
