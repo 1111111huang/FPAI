@@ -122,6 +122,9 @@ class ModelManager:
             if "SQUAD" not in comp_def.enabled_feature_groups:
                 all_features = [f for f in all_features if not f.startswith("SQUAD_")]
                 all_features = [f for f in all_features if not f.startswith("LUCK_")]
+                all_features = [f for f in all_features if not f.startswith("XOC_")]
+                all_features = [f for f in all_features if not f.startswith("FRDS_")]
+                all_features = [f for f in all_features if not f.startswith("DEF_ANCHOR_")]
         except Exception as exc:  # noqa: BLE001
             LOGGER.warning(
                 "SQUAD gating skipped for competition_id=%r — registry unavailable or unknown: %s",

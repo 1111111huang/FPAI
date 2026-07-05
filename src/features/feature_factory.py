@@ -313,6 +313,21 @@ class FeatureFactory:
         if not luck.empty:
             features = features.merge(luck, on="match_id", how="left")
 
+        # US#103: xOC — Top-3 Offensive Concentration (skipped when lineup tables absent)
+        xoc = self._compute_xoc_features(raw_df)
+        if not xoc.empty:
+            features = features.merge(xoc, on="match_id", how="left")
+
+        # US#102: FRDS — FotMob Rating Dominance Share (skipped when lineup tables absent)
+        frds = self._compute_frds_features(raw_df)
+        if not frds.empty:
+            features = features.merge(frds, on="match_id", how="left")
+
+        # US#104: Defensive Anchor (skipped when lineup/interceptions data absent)
+        def_anchor = self._compute_defensive_anchor_features(raw_df)
+        if not def_anchor.empty:
+            features = features.merge(def_anchor, on="match_id", how="left")
+
         # US#59: cold-start imputation — fill NaN rolling values with column means
         features = self._apply_cold_start_imputation(features)
 
@@ -1217,3 +1232,67 @@ class FeatureFactory:
         home_feats = _join_side("HOME", "home_team", "LUCK_HOME_BURNOUT_R5")
         away_feats = _join_side("AWAY", "away_team", "LUCK_AWAY_BURNOUT_R5")
         return home_feats.merge(away_feats, on="match_id", how="left")
+
+    def _compute_xoc_features(self, raw_df: pd.DataFrame) -> pd.DataFrame:
+        """Query match_lineups + raw_player_match_stats and compute xOC features.
+
+        Returns empty DataFrame (with only match_id column) when either table is absent.
+        """
+        try:
+            with self.db_manager.connection(read_only=True) as conn:
+                lineups_df = conn.execute(
+                    "SELECT fotmob_match_id, player_id, team_name, side, position_group"
+                    " FROM match_lineups"
+                ).fetchdf()
+                player_df = conn.execute(
+                    "SELECT match_id, player_id, team_name, minutes_played, xg, xa"
+                    " FROM raw_player_match_stats"
+                ).fetchdf()
+        except duckdb.CatalogException:
+            return pd.DataFrame(columns=["match_id"])
+        from src.features.lineup_features import compute_xoc
+        return compute_xoc(lineups_df, player_df, raw_df)
+
+    def _compute_frds_features(self, raw_df: pd.DataFrame) -> pd.DataFrame:
+        """Query match_lineups + raw_player_match_stats and compute FRDS features.
+
+        Returns empty DataFrame (with only match_id column) when either table is absent.
+        """
+        try:
+            with self.db_manager.connection(read_only=True) as conn:
+                lineups_df = conn.execute(
+                    "SELECT fotmob_match_id, player_id, team_name, side"
+                    " FROM match_lineups"
+                ).fetchdf()
+                player_df = conn.execute(
+                    "SELECT match_id, player_id, team_name, rating"
+                    " FROM raw_player_match_stats"
+                ).fetchdf()
+        except duckdb.CatalogException:
+            return pd.DataFrame(columns=["match_id"])
+        from src.features.lineup_features import compute_frds
+        return compute_frds(lineups_df, player_df, raw_df)
+
+    def _compute_defensive_anchor_features(self, raw_df: pd.DataFrame) -> pd.DataFrame:
+        """Query match_lineups + raw_player_match_stats and compute Defensive Anchor features.
+
+        Returns empty DataFrame (with only match_id column) when tables or columns are absent.
+        """
+        try:
+            with self.db_manager.connection(read_only=True) as conn:
+                lineups_df = conn.execute(
+                    "SELECT fotmob_match_id, player_id, team_name, side, position_group"
+                    " FROM match_lineups"
+                ).fetchdf()
+                player_df = conn.execute(
+                    "SELECT match_id, player_id, team_name, minutes_played,"
+                    "       interceptions, recoveries"
+                    " FROM raw_player_match_stats"
+                ).fetchdf()
+        except duckdb.CatalogException:
+            return pd.DataFrame(columns=["match_id"])
+        except duckdb.BinderException:
+            # interceptions/recoveries columns not yet added to existing DB
+            return pd.DataFrame(columns=["match_id"])
+        from src.features.lineup_features import compute_defensive_anchor
+        return compute_defensive_anchor(lineups_df, player_df, raw_df)

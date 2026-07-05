@@ -1,0 +1,10 @@
+# UEFA/FIFA coefficient per league — used to normalise xOC across competitions.
+# Higher coefficient = stronger league context = more reliable xG stats.
+# Scale: normalised to EPL=1.0 (reference).
+coefficients:
+  E0: 1.00    # Premier League
+  SP1: 0.95   # La Liga
+  D1: 0.90    # Bundesliga
+  I1: 0.88    # Serie A
+  F1: 0.85    # Ligue 1
+  international: 0.75  # International / mixed (conservative default)

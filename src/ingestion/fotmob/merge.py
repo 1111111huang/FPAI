@@ -25,6 +25,7 @@ _EMPTY_RESULT = {"matched": 0, "unmatched": 0, "players_upserted": 0, "rows_upse
 _STATS_COLUMNS = [
     "match_id", "player_id", "team_name", "minutes_played",
     "rating", "goals", "assists", "xg", "xa", "xgot", "shots",
+    "interceptions", "recoveries",
 ]
 
 
@@ -52,9 +53,18 @@ def _create_tables(conn) -> None:
             xa FLOAT,
             xgot FLOAT,
             shots INTEGER,
+            interceptions FLOAT,
+            recoveries FLOAT,
             PRIMARY KEY (match_id, player_id)
         )
         """
+    )
+    # US#104: add defence columns if they were absent in the original schema
+    conn.execute(
+        "ALTER TABLE raw_player_match_stats ADD COLUMN IF NOT EXISTS interceptions FLOAT"
+    )
+    conn.execute(
+        "ALTER TABLE raw_player_match_stats ADD COLUMN IF NOT EXISTS recoveries FLOAT"
     )
 
 
@@ -131,6 +141,11 @@ def upsert_player_match_stats(
             _create_tables(conn)
         return {**_EMPTY_RESULT, "unmatched": unmatched}
 
+    # US#104: fill defence columns with None when absent (older ingestion batches)
+    for _col in ("interceptions", "recoveries"):
+        if _col not in matched.columns:
+            matched[_col] = None
+
     players = matched[["player_id", "player_name", "opta_id"]].drop_duplicates(subset=["player_id"])
     stats = matched[_STATS_COLUMNS].drop_duplicates(subset=["match_id", "player_id"])
 
@@ -163,7 +178,9 @@ def upsert_player_match_stats(
                 xg = excluded.xg,
                 xa = excluded.xa,
                 xgot = excluded.xgot,
-                shots = excluded.shots
+                shots = excluded.shots,
+                interceptions = excluded.interceptions,
+                recoveries = excluded.recoveries
             """
         )
         conn.unregister("_stats_upd")

@@ -49,6 +49,7 @@ PLAYER_MATCH_COLUMNS: list[str] = [
     "fotmob_match_id", "match_date", "home_team", "away_team",
     "player_id", "player_name", "opta_id", "team_name",
     "rating", "minutes_played", "goals", "assists", "xg", "xa", "xgot", "shots",
+    "interceptions", "recoveries",
 ]
 
 
@@ -103,6 +104,18 @@ def _extract_top_stat(top_stats: dict, label: str) -> float | int | None:
     return entry.get("stat", {}).get("value")
 
 
+def _extract_defense_stat(stat_groups: list, label: str) -> float | None:
+    """Extract a stat from the 'Defense' stat group (separate from Top Stats)."""
+    for group in stat_groups:
+        if group.get("title") == "Defense":
+            stats = group.get("stats", {})
+            entry = stats.get(label)
+            if entry is None:
+                return None
+            return entry.get("stat", {}).get("value")
+    return None
+
+
 def fetch_match_player_stats(fotmob_match_id: int, delay: float = 1.0) -> list[dict]:
     """Fetch per-player stats for one finished FotMob match."""
     url = _MATCH_DETAILS_URL.format(match_id=fotmob_match_id)
@@ -127,6 +140,8 @@ def fetch_match_player_stats(fotmob_match_id: int, delay: float = 1.0) -> list[d
             }
             for column, label in _TOP_STAT_FIELDS.items():
                 row[column] = _extract_top_stat(top_stats, label)
+            row["interceptions"] = _extract_defense_stat(stat_groups, "Interceptions")
+            row["recoveries"] = _extract_defense_stat(stat_groups, "Recoveries")
             rows.append(row)
         except (KeyError, TypeError, ValueError) as exc:
             LOGGER.warning(
