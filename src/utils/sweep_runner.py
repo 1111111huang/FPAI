@@ -322,6 +322,7 @@ class OptunaRunner:
                         "sweep_stage": stage,
                         "experiment_version": version,
                         "sampler": "optuna_tpe",
+                        "context": str(config.get("context", "league")),
                     }
                 )
                 extra_tags = config.get("tags", {})

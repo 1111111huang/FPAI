@@ -1,181 +1,235 @@
 contexts:
   international:
     away_corners:
-      feature_subset:
-      - MKT_IMPLIED_HOME
-      - MKT_IMPLIED_DRAW
-      - MKT_IMPLIED_AWAY
-      - MKT_OVERROUND
-      - MKT_LAMBDA_TOTAL
-      - MKT_LAMBDA_HOME
-      - MKT_LAMBDA_AWAY
-      - MKT_POISSON_BTTS_PROB
-      - MKT_LAMBDA_AH_DIFF
-      - MKT_AH_LINE
-      - MKT_AH_HOME_ODDS
-      - MKT_AH_AWAY_ODDS
-      - MKT_IMPLIED_OVER25
+      metric_name: test_mae
+      metric_value: 2.112086
       mlflow_run_id: 2be793ef5ff54691b169883a0ed11bbf
-      model_path: models/away_corners_xgb_mkt_only_v1_20260608.joblib
-      model_type: XGBoostRegressorModel
-      selected_at: '2026-06-08'
-      test_mae: 2.112086
+      model_path: file:///Users/tianqihuang/Documents/GitHub/FPAI/mlruns/987034761344100564/2be793ef5ff54691b169883a0ed11bbf/artifacts/model
+      model_type: xgb
+      previous_model_path: models/away_corners_xgb_mkt_only_v1_20260608.joblib
+      selected_at: '2026-07-06T03:36:34Z'
     away_goals:
-      feature_subset:
-      - MKT_IMPLIED_HOME
-      - MKT_IMPLIED_DRAW
-      - MKT_IMPLIED_AWAY
-      - MKT_OVERROUND
-      - MKT_LAMBDA_TOTAL
-      - MKT_LAMBDA_HOME
-      - MKT_LAMBDA_AWAY
-      - MKT_POISSON_BTTS_PROB
-      - MKT_LAMBDA_AH_DIFF
-      - MKT_AH_LINE
-      - MKT_AH_HOME_ODDS
-      - MKT_AH_AWAY_ODDS
-      - MKT_IMPLIED_OVER25
+      metric_name: test_mae
+      metric_value: 0.856067
       mlflow_run_id: 1900a62a24464f329680cfcb6ee7dbe5
-      model_path: models/away_goals_xgb_mkt_only_v1_20260608.joblib
-      model_type: XGBoostRegressorModel
-      selected_at: '2026-06-08'
-      test_mae: 0.856067
+      model_path: file:///Users/tianqihuang/Documents/GitHub/FPAI/mlruns/576788159280847753/1900a62a24464f329680cfcb6ee7dbe5/artifacts/model
+      model_type: xgb
+      previous_model_path: models/away_goals_xgb_mkt_only_v1_20260608.joblib
+      selected_at: '2026-07-06T03:40:15Z'
     btts:
-      feature_subset:
-      - MKT_IMPLIED_HOME
-      - MKT_IMPLIED_DRAW
-      - MKT_IMPLIED_AWAY
-      - MKT_OVERROUND
-      - MKT_LAMBDA_TOTAL
-      - MKT_LAMBDA_HOME
-      - MKT_LAMBDA_AWAY
-      - MKT_POISSON_BTTS_PROB
-      - MKT_LAMBDA_AH_DIFF
-      - MKT_AH_LINE
-      - MKT_AH_HOME_ODDS
-      - MKT_AH_AWAY_ODDS
-      - MKT_IMPLIED_OVER25
-      mlflow_run_id: f3163bb6173a4c5a83a1654843670198
-      model_path: models/btts_xgb_mkt_only_v1_20260608.joblib
-      model_type: XGBoostModel
-      selected_at: '2026-06-08'
-      test_log_loss: 0.699891
+      metric_name: test_log_loss
+      metric_value: 0.699554
+      mlflow_run_id: 6254fc894bad4b8682aadd13cd8372a7
+      model_path: models/btts_xgboost_v1_20260628.joblib
+      model_type: xgboost
+      previous_model_path: models/btts_xgb_mkt_only_v1_20260608.joblib
+      selected_at: '2026-07-06T03:43:52Z'
     home_corners:
-      feature_subset:
-      - MKT_IMPLIED_HOME
-      - MKT_IMPLIED_DRAW
-      - MKT_IMPLIED_AWAY
-      - MKT_OVERROUND
-      - MKT_LAMBDA_TOTAL
-      - MKT_LAMBDA_HOME
-      - MKT_LAMBDA_AWAY
-      - MKT_POISSON_BTTS_PROB
-      - MKT_LAMBDA_AH_DIFF
-      - MKT_AH_LINE
-      - MKT_AH_HOME_ODDS
-      - MKT_AH_AWAY_ODDS
-      - MKT_IMPLIED_OVER25
+      metric_name: test_mae
+      metric_value: 2.172525
       mlflow_run_id: f81f1d2ccf34434b8fec592e90160d0f
-      model_path: models/home_corners_xgb_mkt_only_v1_20260608.joblib
-      model_type: XGBoostRegressorModel
-      selected_at: '2026-06-08'
-      test_mae: 2.172525
+      model_path: file:///Users/tianqihuang/Documents/GitHub/FPAI/mlruns/802690824096537957/f81f1d2ccf34434b8fec592e90160d0f/artifacts/model
+      model_type: xgb
+      previous_model_path: models/home_corners_xgb_mkt_only_v1_20260608.joblib
+      selected_at: '2026-07-06T03:47:28Z'
     home_goals:
-      feature_subset:
-      - MKT_IMPLIED_HOME
-      - MKT_IMPLIED_DRAW
-      - MKT_IMPLIED_AWAY
-      - MKT_OVERROUND
-      - MKT_LAMBDA_TOTAL
-      - MKT_LAMBDA_HOME
-      - MKT_LAMBDA_AWAY
-      - MKT_POISSON_BTTS_PROB
-      - MKT_LAMBDA_AH_DIFF
-      - MKT_AH_LINE
-      - MKT_AH_HOME_ODDS
-      - MKT_AH_AWAY_ODDS
-      - MKT_IMPLIED_OVER25
+      metric_name: test_mae
+      metric_value: 0.953045
       mlflow_run_id: da0e66ad9df44e9cbb01055c3a8b24ca
-      model_path: models/home_goals_xgb_mkt_only_v1_20260608.joblib
-      model_type: XGBoostRegressorModel
-      selected_at: '2026-06-08'
-      test_mae: 0.953045
+      model_path: file:///Users/tianqihuang/Documents/GitHub/FPAI/mlruns/446108612046927721/da0e66ad9df44e9cbb01055c3a8b24ca/artifacts/model
+      model_type: xgb
+      previous_model_path: models/home_goals_xgb_mkt_only_v1_20260608.joblib
+      selected_at: '2026-07-06T03:51:07Z'
     result_3way:
-      feature_subset:
-      - MKT_IMPLIED_HOME
-      - MKT_IMPLIED_DRAW
-      - MKT_IMPLIED_AWAY
-      - MKT_OVERROUND
-      - MKT_LAMBDA_TOTAL
-      - MKT_LAMBDA_HOME
-      - MKT_LAMBDA_AWAY
-      - MKT_POISSON_BTTS_PROB
-      - MKT_LAMBDA_AH_DIFF
-      - MKT_AH_LINE
-      - MKT_AH_HOME_ODDS
-      - MKT_AH_AWAY_ODDS
-      - MKT_IMPLIED_OVER25
+      metric_name: test_log_loss
+      metric_value: 1.028584
       mlflow_run_id: 487b5974470a4c9ab12ea60d8f08d010
-      model_path: models/result_3way_xgb_mkt_only_v1_20260608.joblib
-      model_type: XGBoostModel
-      selected_at: '2026-06-08'
-      test_log_loss: 1.028584
+      model_path: file:///Users/tianqihuang/Documents/GitHub/FPAI/mlruns/276600809103990075/487b5974470a4c9ab12ea60d8f08d010/artifacts/model
+      model_type: xgb
+      previous_model_path: models/result_3way_xgb_mkt_only_v1_20260608.joblib
+      selected_at: '2026-07-06T03:54:46Z'
     total_corners:
-      feature_subset:
-      - MKT_IMPLIED_HOME
-      - MKT_IMPLIED_DRAW
-      - MKT_IMPLIED_AWAY
-      - MKT_OVERROUND
-      - MKT_LAMBDA_TOTAL
-      - MKT_LAMBDA_HOME
-      - MKT_LAMBDA_AWAY
-      - MKT_POISSON_BTTS_PROB
-      - MKT_LAMBDA_AH_DIFF
-      - MKT_AH_LINE
-      - MKT_AH_HOME_ODDS
-      - MKT_AH_AWAY_ODDS
-      - MKT_IMPLIED_OVER25
+      metric_name: test_mae
+      metric_value: 2.734245
       mlflow_run_id: 5e3ce6f50030401d9a0ce6b33a21d19e
-      model_path: models/total_corners_xgb_mkt_only_v1_20260608.joblib
-      model_type: XGBoostRegressorModel
-      selected_at: '2026-06-08'
-      test_mae: 2.734245
+      model_path: file:///Users/tianqihuang/Documents/GitHub/FPAI/mlruns/602613335574691346/5e3ce6f50030401d9a0ce6b33a21d19e/artifacts/model
+      model_type: xgb
+      previous_model_path: models/total_corners_xgb_mkt_only_v1_20260608.joblib
+      selected_at: '2026-07-06T03:58:26Z'
     total_goals:
-      feature_subset:
-      - MKT_IMPLIED_HOME
-      - MKT_IMPLIED_DRAW
-      - MKT_IMPLIED_AWAY
-      - MKT_OVERROUND
-      - MKT_LAMBDA_TOTAL
-      - MKT_LAMBDA_HOME
-      - MKT_LAMBDA_AWAY
-      - MKT_POISSON_BTTS_PROB
-      - MKT_LAMBDA_AH_DIFF
-      - MKT_AH_LINE
-      - MKT_AH_HOME_ODDS
-      - MKT_AH_AWAY_ODDS
-      - MKT_IMPLIED_OVER25
+      metric_name: test_mae
+      metric_value: 1.275716
       mlflow_run_id: b7d7fb3622b041929cc20dd92ba10bda
-      model_path: models/total_goals_xgb_mkt_only_v1_20260608.joblib
-      model_type: XGBoostRegressorModel
-      selected_at: '2026-06-08'
-      test_mae: 1.275716
+      model_path: file:///Users/tianqihuang/Documents/GitHub/FPAI/mlruns/734852998282319003/b7d7fb3622b041929cc20dd92ba10bda/artifacts/model
+      model_type: xgb
+      previous_model_path: models/total_goals_xgb_mkt_only_v1_20260608.joblib
+      selected_at: '2026-07-06T04:02:08Z'
   league:
     away_corners:
       metric_name: test_mae
-      metric_value: 2.125479
-      mlflow_run_id: 4022e53353d94151a6838c47a8a99422
-      model_path: models/away_corners_xgboostregressor_v1_20260627.joblib
-      model_type: xgboostregressor
-      selected_at: '2026-06-27T19:46:23Z'
+      metric_value: 2.0786
+      mlflow_run_id: 6fbea054c29c41d4904124e3be6153f6
+      model_path: file:///Users/tianqihuang/Documents/GitHub/FPAI/mlruns/366593725223276547/6fbea054c29c41d4904124e3be6153f6/artifacts/model
+      model_type: xgb_regressor
+      previous_model_path: models/away_corners_xgboostregressor_v1_20260627.joblib
+      selected_at: '2026-07-06T05:15:38Z'
     away_goals:
       metric_name: test_mae
-      metric_value: 0.846922
-      mlflow_run_id: 401fa7e63de34334b5b20d3034637874
-      model_path: models/away_goals_xgboostregressor_v1_20260627.joblib
-      model_type: xgboostregressor
-      selected_at: '2026-06-27T19:49:41Z'
+      metric_value: 0.827586
+      mlflow_run_id: 968f8fff23124e8ca0c56258df5e6fb9
+      model_path: file:///Users/tianqihuang/Documents/GitHub/FPAI/mlruns/813364324253558157/968f8fff23124e8ca0c56258df5e6fb9/artifacts/model
+      model_type: xgb_regressor
+      previous_model_path: models/away_goals_xgboostregressor_v1_20260627.joblib
+      selected_at: '2026-07-06T05:34:13Z'
     btts:
+      feature_subset:
+      - OFF_HOME_FTHG_R3
+      - OFF_HOME_FTHG_R5
+      - DEF_HOME_FTAG_R3
+      - DEF_HOME_FTAG_R5
+      - OFF_HOME_HS_R3
+      - OFF_HOME_HS_R5
+      - DEF_HOME_AS_R3
+      - DEF_HOME_AS_R5
+      - OFF_HOME_HST_R3
+      - OFF_HOME_HST_R5
+      - DEF_HOME_AST_R3
+      - DEF_HOME_AST_R5
+      - OFF_HOME_HC_R3
+      - OFF_HOME_HC_R5
+      - DEF_HOME_AC_R3
+      - DEF_HOME_AC_R5
+      - DIS_HOME_HY_R3
+      - DIS_HOME_HY_R5
+      - DIS_HOME_AY_R3
+      - DIS_HOME_AY_R5
+      - DIS_HOME_HR_R3
+      - DIS_HOME_HR_R5
+      - DIS_HOME_AR_R3
+      - DIS_HOME_AR_R5
+      - OFF_HOME_SHOT_ACCURACY_R3
+      - OFF_HOME_SHOT_ACCURACY_R5
+      - DIS_HOME_DISCIPLINE_SCORE_R3
+      - DIS_HOME_DISCIPLINE_SCORE_R5
+      - DEF_HOME_SAVE_RATE_R3
+      - DEF_HOME_SAVE_RATE_R5
+      - OFF_AWAY_FTAG_R3
+      - OFF_AWAY_FTAG_R5
+      - DEF_AWAY_FTHG_R3
+      - DEF_AWAY_FTHG_R5
+      - OFF_AWAY_AS_R3
+      - OFF_AWAY_AS_R5
+      - DEF_AWAY_HS_R3
+      - DEF_AWAY_HS_R5
+      - OFF_AWAY_AST_R3
+      - OFF_AWAY_AST_R5
+      - DEF_AWAY_HST_R3
+      - DEF_AWAY_HST_R5
+      - OFF_AWAY_AC_R3
+      - OFF_AWAY_AC_R5
+      - DEF_AWAY_HC_R3
+      - DEF_AWAY_HC_R5
+      - DIS_AWAY_AY_R3
+      - DIS_AWAY_AY_R5
+      - DIS_AWAY_HY_R3
+      - DIS_AWAY_HY_R5
+      - DIS_AWAY_AR_R3
+      - DIS_AWAY_AR_R5
+      - DIS_AWAY_HR_R3
+      - DIS_AWAY_HR_R5
+      - OFF_AWAY_SHOT_ACCURACY_R3
+      - OFF_AWAY_SHOT_ACCURACY_R5
+      - DIS_AWAY_DISCIPLINE_SCORE_R3
+      - DIS_AWAY_DISCIPLINE_SCORE_R5
+      - OFF_HOME_FTHG_EMA5
+      - DEF_HOME_FTAG_EMA5
+      - OFF_HOME_HST_EMA5
+      - OFF_AWAY_FTAG_EMA5
+      - DEF_AWAY_FTHG_EMA5
+      - OFF_AWAY_AST_EMA5
+      - CTX_HOME_REST_DAYS
+      - CTX_AWAY_REST_DAYS
+      - CTX_REST_DAYS_DIFF
+      - MKT_IMPLIED_HOME
+      - MKT_IMPLIED_DRAW
+      - MKT_IMPLIED_AWAY
+      - STRENGTH_Goal_Diff
+      - STRENGTH_SoT_Diff
+      - INTERACTION_ATTACK_GOALS_DIFF_R5
+      - INTERACTION_DEFENSE_GOALS_DIFF_R5
+      - INTERACTION_ATTACK_SOT_DIFF_R5
+      - EFFICIENCY_HOME_ATTACK_VS_AWAY_DEF_R5
+      - EFFICIENCY_AWAY_ATTACK_VS_HOME_DEF_R5
+      - EFFICIENCY_ATTACK_MATCHUP_DIFF_R5
+      - OPP_ADJ_HOME_GOALS_SCORED_R3
+      - OPP_ADJ_HOME_GOALS_SCORED_R5
+      - OPP_ADJ_HOME_GOALS_CONCEDED_R3
+      - OPP_ADJ_HOME_GOALS_CONCEDED_R5
+      - OPP_ADJ_HOME_CORNERS_SCORED_R3
+      - OPP_ADJ_HOME_CORNERS_SCORED_R5
+      - OPP_ADJ_HOME_CORNERS_CONCEDED_R3
+      - OPP_ADJ_HOME_CORNERS_CONCEDED_R5
+      - OPP_ADJ_HOME_SOT_SCORED_R3
+      - OPP_ADJ_HOME_SOT_SCORED_R5
+      - OPP_ADJ_AWAY_GOALS_SCORED_R3
+      - OPP_ADJ_AWAY_GOALS_SCORED_R5
+      - OPP_ADJ_AWAY_GOALS_CONCEDED_R3
+      - OPP_ADJ_AWAY_GOALS_CONCEDED_R5
+      - OPP_ADJ_AWAY_CORNERS_SCORED_R3
+      - OPP_ADJ_AWAY_CORNERS_SCORED_R5
+      - OPP_ADJ_AWAY_CORNERS_CONCEDED_R3
+      - OPP_ADJ_AWAY_CORNERS_CONCEDED_R5
+      - OPP_ADJ_AWAY_SOT_SCORED_R3
+      - OPP_ADJ_AWAY_SOT_SCORED_R5
+      - OPP_ADJ_GOAL_MATCHUP_HOME_R3
+      - OPP_ADJ_GOAL_MATCHUP_HOME_R5
+      - OPP_ADJ_GOAL_MATCHUP_AWAY_R3
+      - OPP_ADJ_GOAL_MATCHUP_AWAY_R5
+      - OPP_ADJ_CORNER_MATCHUP_HOME_R3
+      - OPP_ADJ_CORNER_MATCHUP_HOME_R5
+      - OPP_ADJ_CORNER_MATCHUP_AWAY_R3
+      - OPP_ADJ_CORNER_MATCHUP_AWAY_R5
+      - OFF_HOME_XG_R3
+      - OFF_HOME_XG_R5
+      - DEF_HOME_XGA_R3
+      - DEF_HOME_XGA_R5
+      - OFF_HOME_LUCK_R3
+      - OFF_HOME_LUCK_R5
+      - OFF_AWAY_XG_R3
+      - OFF_AWAY_XG_R5
+      - DEF_AWAY_XGA_R3
+      - DEF_AWAY_XGA_R5
+      - OFF_AWAY_LUCK_R3
+      - OFF_AWAY_LUCK_R5
+      - CTX_HOME_CUM_PTS
+      - CTX_AWAY_CUM_PTS
+      - CTX_HOME_PPG_L10
+      - CTX_AWAY_PPG_L10
+      - H2H_TOTAL_GOALS_R5
+      - H2H_CORNERS_R5
+      - H2H_HOME_WIN_RATE_R5
+      - MKT_OVERROUND
+      - MKT_IMPLIED_OVER25
+      - MKT_AH_LINE
+      - MKT_AH_HOME_ODDS
+      - MKT_AH_AWAY_ODDS
+      - MKT_LAMBDA_TOTAL
+      - MKT_LAMBDA_HOME
+      - MKT_LAMBDA_AWAY
+      - MKT_POISSON_BTTS_PROB
+      - MKT_LAMBDA_AH_DIFF
+      - CTX_HOME_GOALS_STD_R5
+      - CTX_HOME_CONCEDED_STD_R5
+      - CTX_HOME_CORNERS_STD_R5
+      - CTX_AWAY_GOALS_STD_R5
+      - CTX_AWAY_CONCEDED_STD_R5
+      - CTX_AWAY_CORNERS_STD_R5
+      - CTX_HOME_SCORE_STREAK
+      - CTX_HOME_WIN_STREAK
+      - CTX_HOME_CS_STREAK
+      - CTX_AWAY_SCORE_STREAK
+      - CTX_AWAY_WIN_STREAK
+      - CTX_AWAY_CS_STREAK
       metric_name: test_log_loss
       metric_value: 0.685867
       mlflow_run_id: 98cb676b5b644d91a8d62eb000671d4d
@@ -184,36 +238,41 @@ contexts:
       selected_at: '2026-06-27T19:52:59Z'
     home_corners:
       metric_name: test_mae
-      metric_value: 2.17362
-      mlflow_run_id: 169f2d47efe44b7c83959348182b07f3
-      model_path: models/home_corners_xgboostregressor_v1_20260627.joblib
-      model_type: xgboostregressor
-      selected_at: '2026-06-27T19:56:24Z'
+      metric_value: 2.142982
+      mlflow_run_id: 37ef1f64639a4a03b0a8fc7a5d0eaaa1
+      model_path: file:///Users/tianqihuang/Documents/GitHub/FPAI/mlruns/402744524999985595/37ef1f64639a4a03b0a8fc7a5d0eaaa1/artifacts/model
+      model_type: xgb_regressor
+      previous_model_path: models/home_corners_xgboostregressor_v1_20260627.joblib
+      selected_at: '2026-07-06T06:47:34Z'
     home_goals:
       metric_name: test_mae
-      metric_value: 0.978953
-      mlflow_run_id: 0ff7e9cbd9ee4005a20b0f72c822cc90
-      model_path: models/home_goals_xgboostregressor_v1_20260627.joblib
-      model_type: xgboostregressor
-      selected_at: '2026-06-27T19:59:41Z'
+      metric_value: 0.946158
+      mlflow_run_id: 117dd2897de44bcc89a3568a6a39dbe7
+      model_path: file:///Users/tianqihuang/Documents/GitHub/FPAI/mlruns/652854365409093260/117dd2897de44bcc89a3568a6a39dbe7/artifacts/model
+      model_type: xgb_regressor
+      previous_model_path: models/home_goals_xgboostregressor_v1_20260701.joblib
+      selected_at: '2026-07-06T07:07:16Z'
     result_3way:
       metric_name: test_log_loss
-      metric_value: 1.009303
-      mlflow_run_id: bc46a6d3069344d78bb1146bbbd4f647
-      model_path: models/result_3way_xgboost_v1_20260627.joblib
+      metric_value: 0.999072
+      mlflow_run_id: 998f1bcf5de04efd8e549745b36217ce
+      model_path: file:///Users/tianqihuang/Documents/GitHub/FPAI/mlruns/325053306736649294/998f1bcf5de04efd8e549745b36217ce/artifacts/model
       model_type: xgboost
-      selected_at: '2026-06-27T20:03:10Z'
+      previous_model_path: models/result_3way_xgboost_v1_20260627.joblib
+      selected_at: '2026-07-06T07:10:36Z'
     total_corners:
       metric_name: test_mae
-      metric_value: 2.717004
-      mlflow_run_id: e40b393d73d8428597d326afba9b999a
-      model_path: models/total_corners_xgboostregressor_v1_20260627.joblib
-      model_type: xgboostregressor
-      selected_at: '2026-06-27T20:06:41Z'
+      metric_value: 2.651686
+      mlflow_run_id: a3d5ede352a646c1b7f120183f365af8
+      model_path: file:///Users/tianqihuang/Documents/GitHub/FPAI/mlruns/720388190291245510/a3d5ede352a646c1b7f120183f365af8/artifacts/model
+      model_type: xgb_regressor
+      previous_model_path: models/total_corners_xgboostregressor_v1_20260627.joblib
+      selected_at: '2026-07-06T07:30:14Z'
     total_goals:
       metric_name: test_mae
-      metric_value: 1.27722
-      mlflow_run_id: 098e9d06e7f64ae58a28778c006442f6
-      model_path: models/total_goals_xgboostregressor_v1_20260627.joblib
-      model_type: xgboostregressor
-      selected_at: '2026-06-27T20:10:39Z'
+      metric_value: 1.231935
+      mlflow_run_id: c2000f84fb5f437fb93dd0ea85b66086
+      model_path: file:///Users/tianqihuang/Documents/GitHub/FPAI/mlruns/925000129830376942/c2000f84fb5f437fb93dd0ea85b66086/artifacts/model
+      model_type: xgb_regressor
+      previous_model_path: models/total_goals_randomforestregressor_v1_20260705.joblib
+      selected_at: '2026-07-06T08:04:44Z'
