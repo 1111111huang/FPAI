@@ -1034,6 +1034,26 @@ class FeatureFactory:
         features = features.merge(h2h, on="match_id", how="left")
         temporal = self._compute_temporal_features(combined)
         features = features.merge(temporal, on="match_id", how="left")
+
+        # BUG-012 layer 1: mirror compute_rolling_stats' US#96/#106/#103/#102/#104
+        # feature blocks so the live spot-forecast path stays in sync with the
+        # offline feature_store pipeline (parity with lines ~306-329 above).
+        squad = self._compute_squad_features(combined)
+        if not squad.empty:
+            features = features.merge(squad, on="match_id", how="left")
+        luck = self._compute_luck_burnout_features(combined)
+        if not luck.empty:
+            features = features.merge(luck, on="match_id", how="left")
+        xoc = self._compute_xoc_features(combined)
+        if not xoc.empty:
+            features = features.merge(xoc, on="match_id", how="left")
+        frds = self._compute_frds_features(combined)
+        if not frds.empty:
+            features = features.merge(frds, on="match_id", how="left")
+        def_anchor = self._compute_defensive_anchor_features(combined)
+        if not def_anchor.empty:
+            features = features.merge(def_anchor, on="match_id", how="left")
+
         features = self._apply_cold_start_imputation(features)
 
         # Return the synthetic match row only
@@ -1120,15 +1140,32 @@ class FeatureFactory:
         match_info = raw_df[["match_id", "date", "home_team", "away_team"]].copy()
         match_info["date"] = pd.to_datetime(match_info["date"])
 
-        # Join dates for chronological ordering
-        agg = agg.merge(match_info[["match_id", "date"]], on="match_id", how="inner")
-        agg = agg.sort_values(["team_std", "date", "match_id"]).reset_index(drop=True)
+        # BUG-012 layer 2: build each team's FULL per-match timeline (every
+        # match_info row they appear in, home or away) rather than only the
+        # matches where raw_player_match_stats happens to have a row for
+        # them. A prior inner-join-by-match_id here silently dropped any
+        # fixture lacking its own player-stats row (including
+        # build_for_match()'s synthetic upcoming-match row, and any
+        # historical match recorded before player-stat ingestion started)
+        # from the rolling window entirely, producing NaN even when the
+        # team's recent real history was available to carry forward.
+        home_timeline = match_info[["match_id", "date", "home_team"]].rename(columns={"home_team": "team_std"})
+        away_timeline = match_info[["match_id", "date", "away_team"]].rename(columns={"away_team": "team_std"})
+        timeline = pd.concat([home_timeline, away_timeline], ignore_index=True)
+        timeline = timeline.merge(
+            agg[["match_id", "team_std", "squad_xg", "squad_xa", "squad_rating"]],
+            on=["match_id", "team_std"],
+            how="left",
+        )
+        timeline = timeline.sort_values(["team_std", "date", "match_id"]).reset_index(drop=True)
 
-        # Shifted rolling windows per team (shift=1 guarantees pre-match safety)
+        # Shifted rolling windows per team (shift=1 guarantees pre-match safety).
+        # Rolling .mean() already skips NaN gaps (matches with no stats row),
+        # averaging over whichever real values fall inside the window.
         for metric in ["squad_xg", "squad_xa", "squad_rating"]:
             for window in [3, 5]:
                 col = f"_{metric}_r{window}"
-                agg[col] = agg.groupby("team_std")[metric].transform(
+                timeline[col] = timeline.groupby("team_std")[metric].transform(
                     lambda s, w=window: s.shift(1).rolling(w, min_periods=1).mean()
                 )
 
@@ -1149,7 +1186,7 @@ class FeatureFactory:
             }
             team_col = "home_team" if side == "HOME" else "away_team"
             joined = match_info.merge(
-                agg[["match_id", "team_std"] + stat_cols],
+                timeline[["match_id", "team_std"] + stat_cols],
                 left_on=["match_id", team_col],
                 right_on=["match_id", "team_std"],
                 how="left",
@@ -1211,17 +1248,26 @@ class FeatureFactory:
         match_info = raw_df[["match_id", "date", "home_team", "away_team"]].copy()
         match_info["date"] = pd.to_datetime(match_info["date"])
 
-        agg = agg.merge(match_info[["match_id", "date"]], on="match_id", how="inner")
-        agg = agg.sort_values(["team_std", "date", "match_id"]).reset_index(drop=True)
+        # BUG-012 layer 2: build each team's full per-match timeline (home or
+        # away appearances in match_info), not just matches where player_df
+        # has a row for them — see _squad_rolling_from_data for the identical
+        # rationale (an exact-match_id join otherwise drops any fixture
+        # lacking its own stats row, including build_for_match()'s synthetic
+        # upcoming-match row, from the rolling window entirely).
+        home_timeline = match_info[["match_id", "date", "home_team"]].rename(columns={"home_team": "team_std"})
+        away_timeline = match_info[["match_id", "date", "away_team"]].rename(columns={"away_team": "team_std"})
+        timeline = pd.concat([home_timeline, away_timeline], ignore_index=True)
+        timeline = timeline.merge(agg[["match_id", "team_std", "luck"]], on=["match_id", "team_std"], how="left")
+        timeline = timeline.sort_values(["team_std", "date", "match_id"]).reset_index(drop=True)
 
-        agg["_luck_r5"] = agg.groupby("team_std")["luck"].transform(
+        timeline["_luck_r5"] = timeline.groupby("team_std")["luck"].transform(
             lambda s: s.shift(1).rolling(5, min_periods=1).mean()
         )
 
         def _join_side(side: str, team_col: str, out_col: str) -> pd.DataFrame:
             return (
                 match_info.merge(
-                    agg[["match_id", "team_std", "_luck_r5"]],
+                    timeline[["match_id", "team_std", "_luck_r5"]],
                     left_on=["match_id", team_col],
                     right_on=["match_id", "team_std"],
                     how="left",

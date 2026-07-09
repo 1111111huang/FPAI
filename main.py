@@ -803,6 +803,36 @@ def run_mlflow_cleanup(
     print("\nCleanup report saved to documents/mlflow_cleanup_report.txt")
 
 
+def _current_computable_features() -> set[str] | None:
+    """Sample FeatureFactory.build_for_match() on one real fixture to get the
+    set of feature columns the live inference path can currently produce
+    (BUG-012 layer 3c). Returns None (disabling the promotion-time coverage
+    guard) if this can't be determined, e.g. no raw_matches data yet — the
+    guard is a safety net, not a hard requirement to run model selection."""
+    try:
+        from src.features.feature_factory import FeatureFactory
+        from src.utils.db_manager import DuckDBManager
+
+        db_manager = DuckDBManager()
+        with db_manager.connection(read_only=True) as conn:
+            row = conn.execute(
+                "SELECT home_team, away_team, date, league FROM raw_matches "
+                "WHERE odds_h IS NOT NULL ORDER BY date DESC LIMIT 1"
+            ).fetchone()
+        if row is None:
+            return None
+        home_team, away_team, date, league = row
+        factory = FeatureFactory()
+        sample = factory.build_for_match(
+            home_team=home_team, away_team=away_team, match_date=str(date),
+            league=league, odds_h=2.0, odds_d=3.0, odds_a=3.5,
+        )
+        return set(sample.columns)
+    except Exception as exc:  # noqa: BLE001 — best-effort guard, never blocks selection
+        LOGGER.warning("Could not determine live-computable features for promotion guard: %s", exc)
+        return None
+
+
 def run_select_best_models(
     target: str | None = None,
     context: str | None = None,
@@ -811,7 +841,7 @@ def run_select_best_models(
 ) -> None:
     """Select best-performing model per target from MLflow (US#78)."""
     from src.utils.model_selection import ModelSelector
-    selector = ModelSelector()
+    selector = ModelSelector(computable_features=_current_computable_features())
     selector.run(target=target, context=context, dry_run=dry_run, min_improvement=min_improvement)
 
 

@@ -128,6 +128,30 @@ def test_home_away_assignment() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Test 4b: carry-forward for a match without its own player-stats row (BUG-012 layer 2)
+# ---------------------------------------------------------------------------
+
+def test_carries_forward_for_match_without_own_player_stats() -> None:
+    """m7 exists in raw_matches but has no row of its own in player_df (only
+    m1-m6 do, per _player_df_full's default) — exactly the shape of
+    build_for_match()'s synthetic upcoming-match row. LUCK_*_BURNOUT_R5 going
+    into m7 must still reflect Arsenal/Everton's last 5 recorded matches
+    (m2-m6), not NaN."""
+    player_df = _player_df_full(n_matches=6)
+    raw_df = _raw_matches_df()  # m1..m7
+
+    result = FeatureFactory._luck_burnout_from_data(player_df, raw_df)
+
+    row_m7 = result[result["match_id"] == "m7"].iloc[0]
+    assert row_m7["LUCK_HOME_BURNOUT_R5"] == pytest.approx(1.5, abs=1e-4), (
+        f"Expected carried-forward LUCK_HOME_BURNOUT_R5=1.5 at m7, got {row_m7['LUCK_HOME_BURNOUT_R5']}"
+    )
+    assert row_m7["LUCK_AWAY_BURNOUT_R5"] == pytest.approx(-0.5, abs=1e-4), (
+        f"Expected carried-forward LUCK_AWAY_BURNOUT_R5=-0.5 at m7, got {row_m7['LUCK_AWAY_BURNOUT_R5']}"
+    )
+
+
+# ---------------------------------------------------------------------------
 # Test 5: team name normalisation (abbreviated → canonical)
 # ---------------------------------------------------------------------------
 

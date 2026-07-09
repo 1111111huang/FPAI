@@ -40,6 +40,12 @@ PHASE 7 (Backtest Execution Readiness)
   A11 + A19 → A20
   A12 + A13 + A14 + A20 → A21
   A16 + A21 → A22 (Future)
+
+PHASE 8 (Full Season Backtest Expansion)
+  A21 → A23 (fix snapshot determinism before large-scale recording)
+  A23 → A24 (refresh raw data before re-running feature pipeline)
+  A24 → A25 (collect corpus only after data and temp fix are ready)
+  A25 → A26 (run backtests only after full corpus exists)
 ```
 
 **Size key:** XS < 2 hrs · S ≈ half day · M ≈ 1 day · L ≈ 2–3 days
@@ -48,322 +54,84 @@ PHASE 7 (Backtest Execution Readiness)
 
 ## PHASE 1: Foundation
 
-### A01 — Set Up Development Environment
-**Size:** M | **Status:** completed | **Milestone:** M1
-
-Set up all dependencies required to run a LangGraph agent locally.
-
-**Acceptance criteria:**
-- `langgraph`, `langchain`, `langchain-anthropic`, `langchain-ollama`, `tavily-python` added to `requirements.txt`
-- Ollama installed locally with `qwen2.5:7b` pulled and verified
-- LangSmith API key configured; a test run of any LangChain call produces a visible trace in the LangSmith dashboard
-- `src/agent/__init__.py` package created
-
----
-
-### A02 — Implement AgentConfig
-**Size:** S | **Status:** completed | **Milestone:** M1 | **Depends on:** A01
-
-Create a typed configuration object and its corresponding YAML file covering all agent tuning knobs.
-
-**Acceptance criteria:**
-- `AgentConfig` dataclass in `src/agent/agent_config.py` with fields: `model`, `provider`, `temperature`, `max_tool_calls`, `min_odds_threshold`, `min_value_edge`, `markets`, `system_prompt_version`
-- `config/agent_config.yaml` with sensible defaults (Ollama / qwen2.5:7b, temperature 0.1, max_tool_calls 10, min_odds 2.0)
-- `AgentConfig.from_yaml(path)` loads and validates the file; raises a clear error on missing required fields
-
----
-
-### A03 — Build Stub StateGraph
-**Size:** M | **Status:** completed | **Milestone:** M1 | **Depends on:** A01, A02
-
-Implement the LangGraph `StateGraph` skeleton with the correct node structure and stub tools so the agent loop can be exercised end-to-end before real tools exist.
-
-**Acceptance criteria:**
-- `AgentState` TypedDict defined in `src/agent/graph.py` with `messages`, `match_info`, `recommendation`, `tool_call_count`
-- `StateGraph` with `agent_node`, `tools_node`, `output_node` nodes wired correctly
-- Conditional edge: tool calls present AND under budget → `tools_node`; otherwise → `output_node`
-- Stub `web_search` and `forecast_league` tools return hardcoded strings
-- Running the graph against a hardcoded match dict produces a trace in LangSmith showing the full loop
+| ID | Status | Description | Comments |
+|---|---|---|---|
+| A01 | completed | Set up all dependencies required to run a LangGraph agent locally. **Acceptance:** `langgraph`, `langchain`, `langchain-anthropic`, `langchain-ollama`, `tavily-python` added to `requirements.txt`; Ollama installed locally with `qwen2.5:7b` pulled and verified; LangSmith API key configured with a visible test trace; `src/agent/__init__.py` created. | Size M · Milestone M1 · Depends on: none |
+| A02 | completed | Create a typed configuration object and YAML file covering all agent tuning knobs. **Acceptance:** `AgentConfig` dataclass in `src/agent/agent_config.py` with fields `model`, `provider`, `temperature`, `max_tool_calls`, `min_odds_threshold`, `min_value_edge`, `markets`, `system_prompt_version`; `config/agent_config.yaml` with sensible defaults; `AgentConfig.from_yaml(path)` loads/validates, raising a clear error on missing fields. | Size S · Milestone M1 · Depends on: A01 |
+| A03 | completed | Implement the LangGraph `StateGraph` skeleton with stub tools so the agent loop can be exercised end-to-end before real tools exist. **Acceptance:** `AgentState` TypedDict with `messages`, `match_info`, `recommendation`, `tool_call_count`; `StateGraph` with `agent_node`/`tools_node`/`output_node` wired correctly; conditional edge (tool calls under budget → tools, else → output); stub `web_search`/`forecast_league` tools; full-loop LangSmith trace against a hardcoded match. | Size M · Milestone M1 · Depends on: A01, A02 |
 
 ---
 
 ## PHASE 2: Live Recommendation
 
-### A04 — Implement web_search Tool
-**Size:** M | **Status:** completed | **Milestone:** M2 | **Depends on:** A03
-
-Connect the Tavily search API as the agent's primary web search tool.
-
-**Acceptance criteria:**
-- `web_search(query: str) -> str` defined in `src/agent/tools.py` with `@tool` decorator
-- Tavily client reads API key from environment variable `TAVILY_API_KEY`
-- Tool description clearly states its purpose (odds discovery, team name lookup, injury news) so the agent uses it correctly
-- Registered with the `ToolNode` in `graph.py`
-- Manual test: agent successfully searches for current odds for a named match
-
----
-
-### A05 — Implement forecast_league and forecast_international Tools
-**Size:** M | **Status:** completed | **Milestone:** M2 | **Depends on:** A03
-
-Expose the two ML model contexts as distinct, named tools so the agent cannot accidentally call the wrong one.
-
-**Acceptance criteria:**
-- `forecast_league(home_team, away_team, date, league, odds_h, odds_d, odds_a, ...) -> dict` makes a direct call to `ForecastService.forecast_upcoming(match_type="league")`
-- `forecast_international(home_team, away_team, date, odds_h, odds_d, odds_a, ...) -> dict` makes a direct call to `ForecastService.forecast_upcoming(match_type="international")`
-- Tool docstrings clearly state when each should be used (league context vs. no team history available)
-- Both tools registered with the `ToolNode`
-- Both tools return the full forecast JSON dict including `data_quality.prediction_basis`
-
----
-
-### A06 — Write System Prompt v1 and MatchRecommendation Output Schema
-**Size:** M | **Status:** completed | **Milestone:** M2 | **Depends on:** A03
-
-Define the agent's betting philosophy in the system prompt and enforce a structured JSON output at the end of every run.
-
-**Acceptance criteria:**
-- System prompt stored as a text file at `config/prompts/agent_v1.txt`; loaded by `AgentConfig`
-- Prompt specifies: search for odds first → call appropriate forecast tool → search for news → evaluate value → output JSON
-- Prompt includes the `MatchRecommendation` JSON schema the agent must output in its final turn
-- `MatchRecommendation` and `MarketRecommendation` TypedDicts defined in `src/agent/schema.py`
-- `output_node` in `graph.py` parses and validates the final message; raises `RecommendationParseError` with the raw text if JSON extraction fails
-- `overall` field is one of: `direct_bet`, `conditional`, `no_bet`, `insufficient_data`
-- `recommendation_type` per market is one of: `direct_bet`, `conditional`, `no_bet`
-
----
-
-### A07 — Wire Full Agent Graph and Validate End-to-End
-**Size:** M | **Status:** completed | **Milestone:** M2 | **Depends on:** A04, A05, A06
-
-Connect all real tools into the graph and validate the full live recommendation workflow.
-
-**Acceptance criteria:**
-- Graph runs with real Tavily search, real `ForecastService` calls, and real LLM (first with Ollama, then with Haiku)
-- Agent produces a valid `MatchRecommendation` JSON for a known upcoming match
-- LangSmith trace shows all tool calls, inputs, outputs, and reasoning turns
-- Agent correctly selects `forecast_league` vs `forecast_international` for a league and international match respectively
-- `insufficient_data` recommendation is produced when odds cannot be found by web search
-
----
-
-### A08 — Add agent-recommend CLI Command
-**Size:** S | **Status:** completed | **Milestone:** M2 | **Depends on:** A07
-
-Expose the live recommendation workflow as a CLI command.
-
-**Acceptance criteria:**
-- `python main.py agent-recommend --home "Man City" --away "Arsenal" --date 2026-06-15` runs the full agent and prints the `MatchRecommendation` JSON plus explanation
-- `--config` flag allows specifying a non-default `agent_config.yaml` path
-- Exit code 0 on success; non-zero on agent error or parse failure
+| ID | Status | Description | Comments |
+|---|---|---|---|
+| A04 | completed | Connect the Tavily search API as the agent's primary web search tool. **Acceptance:** `web_search(query: str) -> str` with `@tool` decorator; Tavily client reads `TAVILY_API_KEY`; description clearly states purpose (odds, team names, injury news); registered with `ToolNode`; manual test finds current odds for a named match. | Size M · Milestone M2 · Depends on: A03 |
+| A05 | completed | Expose the two ML model contexts as distinct, named tools so the agent cannot call the wrong one. **Acceptance:** `forecast_league(...)` and `forecast_international(...)` call `ForecastService.forecast_upcoming(match_type=...)` directly; docstrings state when each should be used; both registered with `ToolNode`; both return full forecast JSON including `data_quality.prediction_basis`. | Size M · Milestone M2 · Depends on: A03 |
+| A06 | completed | Define the agent's betting philosophy in the system prompt and enforce a structured JSON output every run. **Acceptance:** prompt at `config/prompts/agent_v1.txt`, loaded by `AgentConfig`; specifies search odds → forecast → news → evaluate value → output JSON; includes the `MatchRecommendation` schema; `MatchRecommendation`/`MarketRecommendation` TypedDicts in `src/agent/schema.py`; `output_node` parses/validates, raising `RecommendationParseError` with raw text on failure; `overall` ∈ {`direct_bet`, `conditional`, `no_bet`, `insufficient_data`}; `recommendation_type` ∈ {`direct_bet`, `conditional`, `no_bet`}. | Size M · Milestone M2 · Depends on: A03 |
+| A07 | completed | Connect all real tools into the graph and validate the full live recommendation workflow end-to-end. **Acceptance:** graph runs with real Tavily, real `ForecastService`, real LLM (Ollama then Haiku); valid `MatchRecommendation` JSON for a known upcoming match; LangSmith trace shows all tool calls/inputs/outputs/reasoning; correct `forecast_league` vs `forecast_international` selection; `insufficient_data` produced when odds can't be found. | Size M · Milestone M2 · Depends on: A04, A05, A06 |
+| A08 | completed | Expose the live recommendation workflow as a CLI command. **Acceptance:** `python main.py agent-recommend --home "Man City" --away "Arsenal" --date 2026-06-15` runs the full agent and prints the `MatchRecommendation` JSON plus explanation; `--config` flag for a non-default YAML path; exit code 0 on success, non-zero on agent error or parse failure. | Size S · Milestone M2 · Depends on: A07 |
 
 ---
 
 ## PHASE 3: Snapshot Infrastructure
 
-### A09 — Implement SnapshotStore
-**Size:** M | **Status:** completed | **Milestone:** M3 | **Depends on:** A01
-
-Build the record/replay interceptor that isolates backtest runs from live APIs.
-
-**Acceptance criteria:**
-- `SnapshotStore` class in `src/agent/snapshot_store.py` with `set_mode(mode: Literal["record", "replay", "live"])` method
-- `record` mode: executes the wrapped callable, serialises `{tool, inputs, response, recorded_at}` to `data/agent_snapshots/<match_id>/<tool>_<sha256_of_inputs>.json`
-- `replay` mode: loads from disk; raises `SnapshotMissingError` immediately if file not found — no silent fallback to live call
-- `live` mode: passes through to the real callable with no interception (default for `agent-recommend`)
-- Key is a SHA-256 hash of the canonically serialised input dict, ensuring the same query always maps to the same file
-
----
-
-### A10 — Integrate SnapshotStore with All Tool Functions
-**Size:** S | **Status:** completed | **Milestone:** M3 | **Depends on:** A04, A05, A06, A09
-
-Wrap every tool function with the `SnapshotStore` interceptor and add date-filtering to web search during snapshot collection.
-
-**Acceptance criteria:**
-- `web_search`, `forecast_league`, and `forecast_international` all route through `SnapshotStore`
-- During snapshot collection (`agent-snapshot`), web search queries automatically have `before:<match_date>` appended to reduce post-match leakage
-- System prompt for snapshot collection run instructs the agent to discard any result that references a final score
-- Switching mode from `live` to `record` to `replay` requires no changes to tool function code
-
----
-
-### A11 — Add agent-snapshot CLI Command
-**Size:** S | **Status:** completed | **Milestone:** M3 | **Depends on:** A10
-
-Expose snapshot collection as a CLI command that drives the agent in record mode over historical matches.
-
-**Acceptance criteria:**
-- `python main.py agent-snapshot --from-date 2025-01-01 --to-date 2025-06-01 --league E0` loads historical matches from DuckDB and runs the agent in `record` mode over each
-- Skips matches that already have a complete snapshot directory
-- Prints progress (match count, skipped, errors)
-- `--dry-run` flag lists matches that would be processed without executing
+| ID | Status | Description | Comments |
+|---|---|---|---|
+| A09 | completed | Build the record/replay interceptor that isolates backtest runs from live APIs. **Acceptance:** `SnapshotStore` class in `src/agent/snapshot_store.py` with `set_mode(mode: Literal["record", "replay", "live"])`; `record` serialises `{tool, inputs, response, recorded_at}` to `data/agent_snapshots/<match_id>/<tool>_<sha256_of_inputs>.json`; `replay` raises `SnapshotMissingError` immediately if file not found, no silent live fallback; `live` passes through with no interception (default for `agent-recommend`); key is a SHA-256 hash of the canonically serialised input dict. | Size M · Milestone M3 · Depends on: A01 |
+| A10 | completed | Wrap every tool function with the `SnapshotStore` interceptor and add date-filtering to web search during snapshot collection. **Acceptance:** `web_search`, `forecast_league`, `forecast_international` all route through `SnapshotStore`; during `agent-snapshot`, web search queries automatically get `before:<match_date>` appended; snapshot-collection system prompt instructs discarding any result referencing a final score; switching `live`→`record`→`replay` requires no tool function code changes. | Size S · Milestone M3 · Depends on: A04, A05, A06, A09 |
+| A11 | completed | Expose snapshot collection as a CLI command that drives the agent in record mode over historical matches. **Acceptance:** `python main.py agent-snapshot --from-date 2025-01-01 --to-date 2025-06-01 --league E0` loads historical matches from DuckDB and runs in `record` mode; skips matches with a complete snapshot directory already; prints progress (count/skipped/errors); `--dry-run` lists matches without executing. | Size S · Milestone M3 · Depends on: A10 |
 
 ---
 
 ## PHASE 4: Backtest Harness
 
-### A12 — Implement BacktestHarness and Outcome Loader
-**Size:** L | **Status:** completed | **Milestone:** M4 | **Depends on:** A11
-
-Build the core backtest engine that replays snapshot episodes and compares agent recommendations against actual outcomes.
-
-**Acceptance criteria:**
-- `BacktestHarness` class in `src/agent/backtest.py`
-- Loads historical matches from DuckDB for a given date range and league
-- For each match: sets `SnapshotStore` to `replay` mode, runs the agent, loads the actual outcome from `raw_matches`
-- `BacktestRecord` datatype holds: match info, `MatchRecommendation`, actual outcome, and whether each market recommendation was correct
-- Raises `SnapshotMissingError` at the harness level if any match lacks snapshots — does not silently skip
-- `--sample N` runs a stratified random sample (balanced across bet / no-bet outcomes) before a full run
-
----
-
-### A13 — Implement Flat-Stake Bankroll Simulation and Evaluation Metrics
-**Size:** M | **Status:** completed | **Milestone:** M4 | **Depends on:** A12
-
-Simulate bankroll evolution over backtest records and compute the evaluation report.
-
-**Acceptance criteria:**
-- `flat` staking: configurable fixed stake (default 1% of starting bankroll) applied to every `direct_bet` recommendation
-- Bankroll updated per bet: win → bankroll += stake × (odds − 1); loss → bankroll −= stake
-- Evaluation report computed by `src/agent/evaluation.py` with: ROI, hit rate, bet frequency, max drawdown, bets placed, insufficient data rate
-- Report saved to `reports/agent_backtest/<timestamp>_<config_hash>.json`
-- Report also printed to stdout in a human-readable table
-
----
-
-### A14 — Add agent-backtest CLI with Parallelism
-**Size:** M | **Status:** completed | **Milestone:** M4 | **Depends on:** A12, A13
-
-Expose the backtest harness as a CLI command with concurrent execution support.
-
-**Acceptance criteria:**
-- `python main.py agent-backtest --from-date 2025-01-01 --to-date 2025-06-01 --stake-mode flat --sample 50` runs and prints the evaluation report
-- `--concurrency N` flag (default 5) controls how many agent runs execute concurrently via `asyncio.gather`
-- `--config` flag allows specifying a non-default `agent_config.yaml` for model/prompt comparison
-- Progress bar shown during run (matches completed / total)
+| ID | Status | Description | Comments |
+|---|---|---|---|
+| A12 | completed | Build the core backtest engine that replays snapshot episodes and compares agent recommendations against actual outcomes. **Acceptance:** `BacktestHarness` class in `src/agent/backtest.py`; loads historical matches from DuckDB for a date range/league; per match sets `SnapshotStore` to `replay`, runs the agent, loads the actual outcome from `raw_matches`; `BacktestRecord` holds match info, `MatchRecommendation`, actual outcome, per-market correctness; raises `SnapshotMissingError` at the harness level (no silent skip); `--sample N` runs a stratified random sample before a full run. | Size L · Milestone M4 · Depends on: A11 |
+| A13 | completed | Simulate bankroll evolution over backtest records and compute the evaluation report. **Acceptance:** `flat` staking (configurable, default 1% of starting bankroll) applied to every `direct_bet`; bankroll updates win → `+= stake × (odds − 1)`, loss → `−= stake`; `src/agent/evaluation.py` computes ROI, hit rate, bet frequency, max drawdown, bets placed, insufficient data rate; report saved to `reports/agent_backtest/<timestamp>_<config_hash>.json`; also printed as a human-readable table. | Size M · Milestone M4 · Depends on: A12 |
+| A14 | completed | Expose the backtest harness as a CLI command with concurrent execution support. **Acceptance:** `python main.py agent-backtest --from-date 2025-01-01 --to-date 2025-06-01 --stake-mode flat --sample 50` runs and prints the evaluation report; `--concurrency N` (default 5) controls concurrent agent runs via `asyncio.gather`; `--config` flag for model/prompt comparison; progress bar shown during run. | Size M · Milestone M4 · Depends on: A12, A13 |
 
 ---
 
 ## PHASE 5: Model & Prompt Tuning
 
-### A15 — Implement Kelly Criterion Staking
-**Size:** S | **Status:** completed | **Milestone:** M5 | **Depends on:** A13
-
-Add Kelly criterion as a second staking mode.
-
-**Acceptance criteria:**
-- `kelly` staking: stake = `value_edge / (odds − 1)` × current bankroll, capped at 10% of bankroll per bet
-- Selectable via `--stake-mode kelly` on `agent-backtest`
-- Both `flat` and `kelly` produce comparable report formats for side-by-side analysis
-
----
-
-### A16 — Build Config Comparison Framework
-**Size:** M | **Status:** completed | **Milestone:** M5 | **Depends on:** A14, A15
-
-Allow systematic comparison of agent configurations (model, prompt version, staking) over the same snapshot set.
-
-**Acceptance criteria:**
-- `python main.py agent-compare --configs config/agent_v1.yaml config/agent_v2.yaml --from-date ... --to-date ...` runs each config over the same snapshots and outputs a side-by-side comparison table
-- Comparison table includes: ROI, hit rate, bet frequency, max drawdown per config
-- Results saved to `reports/agent_backtest/comparison_<timestamp>.json`
-
----
-
-### A17 — Create agent_techspec.md
-**Size:** M | **Status:** completed | **Milestone:** M5 | **Depends on:** A08, A14 (partial — see note)
-
-Document the implementation details discovered during M1–M4 in a formal technical specification.
-
-**Acceptance criteria:**
-- `documents/agent_techspec.md` created as the authoritative implementation reference
-- Covers: `src/agent/` module structure, `StateGraph` node contracts, `SnapshotStore` file layout, `BacktestHarness` data flow, CLI command reference, LangSmith configuration
-- Reflects actual implementation (written after M4, not before)
-- `agent_prd.md` Extension Points section updated to mark `agent_techspec.md` as complete
-
-**Note:** written against A01–A08 only since A09–A16 (snapshot/backtest/tuning) are not yet implemented. The doc's Implementation Status section documents this gap explicitly and should be revisited once A14 actually lands.
+| ID | Status | Description | Comments |
+|---|---|---|---|
+| A15 | completed | Add Kelly criterion as a second staking mode. **Acceptance:** `kelly` staking = `value_edge / (odds − 1) × current bankroll`, capped at 10% of bankroll per bet; selectable via `--stake-mode kelly`; both `flat` and `kelly` produce comparable report formats. | Size S · Milestone M5 · Depends on: A13 |
+| A16 | completed | Allow systematic comparison of agent configurations (model, prompt version, staking) over the same snapshot set. **Acceptance:** `python main.py agent-compare --configs config/agent_v1.yaml config/agent_v2.yaml --from-date ... --to-date ...` runs each config over the same snapshots and outputs a side-by-side table (ROI, hit rate, bet frequency, max drawdown per config); results saved to `reports/agent_backtest/comparison_<timestamp>.json`. | Size M · Milestone M5 · Depends on: A14, A15 |
+| A17 | completed | Document the implementation details discovered during M1–M4 in a formal technical specification. **Acceptance:** `documents/agent_techspec.md` created covering `src/agent/` module structure, `StateGraph` node contracts, `SnapshotStore` file layout, `BacktestHarness` data flow, CLI command reference, LangSmith configuration; reflects actual implementation (written after M4, not before); `agent_prd.md` Extension Points section updated to mark `agent_techspec.md` complete. | Size M · Milestone M5 · Depends on: A08, A14 (partial). **Note:** written against A01–A08 only since A09–A16 weren't implemented yet at time of writing; the doc's Implementation Status section documents this gap explicitly and should be revisited once A14 actually lands. |
 
 ---
 
 ## PHASE 6: Batch Recommendation (Future)
 
-### A18 — Implement Batch Recommendation for Weekend Fixtures
-**Size:** L | **Status:** future | **Milestone:** M6 | **Depends on:** A08
-
-Allow the user to request recommendations for all upcoming fixtures in a league over a given weekend.
-
-**Acceptance criteria:**
-- `python main.py agent-batch --league E0 --weekend` fetches upcoming fixtures, runs the agent over each in parallel, and produces a ranked recommendation report (best value bets first)
-- Fixture discovery uses web search or a configured fixtures API
-- Report groups matches by date and highlights `direct_bet` recommendations at the top
-- Respects the same `agent_config.yaml` knobs as `agent-recommend`
+| ID | Status | Description | Comments |
+|---|---|---|---|
+| A18 | future | Allow the user to request recommendations for all upcoming fixtures in a league over a given weekend. **Acceptance:** `python main.py agent-batch --league E0 --weekend` fetches upcoming fixtures, runs the agent over each in parallel, produces a ranked recommendation report (best value bets first); fixture discovery via web search or a configured fixtures API; report groups matches by date and highlights `direct_bet` recommendations at the top; respects the same `agent_config.yaml` knobs as `agent-recommend`. | Size L · Milestone M6 · Depends on: A08 |
 
 ---
 
 ## PHASE 7: Backtest Execution Readiness
 
-The backtest harness (A09–A16) has been implemented and committed, but never actually run — `data/agent_snapshots/` is empty and no report exists under `reports/agent_backtest/`. This phase is the operational path from "harness exists" to "we have a first real backtest result."
+> The backtest harness (A09–A16) has been implemented and committed, but never actually run — `data/agent_snapshots/` is empty and no report exists under `reports/agent_backtest/`. This phase is the operational path from "harness exists" to "we have a first real backtest result."
 
-### A19 — Train and Select League-Context Forecast Models (Resolve BUG-010)
-
-**Size:** M | **Status:** completed | **Milestone:** M7 | **Depends on:** none (forecast-engine side)
-
-`config/model_selection.yaml` currently only has an `international` (market-odds-only) context. Every `forecast_league` call for an E0 match silently falls back to the market-odds-only path and tags the result `market_odds_only_league_fallback`. Any snapshot or backtest collected before this is fixed will permanently encode odds-only forecasts, not the full 147-feature league models. This story must land before A20, or A20's snapshot corpus must be discarded and recollected afterward.
-
-**Acceptance criteria:**
-- `python main.py train-forecast-suite --context league` trains all 8 forecast targets under the league context
-- `python main.py select-best-models --context league` populates `config/model_selection.yaml`'s `contexts.league` block for all 8 targets
-- A manual `forecast_league` call for a known E0 match returns `data_quality.prediction_basis == "team_history_and_market"`, not the league-fallback tag
-- BUG-010 in `documents/bugs.md` updated from `partial` to `fixed`
-
-**Completion notes (2026-06-27):** Plain `train-forecast-suite --context league` defaults to `lr`/`rf_regressor`, which crash ("No rows left after dropping records with missing labels or features") because 12 xG/LUCK columns are 100% NaN in the current feature store and non-XGBoost models require zero NaN across all 147 features. Trained all 8 targets individually instead via `train-target --target <t> --model xgb|xgb_regressor --context league`, matching the XGBoost-wins-every-target conclusion already established in `agent_techspec.md` Sections 22–24. Discovered and fixed two latent bugs in the selection pipeline that would have silently no-opped otherwise: (1) plain (non-sweep) training runs were never tagged `context`/`sweep_stage`, so `select-best-models` could never find them — fixed in `ModelManager.run_pipeline()`. (2) `ModelSelector` built `model_path` from the MLflow autolog artifact URI, which isn't a `joblib.load()`-able file — fixed by logging an `artifact_filename` param and pointing `model_path` at the real `models/*.joblib` artifact. Verified live: `forecast_league` for an E0 match now returns `data_quality.prediction_basis == "team_history_and_market"`. `documents/bugs.md` BUG-010 updated to `fixed`.
+| ID | Status | Description | Comments |
+|---|---|---|---|
+| A19 | completed | Train and select league-context forecast models (resolve BUG-010). `config/model_selection.yaml` currently only has an `international` (market-odds-only) context — every `forecast_league` call for an E0 match silently falls back to market-odds-only and tags the result `market_odds_only_league_fallback`. Must land before A20, or A20's snapshot corpus must be discarded and recollected afterward. **Acceptance:** `python main.py train-forecast-suite --context league` trains all 8 forecast targets under the league context; `python main.py select-best-models --context league` populates `config/model_selection.yaml`'s `contexts.league` block for all 8 targets; a manual `forecast_league` call for a known E0 match returns `data_quality.prediction_basis == "team_history_and_market"`, not the league-fallback tag; BUG-010 in `documents/bugs.md` updated from `partial` to `fixed`. | Size M · Milestone M7 · Depends on: none (forecast-engine side). **Completion notes (2026-06-27):** Plain `train-forecast-suite --context league` defaults to `lr`/`rf_regressor`, which crash ("No rows left after dropping records with missing labels or features") because 12 xG/LUCK columns are 100% NaN in the current feature store and non-XGBoost models require zero NaN across all 147 features. Trained all 8 targets individually instead via `train-target --target <t> --model xgb\|xgb_regressor --context league`, matching the XGBoost-wins-every-target conclusion already established in `agent_techspec.md` Sections 22–24. Discovered and fixed two latent bugs in the selection pipeline that would have silently no-opped otherwise: (1) plain (non-sweep) training runs were never tagged `context`/`sweep_stage`, so `select-best-models` could never find them — fixed in `ModelManager.run_pipeline()`. (2) `ModelSelector` built `model_path` from the MLflow autolog artifact URI, which isn't a `joblib.load()`-able file — fixed by logging an `artifact_filename` param and pointing `model_path` at the real `models/*.joblib` artifact. Verified live: `forecast_league` for an E0 match now returns `data_quality.prediction_basis == "team_history_and_market"`. `documents/bugs.md` BUG-010 updated to `fixed`. |
+| A20 | completed | Collect a pilot snapshot corpus for E0. Record a real snapshot corpus over a deliberately small E0 date range to validate the end-to-end record path (live Ollama + live Tavily) before committing to a larger run. `agent-snapshot` is sequential (no concurrency flag), so range size should be chosen for wall-clock feasibility, not statistical completeness. **Acceptance:** `agent-snapshot ... --dry-run` confirms fixture count for the pilot range; real run shows `Errors: 0`, or errors investigated/resolved before proceeding; every match has a `data/agent_snapshots/<match_id>/_complete.json` marker; corpus collected after A19 lands so `forecast_league` snapshots reflect league-context models, not the BUG-010 fallback. | Size S · Milestone M7 · Depends on: A11, A19. **Completion notes (2026-06-27):** Pilot range 2026-03-01 → 2026-03-16, E0 (most recent 24 finished matches). Dry-run confirmed 24 fixtures. First real run discarded — ran in parallel with A19's last verification step and completed before the `model_path` fix landed, so every match silently used `market_odds_only_league_fallback`. Cleared and re-ran after confirming the fix live: 24/24 processed, 0 errors — but **also invalid**: user inspected snapshot directories directly and found every one contained only `_complete.json` with zero actual tool-response files, leading to discovery of BUG-011 (`SnapshotStore`'s `threading.local()` never reaching the thread LangGraph's `ToolNode` actually runs tool calls on — see `agent_techspec.md` Section 18.4). Fixed `SnapshotStore` to use `contextvars.ContextVar` instead. Cleared a third time and re-collected: 24/24 processed, 0 errors, and this time genuinely verified — 24 `forecast_league_*.json` + 11 `web_search_*.json` files actually present on disk. |
+| A21 | completed | Run first agent backtest and record baseline report against the A20 pilot corpus, establishing a baseline ROI/hit-rate/drawdown reference for future prompt and model tuning. **Acceptance:** `agent-backtest --stake-mode flat` runs to completion and prints/saves an evaluation report under `reports/agent_backtest/`; same date range re-run with `--stake-mode kelly` for side-by-side comparison; baseline findings (ROI, hit rate, bet frequency, insufficient_data_rate, notable failure patterns) written up as a new section in `documents/agent_techspec.md`. | Size S · Milestone M7 · Depends on: A12, A13, A14, A20. **Completion notes (2026-06-27):** First flat run crashed in `simulate_flat_stake` (`TypeError: float() argument must be ... not 'NoneType'`) — the agent can mark a market `direct_bet` while `current_odds` is `null`, and `staking.py`'s skip-gate never checked for it. Fixed in both `simulate_flat_stake`/`simulate_kelly_stake`, plus 2 regression tests in `tests/test_staking.py`. Re-ran and got a "clean" 7-bet flat / 8-bet kelly result — **invalid**, because `agent-backtest` was secretly making live calls instead of replaying (BUG-011, see A20). After fixing `SnapshotStore` and re-collecting a genuine A20 corpus, both reports were discarded and regenerated for real: **flat** — 23/24 evaluated (1 skipped, `SnapshotMissingError`), 20 bets, 11 won, hit rate 0.55, ROI **+0.1845**, max drawdown 0.050, ending bankroll 1036.90. **kelly** — 20/24 evaluated (4 skipped), 5 bets, 2 won, hit rate 0.40, ROI **−0.1476**, max drawdown 0.136, ending bankroll 961.70. Genuinely-replayed bet frequency (0.87 flat) far higher than the bogus live-call run's (0.29) — confirms the original numbers were systematically wrong, not just imprecise. Two further findings written up in `agent_techspec.md` Section 18.6–18.7 rather than fixed here (out of scope): (1) flat/kelly evaluated different match counts from the identical corpus because the LLM regenerates its own tool-call args each run and the SHA-256 snapshot key occasionally misses on arg drift — A22 should run each config multiple times; (2) one match's recommendation stated the final score was known despite both leakage defenses — that protection is a mitigation, not a guarantee. Sample size (20–23 matches, 5–20 bets) still far too small for any edge conclusion. |
+| A22 | future | Once a baseline exists, use the config comparison framework to test whether a prompt or model change improves on it, over the identical match sample. **Acceptance:** at least one alternative `agent_config.yaml` variant created (e.g. a `v2` system prompt, or `provider: anthropic`); `agent-compare` run against the same snapshot corpus used in A21; comparison table reviewed, better-performing config adopted as new default if it wins on ROI without a worse max drawdown. | Size S · Milestone M7 · Depends on: A16, A21 |
 
 ---
 
-### A20 — Collect a Pilot Snapshot Corpus for E0
+## PHASE 8: Full Season Backtest Expansion
 
-**Size:** S | **Status:** completed | **Milestone:** M7 | **Depends on:** A11, A19
+> The pilot backtest (A20–A21) covered 24 matches (E0, March 1–16 2026). This phase expands coverage to the full 2025/26 E0 season (~380 matches) to produce a statistically meaningful baseline. Four pre-conditions must be resolved before large-scale recording begins.
 
-Record a real snapshot corpus over a deliberately small E0 date range to validate the end-to-end record path (live Ollama + live Tavily) before committing to a larger run. `agent-snapshot` is sequential (no concurrency flag), so range size should be chosen for wall-clock feasibility, not statistical completeness.
-
-**Acceptance criteria:**
-- `python main.py agent-snapshot --from-date <X> --to-date <Y> --league E0 --dry-run` run first to confirm fixture count for the chosen pilot range
-- `agent-snapshot` run for real (no `--dry-run`) over that range; final summary shows `Errors: 0`, or any errors are investigated and resolved before proceeding
-- Every match in the range has a `data/agent_snapshots/<match_id>/_complete.json` marker
-- Corpus was collected after A19 lands, so `forecast_league` snapshots reflect league-context models, not the BUG-010 fallback
-
-**Completion notes (2026-06-27):** Pilot range chosen: 2026-03-01 → 2026-03-16, E0 (the most recent 24 finished matches, the tail end of the available raw_matches data). Dry-run confirmed 24 fixtures. First real run was started in parallel with A19's last verification step and had to be discarded and redone — it completed before the `model_path` fix (mlflow artifact URI vs. loadable joblib) landed, so every match in it silently used the `market_odds_only_league_fallback` path. Cleared `data/agent_snapshots/` and re-ran after confirming the fix live. That second run reported 24/24 processed, 0 errors, all `_complete.json` markers present — **but this was also invalid**: the user inspected the snapshot directories directly and found every one contained only `_complete.json` and zero actual tool-response files, which led to discovering BUG-011 (`SnapshotStore`'s `threading.local()` never reaching the thread LangGraph's `ToolNode` actually runs tool calls on — see `agent_techspec.md` Section 18.4 for the full root-cause writeup). Fixed `SnapshotStore` to use `contextvars.ContextVar` instead. Cleared the corpus a third time and re-collected: 24/24 processed, 0 errors, and this time genuinely verified — 24 `forecast_league_*.json` + 11 `web_search_*.json` files actually present on disk, confirmed via direct inspection, not just log output.
-
----
-
-### A21 — Run First Agent Backtest and Record Baseline Report
-
-**Size:** S | **Status:** completed | **Milestone:** M7 | **Depends on:** A12, A13, A14, A20
-
-Produce the first real evaluation report against the pilot corpus from A20, establishing a baseline ROI/hit-rate/drawdown reference for future prompt and model tuning.
-
-**Acceptance criteria:**
-- `python main.py agent-backtest --from-date <X> --to-date <Y> --league E0 --stake-mode flat` runs to completion against the A20 corpus and prints/saves an evaluation report under `reports/agent_backtest/`
-- Same date range re-run with `--stake-mode kelly` for a side-by-side comparison
-- Baseline findings (ROI, hit rate, bet frequency, insufficient_data_rate, notable failure patterns) written up as a new section in `documents/agent_techspec.md`
-
-**Completion notes (2026-06-27):** First flat run crashed in `simulate_flat_stake` with `TypeError: float() argument must be ... not 'NoneType'` — the agent can mark a market `direct_bet` while `current_odds` is `null` (odds missing for that one market), and `staking.py`'s skip-gate never checked for it. Fixed in both `simulate_flat_stake` and `simulate_kelly_stake`, plus two new regression tests in `tests/test_staking.py`. Re-ran and got a "clean" 7-bet flat / 8-bet kelly result — **which was invalid**, because at that point `agent-backtest` was secretly making live calls instead of replaying anything (BUG-011, see A20's completion notes and `agent_techspec.md` Section 18.4). After fixing `SnapshotStore` and re-collecting a genuine A20 corpus, both reports were discarded and regenerated for real:
-
-**flat** — 23/24 matches evaluated (1 skipped, `SnapshotMissingError`), 20 bets, 11 won, hit rate 0.55, ROI **+0.1845**, max drawdown 0.050, ending bankroll 1036.90.
-**kelly** — 20/24 matches evaluated (4 skipped), 5 bets, 2 won, hit rate 0.40, ROI **−0.1476**, max drawdown 0.136, ending bankroll 961.70.
-
-The genuinely-replayed bet frequency (0.87 for flat) is far higher than the bogus live-call run's (0.29) — confirms the original numbers weren't just imprecise, they were systematically wrong. Two further findings written up in `agent_techspec.md` Section 18.6–18.7 rather than fixed in this story (out of scope): (1) flat and kelly evaluated a *different* number of matches from the identical corpus, because the LLM regenerates its own tool-call arguments each run and the SHA-256 snapshot key occasionally misses on argument drift — A22 should run each config multiple times, not trust a single pass; (2) one match's recommendation explicitly stated the final score was known despite both leakage defenses (`before:<date>` filter + prompt instruction), meaning that protection is a mitigation, not a guarantee. Sample size (20–23 matches, 5–20 bets) is still far too small to draw any conclusion about agent edge — this story's goal was a working, reproducible, *genuinely isolated* pipeline and a documented baseline, not a profitability verdict.
-
----
-
-### A22 — Compare Agent Configurations Against the Baseline
-
-**Size:** S | **Status:** future | **Milestone:** M7 | **Depends on:** A16, A21
-
-Once a baseline exists, use the config comparison framework to test whether a prompt or model change improves on it, over the identical match sample.
-
-**Acceptance criteria:**
-- At least one alternative `agent_config.yaml` variant created (e.g. a `v2` system prompt, or `provider: anthropic`)
-- `python main.py agent-compare --configs config/agent_config.yaml config/agent_config_v2.yaml --from-date <X> --to-date <Y> --league E0 --sample N` run against the same snapshot corpus used in A21
-- Comparison table reviewed; the better-performing config adopted as the new default if it wins on ROI without a worse max drawdown
+| ID | Status | Description | Comments |
+|---|---|---|---|
+| A23 | future | Fix snapshot recording to use temperature=0 so LLM tool-call arguments are deterministic across runs. The pilot revealed that at temperature=0.1 the LLM regenerates slightly different query strings each run, producing SHA-256 key misses on replay and dropping different match subsets per backtest run (flat evaluated 23/24, kelly 20/24 on the identical corpus). At scale this compounds to dozens of silently skipped matches per run. **Acceptance:** agent config used during `agent-snapshot` sets `temperature: 0`; re-run of the existing 24-match pilot produces zero `SnapshotMissingError` skips on first replay (both flat and kelly evaluate the full 24/24); unit test added confirming that back-to-back `agent-snapshot` runs on the same match produce identical snapshot hashes. | Size S · Milestone M8 · Depends on: A21 |
+| A24 | future | Download complete 2025/26 season raw data and refresh the feature store. The current `data/raw/football_data/E0_2526.csv` ends at 2026-03-16 (301 rows); the season ran through May 2026 (~79 matches missing). **Acceptance:** updated `E0_2526.csv` covers the full season through the final matchday (≥ 380 rows for E0); feature engineering pipeline re-run over the full date range so `ForecastService` can produce predictions for all matches; `forecast_league` for a match in April or May 2026 returns a result without a `data_quality` fallback tag. | Size S · Milestone M8 · Depends on: A23 |
+| A25 | future | Collect the full 2025/26 E0 snapshot corpus. Run `agent-snapshot` from 2025-08-15 to the final matchday with the temperature=0 fix (A23) and updated data (A24) in place. **Acceptance:** `agent-snapshot --from-date 2025-08-15 --to-date 2026-05-25 --league E0 --dry-run` confirms ≥ 370 fixtures; real run completes with 0 errors; every match directory contains at least one `forecast_league_*.json` file (zero tool-call files is a repeat of BUG-011 — must be caught before proceeding); total `web_search_*.json` count across all matches is non-zero. | Size M · Milestone M8 · Depends on: A24 |
+| A26 | future | Run full-season backtests (flat and kelly) and produce the expanded baseline report. Supports `--sample N` (already wired in `agent-backtest`) for a quick sanity-check over a random subset of the collected corpus before committing to the full run. **Acceptance:** quick-test path: `agent-backtest --from-date 2025-08-15 --to-date 2026-05-25 --league E0 --sample 30 --stake-mode flat` completes with ≤ 2 `SnapshotMissingError` skips; full path: same command without `--sample` and with `--stake-mode flat` then `--stake-mode kelly` both complete with ≤ 5% matches skipped; reports saved under `reports/agent_backtest/`; findings written up in `documents/agent_techspec.md` as a new section covering ROI, hit rate, drawdown, and leakage observations across the full season; note that the training cutoff (2023-04-27) predates the entire 2025/26 season so evaluation is genuinely out-of-sample. | Size S · Milestone M8 · Depends on: A25 |

@@ -402,10 +402,10 @@ def compute_defensive_anchor(
     stats["player_id"] = pd.to_numeric(stats["player_id"], errors="coerce")
     stats["minutes_played"] = pd.to_numeric(stats["minutes_played"], errors="coerce")
     stats["interceptions"] = pd.to_numeric(
-        stats.get("interceptions", pd.Series(0, index=stats.index)), errors="coerce"
+        stats["interceptions"] if "interceptions" in stats.columns else 0, errors="coerce"
     ).fillna(0.0)
     stats["recoveries"] = pd.to_numeric(
-        stats.get("recoveries", pd.Series(0, index=stats.index)), errors="coerce"
+        stats["recoveries"] if "recoveries" in stats.columns else 0, errors="coerce"
     ).fillna(0.0)
 
     match_info = raw_df[["match_id", "date", "home_team", "away_team"]].copy()
@@ -413,12 +413,8 @@ def compute_defensive_anchor(
 
     stats_dated = stats.merge(match_info[["match_id", "date"]], on="match_id", how="inner")
     stats_dated["def_rec"] = stats_dated["interceptions"] + stats_dated["recoveries"]
-    stats_dated["def_rec_p90"] = stats_dated.apply(
-        lambda r: r["def_rec"] / r["minutes_played"] * 90.0
-        if (r["minutes_played"] is not None and r["minutes_played"] > 0)
-        else float("nan"),
-        axis=1,
-    )
+    mp = pd.to_numeric(stats_dated["minutes_played"], errors="coerce")
+    stats_dated["def_rec_p90"] = stats_dated["def_rec"] / mp.where(mp > 0) * 90.0
     stats_dated = stats_dated.sort_values(["player_id", "date", "match_id"]).reset_index(drop=True)
     stats_dated["def_anchor_roll"] = stats_dated.groupby("player_id")["def_rec_p90"].transform(
         lambda s: s.shift(1).rolling(5, min_periods=1).mean()

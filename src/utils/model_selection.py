@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+import json
 from pathlib import Path
 from typing import Any
 
@@ -15,12 +16,25 @@ from src.utils.logger import get_logger
 LOGGER = get_logger(__name__)
 
 SELECTION_CONFIG_PATH = Path("config/model_selection.yaml")
+DEFAULT_MODEL_DIR = Path("models")
 
 # Metrics where lower = better
 _LOWER_IS_BETTER = {"log_loss", "mae", "rmse", "test_log_loss", "test_mae", "test_rmse"}
 
 # Classification targets use test_log_loss; regression targets use test_mae
 _CLASSIFICATION_TARGETS = {"result_3way", "btts"}
+
+
+def missing_features(required: list[str], available: set[str]) -> list[str]:
+    """Return the subset of `required` not present in `available`.
+
+    Used at promotion time (BUG-012 layer 3c) to check whether a candidate
+    model's declared feature list can actually be produced by the live
+    feature pipeline (FeatureFactory.build_for_match) before writing it to
+    model_selection.yaml — catching a training/serving feature-set mismatch
+    before it reaches live inference, not after.
+    """
+    return [f for f in required if f not in available]
 
 
 def _primary_metric_for_target(target_name: str) -> str:
@@ -41,8 +55,21 @@ def _is_better(new_val: float, old_val: float, metric: str, min_improvement: flo
 class ModelSelector:
     """Select and persist the best-performing model per target and context."""
 
-    def __init__(self, config_path: str | Path = SELECTION_CONFIG_PATH) -> None:
+    def __init__(
+        self,
+        config_path: str | Path = SELECTION_CONFIG_PATH,
+        model_dir: str | Path = DEFAULT_MODEL_DIR,
+        computable_features: set[str] | None = None,
+    ) -> None:
         self.config_path = Path(config_path)
+        self.model_dir = Path(model_dir)
+        # BUG-012 layer 3c: the set of feature names the live feature pipeline
+        # can currently produce (e.g. FeatureFactory.build_for_match(...).columns
+        # on a sample match). None disables the promotion-time coverage check
+        # (e.g. in contexts with no live DB, or existing callers/tests that
+        # predate this guard) — see run_select_best_models in main.py for how
+        # this is populated in the real CLI path.
+        self.computable_features = computable_features
         self.client = mlflow.tracking.MlflowClient()
 
     def load_config(self) -> dict[str, Any]:
@@ -154,8 +181,41 @@ class ModelSelector:
         }
         if current_entry.get("model_path"):
             new_entry["previous_model_path"] = current_entry["model_path"]
-        if best.get("feature_subset"):
-            new_entry["feature_subset"] = best["feature_subset"]
+
+        # BUG-012 layer 3d: prefer the feature_subset MLflow param when the
+        # training run logged one (as international-context runs do); when it
+        # didn't (as league-context runs previously never did), fall back to
+        # the model's own .metadata.json feature_names — the training
+        # pipeline already writes this file, so this is free, and it keeps
+        # model_selection.yaml self-documenting for every context.
+        feature_subset = best.get("feature_subset")
+        artifact_feature_names: list[str] | None = None
+        metadata_path = self.model_dir / f"{best.get('artifact_filename', '')}.metadata.json"
+        if best.get("artifact_filename") and metadata_path.exists():
+            with metadata_path.open("r", encoding="utf-8") as meta_fh:
+                artifact_feature_names = json.load(meta_fh).get("feature_names")
+        if not feature_subset and artifact_feature_names:
+            feature_subset = artifact_feature_names
+        if feature_subset:
+            new_entry["feature_subset"] = feature_subset
+
+        # BUG-012 layer 3c: refuse to promote a model whose required features
+        # the live feature pipeline can't currently produce — fail loudly here
+        # instead of at live-inference time (see BUG-012 in documents/bugs.md).
+        if self.computable_features is not None and feature_subset:
+            gaps = missing_features(feature_subset, self.computable_features)
+            if gaps:
+                LOGGER.error(
+                    "Refusing to promote target=%s context=%s run_id=%s: "
+                    "%d required feature(s) not computable by the live feature "
+                    "pipeline: %s",
+                    target_name, context, best["run_id"], len(gaps), gaps,
+                )
+                print(
+                    f"  REFUSED: {target_name} [{context}] | run={best['run_id'][:8]} | "
+                    f"missing from live feature pipeline: {gaps}"
+                )
+                return None
 
         action = "[DRY RUN] Would select" if dry_run else "Selected"
         LOGGER.info(

@@ -74,6 +74,28 @@ def test_squad_rolling_second_match_uses_first_match_stats() -> None:
     assert row_m2["SQUAD_HOME_XG_MEAN_R5"] == pytest.approx(0.55, abs=1e-3)  # only 1 prior → same value
 
 
+def test_squad_rolling_carries_forward_for_match_without_own_player_stats() -> None:
+    """BUG-012 layer 2: m3 (in raw_matches, per _raw_matches_df) has no row of
+    its own in raw_player_match_stats (per _player_df_two_matches, which only
+    covers m1/m2) — this is exactly the shape of build_for_match()'s synthetic
+    upcoming-match row. The rolling SQUAD_* value going into m3 must still
+    reflect Arsenal/Everton's last 2 recorded performances (m1, m2), not NaN —
+    an exact-match_id join silently drops any fixture lacking its own
+    lineup/player-stats row, even when the team's rolling history exists."""
+    result = FeatureFactory._squad_rolling_from_data(_player_df_two_matches(), _raw_matches_df())
+
+    row_m3 = result[result["match_id"] == "m3"].iloc[0]
+    # Arsenal (home) xG across m1, m2: [0.5, 0.6, 0.8, 0.9] → mean = 0.7
+    assert row_m3["SQUAD_HOME_XG_MEAN_R3"] == pytest.approx(0.7, abs=1e-3), (
+        f"Expected carried-forward SQUAD_HOME_XG_MEAN_R3=0.7 at m3, got {row_m3['SQUAD_HOME_XG_MEAN_R3']}"
+    )
+    assert not pd.isna(row_m3["SQUAD_AWAY_RATING_MEAN_R5"]), (
+        "SQUAD_AWAY_RATING_MEAN_R5 at m3 must carry forward Everton's rolling "
+        "rating from m1/m2, not fall back to NaN just because m3 itself has no "
+        "recorded player stats"
+    )
+
+
 def test_squad_rolling_handles_empty_player_data() -> None:
     empty = pd.DataFrame(columns=["match_id", "team_name", "xg", "xa", "rating"])
     result = FeatureFactory._squad_rolling_from_data(empty, _raw_matches_df())

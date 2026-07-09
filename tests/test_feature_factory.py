@@ -473,3 +473,74 @@ def test_opp_adjusted_features_combine_home_and_away_venues(tmp_path: Path) -> N
     assert target["OPP_ADJ_HOME_GOALS_SCORED_R3"] == pytest.approx(2.0)
     # Alpha FC's combined-venue goals conceded R3: h1=0, a1=1 (opponent fthg), h2=0 → (0+1+0)/3
     assert target["OPP_ADJ_HOME_GOALS_CONCEDED_R3"] == pytest.approx(1 / 3)
+
+
+def test_build_for_match_includes_squad_and_luck_columns(tmp_path: Path) -> None:
+    """BUG-012 layer 1: build_for_match() must compute the same SQUAD_*/LUCK_*
+    columns that compute_rolling_stats() computes for feature_store, or
+    ForecastService.forecast_upcoming's league path KeyErrors on them."""
+    db_path = tmp_path / "test_fpai.db"
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        yaml.safe_dump({"paths": {"database_path": str(db_path)}}),
+        encoding="utf-8",
+    )
+
+    with duckdb.connect(str(db_path)) as conn:
+        conn.execute(
+            """
+            CREATE TABLE raw_matches (
+                match_id TEXT PRIMARY KEY, league TEXT, tier INTEGER, date TIMESTAMP,
+                home_team TEXT, away_team TEXT, fthg INTEGER, ftag INTEGER,
+                hs FLOAT, "as" FLOAT, hst FLOAT, ast FLOAT, hc FLOAT, ac FLOAT,
+                hy FLOAT, ay FLOAT, hr FLOAT, ar FLOAT,
+                odds_h FLOAT, odds_d FLOAT, odds_a FLOAT,
+                avgh FLOAT, avgd FLOAT, avga FLOAT,
+                xg_h FLOAT, xg_a FLOAT, xga_h FLOAT, xga_a FLOAT,
+                over25_odds FLOAT, under25_odds FLOAT,
+                ah_line FLOAT, ah_home_odds FLOAT, ah_away_odds FLOAT
+            )
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO raw_matches
+            (match_id, league, tier, date, home_team, away_team, fthg, ftag, odds_h, odds_d, odds_a, avgh, avgd, avga)
+            VALUES
+            ('m1', 'E0', 1, '2025-08-10 20:00:00', 'Arsenal', 'Everton', 2, 1, 1.5, 4.0, 5.0, 1.5, 4.0, 5.0),
+            ('m2', 'E0', 1, '2025-08-17 20:00:00', 'Arsenal', 'Everton', 1, 1, 1.5, 4.0, 5.0, 1.5, 4.0, 5.0)
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE raw_player_match_stats (
+                match_id TEXT, team_name TEXT, xg FLOAT, xa FLOAT, rating FLOAT,
+                goals INTEGER, assists INTEGER
+            )
+            """
+        )
+        conn.executemany(
+            "INSERT INTO raw_player_match_stats VALUES (?, ?, ?, ?, ?, ?, ?)",
+            [
+                ("m1", "Arsenal", 0.6, 0.2, 7.0, 2, 1),
+                ("m1", "Everton", 0.4, 0.1, 6.5, 1, 0),
+            ],
+        )
+
+    feature_factory = FeatureFactory(config_path=str(config_path))
+    row = feature_factory.build_for_match(
+        home_team="Arsenal", away_team="Everton", match_date="2025-08-24",
+        league="E0", odds_h=1.8, odds_d=3.6, odds_a=4.2,
+    )
+
+    expected_new_columns = [
+        "SQUAD_HOME_XG_MEAN_R3", "SQUAD_HOME_XG_MEAN_R5",
+        "SQUAD_HOME_XA_MEAN_R3", "SQUAD_HOME_XA_MEAN_R5",
+        "SQUAD_HOME_RATING_MEAN_R3", "SQUAD_HOME_RATING_MEAN_R5",
+        "SQUAD_AWAY_XG_MEAN_R3", "SQUAD_AWAY_XG_MEAN_R5",
+        "SQUAD_AWAY_XA_MEAN_R3", "SQUAD_AWAY_XA_MEAN_R5",
+        "SQUAD_AWAY_RATING_MEAN_R3", "SQUAD_AWAY_RATING_MEAN_R5",
+        "LUCK_HOME_BURNOUT_R5", "LUCK_AWAY_BURNOUT_R5",
+    ]
+    for col in expected_new_columns:
+        assert col in row.columns, f"build_for_match() missing column: {col}"

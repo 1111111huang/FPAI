@@ -1257,9 +1257,21 @@ src/ingestion/
 - `config/team_mapping.json` stays a single shared file; FotMob team-name variants are added to it alongside Understat's.
 
 ### 27.4 Squad-Level Feature Engineering & Model Integration (Phase 14c)
-- New `SQUAD_*` feature family in `feature_factory.py`, aggregating `raw_player_match_stats` into squad-level rolling form (e.g. `SQUAD_XG_PER90_R5`, `SQUAD_RATING_PROXY_R5`), using the same shifted-window, pre-match-safe convention as existing feature families (Section 3.2).
+12 `SQUAD_*` features added to `feature_factory.py`, computed from `raw_player_match_stats` aggregated to team level per match, then rolled with `shift(1)` before the window (pre-match safe):
+
+| Feature | Description |
+|---|---|
+| `SQUAD_HOME_XG_MEAN_R3` / `R5` | Rolling mean of home squad's per-match xG (3 / 5 matches) |
+| `SQUAD_HOME_XA_MEAN_R3` / `R5` | Rolling mean of home squad's per-match xA |
+| `SQUAD_HOME_RATING_MEAN_R3` / `R5` | Rolling mean of home squad's FotMob player ratings |
+| `SQUAD_AWAY_XG_MEAN_R3` / `R5` | Same for the away side |
+| `SQUAD_AWAY_XA_MEAN_R3` / `R5` | |
+| `SQUAD_AWAY_RATING_MEAN_R3` / `R5` | |
+
+Implementation: `FeatureFactory._compute_squad_features()` queries `raw_player_match_stats`, calls `_squad_rolling_from_data()` (static), which normalises team names via `standardize_team_name`, aggregates to `(match_id, team)` mean, then applies the shifted rolling windows. Joined to the main feature frame on `match_id` before cold-start imputation.
+
 - `SQUAD_*` features are enabled only for competitions whose registry entry includes `"SQUAD"` in `enabled_feature_groups` — i.e., `competition_specific` tier only. `general_purpose` tier never sees them, by construction of the feature-superset invariant in 27.2.
-- Competition-specific models are retrained with the expanded feature set once `SQUAD_*` features are available; `select-best-models` re-run to update `model_selection.yaml`.
+- Competition-specific models retrained with the expanded feature set (159 features for PL); `home_goals` model promoted by `select-best-models` (MAE 0.979 → 0.974). Remaining targets kept June 2026 models (improvement below 0.005 threshold). XGBoost assigned zero importance to all 12 SQUAD features against the existing 147 team-form features — the signal is present in the feature store (100% coverage on 3,721 PL rows) and will register if it finds a predictive edge as data accumulates.
 
 ### 27.5 Dependency Map
 - **Phase 14a** (competition registry + tier reorg, 27.2): no dependency on player data. Buildable now.

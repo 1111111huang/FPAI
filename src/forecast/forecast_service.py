@@ -214,6 +214,14 @@ class ForecastService:
         metadata: dict[str, Any],
         feature_row: pd.DataFrame,
     ) -> dict[str, Any]:
+        # BUG-012 layer 3b: feature_row may carry the union of every loaded
+        # target's columns (see forecast_upcoming) — slice to this target's
+        # own trained feature list/order before predicting, so one target
+        # needing extra columns never affects another's input shape.
+        target_feature_names = metadata.get("feature_names")
+        if target_feature_names:
+            feature_row = feature_row[target_feature_names]
+
         if definition.task_type in {"binary_classification", "multiclass_classification"}:
             probabilities = self._coerce_probability_vector(model.predict_proba(feature_row))
             labels = self._class_labels(definition, model, probabilities)
@@ -265,11 +273,22 @@ class ForecastService:
                         model_path = self.config_path.parent / model_path
                     if not model_path.exists():
                         continue
+                    # BUG-012 layer 3a: the model's own .metadata.json sidecar
+                    # (written by the training pipeline) is ground truth for
+                    # what features it was actually trained on — prefer it over
+                    # schema.yaml's aspirational selected_features list, which
+                    # can drift ahead of what any given artifact supports.
+                    metadata_path = model_path.with_suffix(model_path.suffix + ".metadata.json")
+                    artifact_feature_names: list[str] | None = None
+                    if metadata_path.exists():
+                        with metadata_path.open("r", encoding="utf-8") as meta_fh:
+                            artifact_metadata = json.load(meta_fh)
+                        artifact_feature_names = artifact_metadata.get("feature_names")
                     metadata: dict[str, Any] = {
                         "target": target,
                         "model_type": entry.get("model_type", "unknown"),
                         "artifact_name": model_path.name,
-                        "feature_names": entry.get("feature_subset") or self.feature_names,
+                        "feature_names": entry.get("feature_subset") or artifact_feature_names or self.feature_names,
                         "feature_subset": entry.get("feature_subset"),
                     }
                     loaded[target] = (definition, self._load_model(model_path, metadata), metadata)
@@ -323,8 +342,6 @@ class ForecastService:
             prediction_basis = "market_odds_only"
             mkt_row = self._compute_mkt_features_from_odds(odds_h, odds_d, odds_a, over25_odds, ah_line, ah_home_odds, ah_away_odds)
             feature_row = mkt_row
-            feature_names_used = [f for f in _MKT_FEATURES if f in feature_row.columns]
-            feature_count = feature_row[feature_names_used].notna().sum().sum()
             context = "international"
         else:
             # US#84: full feature computation
@@ -335,20 +352,7 @@ class ForecastService:
                 league=league, odds_h=odds_h, odds_d=odds_d, odds_a=odds_a,
                 over25_odds=over25_odds, ah_line=ah_line, ah_home_odds=ah_home_odds, ah_away_odds=ah_away_odds,
             )
-            feature_names_used = self.feature_names
-            feature_count = feature_row[feature_names_used].notna().sum().sum() if feature_names_used else 0
             context = "league"
-
-        # Align feature frame to expected columns (fill missing with NaN)
-        for col in feature_names_used:
-            if col not in feature_row.columns:
-                feature_row[col] = float("nan")
-        feature_frame = feature_row[feature_names_used].apply(pd.to_numeric, errors="coerce").astype(float)
-
-        # Impute column means for any remaining NaN (cold-start)
-        for col in feature_frame.columns:
-            if feature_frame[col].isna().any():
-                feature_frame[col] = feature_frame[col].fillna(0.0)
 
         loaded = self._load_context_models(context)
         if not loaded:
@@ -356,6 +360,36 @@ class ForecastService:
 
         # Filter loaded to active_targets
         loaded = {t: v for t, v in loaded.items() if t in active_targets}
+
+        if match_type == "international":
+            feature_names_used = [f for f in _MKT_FEATURES if f in feature_row.columns]
+        else:
+            # BUG-012 layer 3b: use the union of each *loaded* model's own
+            # feature list (from _load_context_models, which now reads each
+            # artifact's .metadata.json) rather than schema.yaml's full
+            # selected_features — a model is never asked for a column it
+            # wasn't trained on, even if schema.yaml has since drifted ahead
+            # of what that specific artifact supports.
+            feature_names_used = sorted({
+                name
+                for _, __, metadata in loaded.values()
+                for name in metadata.get("feature_names", [])
+            })
+
+        # Align feature frame to expected columns (fill missing with NaN) —
+        # this must run before any feature_row[feature_names_used] access, or
+        # a column absent from feature_row (e.g. a lineup-gated feature with
+        # no match_lineups data yet) KeyErrors instead of cold-start imputing.
+        for col in feature_names_used:
+            if col not in feature_row.columns:
+                feature_row[col] = float("nan")
+        feature_frame = feature_row[feature_names_used].apply(pd.to_numeric, errors="coerce").astype(float)
+        feature_count = feature_frame.notna().sum().sum()
+
+        # Impute column means for any remaining NaN (cold-start)
+        for col in feature_frame.columns:
+            if feature_frame[col].isna().any():
+                feature_frame[col] = feature_frame[col].fillna(0.0)
 
         row_series = feature_frame.iloc[0]
         forecast_result, metadata_by_target = self._score_targets(feature_frame, loaded, row_series, feature_names_used)
