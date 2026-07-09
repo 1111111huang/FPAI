@@ -28,3 +28,6 @@ CLAUDE.md
 
 # Local git worktrees (scratch space, never committed)
 .claude/worktrees/
+
+# Runtime logs (grow unbounded, not source)
+data/logs/*.log
