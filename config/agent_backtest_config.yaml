@@ -1,0 +1,20 @@
+# Backtest-specific agent configuration.
+# temperature: 0.0 ensures the LLM generates identical tool-call arguments
+# across record and replay runs, preventing SHA-256 key misses (A23).
+
+model: "llama3.1:8b"
+provider: "ollama"
+temperature: 0.0
+max_tool_calls: 10
+
+min_odds_threshold: 2.0
+min_value_edge: 0.05
+
+markets:
+  - result_3way
+  - btts
+  - total_goals
+  - home_corners
+  - away_corners
+
+system_prompt_version: "v1"
