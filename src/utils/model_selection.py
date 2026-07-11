@@ -154,13 +154,35 @@ class ModelSelector:
         best_metric_val = best["metrics"].get(metric, best["metrics"].get(metric.replace("test_", "")))
         current_metric_val = current_entry.get("metric_value")
 
-        if current_metric_val is not None:
+        # BUG-014: a tied/no-improvement metric only justifies skipping
+        # promotion if the current champion's model_path is actually usable.
+        # select-best-models doesn't train anything itself, so re-running it
+        # against an already-recorded champion finds the identical run every
+        # time -- "no improvement" forever -- which would otherwise leave a
+        # stale, broken model_path (e.g. a pre-BUG-010-fix MLflow artifact
+        # URI) permanently un-refreshed, with no way to self-correct.
+        current_model_path = current_entry.get("model_path")
+        current_path_resolves = False
+        if current_model_path:
+            resolved = Path(current_model_path)
+            if not resolved.is_absolute():
+                resolved = self.model_dir.parent / resolved
+            current_path_resolves = resolved.exists()
+
+        if current_metric_val is not None and current_path_resolves:
             if not _is_better(float(best_metric_val), float(current_metric_val), metric, min_improvement):
                 LOGGER.info(
                     "No improvement for target=%s context=%s: current=%.4f best=%.4f (min_improvement=%.4f)",
                     target_name, context, current_metric_val, best_metric_val, min_improvement,
                 )
                 return None
+        elif current_metric_val is not None and not current_path_resolves:
+            LOGGER.info(
+                "Refreshing target=%s context=%s despite tied/no-improvement metric "
+                "(current=%.4f best=%.4f) -- current model_path %r does not resolve "
+                "to an existing file (BUG-014).",
+                target_name, context, current_metric_val, best_metric_val, current_model_path,
+            )
 
         # Prefer the plain joblib path (ForecastService.joblib.load-compatible) logged
         # via the "artifact_filename" param. Fall back to the MLflow-flavor autolog
