@@ -359,6 +359,7 @@ class ForecastService:
             mkt_row = self._compute_mkt_features_from_odds(odds_h, odds_d, odds_a, over25_odds, ah_line, ah_home_odds, ah_away_odds)
             feature_row = mkt_row
             context = "international"
+            unknown_team = False  # no team-identity lookup happens on this path
         else:
             # US#84: full feature computation
             prediction_basis = "team_history_and_market"
@@ -369,6 +370,9 @@ class ForecastService:
                 over25_odds=over25_odds, ah_line=ah_line, ah_home_odds=ah_home_odds, ah_away_odds=ah_away_odds,
             )
             context = "league"
+            # US#108: build_for_match's own zero-history detection, distinct from
+            # the feature_completeness-based cold_start_risk computed below.
+            unknown_team = bool(feature_row["_unknown_team"].iloc[0])
 
         loaded = self._load_context_models(context)
         if not loaded:
@@ -444,6 +448,7 @@ class ForecastService:
             "data_quality": {
                 "prediction_basis": prediction_basis,
                 "feature_count": int(feature_count),
+                "unknown_team": unknown_team,
                 "caveat": caveat,
             },
         }

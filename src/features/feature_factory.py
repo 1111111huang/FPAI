@@ -879,6 +879,15 @@ class FeatureFactory:
                 [home_norm, home_norm, away_norm, away_norm],
             ).fetchdf()
 
+        # US#108: detect a team with zero rows in raw_matches at all -- distinct
+        # from the existing cold_start_risk/feature_completeness signal, which
+        # only catches sparse/missing individual feature values for a team that
+        # does have some history. Checked here (against the raw, unfiltered
+        # fetch) before any cold-start imputation runs.
+        home_has_history = bool(((raw_df["home_team"] == home_norm) | (raw_df["away_team"] == home_norm)).any())
+        away_has_history = bool(((raw_df["home_team"] == away_norm) | (raw_df["away_team"] == away_norm)).any())
+        unknown_team = not home_has_history or not away_has_history
+
         if raw_df.empty:
             # No history — build empty history, synthetic row only; cold-start imputation covers NaNs
             raw_df = pd.DataFrame(columns=[
@@ -1061,6 +1070,7 @@ class FeatureFactory:
         if row.empty:
             raise RuntimeError("build_for_match: synthetic row missing after feature computation.")
         row = row.drop(columns=["match_id"], errors="ignore")
+        row["_unknown_team"] = unknown_team
         return row.reset_index(drop=True)
 
     def generate_feature_report(self) -> dict[str, object]:
