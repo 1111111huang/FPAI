@@ -35,3 +35,8 @@ mlflow
 
 seaborn
 mcp
+
+# Web app backend (app/backend)
+fastapi
+uvicorn
+httpx
