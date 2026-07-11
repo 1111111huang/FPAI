@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from pydantic import BaseModel, ValidationError
 
+from app.backend.match_info import gate_league
 from app.backend.recommendation_cache import RecommendationCache
 from src.agent.graph import run_agent
 
@@ -38,9 +39,13 @@ class RecommendationRequest(BaseModel):
     match_id: str | None = None
 
     def to_match_info(self) -> dict:
+        # W03: the app decides whether 'league' is set, via a hardcoded
+        # allowlist independent of the engine/agent's own routing -- not a
+        # direct pass-through of whatever the caller supplied.
         match_info = {"home_team": self.home_team, "away_team": self.away_team, "date": self.date}
-        if self.league is not None:
-            match_info["league"] = self.league
+        gated_league = gate_league(self.league)
+        if gated_league is not None:
+            match_info["league"] = gated_league
         if self.odds is not None:
             match_info["odds"] = self.odds.model_dump()
         return match_info
