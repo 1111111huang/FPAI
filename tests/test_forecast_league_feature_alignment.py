@@ -146,6 +146,13 @@ def test_forecast_upcoming_league_ignores_schema_features_model_was_not_trained_
         tmp_path,
         schema_features=["OFF_HOME_FTHG_R5", "MKT_IMPLIED_HOME", "XOC_HOME"],  # XOC_HOME: unproducible today
     )
+    # US#107: forecast_upcoming's league branch now consults config/competitions.yaml
+    # before loading model context -- E0 must be registered competition_specific here
+    # for this test to reach the same league-context path it was already exercising.
+    (config_path.parent / "config" / "competitions.yaml").write_text(
+        yaml.safe_dump({"competitions": {"E0": {"competition_id": "E0", "tier": "competition_specific", "league_code": "E0"}}}),
+        encoding="utf-8",
+    )
     _write_raw_matches(config_path)
     _write_league_model(
         config_path,

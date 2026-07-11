@@ -19,6 +19,7 @@ from src.forecast.uncertainty import (
     poisson_count_distribution,
     residual_prediction_interval,
 )
+from src.logic.competition_registry import get_competition_definition
 from src.logic.target_registry import TargetDefinition, get_target_definition, list_target_definitions
 from src.utils.config_loader import AppSettings, load_settings
 from src.utils.db_manager import DuckDBManager
@@ -338,6 +339,21 @@ class ForecastService:
         active_targets = targets or self.targets
 
         if match_type == "international":
+            effective_context = "international"
+        else:
+            # US#107: consult the competition registry before committing to full
+            # team-history features. A league the registry doesn't know about,
+            # or one explicitly tiered 'general_purpose', must fall back to the
+            # market-odds-only path automatically rather than silently
+            # cold-starting a mislabeled 'team_history_and_market' result.
+            registry_path = self.config_path.parent / "config" / "competitions.yaml"
+            try:
+                tier = get_competition_definition(league, registry_path=registry_path).tier
+            except ValueError:
+                tier = "general_purpose"
+            effective_context = "international" if tier == "general_purpose" else "league"
+
+        if effective_context == "international":
             # US#86: compute MKT features from odds only, no team history needed
             prediction_basis = "market_odds_only"
             mkt_row = self._compute_mkt_features_from_odds(odds_h, odds_d, odds_a, over25_odds, ah_line, ah_home_odds, ah_away_odds)
@@ -361,7 +377,7 @@ class ForecastService:
         # Filter loaded to active_targets
         loaded = {t: v for t, v in loaded.items() if t in active_targets}
 
-        if match_type == "international":
+        if effective_context == "international":
             feature_names_used = [f for f in _MKT_FEATURES if f in feature_row.columns]
         else:
             # BUG-012 layer 3b: use the union of each *loaded* model's own
@@ -397,7 +413,7 @@ class ForecastService:
         completeness = round(float(feature_count) / max(len(feature_names_used), 1), 6)
         caveat = (
             "Market-odds-only prediction; team history not used."
-            if match_type == "international"
+            if effective_context == "international"
             else "Full team history and market features used."
         )
 
