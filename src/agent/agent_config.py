@@ -8,7 +8,7 @@ import yaml
 
 _REQUIRED = {
     "model", "provider", "temperature", "max_tool_calls",
-    "min_odds_threshold", "min_value_edge", "markets", "system_prompt_version",
+    "min_odds_threshold", "max_odds_threshold", "min_value_edge", "markets", "system_prompt_version",
 }
 _DEFAULT_CONFIG = Path(__file__).parent.parent.parent / "config" / "agent_config.yaml"
 
@@ -20,6 +20,7 @@ class AgentConfig:
     temperature: float
     max_tool_calls: int
     min_odds_threshold: float
+    max_odds_threshold: float
     min_value_edge: float
     markets: list[str]
     system_prompt_version: str

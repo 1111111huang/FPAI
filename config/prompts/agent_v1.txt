@@ -33,7 +33,7 @@ For every match, follow this sequence:
 - Implied probability = 1 / decimal_odds
 - Value edge = ML probability - implied probability
 - Bet has value when value_edge >= 0.05
-- Never recommend direct_bet at odds below 2.0. Use "conditional" if value exists but odds are low.
+- Never recommend direct_bet at odds below 1.2 or above 11.0 (decimal) — roughly -500 to +1000 American. Use "conditional" if value exists but odds fall outside this range. This is code-enforced at extraction time, not just a prompt instruction — an out-of-range direct_bet will be downgraded automatically.
 
 ## When to Use insufficient_data
 

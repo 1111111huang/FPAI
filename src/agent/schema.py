@@ -77,6 +77,33 @@ def _downgrade_direct_bet_with_null_odds(data: dict) -> dict:
     return data
 
 
+def _downgrade_direct_bet_outside_odds_bounds(
+    data: dict, min_odds_threshold: float, max_odds_threshold: float
+) -> dict:
+    """A29: recommendation_type='direct_bet' requires current_odds within
+    [min_odds_threshold, max_odds_threshold] (inclusive) -- code-enforced,
+    not left as a prompt-only suggestion. Downgrades to 'conditional' (not
+    'no_bet'), matching the pre-existing prompt convention that a market with
+    a real price outside the comfort zone is a conditional opportunity, not a
+    non-bet. A null current_odds is out of scope here -- BUG-013's rule
+    (above) already downgraded that case to 'no_bet' before this runs."""
+    limitations = list(data.get("limitations") or [])
+    for market in data.get("markets", []):
+        if market["recommendation_type"] != "direct_bet":
+            continue
+        odds = market["current_odds"]
+        if odds is None:
+            continue
+        if odds < min_odds_threshold or odds > max_odds_threshold:
+            market["recommendation_type"] = "conditional"
+            limitations.append(
+                f"Downgraded {market['market']!r} from direct_bet to conditional: "
+                f"current_odds {odds} outside [{min_odds_threshold}, {max_odds_threshold}]."
+            )
+    data["limitations"] = limitations
+    return data
+
+
 class RecommendationParseError(Exception):
     def __init__(self, raw_text: str, reason: str = ""):
         self.raw_text = raw_text
@@ -86,7 +113,9 @@ class RecommendationParseError(Exception):
         super().__init__(msg)
 
 
-def extract_recommendation(text: str) -> MatchRecommendation:
+def extract_recommendation(
+    text: str, min_odds_threshold: float = 1.2, max_odds_threshold: float = 11.0
+) -> MatchRecommendation:
     """Extract and validate a MatchRecommendation JSON block from agent output text.
 
     Tries all fenced ```json blocks last-to-first (the final block is the recommendation),
@@ -141,6 +170,7 @@ def extract_recommendation(text: str) -> MatchRecommendation:
             continue
 
         data = _downgrade_direct_bet_with_null_odds(data)
+        data = _downgrade_direct_bet_outside_odds_bounds(data, min_odds_threshold, max_odds_threshold)
         return data  # type: ignore[return-value]
 
     raise RecommendationParseError(text, f"no valid MatchRecommendation found ({last_error})")

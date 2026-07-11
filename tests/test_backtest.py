@@ -19,7 +19,7 @@ from src.agent.snapshot_store import SnapshotMissingError
 def _make_config(**overrides) -> AgentConfig:
     defaults = dict(
         model="stub-model", provider="ollama", temperature=0.0, max_tool_calls=5,
-        min_odds_threshold=2.0, min_value_edge=0.05, markets=["result_3way"],
+        min_odds_threshold=1.2, max_odds_threshold=11.0, min_value_edge=0.05, markets=["result_3way"],
         system_prompt_version="v1",
     )
     defaults.update(overrides)

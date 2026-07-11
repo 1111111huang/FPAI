@@ -55,7 +55,7 @@ The overall match-level recommendation is also one of:
 `insufficient_data` is a first-class outcome. Some matches will fall outside the agent's capability (unknown teams, missing odds, very low ML feature completeness). The agent must say so explicitly rather than produce a low-confidence guess.
 
 ### 3.3 Odds Threshold
-The user's minimum odds threshold is **2.0 (decimal) / +100 (American)**. The agent will never recommend a direct bet below this threshold regardless of value edge.
+The user's odds bounds are **1.2–11.0 (decimal) / -500 to +1000 (American)** (widened 2026-07-11 from an original 2.0-only floor, per A29). The agent will never recommend a direct bet outside this band regardless of value edge — code-enforced at extraction time (`extract_recommendation`), not just a prompt instruction.
 
 ### 3.4 Per-Market vs Per-Match Output
 The agent evaluates all configured markets and produces a recommendation per market. The match-level `overall` field reflects the strongest opportunity found. This allows the user to see, for example, a `conditional` recommendation on `btts` alongside a `no_bet` on `result_3way` for the same match.

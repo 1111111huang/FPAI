@@ -6,8 +6,9 @@ provider: "ollama"              # "ollama" | "anthropic"
 temperature: 0.1                # lower = more deterministic; use 0.0 for backtesting
 max_tool_calls: 10              # per-match tool budget
 
-# Value detection thresholds
-min_odds_threshold: 2.0         # never recommend below this (decimal) / +100 American
+# Value detection thresholds (A29, 2026-07-11: widened from a 2.0-only floor)
+min_odds_threshold: 1.2         # never recommend direct_bet below this (decimal) / -500 American
+max_odds_threshold: 11.0        # never recommend direct_bet above this (decimal) / +1000 American
 min_value_edge: 0.05            # model prob must exceed implied prob by at least this
 
 # Markets the agent evaluates per match

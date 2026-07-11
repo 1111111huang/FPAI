@@ -85,7 +85,11 @@ def build_graph(config: AgentConfig, tools: list):
         _LOG.info("output_node | raw_output_length=%d", len(text))
         _LOG.info("output_node | raw_output=%s", text)
         try:
-            recommendation = extract_recommendation(text)
+            recommendation = extract_recommendation(
+                text,
+                min_odds_threshold=config.min_odds_threshold,
+                max_odds_threshold=config.max_odds_threshold,
+            )
             _LOG.info("output_node | parse=success | overall=%s", recommendation.get("overall"))
         except RecommendationParseError as exc:
             _LOG.warning("output_node | parse=failed | reason=%s", exc)
