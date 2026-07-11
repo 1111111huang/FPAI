@@ -65,6 +65,44 @@ def web_search(query: str) -> str:
     return _snapshot_store.wrap("web_search", _web_search_impl)(query=effective_query)
 
 
+def _resolve_competition_impl(competition_or_league: str) -> str:
+    from src.logic.competition_registry import get_competition_definition
+
+    try:
+        tier = get_competition_definition(competition_or_league).tier
+    except (ValueError, FileNotFoundError):
+        # Unregistered, or the registry file itself is missing -- either way,
+        # there's no confirmed competition_specific coverage, so default to
+        # the always-safe general_purpose path rather than guessing league.
+        tier = "general_purpose"
+    recommended_tool = "forecast_league" if tier == "competition_specific" else "forecast_international"
+    return json.dumps({
+        "competition": competition_or_league,
+        "tier": tier,
+        "recommended_tool": recommended_tool,
+    })
+
+
+@tool
+def resolve_competition(competition_or_league: str) -> str:
+    """Look up whether a league/competition has real historical team-data model coverage.
+
+    ALWAYS call this BEFORE choosing between forecast_league and
+    forecast_international for a domestic-looking fixture — do not guess
+    based on how well-known the league is. A well-known league (e.g. La Liga)
+    can still have zero historical-data coverage in this system. Returns JSON
+    with 'tier' ('competition_specific' or 'general_purpose') and
+    'recommended_tool' ('forecast_league' or 'forecast_international') —
+    follow recommended_tool exactly.
+
+    Args:
+        competition_or_league: League code or name, e.g. 'E0', 'La Liga', 'SP1'.
+    """
+    return _snapshot_store.wrap("resolve_competition", _resolve_competition_impl)(
+        competition_or_league=competition_or_league
+    )
+
+
 def _forecast_league_impl(
     home_team: str,
     away_team: str,
@@ -198,4 +236,4 @@ def forecast_international(
 
 
 def get_default_tools() -> list:
-    return [web_search, forecast_league, forecast_international]
+    return [resolve_competition, web_search, forecast_league, forecast_international]
