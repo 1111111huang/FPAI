@@ -1,0 +1,26 @@
+{
+  "name": "fpai-sandbox",
+  "private": true,
+  "version": "0.0.0",
+  "description": "Disposable UI prototypes for the FPAI web app. Not part of the real app/frontend build.",
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start"
+  },
+  "dependencies": {
+    "next": "14.2.35",
+    "react": "18.3.1",
+    "react-dom": "18.3.1",
+    "@phosphor-icons/react": "2.1.7"
+  },
+  "devDependencies": {
+    "typescript": "5.4.5",
+    "@types/node": "20.14.9",
+    "@types/react": "18.3.3",
+    "@types/react-dom": "18.3.0",
+    "tailwindcss": "3.4.4",
+    "postcss": "8.4.39",
+    "autoprefixer": "10.4.19"
+  }
+}

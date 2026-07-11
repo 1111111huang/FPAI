@@ -31,3 +31,14 @@ CLAUDE.md
 
 # Runtime logs (grow unbounded, not source)
 data/logs/*.log
+
+# Node (sandbox/ UI prototypes, future app/frontend)
+node_modules/
+.next/
+out/
+npm-debug.log*
+
+# Claude Code skill-marketplace files (local tooling, not project source)
+.agents/
+.claude/skills/
+skills-lock.json
