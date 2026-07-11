@@ -76,6 +76,16 @@ def _build_parser() -> argparse.ArgumentParser:
     refresh_parser.add_argument("--league", type=str, default="E0", help="League code for understat fetch (default: E0).")
     refresh_parser.add_argument("--force", action="store_true", help="Force re-download and re-ingest of all files.")
 
+    # schedule-refresh (US#109)
+    schedule_refresh_parser = subparsers.add_parser(
+        "schedule-refresh",
+        help="Run refresh-data on a standing weekly schedule (blocks until interrupted).",
+    )
+    schedule_refresh_parser.add_argument("--league", type=str, default="E0", help="League code for understat fetch (default: E0).")
+    schedule_refresh_parser.add_argument("--day-of-week", type=str, default="sun", help="Cron day-of-week (default: sun).")
+    schedule_refresh_parser.add_argument("--hour", type=int, default=3, help="Cron hour, 0-23 (default: 3).")
+    schedule_refresh_parser.add_argument("--minute", type=int, default=0, help="Cron minute, 0-59 (default: 0).")
+
     # train-target
     train_target_parser = subparsers.add_parser("train-target", help="Train one forecast target model")
     train_target_parser.add_argument(
@@ -480,6 +490,26 @@ def run_refresh_data(app_settings: AppSettings, db_manager: DuckDBManager, leagu
     total = backfill_lineups_from_player_stats(db_manager)
     LOGGER.info("refresh-data: lineup backfill complete | rows_upserted=%d", total)
     LOGGER.info("refresh-data complete.")
+
+
+def run_schedule_refresh(league: str = "E0", day_of_week: str = "sun", hour: int = 3, minute: int = 0) -> None:
+    """Run refresh-data on a standing weekly schedule (US#109). Blocks until interrupted."""
+    import time
+
+    from src.scheduling.data_refresh_scheduler import build_weekly_refresh_scheduler
+
+    scheduler = build_weekly_refresh_scheduler(day_of_week=day_of_week, hour=hour, minute=minute, league=league)
+    scheduler.start()
+    LOGGER.info(
+        "schedule-refresh: weekly refresh-data scheduler started | day_of_week=%s hour=%d minute=%d league=%s",
+        day_of_week, hour, minute, league,
+    )
+    try:
+        while True:
+            time.sleep(3600)
+    except (KeyboardInterrupt, SystemExit):
+        LOGGER.info("schedule-refresh: shutting down.")
+        scheduler.shutdown()
 
 
 def _default_model_for_target(target_name: str) -> str:
@@ -1135,6 +1165,13 @@ def main() -> None:
         run_ingest(app_settings, db_manager, force=getattr(args, "force", False))
     elif args.command == "refresh-data":
         run_refresh_data(app_settings, db_manager, league=str(args.league), force=getattr(args, "force", False))
+    elif args.command == "schedule-refresh":
+        run_schedule_refresh(
+            league=str(args.league),
+            day_of_week=str(args.day_of_week),
+            hour=int(args.hour),
+            minute=int(args.minute),
+        )
     elif args.command == "train-target":
         run_train_target(target_name=str(args.target), model_name=args.model, context=str(args.context))
     elif args.command == "train-forecast-suite":

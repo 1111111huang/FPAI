@@ -4,6 +4,7 @@ duckdb
 pydantic
 pyyaml
 python-dotenv
+apscheduler
 
 # AI & Scrapers
 requests
