@@ -5,6 +5,7 @@ import re
 from typing import Literal, TypedDict
 
 import json_repair
+from pydantic import BaseModel, ValidationError
 
 
 class MarketRecommendation(TypedDict):
@@ -30,6 +31,50 @@ class MatchRecommendation(TypedDict):
 
 _REQUIRED_KEYS = {"match", "overall", "markets", "explanation", "confidence", "limitations", "prediction_basis"}
 _VALID_OVERALL = {"direct_bet", "conditional", "no_bet", "insufficient_data"}
+
+
+class _MarketRecommendationModel(BaseModel):
+    """A28: type/enum validation for every market-level field. current_odds is
+    nullable -- that's a legitimate state (odds simply weren't found for this
+    market) -- the direct_bet + null-odds combination (BUG-013) is a separate
+    semantic rule applied after this structural validation passes."""
+
+    market: str
+    selection: str
+    recommendation_type: Literal["direct_bet", "conditional", "no_bet"]
+    current_odds: float | None
+    min_odds: float
+    ml_probability: float
+    implied_probability: float
+    value_edge: float
+
+
+class _MatchRecommendationModel(BaseModel):
+    """A28: adds type/enum validation for confidence and every market field,
+    beyond the pre-existing key-presence/overall-enum checks."""
+
+    match: dict
+    overall: Literal["direct_bet", "conditional", "no_bet", "insufficient_data"]
+    markets: list[_MarketRecommendationModel]
+    explanation: str
+    confidence: Literal["low", "medium", "high"]
+    limitations: list[str]
+    prediction_basis: str
+
+
+def _downgrade_direct_bet_with_null_odds(data: dict) -> dict:
+    """BUG-013: recommendation_type='direct_bet' requires a non-null
+    current_odds -- downgrade to 'no_bet' (the only other value valid for this
+    market-level field) instead of passing the incoherent combination through."""
+    limitations = list(data.get("limitations") or [])
+    for market in data.get("markets", []):
+        if market["recommendation_type"] == "direct_bet" and market["current_odds"] is None:
+            market["recommendation_type"] = "no_bet"
+            limitations.append(
+                f"Downgraded {market['market']!r} from direct_bet to no_bet: current_odds was null."
+            )
+    data["limitations"] = limitations
+    return data
 
 
 class RecommendationParseError(Exception):
@@ -87,6 +132,15 @@ def extract_recommendation(text: str) -> MatchRecommendation:
             last_error = f"invalid overall value: {data['overall']!r}"
             continue
 
+        # A28: type/enum validation for every market field and top-level
+        # confidence, beyond the key-presence/overall-enum checks above.
+        try:
+            _MatchRecommendationModel.model_validate(data)
+        except ValidationError as exc:
+            last_error = f"field validation failed: {exc}"
+            continue
+
+        data = _downgrade_direct_bet_with_null_odds(data)
         return data  # type: ignore[return-value]
 
     raise RecommendationParseError(text, f"no valid MatchRecommendation found ({last_error})")
