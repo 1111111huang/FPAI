@@ -9,7 +9,18 @@ from __future__ import annotations
 
 from pydantic import BaseModel, ValidationError
 
+from app.backend.recommendation_cache import RecommendationCache
 from src.agent.graph import run_agent
+
+_cache_singleton: RecommendationCache | None = None
+
+
+def get_cache() -> RecommendationCache:
+    """FastAPI dependency -- overridden in tests via app.dependency_overrides."""
+    global _cache_singleton
+    if _cache_singleton is None:
+        _cache_singleton = RecommendationCache()
+    return _cache_singleton
 
 
 class OddsInput(BaseModel):
@@ -24,6 +35,7 @@ class RecommendationRequest(BaseModel):
     date: str
     league: str | None = None
     odds: OddsInput | None = None
+    match_id: str | None = None
 
     def to_match_info(self) -> dict:
         match_info = {"home_team": self.home_team, "away_team": self.away_team, "date": self.date}
@@ -32,6 +44,11 @@ class RecommendationRequest(BaseModel):
         if self.odds is not None:
             match_info["odds"] = self.odds.model_dump()
         return match_info
+
+    def effective_match_id(self) -> str:
+        if self.match_id:
+            return self.match_id
+        return f"{self.home_team}__{self.away_team}__{self.date}".replace(" ", "_")
 
 
 class MarketRecommendationOut(BaseModel):

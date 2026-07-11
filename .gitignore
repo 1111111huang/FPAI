@@ -42,3 +42,6 @@ npm-debug.log*
 .agents/
 .claude/skills/
 skills-lock.json
+
+# App backend's own local SQLite data (W11 recommendation cache, etc.)
+app/data/

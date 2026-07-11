@@ -1,0 +1,127 @@
+"""W11: recommendation caching layer, in app/backend. Not a reuse of
+SnapshotStore (src/agent/snapshot_store.py) -- that component's record/replay
+semantics are purpose-built for backtest determinism, keyed by tool-call
+SHA-256, gitignored; repurposing it for live caching would conflate two
+different concerns. This is a new, SQLite-backed store keyed by
+(match_id, date, agent_config_hash).
+
+Append-only: every generation is kept as a row, not just the latest -- a
+lightweight generation history (timestamp + odds snapshot per generation)
+lets a future consumer (W10) cheaply detect "no new data" before deciding
+whether to regenerate, and doubles as an audit trail. "The cache" for a key
+is simply its most recent row (get_latest); get_history returns the rest.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from datetime import datetime, timezone
+import json
+from pathlib import Path
+import sqlite3
+from typing import Literal
+
+DEFAULT_DB_PATH = Path(__file__).parent.parent / "data" / "recommendation_cache.db"
+
+TriggeredBy = Literal["scheduled", "manual_regenerate"]
+
+
+@dataclass(frozen=True)
+class CacheEntry:
+    match_id: str
+    date: str
+    agent_config_hash: str
+    odds: dict
+    recommendation: dict
+    generated_at: str
+    triggered_by: TriggeredBy
+
+
+class RecommendationCache:
+    def __init__(self, db_path: str | Path = DEFAULT_DB_PATH) -> None:
+        self._db_path = Path(db_path)
+        self._db_path.parent.mkdir(parents=True, exist_ok=True)
+        self._init_schema()
+
+    def _connect(self) -> sqlite3.Connection:
+        return sqlite3.connect(self._db_path)
+
+    def _init_schema(self) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS recommendation_generations (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    match_id TEXT NOT NULL,
+                    date TEXT NOT NULL,
+                    agent_config_hash TEXT NOT NULL,
+                    odds_json TEXT NOT NULL,
+                    recommendation_json TEXT NOT NULL,
+                    generated_at TEXT NOT NULL,
+                    triggered_by TEXT NOT NULL
+                )
+                """
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_recgen_key "
+                "ON recommendation_generations (match_id, date, agent_config_hash)"
+            )
+
+    def record_generation(
+        self,
+        match_id: str,
+        date: str,
+        agent_config_hash: str,
+        odds: dict,
+        recommendation: dict,
+        triggered_by: TriggeredBy,
+        generated_at: str | None = None,
+    ) -> None:
+        generated_at = generated_at or datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO recommendation_generations
+                (match_id, date, agent_config_hash, odds_json, recommendation_json, generated_at, triggered_by)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (match_id, date, agent_config_hash, json.dumps(odds), json.dumps(recommendation), generated_at, triggered_by),
+            )
+
+    def get_latest(self, match_id: str, date: str, agent_config_hash: str) -> CacheEntry | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT match_id, date, agent_config_hash, odds_json, recommendation_json, generated_at, triggered_by
+                FROM recommendation_generations
+                WHERE match_id = ? AND date = ? AND agent_config_hash = ?
+                ORDER BY id DESC LIMIT 1
+                """,
+                (match_id, date, agent_config_hash),
+            ).fetchone()
+        return self._row_to_entry(row) if row else None
+
+    def get_history(self, match_id: str, date: str, agent_config_hash: str) -> list[CacheEntry]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT match_id, date, agent_config_hash, odds_json, recommendation_json, generated_at, triggered_by
+                FROM recommendation_generations
+                WHERE match_id = ? AND date = ? AND agent_config_hash = ?
+                ORDER BY id ASC
+                """,
+                (match_id, date, agent_config_hash),
+            ).fetchall()
+        return [self._row_to_entry(row) for row in rows]
+
+    @staticmethod
+    def _row_to_entry(row: tuple) -> CacheEntry:
+        return CacheEntry(
+            match_id=row[0],
+            date=row[1],
+            agent_config_hash=row[2],
+            odds=json.loads(row[3]),
+            recommendation=json.loads(row[4]),
+            generated_at=row[5],
+            triggered_by=row[6],
+        )
