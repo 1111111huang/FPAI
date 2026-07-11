@@ -6,6 +6,7 @@ from pathlib import Path
 
 import duckdb
 import pandas as pd
+from src.ingestion.common.team_mapping import TeamNameMapper
 from src.utils.db_manager import DuckDBManager
 from src.utils.helpers import standardize_team_name
 from src.utils.logger import get_logger
@@ -848,16 +849,13 @@ class FeatureFactory:
         home_norm = standardize_team_name(home_team)
         away_norm = standardize_team_name(away_team)
 
-        # Apply team_mapping.json fuzzy lookup
+        # W06: resolve via the shared TeamNameMapper (same one ingestion uses)
+        # instead of a bespoke inline lookup -- logs a warning on a mismatch
+        # rather than silently passing an unresolved name through.
         mapping_path = Path(__file__).parent.parent.parent / "config" / "team_mapping.json"
-        if mapping_path.exists():
-            with mapping_path.open("r", encoding="utf-8") as fh:
-                team_map: dict[str, str] = json.load(fh)
-            # Build reverse map for lookup by canonical name
-            reverse_map = {v: v for v in team_map.values()}
-            reverse_map.update(team_map)
-            home_norm = reverse_map.get(home_norm, home_norm)
-            away_norm = reverse_map.get(away_norm, away_norm)
+        team_mapper = TeamNameMapper(mapping_path=str(mapping_path))
+        home_norm = team_mapper.map_team(home_norm)
+        away_norm = team_mapper.map_team(away_norm)
 
         LOGGER.info("build_for_match | home=%s away=%s date=%s league=%s", home_norm, away_norm, match_date, league)
 
