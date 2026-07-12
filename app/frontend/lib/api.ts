@@ -112,3 +112,14 @@ export async function getBets(): Promise<Bet[]> {
   }
   return response.json();
 }
+
+/** W13: on-demand settlement trigger -- no scheduler (W08/W09 deferred).
+ * Returns the bets that were actually settled by this call (won/lost);
+ * corners bets and not-yet-finished matches are never included. */
+export async function settleOpenBets(): Promise<Bet[]> {
+  const response = await fetch(`${API_BASE}/api/bets/settle-open`, { method: "POST" });
+  if (!response.ok) {
+    throw new ApiError(`Failed to settle open bets (${response.status})`, response.status);
+  }
+  return response.json();
+}

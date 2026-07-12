@@ -14,14 +14,8 @@ from typing import Any
 import pandas as pd
 
 from src.agent.agent_config import AgentConfig
+from src.agent.market_resolution import build_actual_outcome, market_correct as _market_correct
 from src.utils.db_manager import DuckDBManager
-
-# Markets whose correctness can be programmatically resolved from raw_matches.
-# home_corners/away_corners are excluded: the MatchRecommendation schema has no
-# numeric line field for them (only current_odds/min_odds), so we cannot tell
-# what threshold the agent's "selection" refers to. Documented limitation —
-# see documents/agent_techspec.md Known Limitations.
-_RESOLVABLE_MARKETS = {"result_3way", "btts", "total_goals"}
 
 
 @dataclass
@@ -38,41 +32,7 @@ class BacktestRecord:
 
 def load_outcome(row: pd.Series) -> dict[str, Any]:
     """Derive the resolvable outcome categories for a finished match."""
-    fthg, ftag = int(row["fthg"]), int(row["ftag"])
-    if fthg > ftag:
-        result = "home"
-    elif fthg < ftag:
-        result = "away"
-    else:
-        result = "draw"
-    total_goals = fthg + ftag
-    return {
-        "fthg": fthg,
-        "ftag": ftag,
-        "result": result,
-        "btts": "yes" if (fthg > 0 and ftag > 0) else "no",
-        "total_goals": total_goals,
-        "total_goals_side": "over_2.5" if total_goals > 2 else "under_2.5",
-    }
-
-
-def _market_correct(market_rec: dict[str, Any], actual: dict[str, Any]) -> bool | None:
-    """Resolve whether a market recommendation matches the actual outcome.
-
-    Returns True/False for resolvable markets (result_3way, btts, total_goals).
-    Returns None — not False — for markets with no programmatic resolution
-    (e.g. home_corners/away_corners). Callers (e.g. staking.py) MUST treat
-    None as "unknown, skip" and never coerce it to a loss.
-    """
-    market = market_rec.get("market")
-    if market not in _RESOLVABLE_MARKETS:
-        return None
-    selection = market_rec.get("selection")
-    if market == "result_3way":
-        return selection == actual["result"]
-    if market == "btts":
-        return selection == actual["btts"]
-    return selection == actual["total_goals_side"]  # market == "total_goals"
+    return build_actual_outcome(int(row["fthg"]), int(row["ftag"]))
 
 
 def _date_str(row: pd.Series) -> str:

@@ -8,7 +8,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { MagnifyingGlass, WarningCircle } from "@phosphor-icons/react";
 
-import { ApiError, getBets, getFixtures, logBetManual } from "@/lib/api";
+import { ApiError, getBets, getFixtures, logBetManual, settleOpenBets } from "@/lib/api";
 import type { Bet, Fixture } from "@/lib/types";
 import { DraftNav, TeamBadge } from "./MatchUI";
 
@@ -188,12 +188,32 @@ function BetRow({ bet }: { bet: Bet }) {
 export function BetTrackerPage() {
   const [bets, setBets] = useState<Bet[] | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [settling, setSettling] = useState(false);
+  const [settleMsg, setSettleMsg] = useState<string | null>(null);
 
   async function load() {
     try {
       setBets(await getBets());
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Could not load bets.");
+    }
+  }
+
+  async function handleSettle() {
+    setSettling(true);
+    setSettleMsg(null);
+    try {
+      const settled = await settleOpenBets();
+      setSettleMsg(
+        settled.length === 0
+          ? "No open bets have a finished, scorable result yet."
+          : `Settled ${settled.length} bet${settled.length === 1 ? "" : "s"}.`
+      );
+      await load();
+    } catch (err) {
+      setSettleMsg(err instanceof ApiError ? err.message : "Could not settle open bets.");
+    } finally {
+      setSettling(false);
     }
   }
 
@@ -213,7 +233,18 @@ export function BetTrackerPage() {
       </div>
 
       <div className="mt-8">
-        <h2 className="text-sm font-semibold uppercase tracking-wide text-muted">Logged bets</h2>
+        <div className="flex items-center justify-between">
+          <h2 className="text-sm font-semibold uppercase tracking-wide text-muted">Logged bets</h2>
+          <button
+            type="button"
+            onClick={handleSettle}
+            disabled={settling}
+            className="rounded-md border border-border px-3 py-1.5 text-xs font-medium text-ink-secondary hover:border-border-strong disabled:opacity-50"
+          >
+            {settling ? "Checking results…" : "Settle open bets"}
+          </button>
+        </div>
+        {settleMsg && <p className="mt-2 text-xs text-ink-secondary">{settleMsg}</p>}
         {error && <p className="mt-2 text-sm text-serious">{error}</p>}
         {!error && bets === null && <p className="mt-2 text-sm text-ink-secondary">Loading…</p>}
         {!error && bets && bets.length === 0 && (

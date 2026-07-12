@@ -24,6 +24,7 @@ from app.backend.football_data_client import FootballDataClient, NormalizedMatch
 from app.backend.llm_check import check_llm_reachable
 from app.backend.recommendation_cache import RecommendationCache
 from app.backend.recommendations import MatchRecommendationOut, RecommendationRequest, validate_and_degrade
+from app.backend.settlement import settle_open_bets
 from src.agent.agent_config import AgentConfig
 from src.utils.logger import get_logger
 
@@ -163,3 +164,14 @@ async def create_bet_manual(
 @app.get("/api/bets")
 async def list_bets(tracker: BetTracker = Depends(bets.get_bet_tracker)) -> list[BetOut]:
     return [BetOut.from_bet(bet) for bet in tracker.list_bets()]
+
+
+@app.post("/api/bets/settle-open")
+async def settle_open(tracker: BetTracker = Depends(bets.get_bet_tracker)) -> list[BetOut]:
+    """On-demand settlement trigger (W13) -- no scheduler; W08/W09 are
+    deliberately deferred. Reuses get_fixtures_client (W05's
+    FootballDataClient) since results/fixtures share the same API and rate
+    limit budget."""
+    client = get_fixtures_client()
+    settled = await run_in_threadpool(settle_open_bets, tracker, client)
+    return [BetOut.from_bet(bet) for bet in settled]
