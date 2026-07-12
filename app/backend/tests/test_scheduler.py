@@ -146,3 +146,23 @@ def test_scheduler_uses_america_new_york_timezone(tmp_path: Path) -> None:
     run_log = JobRunLog(db_path=tmp_path / "job_runs.db")
     scheduler = RecoverableScheduler(run_log=run_log)
     assert scheduler.timezone == ZoneInfo("America/New_York")
+
+
+def test_a_failing_catchup_job_does_not_raise_and_is_not_marked_as_run(tmp_path: Path) -> None:
+    """A job failing during the immediate catch-up path (e.g. a real network
+    error) must not propagate -- schedule_daily()/schedule_once() run
+    synchronously in the caller's own thread (unlike APScheduler's own
+    later trigger fires, which run on its background thread), so an
+    unguarded exception here would crash whoever is registering the job --
+    at worst, the whole app's startup. It also must not be marked as run,
+    so the next registration retries it."""
+    run_log = JobRunLog(db_path=tmp_path / "job_runs.db")
+    now = datetime(2026, 7, 12, 23, 30, tzinfo=NY_TZ)
+
+    def _boom() -> None:
+        raise RuntimeError("simulated network failure")
+
+    scheduler = RecoverableScheduler(run_log=run_log, now_fn=lambda: now)
+    scheduler.schedule_daily("daily_eod", _boom, hour=23, minute=0)  # must not raise
+
+    assert not run_log.has_run("daily_eod", "2026-07-12")

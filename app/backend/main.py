@@ -25,6 +25,8 @@ from app.backend.llm_check import check_llm_reachable
 from app.backend.recommendation_cache import RecommendationCache
 from app.backend.bet_stats import compute_bet_stats
 from app.backend.recommendations import MatchRecommendationOut, RecommendationRequest, validate_and_degrade
+from app.backend.scheduler import RecoverableScheduler
+from app.backend.scheduler_wiring import build_odds_client, register_eod_job
 from app.backend.settlement import settle_open_bets
 from src.agent.agent_config import AgentConfig
 from src.utils.logger import get_logger
@@ -51,7 +53,35 @@ async def lifespan(app: FastAPI):
             "recommendation generation will fail until this is resolved.",
             config.provider, config.model,
         )
+
+    # W08/W09/W10: off by default. Registering the EOD job runs
+    # RecoverableScheduler's restart/catch-up check immediately (by design,
+    # W08's whole point) -- if wired in unconditionally, every test file's
+    # `with TestClient(app)` would non-deterministically trigger a real live
+    # EOD batch (real fixtures/odds/LLM calls) depending on whatever wall-clock
+    # time tests happen to run at relative to the 23:00 NY trigger. Gated
+    # behind an explicit opt-in until this wave is verified live and the app
+    # is actually going to production -- see app_user_stories.md W08 sequencing
+    # note ("built last, right before going live").
+    scheduler: RecoverableScheduler | None = None
+    if os.environ.get("ENABLE_SCHEDULER", "").lower() in ("1", "true", "yes"):
+        scheduler = RecoverableScheduler()
+        register_eod_job(
+            scheduler,
+            fixtures_client=get_fixtures_client(),
+            odds_client=build_odds_client(),
+            cache=recommendations.get_cache(),
+            config=config,
+        )
+        scheduler.start()
+        LOGGER.info("W08/W09/W10 scheduler started (ENABLE_SCHEDULER=1).")
+    else:
+        LOGGER.info("Scheduler disabled -- set ENABLE_SCHEDULER=1 to enable the EOD/T-30 pipeline.")
+
     yield
+
+    if scheduler is not None:
+        scheduler.shutdown()
 
 
 app = FastAPI(title="FPAI Web App Backend", lifespan=lifespan)
@@ -74,10 +104,10 @@ def health() -> dict:
 @app.get("/api/fixtures")
 async def get_fixtures(date_from: str | None = None, date_to: str | None = None) -> list[NormalizedMatch]:
     """Thin wrapper over W05's FootballDataClient -- gives the frontend a real
-    fixture list to render (Dashboard/Match Explorer). No dedicated story
-    covers this narrowly; W09 (built last) will eventually populate fixtures
-    via the recommendation cache instead, but the frontend needs something
-    real to fetch today."""
+    fixture list to render (Dashboard/Match Explorer). Still used directly
+    even after W09 shipped -- W09 populates the recommendation cache in the
+    background, but the frontend still needs a live fixture list to render
+    cards for, cached recommendation or not."""
     client = get_fixtures_client()
     fixtures = await run_in_threadpool(client.get_fixtures, date_from=date_from, date_to=date_to)
     return fixtures
@@ -90,7 +120,7 @@ async def create_recommendation(
 ) -> MatchRecommendationOut:
     """The explicit 'regenerate now' escape hatch (W11) -- always calls the
     agent and writes the result into the cache, tagged manual_regenerate so
-    it's distinguishable from a scheduled generation (once W09 exists)."""
+    it's distinguishable from a scheduled (W09/W10) generation."""
     # run_agent is a real ~10-30s synchronous call (LLM + Tavily) -- must run
     # off the event loop or it blocks every other request.
     raw = await run_in_threadpool(recommendations.run_agent, request.to_match_info())
@@ -176,8 +206,9 @@ async def get_bet_stats(tracker: BetTracker = Depends(bets.get_bet_tracker)) -> 
 
 @app.post("/api/bets/settle-open")
 async def settle_open(tracker: BetTracker = Depends(bets.get_bet_tracker)) -> list[BetOut]:
-    """On-demand settlement trigger (W13) -- no scheduler; W08/W09 are
-    deliberately deferred. Reuses get_fixtures_client (W05's
+    """On-demand settlement trigger (W13) -- intentionally not folded into
+    W08's scheduler; bet settlement isn't tied to recommendation-generation
+    timing the way W09/W10 are. Reuses get_fixtures_client (W05's
     FootballDataClient) since results/fixtures share the same API and rate
     limit budget."""
     client = get_fixtures_client()

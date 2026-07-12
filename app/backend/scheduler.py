@@ -32,6 +32,10 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.date import DateTrigger
 
+from src.utils.logger import get_logger
+
+LOGGER = get_logger(__name__)
+
 NY_TZ = ZoneInfo("America/New_York")
 
 DEFAULT_DB_PATH = Path(__file__).parent.parent / "data" / "job_runs.db"
@@ -126,7 +130,19 @@ class RecoverableScheduler:
             self._run_and_mark(job_id, fn, ONCE_RUN_KEY)
 
     def _run_and_mark(self, job_id: str, fn: Callable[[], None], run_key: str) -> None:
-        fn()
+        """Never lets a job's own exception propagate: schedule_daily()/
+        schedule_once() call this synchronously in the caller's own thread
+        for the immediate catch-up path (unlike APScheduler's own later
+        trigger fires, which run on its background thread and are already
+        exception-isolated there) -- an unguarded failure here would crash
+        whoever is registering the job, at worst the whole app's startup.
+        A failed run is also not marked as done, so the next registration
+        retries it rather than silently treating a failure as a success."""
+        try:
+            fn()
+        except Exception:
+            LOGGER.exception("RecoverableScheduler: job %r (run_key=%r) failed.", job_id, run_key)
+            return
         self.run_log.mark_ran(job_id, run_key)
 
     def start(self) -> None:

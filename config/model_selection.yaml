@@ -21,7 +21,7 @@ contexts:
       model_path: models/away_corners_xgboostregressor_v1_20260711.joblib
       model_type: xgboostregressor
       previous_model_path: file:///Users/tianqihuang/Documents/GitHub/FPAI/mlruns/987034761344100564/2be793ef5ff54691b169883a0ed11bbf/artifacts/model
-      selected_at: '2026-07-12T04:04:21Z'
+      selected_at: '2026-07-12T03:58:53Z'
     away_goals:
       feature_subset:
       - MKT_IMPLIED_HOME
@@ -87,7 +87,7 @@ contexts:
       model_path: models/home_corners_xgboostregressor_v1_20260711.joblib
       model_type: xgboostregressor
       previous_model_path: file:///Users/tianqihuang/Documents/GitHub/FPAI/mlruns/802690824096537957/f81f1d2ccf34434b8fec592e90160d0f/artifacts/model
-      selected_at: '2026-07-12T04:08:46Z'
+      selected_at: '2026-07-12T04:09:59Z'
     home_goals:
       feature_subset:
       - MKT_IMPLIED_HOME
