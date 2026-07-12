@@ -32,6 +32,9 @@ _VALID_RAW = {
     "confidence": "medium",
     "limitations": [],
     "prediction_basis": "team_history_and_market",
+    "cold_start_risk": False,
+    "feature_completeness": 0.97,
+    "unknown_team": False,
 }
 
 
@@ -73,3 +76,23 @@ def test_missing_top_level_fields_default_safely_instead_of_raising():
     result = validate_and_degrade({"markets": []})
     assert result.overall == "insufficient_data"
     assert result.markets == []
+
+
+def test_cold_start_risk_and_unknown_team_pass_through():
+    """W15: these fields must reach the app response, since the UI treats
+    cold_start_risk as a first-class trust signal regardless of prediction_basis."""
+    raw = {**_VALID_RAW, "cold_start_risk": True, "feature_completeness": 0.41, "unknown_team": True}
+    result = validate_and_degrade(raw)
+    assert result.cold_start_risk is True
+    assert result.feature_completeness == 0.41
+    assert result.unknown_team is True
+
+
+def test_missing_w15_fields_default_safely_for_pre_w15_cached_data():
+    """A recommendation cached before W15 shipped won't have these keys at
+    all -- must default, not raise."""
+    raw = {k: v for k, v in _VALID_RAW.items() if k not in ("cold_start_risk", "feature_completeness", "unknown_team")}
+    result = validate_and_degrade(raw)
+    assert result.cold_start_risk is False
+    assert result.feature_completeness is None
+    assert result.unknown_team is False

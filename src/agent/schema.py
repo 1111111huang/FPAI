@@ -27,6 +27,12 @@ class MatchRecommendation(TypedDict):
     confidence: Literal["low", "medium", "high"]
     limitations: list[str]
     prediction_basis: str
+    # W15: not populated by extract_recommendation() itself -- graph.py's
+    # _build_recommendation() adds these afterward, read deterministically
+    # from the forecast tool's own diagnostics rather than the LLM's JSON.
+    cold_start_risk: bool
+    feature_completeness: float | None
+    unknown_team: bool
 
 
 _REQUIRED_KEYS = {"match", "overall", "markets", "explanation", "confidence", "limitations", "prediction_basis"}

@@ -68,6 +68,11 @@ type Match = {
   explanation: string;
   limitations: string[];
   predictionBasis: string;
+  // W15: first-class trust signals, independent of predictionBasis/overall --
+  // must read as lower-trust even when predictionBasis claims full coverage.
+  coldStartRisk: boolean;
+  featureCompleteness: number | null;
+  unknownTeam: boolean;
 };
 
 // ---------------------------------------------------------------------------
@@ -94,6 +99,9 @@ function fixtureToMatch(fixture: Fixture): Match {
     explanation: "",
     limitations: [],
     predictionBasis: "",
+    coldStartRisk: false,
+    featureCompleteness: null,
+    unknownTeam: false,
   };
 }
 
@@ -106,6 +114,9 @@ function applyRecommendation(match: Match, rec: MatchRecommendationOut): Match {
     predictionBasis: rec.prediction_basis,
     explanation: rec.explanation,
     limitations: rec.limitations,
+    coldStartRisk: rec.cold_start_risk,
+    featureCompleteness: rec.feature_completeness,
+    unknownTeam: rec.unknown_team,
     markets: rec.markets.map((m) => ({
       market: m.market,
       selection: m.selection,
@@ -249,6 +260,28 @@ function StatusBadge({ status, size = "sm" }: { status: Overall; size?: "sm" | "
     <span className={`inline-flex items-center gap-1.5 rounded-md border ${s.ring} ${s.text} ${pad} font-medium`}>
       {s.icon}
       {s.label}
+    </span>
+  );
+}
+
+/** W15: a first-class trust signal, independent of predictionBasis/overall --
+ * renders whenever cold_start_risk or unknown_team is true, even if
+ * predictionBasis itself claims full team_history_and_market coverage. */
+function TrustSignal({ match, size = "sm" }: { match: Match; size?: "sm" | "lg" }) {
+  if (!match.coldStartRisk && !match.unknownTeam) return null;
+  const label = match.unknownTeam ? "Unseen team — no history" : "Cold start — thin history";
+  const pad = size === "lg" ? "px-3 py-1.5 text-sm" : "px-2 py-0.5 text-[11px]";
+  return (
+    <span
+      className={`inline-flex items-center gap-1.5 rounded-md border border-warning/40 text-warning ${pad} font-medium`}
+      title={
+        match.featureCompleteness !== null
+          ? `feature_completeness=${match.featureCompleteness.toFixed(2)}`
+          : undefined
+      }
+    >
+      <WarningCircle weight="fill" size={size === "lg" ? 15 : 13} />
+      {label}
     </span>
   );
 }
@@ -401,7 +434,10 @@ function MatchCard({ match, onUpdate }: { match: Match; onUpdate: (m: Match) => 
             <TierTag tier={match.tier} />
           </span>
           {match.hasRecommendation ? (
-            <StatusBadge status={match.overall} />
+            <span className="flex items-center gap-1.5">
+              <TrustSignal match={match} />
+              <StatusBadge status={match.overall} />
+            </span>
           ) : (
             <span className="text-[11px] uppercase tracking-wide text-muted">
               {isCompleted ? "Settled" : "Not yet generated"}
@@ -670,6 +706,9 @@ export function MatchAnalysisPage({
             explanation: "",
             limitations: [],
             predictionBasis: "",
+            coldStartRisk: false,
+            featureCompleteness: null,
+            unknownTeam: false,
           },
           rec
         )
@@ -729,6 +768,9 @@ export function MatchAnalysisPage({
             </div>
             <div className="mt-1 text-xs text-ink-secondary">
               Confidence: <span className="font-medium text-ink">{match.confidence}</span>
+            </div>
+            <div className="mt-2 flex justify-end">
+              <TrustSignal match={match} size="lg" />
             </div>
           </div>
         )}

@@ -76,6 +76,12 @@ class MatchRecommendationOut(BaseModel):
     limitations: list[str]
     prediction_basis: str
     invalid_market_count: int = 0
+    # W15: surfaced so the UI can treat cold_start_risk as a first-class
+    # trust signal regardless of what prediction_basis claims. Default safely
+    # for recommendations cached before W15 shipped (no such keys at all).
+    cold_start_risk: bool = False
+    feature_completeness: float | None = None
+    unknown_team: bool = False
 
 
 def validate_and_degrade(raw: dict) -> MatchRecommendationOut:
@@ -104,4 +110,7 @@ def validate_and_degrade(raw: dict) -> MatchRecommendationOut:
         limitations=limitations,
         prediction_basis=raw.get("prediction_basis") or "unknown",
         invalid_market_count=invalid_count,
+        cold_start_risk=bool(raw.get("cold_start_risk", False)),
+        feature_completeness=raw.get("feature_completeness"),
+        unknown_team=bool(raw.get("unknown_team", False)),
     )

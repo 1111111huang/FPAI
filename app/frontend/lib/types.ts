@@ -32,4 +32,10 @@ export type MatchRecommendationOut = {
   limitations: string[];
   prediction_basis: string;
   invalid_market_count: number;
+  // W15: cold_start_risk/unknown_team are first-class trust signals --
+  // treat them as authoritative even when prediction_basis itself claims
+  // team_history_and_market (see agent_techspec.md / US#108).
+  cold_start_risk: boolean;
+  feature_completeness: number | null;
+  unknown_team: boolean;
 };

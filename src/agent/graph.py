@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Annotated, Any, Literal, TypedDict
 
-from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
+from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage, ToolMessage
 from langgraph.graph import StateGraph, END
 from langgraph.graph.message import add_messages
 from langgraph.prebuilt import ToolNode
@@ -11,6 +12,8 @@ from langgraph.prebuilt import ToolNode
 from src.agent.agent_config import AgentConfig
 from src.agent.schema import MatchRecommendation, RecommendationParseError, extract_recommendation
 from src.utils.logger import get_logger
+
+_FORECAST_TOOL_NAMES = ("forecast_league", "forecast_international")
 
 _PROMPTS_DIR = Path(__file__).parent.parent.parent / "config" / "prompts"
 _LOG = get_logger(__name__)
@@ -38,6 +41,56 @@ def _load_system_prompt(config: AgentConfig) -> str:
     if not path.exists():
         raise FileNotFoundError(f"System prompt not found: {path}")
     return path.read_text()
+
+
+def _extract_forecast_diagnostics(messages: list[BaseMessage]) -> dict:
+    """W15: pull cold_start_risk/feature_completeness/unknown_team from the
+    most recent forecast_league/forecast_international tool result, rather
+    than trusting the LLM to transcribe them into its own JSON -- these are
+    engine-computed facts, not something agent_v1.txt even asks the model to
+    report, so relying on prose in `limitations` would be unreliable at best.
+    """
+    for message in reversed(messages):
+        if not isinstance(message, ToolMessage) or message.name not in _FORECAST_TOOL_NAMES:
+            continue
+        try:
+            payload = json.loads(message.content)
+        except (json.JSONDecodeError, TypeError):
+            continue
+        diagnostics = payload.get("diagnostics") or {}
+        data_quality = payload.get("data_quality") or {}
+        return {
+            "cold_start_risk": bool(diagnostics.get("cold_start_risk", False)),
+            "feature_completeness": diagnostics.get("feature_completeness"),
+            "unknown_team": bool(data_quality.get("unknown_team", False)),
+        }
+    return {"cold_start_risk": False, "feature_completeness": None, "unknown_team": False}
+
+
+def _build_recommendation(text: str, match_info: dict, messages: list[BaseMessage], config: AgentConfig) -> dict:
+    """Extract the LLM's MatchRecommendation JSON (or fall back to an
+    insufficient_data placeholder on parse failure), then enrich it with
+    forecast-tool diagnostics regardless of which path was taken."""
+    try:
+        recommendation = extract_recommendation(
+            text,
+            min_odds_threshold=config.min_odds_threshold,
+            max_odds_threshold=config.max_odds_threshold,
+        )
+        _LOG.info("output_node | parse=success | overall=%s", recommendation.get("overall"))
+    except RecommendationParseError as exc:
+        _LOG.warning("output_node | parse=failed | reason=%s", exc)
+        recommendation = {
+            "match": match_info,
+            "overall": "insufficient_data",
+            "markets": [],
+            "explanation": f"Agent did not produce a parseable recommendation. Raw output: {text[:800]}",
+            "confidence": "low",
+            "limitations": ["Agent output could not be parsed as a structured recommendation"],
+            "prediction_basis": "unknown",
+        }
+    recommendation.update(_extract_forecast_diagnostics(messages))
+    return recommendation
 
 
 def build_graph(config: AgentConfig, tools: list):
@@ -84,24 +137,7 @@ def build_graph(config: AgentConfig, tools: list):
 
         _LOG.info("output_node | raw_output_length=%d", len(text))
         _LOG.info("output_node | raw_output=%s", text)
-        try:
-            recommendation = extract_recommendation(
-                text,
-                min_odds_threshold=config.min_odds_threshold,
-                max_odds_threshold=config.max_odds_threshold,
-            )
-            _LOG.info("output_node | parse=success | overall=%s", recommendation.get("overall"))
-        except RecommendationParseError as exc:
-            _LOG.warning("output_node | parse=failed | reason=%s", exc)
-            recommendation = {
-                "match": state["match_info"],
-                "overall": "insufficient_data",
-                "markets": [],
-                "explanation": f"Agent did not produce a parseable recommendation. Raw output: {text[:800]}",
-                "confidence": "low",
-                "limitations": ["Agent output could not be parsed as a structured recommendation"],
-                "prediction_basis": "unknown",
-            }
+        recommendation = _build_recommendation(text, state["match_info"], state["messages"], config)
         return {"recommendation": recommendation}
 
     graph = StateGraph(AgentState)
