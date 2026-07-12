@@ -39,3 +39,21 @@ export type MatchRecommendationOut = {
   feature_completeness: number | null;
   unknown_team: boolean;
 };
+
+// W12: mirrors app/backend/bets.py BetOut.
+export type Bet = {
+  id: number;
+  match_id: string;
+  date: string;
+  home_team: string;
+  away_team: string;
+  market: string;
+  selection: string;
+  odds: number;
+  stake: number;
+  outcome: "open" | "won" | "lost";
+  profit_loss: number | null;
+  source: "from_recommendation" | "manual";
+  recommendation_snapshot: Record<string, unknown> | null;
+  created_at: string;
+};

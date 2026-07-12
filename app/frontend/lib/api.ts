@@ -1,4 +1,4 @@
-import type { Fixture, MatchRecommendationOut } from "./types";
+import type { Bet, Fixture, MatchRecommendationOut } from "./types";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000";
 
@@ -59,6 +59,56 @@ export async function getCachedRecommendation(
   if (response.status === 404) return null;
   if (!response.ok) {
     throw new ApiError(`Failed to load cached recommendation (${response.status})`, response.status);
+  }
+  return response.json();
+}
+
+/** W12: logs a bet with every field but stake locked to the given
+ * recommendation snapshot. */
+export async function logBetFromRecommendation(body: {
+  match_id: string;
+  recommendation: MatchRecommendationOut;
+  market: string;
+  selection: string;
+  stake: number;
+}): Promise<Bet> {
+  const response = await fetch(`${API_BASE}/api/bets/from-recommendation`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!response.ok) {
+    throw new ApiError(`Failed to log bet (${response.status})`, response.status);
+  }
+  return response.json();
+}
+
+/** W12: manual entry -- match_id must reference a real, resolved fixture. */
+export async function logBetManual(body: {
+  match_id: string;
+  date: string;
+  home_team: string;
+  away_team: string;
+  market: string;
+  selection: string;
+  odds: number;
+  stake: number;
+}): Promise<Bet> {
+  const response = await fetch(`${API_BASE}/api/bets/manual`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!response.ok) {
+    throw new ApiError(`Failed to log bet (${response.status})`, response.status);
+  }
+  return response.json();
+}
+
+export async function getBets(): Promise<Bet[]> {
+  const response = await fetch(`${API_BASE}/api/bets`);
+  if (!response.ok) {
+    throw new ApiError(`Failed to load bets (${response.status})`, response.status);
   }
   return response.json();
 }

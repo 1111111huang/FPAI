@@ -16,8 +16,10 @@ from starlette.concurrency import run_in_threadpool
 
 load_dotenv()
 
-from app.backend import recommendations
+from app.backend import bets, recommendations
 from app.backend.agent_config_hash import compute_agent_config_hash
+from app.backend.bet_tracker import BetTracker
+from app.backend.bets import BetFromRecommendationRequest, BetManualRequest, BetOut
 from app.backend.football_data_client import FootballDataClient, NormalizedMatch
 from app.backend.llm_check import check_llm_reachable
 from app.backend.recommendation_cache import RecommendationCache
@@ -116,3 +118,48 @@ async def get_cached_recommendation(
     if entry is None:
         raise HTTPException(status_code=404, detail="No cached recommendation for this match/date yet.")
     return MatchRecommendationOut.model_validate(entry.recommendation)
+
+
+@app.post("/api/bets/from-recommendation")
+async def create_bet_from_recommendation(
+    request: BetFromRecommendationRequest,
+    tracker: BetTracker = Depends(bets.get_bet_tracker),
+) -> BetOut:
+    """Every field but stake is locked -- derived from the recommendation
+    snapshot itself, which is also stored verbatim (recommendations aren't
+    reproducible run-to-run, agent_techspec.md sec18.6)."""
+    try:
+        resolved = bets.resolve_from_recommendation(request)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    bet = tracker.create_bet(
+        match_id=resolved["match_id"], date=resolved["date"],
+        home_team=resolved["home_team"], away_team=resolved["away_team"],
+        market=resolved["market"], selection=resolved["selection"],
+        odds=resolved["odds"], stake=resolved["stake"],
+        source="from_recommendation", recommendation_snapshot=request.recommendation,
+    )
+    return BetOut.from_bet(bet)
+
+
+@app.post("/api/bets/manual")
+async def create_bet_manual(
+    request: BetManualRequest,
+    tracker: BetTracker = Depends(bets.get_bet_tracker),
+) -> BetOut:
+    """User-provided fields, but match_id must be a resolved fixture reference
+    (enforced by the frontend's Match Explorer search, not free-typed team
+    names) -- Pydantic requires it non-empty at minimum."""
+    bet = tracker.create_bet(
+        match_id=request.match_id, date=request.date,
+        home_team=request.home_team, away_team=request.away_team,
+        market=request.market, selection=request.selection,
+        odds=request.odds, stake=request.stake,
+        source="manual", recommendation_snapshot=None,
+    )
+    return BetOut.from_bet(bet)
+
+
+@app.get("/api/bets")
+async def list_bets(tracker: BetTracker = Depends(bets.get_bet_tracker)) -> list[BetOut]:
+    return [BetOut.from_bet(bet) for bet in tracker.list_bets()]

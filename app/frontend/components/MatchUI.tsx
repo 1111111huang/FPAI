@@ -28,7 +28,7 @@ import {
   WarningCircle,
 } from "@phosphor-icons/react";
 
-import { ApiError, generateRecommendation, getFixtures } from "@/lib/api";
+import { ApiError, generateRecommendation, getFixtures, logBetFromRecommendation } from "@/lib/api";
 import type { Fixture, MatchRecommendationOut } from "@/lib/types";
 
 // ---------------------------------------------------------------------------
@@ -343,7 +343,7 @@ function SegmentedControl<T extends string>({
   );
 }
 
-function DraftNav({ active }: { active: "dashboard" | "matches" }) {
+export function DraftNav({ active }: { active: "dashboard" | "matches" | "bets" }) {
   return (
     <div className="mb-8 flex items-center justify-between">
       <div className="flex items-baseline gap-1.5">
@@ -365,6 +365,14 @@ function DraftNav({ active }: { active: "dashboard" | "matches" }) {
           }`}
         >
           Matches
+        </Link>
+        <Link
+          href="/bets"
+          className={`transition-colors duration-150 ${
+            active === "bets" ? "text-ink" : "text-ink-secondary hover:text-ink"
+          }`}
+        >
+          Bets
         </Link>
       </nav>
     </div>
@@ -671,13 +679,93 @@ function isAnomalousDirectBet(m: MarketRec): boolean {
   return m.recommendationType === "direct_bet" && m.currentOdds === null;
 }
 
-function ProbabilityRow({ m }: { m: MarketRec }) {
+/** W12: from-recommendation bet logging -- every field but stake is locked
+ * to the given market/selection within the recommendation snapshot. */
+function LogBetButton({
+  matchId,
+  recommendation,
+  market,
+  selection,
+}: {
+  matchId: string;
+  recommendation: MatchRecommendationOut;
+  market: string;
+  selection: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const [stake, setStake] = useState("");
+  const [status, setStatus] = useState<"idle" | "saving" | "done" | "error">("idle");
+  const [errorMsg, setErrorMsg] = useState("");
+
+  async function submit() {
+    const parsedStake = parseFloat(stake);
+    if (!parsedStake || parsedStake <= 0) {
+      setStatus("error");
+      setErrorMsg("Enter a stake greater than 0.");
+      return;
+    }
+    setStatus("saving");
+    try {
+      await logBetFromRecommendation({ match_id: matchId, recommendation, market, selection, stake: parsedStake });
+      setStatus("done");
+    } catch (err) {
+      setStatus("error");
+      setErrorMsg(err instanceof ApiError ? err.message : "Could not log bet.");
+    }
+  }
+
+  if (status === "done") return <span className="text-xs text-good">Logged</span>;
+
+  if (!open) {
+    return (
+      <button type="button" onClick={() => setOpen(true)} className="text-xs font-medium text-accent">
+        Log bet
+      </button>
+    );
+  }
+
+  return (
+    <span className="flex flex-wrap items-center gap-1.5">
+      <input
+        value={stake}
+        onChange={(e) => setStake(e.target.value)}
+        placeholder="Stake"
+        inputMode="decimal"
+        className="w-16 rounded border border-border bg-surface px-1.5 py-0.5 text-xs text-ink outline-none focus:border-accent"
+      />
+      <button
+        type="button"
+        onClick={submit}
+        disabled={status === "saving"}
+        className="text-xs font-medium text-accent disabled:opacity-50"
+      >
+        {status === "saving" ? "…" : "Confirm"}
+      </button>
+      {status === "error" && <span className="text-xs text-serious">{errorMsg}</span>}
+    </span>
+  );
+}
+
+function ProbabilityRow({
+  m,
+  matchId,
+  recommendation,
+}: {
+  m: MarketRec;
+  matchId?: string;
+  recommendation?: MatchRecommendationOut;
+}) {
   const anomalous = isAnomalousDirectBet(m);
   const s = STATUS_META[m.recommendationType];
   return (
     <div className="grid grid-cols-[1fr_auto_auto_auto_auto] items-center gap-4 border-b border-border py-3 text-sm last:border-b-0">
-      <span className="truncate text-ink">
-        {m.market} · {m.selection}
+      <span className="flex flex-col gap-1 truncate text-ink">
+        <span className="truncate">
+          {m.market} · {m.selection}
+        </span>
+        {matchId && recommendation && !anomalous && (
+          <LogBetButton matchId={matchId} recommendation={recommendation} market={m.market} selection={m.selection} />
+        )}
       </span>
       <span className="text-right font-mono text-ink">{formatPct(m.mlProbability)}</span>
       <span className={`text-right font-mono ${anomalous ? "text-serious" : "text-ink-secondary"}`}>
@@ -709,6 +797,7 @@ export function MatchAnalysisPage({
   date: string;
 }) {
   const [match, setMatch] = useState<Match | null>(null);
+  const [rawRecommendation, setRawRecommendation] = useState<MatchRecommendationOut | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -717,6 +806,7 @@ export function MatchAnalysisPage({
     setError(null);
     try {
       const rec = await generateRecommendation({ home_team: home, away_team: away, date, league: "E0", match_id: id });
+      setRawRecommendation(rec);
       setMatch(
         applyRecommendation(
           {
@@ -832,7 +922,14 @@ export function MatchAnalysisPage({
                 No markets in this recommendation.
               </p>
             ) : (
-              match.markets.map((m, i) => <ProbabilityRow key={`${m.market}-${i}`} m={m} />)
+              match.markets.map((m, i) => (
+                <ProbabilityRow
+                  key={`${m.market}-${i}`}
+                  m={m}
+                  matchId={id}
+                  recommendation={rawRecommendation ?? undefined}
+                />
+              ))
             )}
             {match.invalidMarketCount > 0 && (
               <p className="mt-2 flex items-center gap-1.5 text-xs text-serious">
