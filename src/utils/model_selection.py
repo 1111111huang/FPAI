@@ -115,11 +115,28 @@ class ModelSelector:
             })
         return results
 
+    def _run_artifact_resolves(self, run: dict[str, Any]) -> bool:
+        """Whether this run's own model artifact actually exists on disk.
+
+        BUG-014 layer 2: an MLflow run can carry a real, competitive metric
+        while its artifact_filename points to a file that was never saved or
+        has since been deleted -- such a run can never actually be loaded by
+        ForecastService, so it must not be eligible to be "best" at all, not
+        merely deprioritized against whatever the current champion is.
+        """
+        artifact_filename = run.get("artifact_filename")
+        if not artifact_filename:
+            # No artifact_filename param logged -- the pre-BUG-010-fix
+            # MLflow-flavor path convention, never loadable either.
+            return False
+        return (self.model_dir / artifact_filename).exists()
+
     def _best_run(
         self,
         runs: list[dict[str, Any]],
         metric: str,
     ) -> dict[str, Any] | None:
+        runs = [r for r in runs if self._run_artifact_resolves(r)]
         eligible = [r for r in runs if metric in r["metrics"]]
         if not eligible:
             # Fallback: try without test_ prefix
