@@ -35,12 +35,12 @@ import type { Fixture, MatchRecommendationOut } from "@/lib/types";
 // Types
 // ---------------------------------------------------------------------------
 
-type Tier = "competition_specific" | "general_purpose";
-type RecommendationType = "direct_bet" | "conditional" | "no_bet";
-type Overall = RecommendationType | "insufficient_data";
-type Confidence = "low" | "medium" | "high" | string;
+export type Tier = "competition_specific" | "general_purpose";
+export type RecommendationType = "direct_bet" | "conditional" | "no_bet";
+export type Overall = RecommendationType | "insufficient_data";
+export type Confidence = "low" | "medium" | "high" | string;
 
-type MarketRec = {
+export type MarketRec = {
   market: string;
   selection: string;
   recommendationType: RecommendationType;
@@ -51,7 +51,7 @@ type MarketRec = {
   valueEdge: number;
 };
 
-type Match = {
+export type Match = {
   id: string;
   league: string;
   tier: Tier;
@@ -258,7 +258,7 @@ function initials(name: string) {
 // Atoms
 // ---------------------------------------------------------------------------
 
-function StatusBadge({ status, size = "sm" }: { status: Overall; size?: "sm" | "lg" }) {
+export function StatusBadge({ status, size = "sm" }: { status: Overall; size?: "sm" | "lg" }) {
   const s = STATUS_META[status];
   const pad = size === "lg" ? "px-3 py-1.5 text-sm" : "px-2 py-0.5 text-[11px]";
   return (
@@ -408,7 +408,7 @@ function LoadingRows({ count = 3 }: { count?: number }) {
 // if no recommendation has been generated for this fixture yet.
 // ---------------------------------------------------------------------------
 
-function MatchCard({ match, onUpdate }: { match: Match; onUpdate: (m: Match) => void }) {
+export function MatchCard({ match, onUpdate }: { match: Match; onUpdate: (m: Match) => void }) {
   const [open, setOpen] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -681,7 +681,7 @@ function isAnomalousDirectBet(m: MarketRec): boolean {
 
 /** W12: from-recommendation bet logging -- every field but stake is locked
  * to the given market/selection within the recommendation snapshot. */
-function LogBetButton({
+export function LogBetButton({
   matchId,
   recommendation,
   market,
