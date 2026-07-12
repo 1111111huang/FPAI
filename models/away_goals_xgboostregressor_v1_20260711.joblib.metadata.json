@@ -1,0 +1,94 @@
+{
+  "artifact_name": "away_goals_xgboostregressor_v1_20260711.joblib",
+  "artifact_path": "models/away_goals_xgboostregressor_v1_20260711.joblib",
+  "classes": [],
+  "created_at": "2026-07-12T03:18:47Z",
+  "feature_importance": [
+    {
+      "feature": "MKT_IMPLIED_AWAY",
+      "importance": 0.2734251022338867
+    },
+    {
+      "feature": "MKT_IMPLIED_HOME",
+      "importance": 0.115483857691288
+    },
+    {
+      "feature": "MKT_AH_LINE",
+      "importance": 0.08321545273065567
+    },
+    {
+      "feature": "MKT_IMPLIED_OVER25",
+      "importance": 0.07973536849021912
+    },
+    {
+      "feature": "MKT_IMPLIED_DRAW",
+      "importance": 0.07433509081602097
+    },
+    {
+      "feature": "MKT_LAMBDA_AH_DIFF",
+      "importance": 0.06528083980083466
+    },
+    {
+      "feature": "MKT_LAMBDA_TOTAL",
+      "importance": 0.06287780404090881
+    },
+    {
+      "feature": "MKT_LAMBDA_AWAY",
+      "importance": 0.05089786648750305
+    },
+    {
+      "feature": "MKT_POISSON_BTTS_PROB",
+      "importance": 0.04347971826791763
+    },
+    {
+      "feature": "MKT_OVERROUND",
+      "importance": 0.040299683809280396
+    },
+    {
+      "feature": "MKT_LAMBDA_HOME",
+      "importance": 0.038721609860658646
+    },
+    {
+      "feature": "MKT_AH_HOME_ODDS",
+      "importance": 0.03779946640133858
+    },
+    {
+      "feature": "MKT_AH_AWAY_ODDS",
+      "importance": 0.034448180347681046
+    }
+  ],
+  "feature_names": [
+    "MKT_IMPLIED_HOME",
+    "MKT_IMPLIED_DRAW",
+    "MKT_IMPLIED_AWAY",
+    "MKT_OVERROUND",
+    "MKT_LAMBDA_TOTAL",
+    "MKT_LAMBDA_HOME",
+    "MKT_LAMBDA_AWAY",
+    "MKT_POISSON_BTTS_PROB",
+    "MKT_LAMBDA_AH_DIFF",
+    "MKT_AH_LINE",
+    "MKT_AH_HOME_ODDS",
+    "MKT_AH_AWAY_ODDS",
+    "MKT_IMPLIED_OVER25"
+  ],
+  "feature_schema_version": "v1",
+  "metrics": {
+    "mae": 0.8307407994019358,
+    "rmse": 1.0636844933576173
+  },
+  "model_type": "XGBoostRegressorModel",
+  "prediction_interval": {
+    "coverage": 0.8,
+    "lower_residual": -1.1099801301956176,
+    "method": "validation_residual_quantile",
+    "upper_residual": 1.8225522398948673
+  },
+  "primary_metric": "mae",
+  "secondary_metrics": [
+    "rmse"
+  ],
+  "target": "away_goals",
+  "task_type": "regression",
+  "training_cutoff": "2023-05-28T00:00:00"
+}
