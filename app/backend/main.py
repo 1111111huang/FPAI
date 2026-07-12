@@ -9,9 +9,12 @@ from __future__ import annotations
 from contextlib import asynccontextmanager
 import os
 
+from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.concurrency import run_in_threadpool
+
+load_dotenv()
 
 from app.backend import recommendations
 from app.backend.agent_config_hash import compute_agent_config_hash
