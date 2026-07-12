@@ -23,6 +23,7 @@ from app.backend.bets import BetFromRecommendationRequest, BetManualRequest, Bet
 from app.backend.football_data_client import FootballDataClient, NormalizedMatch
 from app.backend.llm_check import check_llm_reachable
 from app.backend.recommendation_cache import RecommendationCache
+from app.backend.bet_stats import compute_bet_stats
 from app.backend.recommendations import MatchRecommendationOut, RecommendationRequest, validate_and_degrade
 from app.backend.settlement import settle_open_bets
 from src.agent.agent_config import AgentConfig
@@ -164,6 +165,13 @@ async def create_bet_manual(
 @app.get("/api/bets")
 async def list_bets(tracker: BetTracker = Depends(bets.get_bet_tracker)) -> list[BetOut]:
     return [BetOut.from_bet(bet) for bet in tracker.list_bets()]
+
+
+@app.get("/api/bets/stats")
+async def get_bet_stats(tracker: BetTracker = Depends(bets.get_bet_tracker)) -> dict:
+    """W14: ROI/hit-rate/bankroll summary, computed fresh over settled bets
+    on every call -- no persisted running total."""
+    return compute_bet_stats(tracker.list_bets())
 
 
 @app.post("/api/bets/settle-open")

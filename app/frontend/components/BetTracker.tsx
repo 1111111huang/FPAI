@@ -8,8 +8,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { MagnifyingGlass, WarningCircle } from "@phosphor-icons/react";
 
-import { ApiError, getBets, getFixtures, logBetManual, settleOpenBets } from "@/lib/api";
-import type { Bet, Fixture } from "@/lib/types";
+import { ApiError, getBetStats, getBets, getFixtures, logBetManual, settleOpenBets } from "@/lib/api";
+import type { Bet, BetStats, Fixture } from "@/lib/types";
 import { DraftNav, TeamBadge } from "./MatchUI";
 
 function formatDate(iso: string): string {
@@ -185,15 +185,43 @@ function BetRow({ bet }: { bet: Bet }) {
   );
 }
 
+function StatBox({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-lg border border-border p-3">
+      <div className="text-xs uppercase tracking-wide text-muted">{label}</div>
+      <div className="mt-1 font-mono text-lg text-ink">{value}</div>
+    </div>
+  );
+}
+
+function StatsBar({ stats }: { stats: BetStats }) {
+  const roiColor = stats.roi > 0 ? "text-good" : stats.roi < 0 ? "text-serious" : "text-ink";
+  return (
+    <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+      <StatBox label="Bankroll" value={stats.current_bankroll.toFixed(2)} />
+      <StatBox label="ROI" value={`${(stats.roi * 100).toFixed(1)}%`} />
+      <StatBox label="Hit rate" value={stats.bets_settled > 0 ? `${(stats.hit_rate * 100).toFixed(0)}%` : "—"} />
+      <StatBox label="Max drawdown" value={`${(stats.max_drawdown * 100).toFixed(1)}%`} />
+      <div className="col-span-2 text-xs text-ink-secondary sm:col-span-4">
+        {stats.bets_settled} settled ({stats.bets_won} won) · {stats.bets_open} open ·{" "}
+        <span className={roiColor}>{stats.total_profit >= 0 ? "+" : ""}{stats.total_profit.toFixed(2)} profit</span>
+      </div>
+    </div>
+  );
+}
+
 export function BetTrackerPage() {
   const [bets, setBets] = useState<Bet[] | null>(null);
+  const [stats, setStats] = useState<BetStats | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [settling, setSettling] = useState(false);
   const [settleMsg, setSettleMsg] = useState<string | null>(null);
 
   async function load() {
     try {
-      setBets(await getBets());
+      const [betList, betStats] = await Promise.all([getBets(), getBetStats()]);
+      setBets(betList);
+      setStats(betStats);
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Could not load bets.");
     }
@@ -227,6 +255,12 @@ export function BetTrackerPage() {
 
       <h1 className="text-xl font-semibold tracking-tight text-ink">Bet Tracker</h1>
       <p className="mt-1 text-sm text-ink-secondary">Bets you've actually placed -- not automatic hypothetical tracking.</p>
+
+      {stats && (
+        <div className="mt-6">
+          <StatsBar stats={stats} />
+        </div>
+      )}
 
       <div className="mt-6">
         <ManualBetForm onLogged={load} />

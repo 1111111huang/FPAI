@@ -1,4 +1,4 @@
-import type { Bet, Fixture, MatchRecommendationOut } from "./types";
+import type { Bet, BetStats, Fixture, MatchRecommendationOut } from "./types";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000";
 
@@ -120,6 +120,15 @@ export async function settleOpenBets(): Promise<Bet[]> {
   const response = await fetch(`${API_BASE}/api/bets/settle-open`, { method: "POST" });
   if (!response.ok) {
     throw new ApiError(`Failed to settle open bets (${response.status})`, response.status);
+  }
+  return response.json();
+}
+
+/** W14: ROI/hit-rate/bankroll summary, computed only over settled bets. */
+export async function getBetStats(): Promise<BetStats> {
+  const response = await fetch(`${API_BASE}/api/bets/stats`);
+  if (!response.ok) {
+    throw new ApiError(`Failed to load bet stats (${response.status})`, response.status);
   }
   return response.json();
 }

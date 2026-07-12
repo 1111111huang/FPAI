@@ -57,3 +57,17 @@ export type Bet = {
   recommendation_snapshot: Record<string, unknown> | null;
   created_at: string;
 };
+
+// W14: mirrors app/backend/bet_stats.py's compute_bet_stats() return shape.
+export type BetStats = {
+  bets_settled: number;
+  bets_open: number;
+  bets_won: number;
+  roi: number;
+  hit_rate: number;
+  total_staked: number;
+  total_profit: number;
+  max_drawdown: number;
+  starting_bankroll: number;
+  current_bankroll: number;
+};
