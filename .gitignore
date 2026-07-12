@@ -37,6 +37,7 @@ node_modules/
 .next/
 out/
 npm-debug.log*
+*.tsbuildinfo
 
 # Claude Code skill-marketplace files (local tooling, not project source)
 .agents/
