@@ -29,6 +29,8 @@ from app.backend.scheduler import RecoverableScheduler
 from app.backend.scheduler_wiring import build_odds_client, register_eod_job
 from app.backend.settlement import settle_open_bets
 from src.agent.agent_config import AgentConfig
+from src.tools.data_tools import get_data_freshness
+from src.tools.model_tools import get_model_status
 from src.utils.logger import get_logger
 
 LOGGER = get_logger(__name__)
@@ -99,6 +101,14 @@ app.add_middleware(
 @app.get("/api/health")
 def health() -> dict:
     return {"status": "ok"}
+
+
+@app.get("/api/status")
+def get_status() -> dict:
+    """W17: system status surface (data staleness + current model
+    selections) -- pure reuse of already-exposed src/tools functions, no
+    new engine work."""
+    return {"data_freshness": get_data_freshness(), "model_status": get_model_status()}
 
 
 @app.get("/api/fixtures")

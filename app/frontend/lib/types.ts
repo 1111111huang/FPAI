@@ -58,6 +58,33 @@ export type Bet = {
   created_at: string;
 };
 
+// W17: mirrors app/backend/main.py's GET /api/status response, itself a
+// thin pass-through of src/tools/data_tools.get_data_freshness() and
+// src/tools/model_tools.get_model_status().
+export type DataFreshness = {
+  latest_match_date: string | null;
+  days_since_update: number | null;
+  match_count: number;
+  is_stale: boolean;
+};
+
+export type ModelStatusEntry = {
+  model_type: string | null;
+  primary_metric_value: number | null;
+  metric_name: string | null;
+  selected_at: string | null;
+};
+
+export type ModelStatus = {
+  league: Record<string, ModelStatusEntry>;
+  international: Record<string, ModelStatusEntry>;
+};
+
+export type StatusResponse = {
+  data_freshness: DataFreshness;
+  model_status: ModelStatus;
+};
+
 // W14: mirrors app/backend/bet_stats.py's compute_bet_stats() return shape.
 export type BetStats = {
   bets_settled: number;

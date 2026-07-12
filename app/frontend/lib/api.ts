@@ -1,4 +1,4 @@
-import type { Bet, BetStats, Fixture, MatchRecommendationOut } from "./types";
+import type { Bet, BetStats, Fixture, MatchRecommendationOut, StatusResponse } from "./types";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000";
 
@@ -129,6 +129,15 @@ export async function getBetStats(): Promise<BetStats> {
   const response = await fetch(`${API_BASE}/api/bets/stats`);
   if (!response.ok) {
     throw new ApiError(`Failed to load bet stats (${response.status})`, response.status);
+  }
+  return response.json();
+}
+
+/** W17: data staleness + current model selections. */
+export async function getStatus(): Promise<StatusResponse> {
+  const response = await fetch(`${API_BASE}/api/status`);
+  if (!response.ok) {
+    throw new ApiError(`Failed to load status (${response.status})`, response.status);
   }
   return response.json();
 }
