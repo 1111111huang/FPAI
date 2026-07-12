@@ -73,6 +73,9 @@ type Match = {
   coldStartRisk: boolean;
   featureCompleteness: number | null;
   unknownTeam: boolean;
+  // W16: markets W02 dropped for failing type validation -- an honest note
+  // beats silently showing fewer markets with no explanation.
+  invalidMarketCount: number;
 };
 
 // ---------------------------------------------------------------------------
@@ -102,6 +105,7 @@ function fixtureToMatch(fixture: Fixture): Match {
     coldStartRisk: false,
     featureCompleteness: null,
     unknownTeam: false,
+    invalidMarketCount: 0,
   };
 }
 
@@ -117,6 +121,7 @@ function applyRecommendation(match: Match, rec: MatchRecommendationOut): Match {
     coldStartRisk: rec.cold_start_risk,
     featureCompleteness: rec.feature_completeness,
     unknownTeam: rec.unknown_team,
+    invalidMarketCount: rec.invalid_market_count,
     markets: rec.markets.map((m) => ({
       market: m.market,
       selection: m.selection,
@@ -496,6 +501,13 @@ function MatchCard({ match, onUpdate }: { match: Match; onUpdate: (m: Match) => 
             {!loading && !error && match.hasRecommendation && (
               <>
                 <p className="text-ink-secondary">{match.explanation}</p>
+                {match.invalidMarketCount > 0 && (
+                  <p className="mt-2 flex items-center gap-1.5 text-xs text-serious">
+                    <WarningCircle weight="fill" size={13} />
+                    {match.invalidMarketCount} market{match.invalidMarketCount > 1 ? "s" : ""} omitted --
+                    malformed data.
+                  </p>
+                )}
                 <Link
                   href={`/matches/${match.id}?home=${encodeURIComponent(match.home)}&away=${encodeURIComponent(
                     match.away
@@ -650,7 +662,17 @@ export function MatchExplorerPage() {
 // Page 3 -- Match Analysis & Agent Intelligence ("/matches/:id")
 // ---------------------------------------------------------------------------
 
+/** W16: a direct_bet market with no current_odds is a known agent-output
+ * quirk (agent_techspec.md §18.3 / BUG-013) -- A28 downgrades this at
+ * extraction time, but the app shouldn't assume that fix holds for every
+ * recommendation it ever sees (e.g. one cached before A28 shipped). Render
+ * it as an explicit data-issue state, not a normal green "Direct Bet". */
+function isAnomalousDirectBet(m: MarketRec): boolean {
+  return m.recommendationType === "direct_bet" && m.currentOdds === null;
+}
+
 function ProbabilityRow({ m }: { m: MarketRec }) {
+  const anomalous = isAnomalousDirectBet(m);
   const s = STATUS_META[m.recommendationType];
   return (
     <div className="grid grid-cols-[1fr_auto_auto_auto_auto] items-center gap-4 border-b border-border py-3 text-sm last:border-b-0">
@@ -658,13 +680,19 @@ function ProbabilityRow({ m }: { m: MarketRec }) {
         {m.market} · {m.selection}
       </span>
       <span className="text-right font-mono text-ink">{formatPct(m.mlProbability)}</span>
-      <span className="text-right font-mono text-ink-secondary">
-        {m.currentOdds ? m.currentOdds.toFixed(2) : "—"}
+      <span className={`text-right font-mono ${anomalous ? "text-serious" : "text-ink-secondary"}`}>
+        {m.currentOdds ? m.currentOdds.toFixed(2) : anomalous ? "missing" : "—"}
       </span>
       <span className={`text-right font-mono ${m.valueEdge >= 0 ? "text-good" : "text-ink-secondary"}`}>
         {formatEdge(m.valueEdge)}
       </span>
-      <span className={`justify-self-end ${s.text}`}>{s.label}</span>
+      {anomalous ? (
+        <span className="justify-self-end text-serious" title="direct_bet with no current_odds -- data issue, not a real recommendation">
+          Data issue
+        </span>
+      ) : (
+        <span className={`justify-self-end ${s.text}`}>{s.label}</span>
+      )}
     </div>
   );
 }
@@ -709,6 +737,7 @@ export function MatchAnalysisPage({
             coldStartRisk: false,
             featureCompleteness: null,
             unknownTeam: false,
+            invalidMarketCount: 0,
           },
           rec
         )
@@ -804,6 +833,13 @@ export function MatchAnalysisPage({
               </p>
             ) : (
               match.markets.map((m, i) => <ProbabilityRow key={`${m.market}-${i}`} m={m} />)
+            )}
+            {match.invalidMarketCount > 0 && (
+              <p className="mt-2 flex items-center gap-1.5 text-xs text-serious">
+                <WarningCircle weight="fill" size={13} />
+                {match.invalidMarketCount} market{match.invalidMarketCount > 1 ? "s" : ""} omitted -- malformed
+                data from the agent.
+              </p>
             )}
           </section>
 
