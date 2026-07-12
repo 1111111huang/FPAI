@@ -1,0 +1,87 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/*
+  Palette: dataviz skill's validated reference instance (references/palette.md),
+  dark steps only. Locked to dark mode per D6 (Page Theme Lock: one theme for
+  the whole page, not auto/light). Status colors are reserved from the accent
+  so recommendation badges never collide with interactive elements; both were
+  WCAG-contrast-checked against this dark surface. Ported verbatim from
+  sandbox/app/globals.css, validated there first.
+*/
+:root {
+  --page-plane: #0d0d0d;
+  --surface-1: #1a1a19;
+  --text-primary: #ffffff;
+  --text-secondary: #c3c2b7;
+  --text-muted: #898781;
+  --gridline: #2c2c2a;
+  --border-hairline: rgba(255, 255, 255, 0.1);
+  --border-hairline-strong: rgba(255, 255, 255, 0.22);
+  --accent: #3987e5;
+  --status-good: #0ca30c;
+  --status-warning: #fab219;
+  --status-serious: #ec835a;
+  --status-critical: #d03b3b;
+}
+
+* {
+  border-color: var(--border-hairline);
+}
+
+body {
+  background: var(--page-plane);
+  color: var(--text-primary);
+  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Smooth-height expand/collapse without JS measuring (grid-rows trick). 150ms per brief. */
+.expand-rows {
+  display: grid;
+  grid-template-rows: 0fr;
+  transition: grid-template-rows 150ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+.expand-rows.is-open {
+  grid-template-rows: 1fr;
+}
+.expand-rows > div {
+  overflow: hidden;
+}
+
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+@keyframes scale-in {
+  from {
+    opacity: 0;
+    transform: scale(0.97) translateY(3px);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+  }
+}
+.animate-fade-in {
+  animation: fade-in 150ms ease-out;
+}
+.animate-scale-in {
+  animation: scale-in 150ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
