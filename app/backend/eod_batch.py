@@ -8,11 +8,15 @@ job (W10) -- for every fixture, regardless of whether EOD generation
 itself succeeded for it, since W10's own refresh is independently
 best-effort and shouldn't depend on tonight's batch having gone cleanly.
 
-Odds are matched to fixtures by exact (home_team, away_team) string
-equality (case-insensitive). The Odds API and football-data.org share no
-common ID, and no live Odds API key was available at W07's implementation
-time to verify their real naming conventions agree -- a fixture with no
-matching odds event proceeds with odds omitted (the agent's existing
+Odds are matched to fixtures by each side's *canonical* team name, via the
+same TeamNameMapper/config/team_mapping.json ingestion already uses --
+BUG-015: confirmed live against a real Odds API key that The Odds API and
+football-data.org spell many clubs differently ("Man United" vs
+"Manchester United", "Nottingham" vs "Nottingham Forest", "Tottenham" vs
+"Tottenham Hotspur", "Brighton Hove" vs "Brighton and Hove Albion", ...) --
+raw case-insensitive string equality silently dropped odds for 6/10 real
+fixtures in that check. A fixture with no matching odds event (even after
+canonical mapping) proceeds with odds omitted (the agent's existing
 no-odds handling) rather than blocking the whole batch.
 """
 
@@ -20,6 +24,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Callable
 
 from app.backend import recommendations
@@ -29,12 +34,15 @@ from app.backend.odds_api_client import NormalizedOdds, OddsAPIClient
 from app.backend.recommendation_cache import RecommendationCache
 from app.backend.recommendations import validate_and_degrade
 from src.agent.agent_config import AgentConfig
+from src.ingestion.common.team_mapping import TeamNameMapper
 from src.utils.logger import get_logger
 
 LOGGER = get_logger(__name__)
 
 COMPETITION_CODE = "PL"
 LEAGUE_CODE = "E0"
+
+_TEAM_MAPPING_PATH = Path(__file__).parent.parent.parent / "config" / "team_mapping.json"
 
 
 @dataclass
@@ -45,13 +53,16 @@ class EodBatchResult:
 
 
 def odds_lookup(odds_events: list[NormalizedOdds]) -> dict[tuple[str, str], NormalizedOdds]:
-    return {(o.home_team.lower(), o.away_team.lower()): o for o in odds_events}
+    mapper = TeamNameMapper(mapping_path=str(_TEAM_MAPPING_PATH))
+    return {(mapper.map_team(o.home_team), mapper.map_team(o.away_team)): o for o in odds_events}
 
 
 def match_odds(
     fixture: NormalizedMatch, odds_by_teams: dict[tuple[str, str], NormalizedOdds]
 ) -> dict[str, float] | None:
-    odds = odds_by_teams.get((fixture.home_team.lower(), fixture.away_team.lower()))
+    mapper = TeamNameMapper(mapping_path=str(_TEAM_MAPPING_PATH))
+    key = (mapper.map_team(fixture.home_team), mapper.map_team(fixture.away_team))
+    odds = odds_by_teams.get(key)
     if odds is None or odds.home_odds is None or odds.draw_odds is None or odds.away_odds is None:
         return None
     return {"home": odds.home_odds, "draw": odds.draw_odds, "away": odds.away_odds}

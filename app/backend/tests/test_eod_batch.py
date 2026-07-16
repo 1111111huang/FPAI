@@ -127,6 +127,42 @@ def test_odds_matched_to_fixture_by_team_name(tmp_path: Path) -> None:
     assert captured_match_info["odds"] == {"home": 1.8, "draw": 3.6, "away": 4.5}
 
 
+def test_odds_matched_via_canonical_team_name_despite_provider_spelling_differences(tmp_path: Path) -> None:
+    """BUG-015: football-data.org and The Odds API spell many clubs
+    differently (confirmed live against a real key -- 'Man United' vs
+    'Manchester United', 'Nottingham' vs 'Nottingham Forest', 'Tottenham'
+    vs 'Tottenham Hotspur', 'Brighton Hove' vs 'Brighton and Hove Albion',
+    etc.). Matching by raw string equality silently drops odds for most
+    real fixtures; matching via the shared TeamNameMapper (the same
+    canonical space ingestion already uses) must resolve them."""
+    fixtures_client = MagicMock()
+    fixtures_client.get_fixtures.return_value = [_fixture("m1", "Man United", "Nottingham")]
+    odds_client = MagicMock()
+    odds_client.get_odds.return_value = [
+        NormalizedOdds(
+            home_team="Manchester United", away_team="Nottingham Forest", commence_time="2026-08-22T15:00:00Z",
+            home_odds=1.4, draw_odds=4.5, away_odds=7.0,
+        ),
+    ]
+    cache = RecommendationCache(db_path=tmp_path / "cache.db")
+    config = AgentConfig.default()
+    captured_match_info = {}
+
+    def _capture(match_info, config):
+        captured_match_info.update(match_info)
+        return _RECOMMENDATION
+
+    with patch("app.backend.recommendations.run_agent", side_effect=_capture):
+        asyncio.run(
+            run_eod_batch(
+                fixtures_client=fixtures_client, odds_client=odds_client, cache=cache, config=config,
+                schedule_t30=lambda f: None, date_str="2026-08-22",
+            )
+        )
+
+    assert captured_match_info["odds"] == {"home": 1.4, "draw": 4.5, "away": 7.0}
+
+
 def test_unmatched_odds_proceeds_with_no_odds_rather_than_skipping(tmp_path: Path) -> None:
     fixtures_client = MagicMock()
     fixtures_client.get_fixtures.return_value = [_fixture("m1", "Arsenal", "Everton")]

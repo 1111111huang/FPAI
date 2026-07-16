@@ -2,14 +2,26 @@
 scoped to a single market and single region to stay within the free tier's
 ~500-credit/month budget.
 
-NOTE on verification status: no Odds API key was available at implementation
-time (2026-07-11) -- agreed with the user to build this against mocks and do
-a live smoke-test later, the same pattern used once already for W06. The
-event-shape normalization in _normalize() follows The Odds API's publicly
-documented v4 schema (sport_key/commence_time/home_team/away_team/
-bookmakers[].markets[].outcomes[]), not a live-captured response. Treat this
-as an assumption to verify, not a confirmed fact, before trusting it in
-production -- unlike football_data_client.py, which was verified live.
+Verified live against a real key (W25, 2026-07-15): _normalize() correctly
+parses a real response, matching the publicly documented v4 schema
+(sport_key/commence_time/home_team/away_team/bookmakers[].markets[].outcomes[])
+it was originally built against -- see test_odds_api_client.py's
+test_normalize_matches_a_real_captured_response for the real fixture.
+
+Two things that check surfaced, not yet addressed here (tracked, not bugs
+in _normalize() itself): (1) bookmakers[] ordering is confirmed *not*
+stable across events -- _normalize() only ever reads bookmakers[0], with
+no fallback if it lacks the h2h market; (2) real responses carry
+authoritative credit-usage headers (x-requests-remaining/x-requests-used)
+that CreditCounter never reads, relying only on a client-side cost
+estimate.
+
+Separately (BUG-015, same live check): The Odds API and football-data.org
+spell a number of clubs differently ("Man United" vs "Manchester United",
+"Nottingham" vs "Nottingham Forest", etc.) -- fixed at the fixture-matching
+layer (app/backend/eod_batch.py's odds_lookup()/match_odds()), not here;
+this client's own output (NormalizedOdds.home_team/away_team) is left as
+The Odds API's own spelling, matching what it actually returns.
 """
 
 from __future__ import annotations

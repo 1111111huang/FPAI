@@ -1,11 +1,23 @@
-"""W07: The Odds API client with an explicit credit-usage counter.
+"""W07/W25: The Odds API client with an explicit credit-usage counter.
 
-No Odds API key was available at implementation time (2026-07-11, agreed
-with the user) -- unlike W05/W06, nothing here is verified against a real
-response. Event-shape fixtures below follow The Odds API's publicly
-documented v4 schema (sport_key/commence_time/home_team/away_team/
-bookmakers[].markets[].outcomes[]), not a live-captured payload. A live
-smoke-test is still needed once a key exists -- see completion notes."""
+W25 (2026-07-15): verified live against a real key. `_normalize()` needed
+no changes -- a real captured response confirmed the documented v4 schema
+(sport_key/commence_time/home_team/away_team/bookmakers[].markets[].outcomes[])
+holds, including the literal `"Draw"` outcome name and decimal price
+format. `test_normalize_matches_a_real_captured_response` below uses that
+real payload (trimmed to 2 of the original 19 bookmakers) as a permanent
+regression fixture, same pattern as W05/W06. Two things the real check did
+surface, tracked separately rather than fixed here since they're
+independent of `_normalize()`'s own correctness: (1) bookmaker ordering in
+`bookmakers[]` is confirmed *not* stable across events (`_normalize()` only
+ever reads `bookmakers[0]`, no fallback), and (2) the response carries
+authoritative credit-usage headers (`x-requests-remaining`/`x-requests-used`)
+that `CreditCounter` never reads, relying only on a client-side estimate
+that happened to agree with the real count in this one check.
+
+The other fixtures below (`_EVENT`) remain synthetic, documented-schema
+constructions -- fine for exercising code paths, just not evidence the
+schema itself is real."""
 
 from __future__ import annotations
 
@@ -21,6 +33,7 @@ from app.backend.odds_api_client import (
     FileCreditCounterStore,
     NormalizedOdds,
     OddsAPIClient,
+    _normalize,
 )
 
 _EVENT = {
@@ -46,6 +59,63 @@ _EVENT = {
         }
     ],
 }
+
+# A real event captured 2026-07-15 from a live GET /v4/sports/soccer_epl/odds
+# call (W25), trimmed from its original 19 bookmakers down to 2 -- the exact
+# real fixture (Arsenal v Coventry City, 2026-08-21) later also used for the
+# W17/W23 live checks.
+_REAL_CAPTURED_EVENT = {
+    "id": "eb2553d10d63dc912b99f8fd0d675721",
+    "sport_key": "soccer_epl",
+    "sport_title": "EPL",
+    "commence_time": "2026-08-21T19:00:00Z",
+    "home_team": "Arsenal",
+    "away_team": "Coventry City",
+    "bookmakers": [
+        {
+            "key": "betfair_sb_uk",
+            "title": "Betfair Sportsbook",
+            "last_update": "2026-07-13T01:45:54Z",
+            "markets": [
+                {
+                    "key": "h2h",
+                    "last_update": "2026-07-13T01:45:54Z",
+                    "outcomes": [
+                        {"name": "Arsenal", "price": 1.15},
+                        {"name": "Coventry City", "price": 17.0},
+                        {"name": "Draw", "price": 7.0},
+                    ],
+                }
+            ],
+        },
+        {
+            "key": "betfred_uk",
+            "title": "Betfred (UK)",
+            "last_update": "2026-07-13T01:46:27Z",
+            "markets": [
+                {
+                    "key": "h2h",
+                    "last_update": "2026-07-13T01:46:27Z",
+                    "outcomes": [
+                        {"name": "Arsenal", "price": 1.17},
+                        {"name": "Coventry City", "price": 17.0},
+                        {"name": "Draw", "price": 7.0},
+                    ],
+                }
+            ],
+        },
+    ],
+}
+
+
+def test_normalize_matches_a_real_captured_response() -> None:
+    """W25: proves _normalize() against a real API payload, not just a
+    synthetic one built from the docs."""
+    result = _normalize(_REAL_CAPTURED_EVENT)
+    assert result == NormalizedOdds(
+        home_team="Arsenal", away_team="Coventry City", commence_time="2026-08-21T19:00:00Z",
+        home_odds=1.15, draw_odds=7.0, away_odds=17.0,
+    )
 
 
 def _mock_session(events: list[dict]) -> MagicMock:
