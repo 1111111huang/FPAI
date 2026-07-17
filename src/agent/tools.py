@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import json
 import os
+from pathlib import Path
 
 from langchain_core.tools import tool
 
-from src.agent.snapshot_store import SnapshotStore, SnapshotMode
+from src.agent.snapshot_store import DEFAULT_BASE_DIR, SnapshotStore, SnapshotMode
 from src.utils.logger import get_logger
 
 _LOG = get_logger(__name__)
@@ -13,14 +14,32 @@ _LOG = get_logger(__name__)
 _snapshot_store = SnapshotStore()
 
 
-def configure_snapshot_store(mode: SnapshotMode, match_id: str | None = None, match_date: str | None = None) -> None:
+def configure_snapshot_store(
+    mode: SnapshotMode,
+    match_id: str | None = None,
+    match_date: str | None = None,
+    base_dir: str | Path | None = None,
+) -> None:
     """Configure the module-level SnapshotStore shared by all tool functions.
-
-    Call this before run_agent() to switch between live/record/replay. In record
-    and replay mode, match_id is required (raises ValueError otherwise, from
-    SnapshotStore._path). match_date, if given, is appended to web_search queries
-    as 'before:<match_date>' to reduce post-match result leakage (A10).
-    """
+    Call this before run_agent() to switch between live/record/replay. In
+    record and replay mode, match_id is required (raises ValueError
+    otherwise, from SnapshotStore._path). match_date, if given, is appended
+    to web_search queries as 'before:<match_date>' to reduce post-match
+    result leakage (A10). base_dir (W37) lets a caller -- the app's sandbox
+    agent-invocation path -- point recordings at a separate namespace (e.g.
+    data/agent_snapshots/sandbox/) instead of the default corpus (module
+    default: DEFAULT_BASE_DIR, i.e. data/agent_snapshots/). Like match_id,
+    base_dir is sticky-if-omitted: passing None leaves whatever base_dir is
+    currently configured untouched rather than forcing it back to the
+    default -- this matters for callers/tests (e.g. test_agent_tools_snapshot.py)
+    that set a base_dir once (directly, or via an earlier configure_snapshot_store
+    call) and then make several bare mode-only calls expecting it to stick.
+    Pass base_dir explicitly (e.g. DEFAULT_BASE_DIR) to force a reset."""
+    global _snapshot_store
+    if base_dir is not None:
+        effective_base_dir = Path(base_dir)
+        if effective_base_dir != _snapshot_store.base_dir:
+            _snapshot_store = SnapshotStore(base_dir=effective_base_dir)
     _snapshot_store.set_mode(mode)
     if match_id is not None:
         _snapshot_store.set_match(match_id, match_date)

@@ -7,15 +7,43 @@ that predate A28/A29 (e.g. from a future cache)."""
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from pydantic import BaseModel, ValidationError
 
 from app.backend.match_info import gate_league
 from app.backend.recommendation_cache import RecommendationCache
 from app.backend.sandbox_clock import is_sandbox_mode, sandbox_scoped_path
-from src.agent.graph import run_agent
+from src.agent import tools as agent_tools
+from src.agent.graph import run_agent as _real_run_agent
 
 _cache_singleton: RecommendationCache | None = None
 _SANDBOX_CACHE_DB_PATH = sandbox_scoped_path("recommendation_cache.db")
+_SANDBOX_SNAPSHOT_BASE_DIR = Path(__file__).parent.parent.parent / "data" / "agent_snapshots" / "sandbox"
+_sandbox_recorded_matches: set[str] = set()
+
+
+def run_agent(match_info: dict, config=None):
+    """W37: routes through SnapshotStore record/replay when sandbox mode is
+    active, so a sandboxed match's real web_search calls are date-filtered
+    (record) and every subsequent run of the same match makes zero live
+    calls at all (replay) -- otherwise passes straight through to the real,
+    live run_agent, unchanged from before this story."""
+    if not is_sandbox_mode():
+        return _real_run_agent(match_info, config=config)
+
+    match_key = f"{match_info.get('home_team')}__{match_info.get('away_team')}__{match_info.get('date')}"
+    mode = "replay" if match_key in _sandbox_recorded_matches else "record"
+    agent_tools.configure_snapshot_store(
+        mode, match_id=match_key, match_date=match_info.get("date"), base_dir=_SANDBOX_SNAPSHOT_BASE_DIR,
+    )
+    try:
+        result = _real_run_agent(match_info, config=config)
+    finally:
+        agent_tools.configure_snapshot_store("live")
+    if mode == "record":
+        _sandbox_recorded_matches.add(match_key)
+    return result
 
 
 def get_cache() -> RecommendationCache:
