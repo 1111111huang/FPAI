@@ -173,9 +173,23 @@ def test_rate_limiter_does_not_sleep_before_any_response_seen() -> None:
 def test_rate_limiter_full_sequence_exhaustion_wait_reset_refreshed_call() -> None:
     """Drives the limiter through a realistic multi-call sequence: exhausted
     -> sleep computed -> simulated time genuinely advances past the reset
-    instant -> the next real response's headers refresh _remaining -> a
-    subsequent call proceeds without waiting. The 3 pre-existing tests above
-    only ever used a single frozen time_fn instant, never proving this."""
+    instant -> a later response's headers refresh reset_at again (while
+    still reporting 0 remaining) -> a subsequent call still correctly
+    proceeds without waiting, because real time has now passed that fresh
+    reset_at too.
+
+    Deliberately keeps _remaining at 0 throughout (never sending a
+    positive x-requests-available-minute): wait_if_needed()'s own guard is
+    `_remaining is None or _remaining > 0 or _reset_at is None`, which
+    short-circuits to "proceed" the instant _remaining > 0, without ever
+    calling time_fn() -- an earlier version of this test refreshed
+    _remaining to 10 in its final headers update, which meant its closing
+    assertion passed via that short-circuit and never actually exercised
+    the wait_seconds = reset_at - time_fn() computation it claimed to
+    prove. Keeping _remaining at 0 forces the real reset-crossing
+    arithmetic to run. The 3 pre-existing tests above only ever used a
+    single frozen time_fn instant, never proving any of this multi-step
+    sequence either way."""
     sleep_fn = MagicMock()
     now = [100.0]
     limiter = _RateLimiter(sleep_fn=sleep_fn, time_fn=lambda: now[0])
@@ -188,10 +202,16 @@ def test_rate_limiter_full_sequence_exhaustion_wait_reset_refreshed_call() -> No
     # Step 2: simulated time genuinely advances past the reset instant (145.0).
     now[0] = 146.0
 
-    # Step 3: the next real response refreshes _remaining via fresh headers.
-    limiter.update_from_headers({"x-requests-available-minute": "10", "X-RequestCounter-Reset": "60"})
+    # Step 3: a later response still reports 0 remaining, but with a fresh
+    # reset_at (146 + 10 = 156) -- a real update, not stale/missing headers.
+    limiter.update_from_headers({"x-requests-available-minute": "0", "X-RequestCounter-Reset": "10"})
 
-    # Step 4: a subsequent call proceeds without waiting -- budget was refreshed.
+    # Step 4: time advances past that fresh reset_at too (156 -> 200).
+    now[0] = 200.0
+
+    # Step 5: a subsequent call proceeds without waiting -- wait_seconds
+    # (156 - 200 = -44) is computed for real via time_fn(), not via the
+    # _remaining > 0 short-circuit (remaining is still 0 here).
     sleep_fn.reset_mock()
     limiter.wait_if_needed()
     sleep_fn.assert_not_called()
