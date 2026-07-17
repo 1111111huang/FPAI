@@ -168,3 +168,49 @@ def test_rate_limiter_does_not_sleep_before_any_response_seen() -> None:
     limiter.wait_if_needed()
 
     sleep_fn.assert_not_called()
+
+
+def test_rate_limiter_full_sequence_exhaustion_wait_reset_refreshed_call() -> None:
+    """Drives the limiter through a realistic multi-call sequence: exhausted
+    -> sleep computed -> simulated time genuinely advances past the reset
+    instant -> the next real response's headers refresh _remaining -> a
+    subsequent call proceeds without waiting. The 3 pre-existing tests above
+    only ever used a single frozen time_fn instant, never proving this."""
+    sleep_fn = MagicMock()
+    now = [100.0]
+    limiter = _RateLimiter(sleep_fn=sleep_fn, time_fn=lambda: now[0])
+
+    # Step 1: a response arrives showing the budget is exhausted, resetting in 45s.
+    limiter.update_from_headers({"x-requests-available-minute": "0", "X-RequestCounter-Reset": "45"})
+    limiter.wait_if_needed()
+    sleep_fn.assert_called_once_with(45)
+
+    # Step 2: simulated time genuinely advances past the reset instant (145.0).
+    now[0] = 146.0
+
+    # Step 3: the next real response refreshes _remaining via fresh headers.
+    limiter.update_from_headers({"x-requests-available-minute": "10", "X-RequestCounter-Reset": "60"})
+
+    # Step 4: a subsequent call proceeds without waiting -- budget was refreshed.
+    sleep_fn.reset_mock()
+    limiter.wait_if_needed()
+    sleep_fn.assert_not_called()
+
+
+def test_rate_limiter_degrades_gracefully_when_headers_missing_after_time_has_passed() -> None:
+    """A later response with no rate-limit headers at all must not crash or
+    permanently wedge the limiter -- once real time has passed the old
+    _reset_at, wait_if_needed() falls through to 'proceed' even without
+    fresh headers, since update_from_headers no-ops on missing keys. A
+    deliberate, tested guarantee, not an unverified side effect."""
+    sleep_fn = MagicMock()
+    now = [100.0]
+    limiter = _RateLimiter(sleep_fn=sleep_fn, time_fn=lambda: now[0])
+
+    limiter.update_from_headers({"x-requests-available-minute": "0", "X-RequestCounter-Reset": "10"})
+
+    now[0] = 111.0  # past the old reset_at (110.0)
+    limiter.update_from_headers({})  # no headers this time -- must no-op, not crash
+
+    limiter.wait_if_needed()
+    sleep_fn.assert_not_called()
