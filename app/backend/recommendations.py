@@ -7,20 +7,69 @@ that predate A28/A29 (e.g. from a future cache)."""
 
 from __future__ import annotations
 
+from pathlib import Path
+import threading
+
 from pydantic import BaseModel, ValidationError
 
 from app.backend.match_info import gate_league
 from app.backend.recommendation_cache import RecommendationCache
-from src.agent.graph import run_agent
+from app.backend.sandbox_clock import is_sandbox_mode, sandbox_scoped_path
+from src.agent import tools as agent_tools
+from src.agent.graph import run_agent as _real_run_agent
 
 _cache_singleton: RecommendationCache | None = None
+_SANDBOX_CACHE_DB_PATH = sandbox_scoped_path("recommendation_cache.db")
+_SANDBOX_SNAPSHOT_BASE_DIR = Path(__file__).parent.parent.parent / "data" / "agent_snapshots" / "sandbox"
+_sandbox_recorded_matches: set[str] = set()
+# Guards the read-check-then-add sequence around _sandbox_recorded_matches in
+# run_agent() below. Without this, two concurrent requests for the *same*
+# sandboxed match could both see match_key not yet recorded and both run in
+# "record" mode simultaneously -- wasteful duplicate live calls that defeat
+# the "first run records, rest replay" guarantee.
+_recorded_matches_lock = threading.Lock()
+
+
+def _composite_match_key(home_team: str, away_team: str, date: str) -> str:
+    return f"{home_team}__{away_team}__{date}".replace(" ", "_")
+
+
+def run_agent(match_info: dict, config=None):
+    """W37: routes through SnapshotStore record/replay when sandbox mode is
+    active, so a sandboxed match's real web_search calls are date-filtered
+    (record) and every subsequent run of the same match makes zero live
+    calls at all (replay) -- otherwise passes straight through to the real,
+    live run_agent, unchanged from before this story."""
+    if not is_sandbox_mode():
+        return _real_run_agent(match_info, config=config)
+
+    match_key = _composite_match_key(
+        match_info.get("home_team"), match_info.get("away_team"), match_info.get("date"),
+    )
+    with _recorded_matches_lock:
+        mode = "replay" if match_key in _sandbox_recorded_matches else "record"
+    agent_tools.configure_snapshot_store(
+        mode, match_id=match_key, match_date=match_info.get("date"), base_dir=_SANDBOX_SNAPSHOT_BASE_DIR,
+    )
+    try:
+        result = _real_run_agent(match_info, config=config)
+    finally:
+        agent_tools.configure_snapshot_store("live")
+    if mode == "record":
+        with _recorded_matches_lock:
+            _sandbox_recorded_matches.add(match_key)
+    return result
 
 
 def get_cache() -> RecommendationCache:
-    """FastAPI dependency -- overridden in tests via app.dependency_overrides."""
+    """FastAPI dependency -- overridden in tests via app.dependency_overrides.
+    Sandbox mode (W29) points this at a scratch db path so sandbox runs
+    never touch real dev data."""
     global _cache_singleton
     if _cache_singleton is None:
-        _cache_singleton = RecommendationCache()
+        _cache_singleton = (
+            RecommendationCache(db_path=_SANDBOX_CACHE_DB_PATH) if is_sandbox_mode() else RecommendationCache()
+        )
     return _cache_singleton
 
 
@@ -53,7 +102,7 @@ class RecommendationRequest(BaseModel):
     def effective_match_id(self) -> str:
         if self.match_id:
             return self.match_id
-        return f"{self.home_team}__{self.away_team}__{self.date}".replace(" ", "_")
+        return _composite_match_key(self.home_team, self.away_team, self.date)
 
 
 class MarketRecommendationOut(BaseModel):

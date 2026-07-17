@@ -39,6 +39,7 @@ from typing import Any, Callable, Literal
 SnapshotMode = Literal["live", "record", "replay"]
 
 _DEFAULT_BASE_DIR = Path("data/agent_snapshots")
+DEFAULT_BASE_DIR = _DEFAULT_BASE_DIR
 _VALID_MODES = {"live", "record", "replay"}
 
 

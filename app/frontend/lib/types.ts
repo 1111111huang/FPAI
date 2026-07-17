@@ -85,6 +85,13 @@ export type StatusResponse = {
   model_status: ModelStatus;
 };
 
+// W27: reflects the backend's sandbox_clock module -- as_of is null when
+// sandbox_mode is false.
+export type SandboxStatus = {
+  sandbox_mode: boolean;
+  as_of: string | null;
+};
+
 // W14: mirrors app/backend/bet_stats.py's compute_bet_stats() return shape.
 export type BetStats = {
   bets_settled: number;

@@ -16,7 +16,7 @@ from starlette.concurrency import run_in_threadpool
 
 load_dotenv()
 
-from app.backend import bets, recommendations
+from app.backend import bets, recommendations, sandbox_clock
 from app.backend.agent_config_hash import compute_agent_config_hash
 from app.backend.bet_tracker import BetTracker
 from app.backend.bets import BetFromRecommendationRequest, BetManualRequest, BetOut
@@ -25,7 +25,7 @@ from app.backend.llm_check import check_llm_reachable
 from app.backend.recommendation_cache import RecommendationCache
 from app.backend.bet_stats import compute_bet_stats
 from app.backend.recommendations import MatchRecommendationOut, RecommendationRequest, validate_and_degrade
-from app.backend.scheduler import RecoverableScheduler
+from app.backend.scheduler import JobRunLog, RecoverableScheduler
 from app.backend.scheduler_wiring import build_odds_client, register_eod_job
 from app.backend.settlement import settle_open_bets
 from src.agent.agent_config import AgentConfig
@@ -34,6 +34,8 @@ from src.tools.model_tools import get_model_status
 from src.utils.logger import get_logger
 
 LOGGER = get_logger(__name__)
+
+_SANDBOX_JOB_RUNS_DB_PATH = sandbox_clock.sandbox_scoped_path("job_runs.db")
 
 _fixtures_client: FootballDataClient | None = None
 
@@ -67,7 +69,9 @@ async def lifespan(app: FastAPI):
     # note ("built last, right before going live").
     scheduler: RecoverableScheduler | None = None
     if os.environ.get("ENABLE_SCHEDULER", "").lower() in ("1", "true", "yes"):
-        scheduler = RecoverableScheduler()
+        # W29: sandbox mode routes JobRunLog to a scratch path so it never touches real dev data.
+        run_log = JobRunLog(db_path=_SANDBOX_JOB_RUNS_DB_PATH) if sandbox_clock.is_sandbox_mode() else None
+        scheduler = RecoverableScheduler(run_log=run_log)
         register_eod_job(
             scheduler,
             fixtures_client=get_fixtures_client(),
@@ -101,6 +105,13 @@ app.add_middleware(
 @app.get("/api/health")
 def health() -> dict:
     return {"status": "ok"}
+
+
+@app.get("/api/sandbox/status")
+def get_sandbox_status() -> dict:
+    """W27: lets the frontend and test scripts introspect the active
+    sandbox date instead of each needing their own access to the env vars."""
+    return sandbox_clock.sandbox_status()
 
 
 @app.get("/api/status")

@@ -16,6 +16,7 @@ from __future__ import annotations
 from pydantic import BaseModel, Field
 
 from app.backend.bet_tracker import Bet, BetTracker
+from app.backend.sandbox_clock import is_sandbox_mode, sandbox_scoped_path
 
 
 class BetOut(BaseModel):
@@ -95,11 +96,16 @@ def resolve_from_recommendation(request: BetFromRecommendationRequest) -> dict:
 
 
 _bet_tracker_singleton: BetTracker | None = None
+_SANDBOX_BET_TRACKER_DB_PATH = sandbox_scoped_path("user_bets.db")
 
 
 def get_bet_tracker() -> BetTracker:
-    """FastAPI dependency -- overridden in tests via app.dependency_overrides."""
+    """FastAPI dependency -- overridden in tests via app.dependency_overrides.
+    Sandbox mode (W29) points this at a scratch db path so sandbox runs
+    never touch real dev data."""
     global _bet_tracker_singleton
     if _bet_tracker_singleton is None:
-        _bet_tracker_singleton = BetTracker()
+        _bet_tracker_singleton = (
+            BetTracker(db_path=_SANDBOX_BET_TRACKER_DB_PATH) if is_sandbox_mode() else BetTracker()
+        )
     return _bet_tracker_singleton
