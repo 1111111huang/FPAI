@@ -30,6 +30,7 @@ import {
 
 import { ApiError, generateRecommendation, getFixtures, logBetFromRecommendation } from "@/lib/api";
 import type { Fixture, MatchRecommendationOut } from "@/lib/types";
+import { useSandboxAsOf } from "@/lib/useSandboxAsOf";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -538,6 +539,7 @@ export function MatchCard({ match, onUpdate }: { match: Match; onUpdate: (m: Mat
 // ---------------------------------------------------------------------------
 
 export function DashboardPage() {
+  const asOf = useSandboxAsOf();
   const [matches, setMatches] = useState<Match[] | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -545,7 +547,7 @@ export function DashboardPage() {
     setError(null);
     setMatches(null);
     try {
-      const today = new Date().toISOString().slice(0, 10);
+      const today = asOf.toISOString().slice(0, 10);
       const fixtures = await getFixtures(today, today);
       setMatches(fixtures.map(fixtureToMatch));
     } catch (err) {
@@ -556,7 +558,7 @@ export function DashboardPage() {
   useEffect(() => {
     load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [asOf]);
 
   function updateMatch(updated: Match) {
     setMatches((prev) => prev?.map((m) => (m.id === updated.id ? updated : m)) ?? null);
@@ -594,6 +596,7 @@ export function DashboardPage() {
 // ---------------------------------------------------------------------------
 
 export function MatchExplorerPage() {
+  const asOf = useSandboxAsOf();
   const [query, setQuery] = useState("");
   const [matches, setMatches] = useState<Match[] | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -602,8 +605,8 @@ export function MatchExplorerPage() {
     setError(null);
     setMatches(null);
     try {
-      const from = new Date();
-      const to = new Date();
+      const from = new Date(asOf);
+      const to = new Date(asOf);
       // Widened from 30 to 90 days after live verification showed the
       // off-season gap between fixture windows can exceed 30 days (e.g.
       // 2026-07-11 -> next real fixture 2026-08-21, 41 days out).
@@ -618,7 +621,7 @@ export function MatchExplorerPage() {
   useEffect(() => {
     load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [asOf]);
 
   function updateMatch(updated: Match) {
     setMatches((prev) => prev?.map((m) => (m.id === updated.id ? updated : m)) ?? null);

@@ -10,6 +10,7 @@ import { MagnifyingGlass, WarningCircle } from "@phosphor-icons/react";
 
 import { ApiError, getBetStats, getBets, getFixtures, logBetManual, settleOpenBets } from "@/lib/api";
 import type { Bet, BetStats, Fixture } from "@/lib/types";
+import { useSandboxAsOf } from "@/lib/useSandboxAsOf";
 import { DraftNav, TeamBadge } from "./MatchUI";
 
 function formatDate(iso: string): string {
@@ -17,6 +18,7 @@ function formatDate(iso: string): string {
 }
 
 function ManualBetForm({ onLogged }: { onLogged: () => void }) {
+  const asOf = useSandboxAsOf();
   const [query, setQuery] = useState("");
   const [fixtures, setFixtures] = useState<Fixture[] | null>(null);
   const [selected, setSelected] = useState<Fixture | null>(null);
@@ -28,13 +30,13 @@ function ManualBetForm({ onLogged }: { onLogged: () => void }) {
   const [errorMsg, setErrorMsg] = useState("");
 
   useEffect(() => {
-    const from = new Date();
-    const to = new Date();
+    const from = new Date(asOf);
+    const to = new Date(asOf);
     to.setDate(to.getDate() + 90);
     getFixtures(from.toISOString().slice(0, 10), to.toISOString().slice(0, 10))
       .then(setFixtures)
       .catch(() => setFixtures([]));
-  }, []);
+  }, [asOf]);
 
   const results = useMemo(() => {
     if (!fixtures) return [];
