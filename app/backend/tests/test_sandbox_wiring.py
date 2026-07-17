@@ -28,7 +28,7 @@ def test_get_cache_uses_sandbox_scoped_db_path_when_sandbox_active(monkeypatch) 
 
     cache = recommendations.get_cache()
 
-    assert "sandbox" in str(cache._db_path)
+    assert cache._db_path.parent.name == "sandbox"
     _reset_singletons()
 
 
@@ -38,7 +38,7 @@ def test_get_cache_uses_real_db_path_when_sandbox_inactive(monkeypatch) -> None:
 
     cache = recommendations.get_cache()
 
-    assert "sandbox" not in str(cache._db_path)
+    assert cache._db_path.parent.name != "sandbox"
     _reset_singletons()
 
 
@@ -49,7 +49,7 @@ def test_get_bet_tracker_uses_sandbox_scoped_db_path_when_sandbox_active(monkeyp
 
     tracker = bets.get_bet_tracker()
 
-    assert "sandbox" in str(tracker._db_path)
+    assert tracker._db_path.parent.name == "sandbox"
     _reset_singletons()
 
 
@@ -59,7 +59,7 @@ def test_get_bet_tracker_uses_real_db_path_when_sandbox_inactive(monkeypatch) ->
 
     tracker = bets.get_bet_tracker()
 
-    assert "sandbox" not in str(tracker._db_path)
+    assert tracker._db_path.parent.name != "sandbox"
     _reset_singletons()
 
 
