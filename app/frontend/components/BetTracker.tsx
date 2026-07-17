@@ -18,7 +18,7 @@ function formatDate(iso: string): string {
 }
 
 function ManualBetForm({ onLogged }: { onLogged: () => void }) {
-  const asOf = useSandboxAsOf();
+  const { asOf } = useSandboxAsOf();
   const [query, setQuery] = useState("");
   const [fixtures, setFixtures] = useState<Fixture[] | null>(null);
   const [selected, setSelected] = useState<Fixture | null>(null);

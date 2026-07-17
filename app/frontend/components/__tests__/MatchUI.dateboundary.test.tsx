@@ -74,12 +74,17 @@ describe("MatchCard's relative-day label respects the sandbox clock", () => {
 
   it("labels a fixture kicking off on the sandbox as_of date as 'today', not a real-clock-relative day", () => {
     // Real wall-clock "now" is whatever the test runs at (in CI, months away
-    // from 2026-03-01) -- without asOf wired through, this fixture would show
-    // something like "138 days ago" instead of "today" (the bug this test
-    // guards against, found in the final whole-branch review).
+    // from 2026-03-01) -- without asOf/sandboxMode wired through, this
+    // fixture would show something like "138 days ago" instead of "today"
+    // (the bug this test guards against, found in the final whole-branch
+    // review). sandboxMode={true} matches how Dashboard/Match Explorer
+    // actually pass it -- omitting it here would (correctly) fall back to
+    // local getters, the real-clock behavior this test isn't exercising.
     const match = matchWithKickoff("2026-03-01T12:00:00Z");
 
-    render(<MatchCard match={match} onUpdate={vi.fn()} asOf={new Date("2026-03-01T00:00:00Z")} />);
+    render(
+      <MatchCard match={match} onUpdate={vi.fn()} asOf={new Date("2026-03-01T00:00:00Z")} sandboxMode={true} />
+    );
 
     expect(screen.getByText("today")).toBeInTheDocument();
   });
@@ -87,8 +92,25 @@ describe("MatchCard's relative-day label respects the sandbox clock", () => {
   it("labels a fixture kicking off the day after the sandbox as_of date as 'tomorrow'", () => {
     const match = matchWithKickoff("2026-03-02T12:00:00Z");
 
-    render(<MatchCard match={match} onUpdate={vi.fn()} asOf={new Date("2026-03-01T00:00:00Z")} />);
+    render(
+      <MatchCard match={match} onUpdate={vi.fn()} asOf={new Date("2026-03-01T00:00:00Z")} sandboxMode={true} />
+    );
 
     expect(screen.getByText("tomorrow")).toBeInTheDocument();
+  });
+
+  it("uses the real local clock (not UTC getters) when sandbox mode is off, even with an explicit asOf", () => {
+    // Regression guard for the bug the prior fix introduced: reading a real
+    // new Date() via UTC getters mislabels "today" as "yesterday"/"tomorrow"
+    // for roughly half of every day in any non-UTC timezone. A kickoff at
+    // the same real instant as asOf must always read as "today" when
+    // sandboxMode is false (the default), regardless of the local timezone
+    // the test runs under.
+    const now = new Date();
+    const match = matchWithKickoff(now.toISOString());
+
+    render(<MatchCard match={match} onUpdate={vi.fn()} asOf={now} />);
+
+    expect(screen.getByText("today")).toBeInTheDocument();
   });
 });

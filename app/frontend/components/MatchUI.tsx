@@ -141,19 +141,25 @@ function formatKickoff(iso: string): string {
   return d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
 }
 
-function formatDay(iso: string, asOf: Date): string {
+function formatDay(iso: string, asOf: Date, sandboxMode: boolean): string {
   const date = new Date(iso);
   const dOnly = new Date(date.getFullYear(), date.getMonth(), date.getDate());
-  // asOf is UTC midnight of the chosen calendar date when sandbox mode is
-  // active (W30), so its calendar day must be read via UTC getters here --
-  // local getters would misread it by a day in non-UTC-zero timezones, the
-  // same bug class already fixed in Dashboard/Match Explorer's own asOf
-  // consumption. When sandbox mode is off, asOf is the real new Date(), so
-  // this reads "today" as of UTC rather than the viewer's local day -- a
-  // narrow, low-stakes trade-off (the label can be one day off for the
-  // viewer's own local-midnight-adjacent hours) accepted here since this is
-  // a coarse "today"/"tomorrow" display label, not settlement-critical data.
-  const tOnly = new Date(asOf.getUTCFullYear(), asOf.getUTCMonth(), asOf.getUTCDate());
+  // asOf's meaning depends on sandboxMode, and the two are not
+  // interchangeable: in sandbox mode, asOf is UTC midnight of a
+  // deliberately timezone-agnostic chosen calendar date (W30) -- reading it
+  // via local getters would misread it by a day in non-UTC-zero timezones
+  // (the same bug class already fixed in Dashboard/Match Explorer's own
+  // asOf consumption), so UTC getters are required here. Outside sandbox
+  // mode, asOf is a real new Date() instant, and the viewer's own local
+  // calendar day is what "today" means for a human reading this label --
+  // reading it via UTC getters there would wrongly relabel "today" as
+  // "yesterday" for roughly half the day, every day, for any non-UTC
+  // viewer (the exact frame-mismatch class this branch keeps re-deriving;
+  // caught by review before this shipped). Don't unify these into one
+  // getter choice -- the branch is load-bearing, not incidental.
+  const tOnly = sandboxMode
+    ? new Date(asOf.getUTCFullYear(), asOf.getUTCMonth(), asOf.getUTCDate())
+    : new Date(asOf.getFullYear(), asOf.getMonth(), asOf.getDate());
   const diffDays = Math.round((dOnly.getTime() - tOnly.getTime()) / 86_400_000);
   if (diffDays === 0) return "today";
   if (diffDays === 1) return "tomorrow";
@@ -421,10 +427,12 @@ export function MatchCard({
   match,
   onUpdate,
   asOf = new Date(),
+  sandboxMode = false,
 }: {
   match: Match;
   onUpdate: (m: Match) => void;
   asOf?: Date;
+  sandboxMode?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -485,7 +493,7 @@ export function MatchCard({
 
         <div className="mt-3 flex items-end justify-between gap-3 border-t border-border pt-2.5">
           <span className="truncate text-xs text-ink-secondary">
-            {shown ? `${shown.market} · ${shown.selection}` : formatDay(match.kickoffIso, asOf)}
+            {shown ? `${shown.market} · ${shown.selection}` : formatDay(match.kickoffIso, asOf, sandboxMode)}
           </span>
           <div className="flex shrink-0 items-end gap-4">
             <div className="text-right">
@@ -555,7 +563,7 @@ export function MatchCard({
 // ---------------------------------------------------------------------------
 
 export function DashboardPage() {
-  const asOf = useSandboxAsOf();
+  const { asOf, sandboxMode } = useSandboxAsOf();
   const [matches, setMatches] = useState<Match[] | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -598,7 +606,7 @@ export function DashboardPage() {
         {!error && matches && matches.length > 0 && (
           <div className="flex flex-col gap-2.5">
             {matches.map((m) => (
-              <MatchCard key={m.id} match={m} onUpdate={updateMatch} asOf={asOf} />
+              <MatchCard key={m.id} match={m} onUpdate={updateMatch} asOf={asOf} sandboxMode={sandboxMode} />
             ))}
           </div>
         )}
@@ -612,7 +620,7 @@ export function DashboardPage() {
 // ---------------------------------------------------------------------------
 
 export function MatchExplorerPage() {
-  const asOf = useSandboxAsOf();
+  const { asOf, sandboxMode } = useSandboxAsOf();
   const [query, setQuery] = useState("");
   const [matches, setMatches] = useState<Match[] | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -680,7 +688,7 @@ export function MatchExplorerPage() {
         {!error && rows && rows.length > 0 && (
           <div className="flex flex-col gap-2.5">
             {rows.map((m) => (
-              <MatchCard key={m.id} match={m} onUpdate={updateMatch} asOf={asOf} />
+              <MatchCard key={m.id} match={m} onUpdate={updateMatch} asOf={asOf} sandboxMode={sandboxMode} />
             ))}
           </div>
         )}
