@@ -1,6 +1,6 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { render, waitFor } from "@testing-library/react";
-import { DashboardPage, MatchExplorerPage } from "./MatchUI";
+import { DashboardPage, MatchExplorerPage } from "../MatchUI";
 import { getFixtures, getSandboxStatus } from "@/lib/api";
 
 vi.mock("@/lib/api");
@@ -26,14 +26,9 @@ describe("date-boundary correctness via the sandbox clock (W38)", () => {
   });
 
   it("Dashboard's fixture query shifts to the next simulated day at midnight", async () => {
-    // SANDBOX_DATE is a static env var fixed for the life of the backend
-    // process (app/backend/sandbox_clock.py) -- there is no live "advance"
-    // endpoint, so a new simulated day is only ever observed via a fresh
-    // page load (backend restart + browser reload). useSandboxAsOf() fetches
-    // getSandboxStatus() once per mount by design (empty effect deps, W30),
-    // matching that reality. A same-instance rerender() never re-triggers
-    // that effect -- only an unmount+remount (the React analogue of a page
-    // reload) does, so that's how "midnight" is simulated here.
+    // useSandboxAsOf() fetches once per mount (empty effect deps, W30) --
+    // a same-instance rerender() never re-fires it, so unmount+remount (a
+    // page reload) is how a new simulated day is actually observed.
     vi.mocked(getSandboxStatus).mockResolvedValueOnce({ sandbox_mode: true, as_of: "2026-03-01" });
     const { unmount } = render(<DashboardPage />);
     await waitFor(() => expect(getFixtures).toHaveBeenCalledWith("2026-03-01", "2026-03-01"));
