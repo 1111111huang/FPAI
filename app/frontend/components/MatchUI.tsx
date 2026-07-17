@@ -141,11 +141,19 @@ function formatKickoff(iso: string): string {
   return d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
 }
 
-function formatDay(iso: string): string {
+function formatDay(iso: string, asOf: Date): string {
   const date = new Date(iso);
-  const today = new Date();
   const dOnly = new Date(date.getFullYear(), date.getMonth(), date.getDate());
-  const tOnly = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+  // asOf is UTC midnight of the chosen calendar date when sandbox mode is
+  // active (W30), so its calendar day must be read via UTC getters here --
+  // local getters would misread it by a day in non-UTC-zero timezones, the
+  // same bug class already fixed in Dashboard/Match Explorer's own asOf
+  // consumption. When sandbox mode is off, asOf is the real new Date(), so
+  // this reads "today" as of UTC rather than the viewer's local day -- a
+  // narrow, low-stakes trade-off (the label can be one day off for the
+  // viewer's own local-midnight-adjacent hours) accepted here since this is
+  // a coarse "today"/"tomorrow" display label, not settlement-critical data.
+  const tOnly = new Date(asOf.getUTCFullYear(), asOf.getUTCMonth(), asOf.getUTCDate());
   const diffDays = Math.round((dOnly.getTime() - tOnly.getTime()) / 86_400_000);
   if (diffDays === 0) return "today";
   if (diffDays === 1) return "tomorrow";
@@ -409,7 +417,15 @@ function LoadingRows({ count = 3 }: { count?: number }) {
 // if no recommendation has been generated for this fixture yet.
 // ---------------------------------------------------------------------------
 
-export function MatchCard({ match, onUpdate }: { match: Match; onUpdate: (m: Match) => void }) {
+export function MatchCard({
+  match,
+  onUpdate,
+  asOf = new Date(),
+}: {
+  match: Match;
+  onUpdate: (m: Match) => void;
+  asOf?: Date;
+}) {
   const [open, setOpen] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -469,7 +485,7 @@ export function MatchCard({ match, onUpdate }: { match: Match; onUpdate: (m: Mat
 
         <div className="mt-3 flex items-end justify-between gap-3 border-t border-border pt-2.5">
           <span className="truncate text-xs text-ink-secondary">
-            {shown ? `${shown.market} · ${shown.selection}` : formatDay(match.kickoffIso)}
+            {shown ? `${shown.market} · ${shown.selection}` : formatDay(match.kickoffIso, asOf)}
           </span>
           <div className="flex shrink-0 items-end gap-4">
             <div className="text-right">
@@ -582,7 +598,7 @@ export function DashboardPage() {
         {!error && matches && matches.length > 0 && (
           <div className="flex flex-col gap-2.5">
             {matches.map((m) => (
-              <MatchCard key={m.id} match={m} onUpdate={updateMatch} />
+              <MatchCard key={m.id} match={m} onUpdate={updateMatch} asOf={asOf} />
             ))}
           </div>
         )}
@@ -664,7 +680,7 @@ export function MatchExplorerPage() {
         {!error && rows && rows.length > 0 && (
           <div className="flex flex-col gap-2.5">
             {rows.map((m) => (
-              <MatchCard key={m.id} match={m} onUpdate={updateMatch} />
+              <MatchCard key={m.id} match={m} onUpdate={updateMatch} asOf={asOf} />
             ))}
           </div>
         )}

@@ -1,6 +1,6 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
-import { render, waitFor } from "@testing-library/react";
-import { DashboardPage, MatchExplorerPage } from "../MatchUI";
+import { render, screen, waitFor } from "@testing-library/react";
+import { DashboardPage, MatchExplorerPage, MatchCard, type Match } from "../MatchUI";
 import { getFixtures, getSandboxStatus } from "@/lib/api";
 
 vi.mock("@/lib/api");
@@ -47,5 +47,48 @@ describe("date-boundary correctness via the sandbox clock (W38)", () => {
 
     // 2026-03-01 + 90 days = 2026-05-30
     await waitFor(() => expect(getFixtures).toHaveBeenCalledWith("2026-03-01", "2026-05-30"));
+  });
+});
+
+describe("MatchCard's relative-day label respects the sandbox clock", () => {
+  function matchWithKickoff(kickoffIso: string): Match {
+    return {
+      id: "m1", league: "E0", tier: "competition_specific", kickoffIso,
+      home: "Arsenal", away: "Everton", status: "upcoming",
+      hasRecommendation: true, overall: "no_bet", confidence: "medium",
+      markets: [], explanation: "", limitations: [],
+      predictionBasis: "team_history_and_market", coldStartRisk: false,
+      featureCompleteness: 0.9, unknownTeam: false, invalidMarketCount: 0,
+    };
+  }
+
+  // Kickoffs are deliberately set at UTC noon, not an arbitrary hour: the
+  // fixture's own calendar day (dOnly, pre-existing/unchanged/out of scope
+  // for this fix) is computed via *local* Date getters, same as it always
+  // was for real-clock display -- so it legitimately rolls to the next
+  // local day for a late-UTC kickoff in far-positive-offset timezones. UTC
+  // noon keeps the same local calendar day across every timezone this
+  // project actually verifies against (UTC/Asia-Tokyo/America-Los_Angeles);
+  // it is not testing that pre-existing local-rollover behavior, only that
+  // asOf (not the real browser clock) now drives the comparison.
+
+  it("labels a fixture kicking off on the sandbox as_of date as 'today', not a real-clock-relative day", () => {
+    // Real wall-clock "now" is whatever the test runs at (in CI, months away
+    // from 2026-03-01) -- without asOf wired through, this fixture would show
+    // something like "138 days ago" instead of "today" (the bug this test
+    // guards against, found in the final whole-branch review).
+    const match = matchWithKickoff("2026-03-01T12:00:00Z");
+
+    render(<MatchCard match={match} onUpdate={vi.fn()} asOf={new Date("2026-03-01T00:00:00Z")} />);
+
+    expect(screen.getByText("today")).toBeInTheDocument();
+  });
+
+  it("labels a fixture kicking off the day after the sandbox as_of date as 'tomorrow'", () => {
+    const match = matchWithKickoff("2026-03-02T12:00:00Z");
+
+    render(<MatchCard match={match} onUpdate={vi.fn()} asOf={new Date("2026-03-01T00:00:00Z")} />);
+
+    expect(screen.getByText("tomorrow")).toBeInTheDocument();
   });
 });
