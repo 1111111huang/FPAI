@@ -7,17 +7,15 @@ that predate A28/A29 (e.g. from a future cache)."""
 
 from __future__ import annotations
 
-from pathlib import Path
-
 from pydantic import BaseModel, ValidationError
 
 from app.backend.match_info import gate_league
 from app.backend.recommendation_cache import RecommendationCache
-from app.backend.sandbox_clock import is_sandbox_mode
+from app.backend.sandbox_clock import is_sandbox_mode, sandbox_scoped_path
 from src.agent.graph import run_agent
 
 _cache_singleton: RecommendationCache | None = None
-_SANDBOX_CACHE_DB_PATH = Path(__file__).parent.parent / "data" / "sandbox" / "recommendation_cache.db"
+_SANDBOX_CACHE_DB_PATH = sandbox_scoped_path("recommendation_cache.db")
 
 
 def get_cache() -> RecommendationCache:

@@ -13,10 +13,20 @@ from __future__ import annotations
 
 from datetime import date, datetime, tzinfo
 import os
+from pathlib import Path
 
 
 def is_sandbox_mode() -> bool:
     return os.environ.get("SANDBOX_MODE") == "1"
+
+
+def sandbox_scoped_path(filename: str) -> Path:
+    """Resolves filename under app/data/sandbox/ -- the one shared root for
+    every sandbox-mode scratch db (RecommendationCache/BetTracker/JobRunLog),
+    so the app/backend/ vs app/ parent-depth arithmetic that already caused
+    one real bug (main.py's JobRunLog path, W29) only needs to be right in
+    one place."""
+    return Path(__file__).parent.parent / "data" / "sandbox" / filename
 
 
 def sandbox_date() -> date | None:

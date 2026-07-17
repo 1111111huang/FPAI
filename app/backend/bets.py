@@ -13,12 +13,10 @@ Two logging paths:
 
 from __future__ import annotations
 
-from pathlib import Path
-
 from pydantic import BaseModel, Field
 
 from app.backend.bet_tracker import Bet, BetTracker
-from app.backend.sandbox_clock import is_sandbox_mode
+from app.backend.sandbox_clock import is_sandbox_mode, sandbox_scoped_path
 
 
 class BetOut(BaseModel):
@@ -98,7 +96,7 @@ def resolve_from_recommendation(request: BetFromRecommendationRequest) -> dict:
 
 
 _bet_tracker_singleton: BetTracker | None = None
-_SANDBOX_BET_TRACKER_DB_PATH = Path(__file__).parent.parent / "data" / "sandbox" / "user_bets.db"
+_SANDBOX_BET_TRACKER_DB_PATH = sandbox_scoped_path("user_bets.db")
 
 
 def get_bet_tracker() -> BetTracker:
