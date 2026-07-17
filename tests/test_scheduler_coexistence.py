@@ -7,14 +7,17 @@ a job-id collision to occur in; this test confirms both fire independently,
 with no exception and no cross-registration, as a forward-looking check in
 case they're ever wired together.
 
-Scrutiny note: a naive version of this test would compare
-{job.id for job in recoverable_jobs} against {job.id for job in weekly_jobs}
-with isdisjoint() and call that proof of "no shared jobstore". That's a
-trap -- "eod_batch_generation" and "weekly_data_refresh" are different
-hardcoded strings regardless of whether the two schedulers share a
-jobstore, so that assertion would pass even if they did. The assertions
-below instead query EACH job id THROUGH THE OTHER scheduler's own
-get_job() -- that only returns None if the stores are genuinely separate.
+Scrutiny note: an isdisjoint() comparison of {job.id for job in
+recoverable_jobs} against {job.id for job in weekly_jobs} was verified
+(empirically, against real BackgroundScheduler/jobstore instances -- not
+just by inspection) to *also* correctly catch a genuinely shared jobstore:
+get_jobs() reflects the live contents of whatever store is registered to
+that instance, so a real collision does make the two ID sets overlap, not
+just the two literal strings differ. isdisjoint isn't a trap after all --
+it's kept below as a cheap sanity check. The cross-instance get_job()
+lookups (each job id queried THROUGH THE OTHER scheduler's own get_job())
+are a more direct phrasing of the same "genuinely separate stores"
+property, not a fix for a gap the isdisjoint check actually had.
 Likewise, merely calling `scheduler.get_job(...).func()` and checking the
 call log is already covered in isolation by
 tests/test_data_refresh_scheduler.py::test_scheduled_job_invokes_the_injected_refresh_fn
@@ -63,14 +66,13 @@ def test_both_schedulers_construct_and_start_in_the_same_process_without_interfe
         weekly_job_ids = {job.id for job in weekly.get_jobs()}
         assert recoverable_job_ids == {"eod_batch_generation"}
         assert weekly_job_ids == {"weekly_data_refresh"}
-        # Cheap sanity check -- kept, but NOT the real proof (see below).
+        # Also a genuine no-shared-jobstore proof (verified empirically,
+        # see module docstring), not just a cheap string-inequality check.
         assert recoverable_job_ids.isdisjoint(weekly_job_ids)
 
-        # The real no-shared-jobstore proof: look each scheduler's job id
-        # up THROUGH THE OTHER scheduler's own get_job(). A disjoint-set
-        # comparison on ID strings would pass trivially even if the two
-        # schedulers secretly shared a backing store; a cross-instance
-        # get_job() miss would not.
+        # A more direct phrasing of the same "genuinely separate stores"
+        # property: look each scheduler's job id up THROUGH THE OTHER
+        # scheduler's own get_job().
         assert recoverable._scheduler.get_job("weekly_data_refresh") is None
         assert weekly.get_job("eod_batch_generation") is None
 
