@@ -22,6 +22,7 @@ schema itself is real."""
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import json
 from pathlib import Path
 import sys
 from unittest.mock import MagicMock
@@ -239,6 +240,37 @@ def test_file_credit_counter_store_round_trip(tmp_path: Path) -> None:
 
     reloaded = store.load(now_fn=now_fn)
     assert reloaded.credits_used == 123
+
+
+def test_credit_counter_rolls_over_on_first_check_after_a_month_boundary_restart(tmp_path: Path) -> None:
+    """Realistic restart sequence: instance A accumulates usage and saves in
+    July; instance B ('process restart') loads that same file in August --
+    its very first real usage check must correctly roll over rather than
+    carrying the stale July count forward. Same 'two separate process
+    instances sharing the same on-disk file' pattern W21 used for the
+    scheduler (test_scheduler_integration.py)."""
+    counter_path = tmp_path / "odds_credit_usage.json"
+    store = FileCreditCounterStore(counter_path)
+
+    # --- instance A: July, accumulates usage, saves before "restarting" ---
+    counter_a = store.load(now_fn=lambda: datetime(2026, 7, 30, tzinfo=timezone.utc))
+    counter_a.record_usage(480)
+    store.save(counter_a)
+
+    # --- instance B: a fresh process, loads the same file in August ---
+    counter_b = store.load(now_fn=lambda: datetime(2026, 8, 1, tzinfo=timezone.utc))
+
+    # the very first real usage check after the restart must roll over
+    assert counter_b.credits_used == 0
+    assert not counter_b.would_exceed(cost=1, limit=500, safety_margin=50)
+
+    counter_b.record_usage(10)
+    assert counter_b.credits_used == 10
+
+    # confirm the rollover was persisted, not just held in memory
+    store.save(counter_b)
+    reloaded = json.loads(counter_path.read_text())
+    assert reloaded == {"credits_used": 10, "month_key": "2026-08"}
 
 
 def test_file_credit_counter_store_missing_file_starts_fresh(tmp_path: Path) -> None:
