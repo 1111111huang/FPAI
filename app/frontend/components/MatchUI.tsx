@@ -610,7 +610,11 @@ export function MatchExplorerPage() {
       // Widened from 30 to 90 days after live verification showed the
       // off-season gap between fixture windows can exceed 30 days (e.g.
       // 2026-07-11 -> next real fixture 2026-08-21, 41 days out).
-      to.setDate(to.getDate() + 90);
+      // UTC methods, not local getDate/setDate: from/to are read back via
+      // toISOString() (always UTC) below, and asOf is UTC midnight (W30) --
+      // mixing local date arithmetic with a UTC value shifts the window by
+      // a day in negative-UTC-offset timezones.
+      to.setUTCDate(to.getUTCDate() + 90);
       const fixtures = await getFixtures(from.toISOString().slice(0, 10), to.toISOString().slice(0, 10));
       setMatches(fixtures.map(fixtureToMatch));
     } catch (err) {

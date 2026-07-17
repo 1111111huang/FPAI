@@ -32,7 +32,11 @@ function ManualBetForm({ onLogged }: { onLogged: () => void }) {
   useEffect(() => {
     const from = new Date(asOf);
     const to = new Date(asOf);
-    to.setDate(to.getDate() + 90);
+    // UTC methods, not local getDate/setDate: from/to are read back via
+    // toISOString() (always UTC) below, and asOf is UTC midnight (W30) --
+    // mixing local date arithmetic with a UTC value shifts the window by a
+    // day in negative-UTC-offset timezones.
+    to.setUTCDate(to.getUTCDate() + 90);
     getFixtures(from.toISOString().slice(0, 10), to.toISOString().slice(0, 10))
       .then(setFixtures)
       .catch(() => setFixtures([]));
