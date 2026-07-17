@@ -111,3 +111,15 @@ def test_register_eod_job_generates_recommendations_and_schedules_t30(tmp_path: 
 
     assert run_log.has_run(EOD_JOB_ID, "2026-08-22")
     assert run_log.has_run("t30_m1", "once")
+
+
+def test_next_day_date_str_respects_sandbox_override(monkeypatch) -> None:
+    monkeypatch.setenv("SANDBOX_MODE", "1")
+    monkeypatch.setenv("SANDBOX_DATE", "2026-03-01")
+    assert next_day_date_str() == "2026-03-02"
+
+
+def test_next_day_date_str_uses_real_clock_when_sandbox_off(monkeypatch) -> None:
+    monkeypatch.delenv("SANDBOX_MODE", raising=False)
+    real_tomorrow = (datetime.now(NY_TZ) + timedelta(days=1)).date().isoformat()
+    assert next_day_date_str() == real_tomorrow

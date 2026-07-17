@@ -16,7 +16,7 @@ from starlette.concurrency import run_in_threadpool
 
 load_dotenv()
 
-from app.backend import bets, recommendations
+from app.backend import bets, recommendations, sandbox_clock
 from app.backend.agent_config_hash import compute_agent_config_hash
 from app.backend.bet_tracker import BetTracker
 from app.backend.bets import BetFromRecommendationRequest, BetManualRequest, BetOut
@@ -101,6 +101,13 @@ app.add_middleware(
 @app.get("/api/health")
 def health() -> dict:
     return {"status": "ok"}
+
+
+@app.get("/api/sandbox/status")
+def get_sandbox_status() -> dict:
+    """W27: lets the frontend and test scripts introspect the active
+    sandbox date instead of each needing their own access to the env vars."""
+    return sandbox_clock.sandbox_status()
 
 
 @app.get("/api/status")

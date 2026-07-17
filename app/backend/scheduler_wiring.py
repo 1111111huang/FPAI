@@ -17,6 +17,7 @@ from app.backend.football_data_client import FootballDataClient, NormalizedMatch
 from app.backend.odds_api_client import CreditCounter, FileCreditCounterStore, OddsAPIClient
 from app.backend.recommendation_cache import RecommendationCache
 from app.backend.scheduler import NY_TZ, RecoverableScheduler
+from app.backend.sandbox_clock import sandbox_now
 from app.backend.t30_refresh import refresh_match_at_t30
 from src.agent.agent_config import AgentConfig
 from src.utils.logger import get_logger
@@ -59,7 +60,7 @@ def build_odds_client() -> OddsAPIClient | None:
     return PersistingOddsClient(client=OddsAPIClient(api_key=api_key, credit_counter=counter), counter=counter, store=store)
 
 
-def next_day_date_str(now_fn: Callable[[], datetime] = lambda: datetime.now(NY_TZ)) -> str:
+def next_day_date_str(now_fn: Callable[[], datetime] = lambda: sandbox_now(NY_TZ)) -> str:
     """Tomorrow's date in America/New_York, as the EOD job (fired at 23:00
     NY time) needs the *next* day's fixtures, not today's."""
     return (now_fn() + timedelta(days=1)).date().isoformat()
@@ -92,7 +93,7 @@ def register_eod_job(
     odds_client: OddsAPIClient | None,
     cache: RecommendationCache,
     config: AgentConfig,
-    now_fn: Callable[[], datetime] = lambda: datetime.now(NY_TZ),
+    now_fn: Callable[[], datetime] = lambda: sandbox_now(NY_TZ),
 ) -> None:
     """Registers the daily EOD batch job (W09) on the given scheduler.
     RecoverableScheduler.schedule_daily itself handles the restart/catch-up
