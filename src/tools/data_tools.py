@@ -2,15 +2,20 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Callable
 
 import pandas as pd
 
 from src.utils.db_manager import DuckDBManager
 
 
-def get_data_freshness() -> dict[str, Any]:
+def get_data_freshness(now_fn: Callable[[], pd.Timestamp] = pd.Timestamp.now) -> dict[str, Any]:
     """Return data freshness metadata from the raw_matches table.
+
+    Args:
+        now_fn: Returns the current time; injectable for testing the
+            staleness boundary without monkeypatching pandas globally.
+            Defaults to the real wall clock.
 
     Returns:
         Dict with keys:
@@ -30,7 +35,7 @@ def get_data_freshness() -> dict[str, Any]:
     max_date = row[1] if row else None
     if max_date is not None:
         latest_ts = pd.Timestamp(max_date).tz_localize(None)
-        days_since = (pd.Timestamp.now().normalize() - latest_ts.normalize()).days
+        days_since = (now_fn().normalize() - latest_ts.normalize()).days
         latest_str = latest_ts.date().isoformat()
     else:
         days_since = None
