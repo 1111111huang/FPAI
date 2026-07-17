@@ -26,7 +26,7 @@ from app.backend.agent_config_hash import compute_agent_config_hash
 from app.backend.football_data_client import NormalizedMatch
 from app.backend.recommendation_cache import RecommendationCache
 from app.backend.scheduler import NY_TZ, JobRunLog, RecoverableScheduler
-from app.backend.scheduler_wiring import EOD_JOB_ID, build_schedule_t30, register_eod_job
+from app.backend.scheduler_wiring import EOD_JOB_ID, build_schedule_t30, register_eod_job, t30_run_at
 from src.agent.agent_config import AgentConfig
 
 _RECOMMENDATION = {
@@ -91,13 +91,14 @@ def test_missed_t30_job_catches_up_after_an_outage_spanning_the_kickoff_window(t
     config = AgentConfig.default()
     job_runs_db = tmp_path / "job_runs.db"
     run_log = JobRunLog(db_path=job_runs_db)
+    expected_run_key = t30_run_at(fixture).isoformat()
 
     # before the T-30 window: 14:00 UTC -- registering must not catch up yet
     before_utc = datetime(2026, 7, 13, 14, 0, tzinfo=timezone.utc)
     scheduler_a = RecoverableScheduler(run_log=JobRunLog(db_path=job_runs_db), now_fn=lambda: before_utc)
     schedule_t30_a = build_schedule_t30(scheduler_a, odds_client=None, cache=cache, config=config, date_str="2026-07-13")
     schedule_t30_a(fixture)
-    assert not run_log.has_run("t30_m2", "once")
+    assert not run_log.has_run("t30_m2", expected_run_key)
 
     # restart after the outage, at 15:00 UTC (past the 14:30 T-30 trigger)
     after_utc = datetime(2026, 7, 13, 15, 0, tzinfo=timezone.utc)
@@ -105,4 +106,4 @@ def test_missed_t30_job_catches_up_after_an_outage_spanning_the_kickoff_window(t
     schedule_t30_b = build_schedule_t30(scheduler_b, odds_client=None, cache=cache, config=config, date_str="2026-07-13")
     schedule_t30_b(fixture)
 
-    assert run_log.has_run("t30_m2", "once")  # caught up immediately on restart
+    assert run_log.has_run("t30_m2", expected_run_key)  # caught up immediately on restart

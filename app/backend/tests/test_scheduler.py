@@ -78,15 +78,15 @@ def test_schedule_once_catches_up_when_run_at_already_passed(tmp_path: Path) -> 
     )
 
     assert calls == ["ran"]
-    assert run_log.has_run("t30_m1", "once")
+    assert run_log.has_run("t30_m1", run_at.isoformat())
 
 
 def test_schedule_once_does_not_rerun_once_marked_ran(tmp_path: Path) -> None:
     run_log = JobRunLog(db_path=tmp_path / "job_runs.db")
-    run_log.mark_ran("t30_m1", "once")
-    calls = []
     now = datetime(2026, 8, 22, 15, 5, tzinfo=NY_TZ)
     run_at = now - timedelta(minutes=5)
+    run_log.mark_ran("t30_m1", run_at.isoformat())
+    calls = []
 
     RecoverableScheduler(run_log=run_log, now_fn=lambda: now).schedule_once(
         "t30_m1", lambda: calls.append("ran"), run_at=run_at

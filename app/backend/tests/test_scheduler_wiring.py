@@ -110,7 +110,7 @@ def test_register_eod_job_generates_recommendations_and_schedules_t30(tmp_path: 
         )
 
     assert run_log.has_run(EOD_JOB_ID, "2026-08-22")
-    assert run_log.has_run("t30_m1", "once")
+    assert run_log.has_run("t30_m1", t30_run_at(fixture).isoformat())
 
 
 def test_next_day_date_str_respects_sandbox_override(monkeypatch) -> None:
