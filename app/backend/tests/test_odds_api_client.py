@@ -242,33 +242,46 @@ def test_file_credit_counter_store_round_trip(tmp_path: Path) -> None:
     assert reloaded.credits_used == 123
 
 
-def test_credit_counter_rolls_over_on_first_check_after_a_month_boundary_restart(tmp_path: Path) -> None:
-    """Realistic restart sequence: instance A accumulates usage and saves in
-    July; instance B ('process restart') loads that same file in August --
-    its very first real usage check must correctly roll over rather than
-    carrying the stale July count forward. Same 'two separate process
-    instances sharing the same on-disk file' pattern W21 used for the
-    scheduler (test_scheduler_integration.py)."""
-    counter_path = tmp_path / "odds_credit_usage.json"
-    store = FileCreditCounterStore(counter_path)
-
-    # --- instance A: July, accumulates usage, saves before "restarting" ---
+def _save_july_state(store: FileCreditCounterStore) -> None:
     counter_a = store.load(now_fn=lambda: datetime(2026, 7, 30, tzinfo=timezone.utc))
     counter_a.record_usage(480)
     store.save(counter_a)
 
-    # --- instance B: a fresh process, loads the same file in August ---
-    counter_b = store.load(now_fn=lambda: datetime(2026, 8, 1, tzinfo=timezone.utc))
 
-    # the very first real usage check after the restart must roll over
-    assert counter_b.credits_used == 0
-    assert not counter_b.would_exceed(cost=1, limit=500, safety_margin=50)
+def test_credit_counter_rolls_over_on_first_check_after_a_month_boundary_restart(tmp_path: Path) -> None:
+    """Realistic restart sequence: an instance accumulates usage and saves
+    in July; a fresh instance ('process restart') loads that same file in
+    August -- its very first real usage check must correctly roll over
+    rather than carrying the stale July count forward. Same 'two separate
+    process instances sharing the same on-disk file' pattern W21 used for
+    the scheduler (test_scheduler_integration.py).
 
-    counter_b.record_usage(10)
-    assert counter_b.credits_used == 10
+    credits_used/would_exceed/record_usage each call their own
+    _roll_month_if_needed() independently -- a fresh store.load() is used
+    per method below (not one shared instance) so an earlier call's side
+    effect can't mask a later method's own rollover check silently being
+    broken. would_exceed() in particular is the actual first call made in
+    production (OddsAPIClient.request()), so it must be proven on its own,
+    not merely alongside credits_used."""
+    counter_path = tmp_path / "odds_credit_usage.json"
+    store = FileCreditCounterStore(counter_path)
+    august_now = lambda: datetime(2026, 8, 1, tzinfo=timezone.utc)
+
+    _save_july_state(store)
+    counter_would_exceed = store.load(now_fn=august_now)
+    assert not counter_would_exceed.would_exceed(cost=1, limit=500, safety_margin=50)
+
+    _save_july_state(store)
+    counter_credits_used = store.load(now_fn=august_now)
+    assert counter_credits_used.credits_used == 0
+
+    _save_july_state(store)
+    counter_record_usage = store.load(now_fn=august_now)
+    counter_record_usage.record_usage(10)
+    assert counter_record_usage.credits_used == 10
 
     # confirm the rollover was persisted, not just held in memory
-    store.save(counter_b)
+    store.save(counter_record_usage)
     reloaded = json.loads(counter_path.read_text())
     assert reloaded == {"credits_used": 10, "month_key": "2026-08"}
 
