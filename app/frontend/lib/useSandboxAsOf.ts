@@ -16,7 +16,14 @@ export function useSandboxAsOf(): Date {
     getSandboxStatus()
       .then((status) => {
         if (!cancelled && status.sandbox_mode && status.as_of) {
-          setAsOf(new Date(`${status.as_of}T00:00:00`));
+          // Every consumer re-serializes this via .toISOString(), which is
+          // always UTC -- constructing UTC midnight here (a bare
+          // YYYY-MM-DD string parses as UTC midnight per ECMA-262) keeps
+          // that round trip exact regardless of the browser's local
+          // timezone. Appending a local-time suffix here would shift the
+          // resulting date by a day in positive-UTC-offset timezones once
+          // read back through .toISOString().
+          setAsOf(new Date(status.as_of));
         }
       })
       .catch(() => {
