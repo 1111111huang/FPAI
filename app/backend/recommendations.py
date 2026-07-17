@@ -7,20 +7,28 @@ that predate A28/A29 (e.g. from a future cache)."""
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from pydantic import BaseModel, ValidationError
 
 from app.backend.match_info import gate_league
 from app.backend.recommendation_cache import RecommendationCache
+from app.backend.sandbox_clock import is_sandbox_mode
 from src.agent.graph import run_agent
 
 _cache_singleton: RecommendationCache | None = None
+_SANDBOX_CACHE_DB_PATH = Path(__file__).parent.parent / "data" / "sandbox" / "recommendation_cache.db"
 
 
 def get_cache() -> RecommendationCache:
-    """FastAPI dependency -- overridden in tests via app.dependency_overrides."""
+    """FastAPI dependency -- overridden in tests via app.dependency_overrides.
+    Sandbox mode (W29) points this at a scratch db path so sandbox runs
+    never touch real dev data."""
     global _cache_singleton
     if _cache_singleton is None:
-        _cache_singleton = RecommendationCache()
+        _cache_singleton = (
+            RecommendationCache(db_path=_SANDBOX_CACHE_DB_PATH) if is_sandbox_mode() else RecommendationCache()
+        )
     return _cache_singleton
 
 

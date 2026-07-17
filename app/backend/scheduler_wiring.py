@@ -14,10 +14,11 @@ from typing import Callable
 
 from app.backend.eod_batch import run_eod_batch
 from app.backend.football_data_client import FootballDataClient, NormalizedMatch
+from app.backend.historical_odds_client import HistoricalOddsClient
 from app.backend.odds_api_client import CreditCounter, FileCreditCounterStore, OddsAPIClient
 from app.backend.recommendation_cache import RecommendationCache
 from app.backend.scheduler import NY_TZ, RecoverableScheduler
-from app.backend.sandbox_clock import sandbox_now
+from app.backend.sandbox_clock import sandbox_date, sandbox_now
 from app.backend.t30_refresh import refresh_match_at_t30
 from src.agent.agent_config import AgentConfig
 from src.utils.logger import get_logger
@@ -49,9 +50,15 @@ class PersistingOddsClient:
         return result
 
 
-def build_odds_client() -> OddsAPIClient | None:
-    """None if no ODDS_API_KEY is configured -- every caller here already
-    treats a None odds_client as best-effort/skip-gracefully (W09/W10)."""
+def build_odds_client() -> OddsAPIClient | HistoricalOddsClient | None:
+    """Returns W28's HistoricalOddsClient when sandbox mode is active with a
+    SANDBOX_DATE set (a real historical odds source, since The Odds API is
+    live-current-odds-only); otherwise the real, live OddsAPIClient -- None
+    if no ODDS_API_KEY is configured."""
+    override_date = sandbox_date()
+    if override_date is not None:
+        return HistoricalOddsClient(sandbox_date=override_date.isoformat())
+
     api_key = os.environ.get("ODDS_API_KEY", "")
     if not api_key:
         return None

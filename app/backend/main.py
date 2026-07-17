@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from contextlib import asynccontextmanager
 import os
+from pathlib import Path
 
 from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, HTTPException
@@ -25,7 +26,7 @@ from app.backend.llm_check import check_llm_reachable
 from app.backend.recommendation_cache import RecommendationCache
 from app.backend.bet_stats import compute_bet_stats
 from app.backend.recommendations import MatchRecommendationOut, RecommendationRequest, validate_and_degrade
-from app.backend.scheduler import RecoverableScheduler
+from app.backend.scheduler import JobRunLog, RecoverableScheduler
 from app.backend.scheduler_wiring import build_odds_client, register_eod_job
 from app.backend.settlement import settle_open_bets
 from src.agent.agent_config import AgentConfig
@@ -34,6 +35,8 @@ from src.tools.model_tools import get_model_status
 from src.utils.logger import get_logger
 
 LOGGER = get_logger(__name__)
+
+_SANDBOX_JOB_RUNS_DB_PATH = Path(__file__).parent / "data" / "sandbox" / "job_runs.db"
 
 _fixtures_client: FootballDataClient | None = None
 
@@ -67,7 +70,8 @@ async def lifespan(app: FastAPI):
     # note ("built last, right before going live").
     scheduler: RecoverableScheduler | None = None
     if os.environ.get("ENABLE_SCHEDULER", "").lower() in ("1", "true", "yes"):
-        scheduler = RecoverableScheduler()
+        run_log = JobRunLog(db_path=_SANDBOX_JOB_RUNS_DB_PATH) if sandbox_clock.is_sandbox_mode() else None
+        scheduler = RecoverableScheduler(run_log=run_log)
         register_eod_job(
             scheduler,
             fixtures_client=get_fixtures_client(),
