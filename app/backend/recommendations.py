@@ -8,6 +8,7 @@ that predate A28/A29 (e.g. from a future cache)."""
 from __future__ import annotations
 
 from pathlib import Path
+import threading
 
 from pydantic import BaseModel, ValidationError
 
@@ -21,6 +22,16 @@ _cache_singleton: RecommendationCache | None = None
 _SANDBOX_CACHE_DB_PATH = sandbox_scoped_path("recommendation_cache.db")
 _SANDBOX_SNAPSHOT_BASE_DIR = Path(__file__).parent.parent.parent / "data" / "agent_snapshots" / "sandbox"
 _sandbox_recorded_matches: set[str] = set()
+# Guards the read-check-then-add sequence around _sandbox_recorded_matches in
+# run_agent() below. Without this, two concurrent requests for the *same*
+# sandboxed match could both see match_key not yet recorded and both run in
+# "record" mode simultaneously -- wasteful duplicate live calls that defeat
+# the "first run records, rest replay" guarantee.
+_recorded_matches_lock = threading.Lock()
+
+
+def _composite_match_key(home_team: str, away_team: str, date: str) -> str:
+    return f"{home_team}__{away_team}__{date}".replace(" ", "_")
 
 
 def run_agent(match_info: dict, config=None):
@@ -32,8 +43,11 @@ def run_agent(match_info: dict, config=None):
     if not is_sandbox_mode():
         return _real_run_agent(match_info, config=config)
 
-    match_key = f"{match_info.get('home_team')}__{match_info.get('away_team')}__{match_info.get('date')}"
-    mode = "replay" if match_key in _sandbox_recorded_matches else "record"
+    match_key = _composite_match_key(
+        match_info.get("home_team"), match_info.get("away_team"), match_info.get("date"),
+    )
+    with _recorded_matches_lock:
+        mode = "replay" if match_key in _sandbox_recorded_matches else "record"
     agent_tools.configure_snapshot_store(
         mode, match_id=match_key, match_date=match_info.get("date"), base_dir=_SANDBOX_SNAPSHOT_BASE_DIR,
     )
@@ -42,7 +56,8 @@ def run_agent(match_info: dict, config=None):
     finally:
         agent_tools.configure_snapshot_store("live")
     if mode == "record":
-        _sandbox_recorded_matches.add(match_key)
+        with _recorded_matches_lock:
+            _sandbox_recorded_matches.add(match_key)
     return result
 
 
@@ -87,7 +102,7 @@ class RecommendationRequest(BaseModel):
     def effective_match_id(self) -> str:
         if self.match_id:
             return self.match_id
-        return f"{self.home_team}__{self.away_team}__{self.date}".replace(" ", "_")
+        return _composite_match_key(self.home_team, self.away_team, self.date)
 
 
 class MarketRecommendationOut(BaseModel):

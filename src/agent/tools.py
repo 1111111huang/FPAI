@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import threading
 from pathlib import Path
 
 from langchain_core.tools import tool
@@ -12,6 +13,15 @@ from src.utils.logger import get_logger
 _LOG = get_logger(__name__)
 
 _snapshot_store = SnapshotStore()
+
+# Guards the base_dir-swap-and-then-set_mode/set_match sequence in
+# configure_snapshot_store() below. The app runs recommendations.run_agent
+# via run_in_threadpool, so concurrent requests genuinely race here -- without
+# this lock, one thread's mode/match_id could land on another thread's
+# freshly-constructed SnapshotStore instance, silently leaving a sandboxed
+# request in "live" mode instead of the date-filtered record/replay this
+# feature exists to guarantee.
+_configure_lock = threading.Lock()
 
 
 def configure_snapshot_store(
@@ -36,13 +46,14 @@ def configure_snapshot_store(
     call) and then make several bare mode-only calls expecting it to stick.
     Pass base_dir explicitly (e.g. DEFAULT_BASE_DIR) to force a reset."""
     global _snapshot_store
-    if base_dir is not None:
-        effective_base_dir = Path(base_dir)
-        if effective_base_dir != _snapshot_store.base_dir:
-            _snapshot_store = SnapshotStore(base_dir=effective_base_dir)
-    _snapshot_store.set_mode(mode)
-    if match_id is not None:
-        _snapshot_store.set_match(match_id, match_date)
+    with _configure_lock:
+        if base_dir is not None:
+            effective_base_dir = Path(base_dir)
+            if effective_base_dir != _snapshot_store.base_dir:
+                _snapshot_store = SnapshotStore(base_dir=effective_base_dir)
+        _snapshot_store.set_mode(mode)
+        if match_id is not None:
+            _snapshot_store.set_match(match_id, match_date)
 
 
 def get_snapshot_store() -> SnapshotStore:

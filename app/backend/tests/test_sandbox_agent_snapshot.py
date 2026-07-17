@@ -77,3 +77,17 @@ def test_sandboxed_run_uses_the_sandbox_snapshot_namespace(monkeypatch) -> None:
 
     record_call = mock_configure.call_args_list[0]
     assert record_call.kwargs["base_dir"] == recommendations._SANDBOX_SNAPSHOT_BASE_DIR
+
+
+def test_configure_snapshot_store_resets_to_live_and_match_not_recorded_on_agent_exception(monkeypatch) -> None:
+    monkeypatch.setenv("SANDBOX_MODE", "1")
+    monkeypatch.setenv("SANDBOX_DATE", "2026-03-01")
+    match_key = f"{_MATCH_INFO['home_team']}__{_MATCH_INFO['away_team']}__{_MATCH_INFO['date']}"
+    with patch("app.backend.recommendations._real_run_agent", side_effect=RuntimeError("boom")), \
+         patch("app.backend.recommendations.agent_tools.configure_snapshot_store") as mock_configure:
+        with pytest.raises(RuntimeError):
+            recommendations.run_agent(_MATCH_INFO)
+
+    modes_used = [call.args[0] for call in mock_configure.call_args_list]
+    assert modes_used == ["record", "live"]
+    assert match_key not in recommendations._sandbox_recorded_matches
