@@ -47,3 +47,60 @@ def test_rescheduled_t30_job_fires_at_its_new_time_after_a_postponement(tmp_path
         "t30_m1", lambda: calls.append("rescheduled_again"), run_at=new_run_at
     )
     assert calls == ["original", "rescheduled"]
+
+
+def test_daily_eod_job_fires_exactly_once_per_calendar_day_across_a_multi_day_run(tmp_path: Path) -> None:
+    """Simulates N days of continuous operation: each day, a fresh
+    RecoverableScheduler is (re)constructed at a moment past the 23:00
+    trigger (as a real long-running process's own CronTrigger fire, or a
+    same-day restart, would both do) and registers the same daily job_id.
+    Exactly one fire per day -- never zero, never twice, even if the same
+    day's registration happens more than once (e.g. two restarts on the
+    same day)."""
+    db_path = tmp_path / "job_runs.db"
+    run_log = JobRunLog(db_path=db_path)
+    calls = []
+    base = datetime(2026, 7, 1, 23, 30, tzinfo=NY_TZ)
+
+    for day_offset in range(10):
+        now = base + timedelta(days=day_offset)
+        RecoverableScheduler(run_log=run_log, now_fn=lambda now=now: now).schedule_daily(
+            "eod_batch_generation", lambda day=day_offset: calls.append(day), hour=23, minute=0
+        )
+        # a same-day restart re-registering must not double-fire today
+        RecoverableScheduler(run_log=run_log, now_fn=lambda now=now: now).schedule_daily(
+            "eod_batch_generation", lambda day=day_offset: calls.append(day), hour=23, minute=0
+        )
+
+    assert calls == list(range(10))  # exactly one fire per day, in order
+
+
+def test_daily_job_fires_correctly_at_local_2300_on_both_sides_of_a_dst_transition(tmp_path: Path) -> None:
+    """2026-03-08 is a real US spring-forward DST transition (clocks jump
+    02:00 EST -> 03:00 EDT). A naive fixed-UTC-offset trigger comparison
+    would drift by an hour across it; NY_TZ is a real zoneinfo timezone, so
+    local 23:00 must resolve correctly on both the day before and the day
+    of the transition."""
+    db_path = tmp_path / "job_runs.db"
+    run_log = JobRunLog(db_path=db_path)
+    calls = []
+
+    before_transition = datetime(2026, 3, 7, 23, 30, tzinfo=NY_TZ)  # still EST (UTC-5)
+    RecoverableScheduler(run_log=run_log, now_fn=lambda: before_transition).schedule_daily(
+        "eod_batch_generation", lambda: calls.append("2026-03-07"), hour=23, minute=0
+    )
+    assert calls == ["2026-03-07"]
+    assert before_transition.utcoffset() == timedelta(hours=-5)
+
+    on_transition_day = datetime(2026, 3, 8, 23, 30, tzinfo=NY_TZ)  # now EDT (UTC-4)
+    RecoverableScheduler(run_log=run_log, now_fn=lambda: on_transition_day).schedule_daily(
+        "eod_batch_generation", lambda: calls.append("2026-03-08"), hour=23, minute=0
+    )
+    assert calls == ["2026-03-07", "2026-03-08"]
+    assert on_transition_day.utcoffset() == timedelta(hours=-4)
+
+    # a same-day re-registration on the transition day itself must not double-fire
+    RecoverableScheduler(run_log=run_log, now_fn=lambda: on_transition_day).schedule_daily(
+        "eod_batch_generation", lambda: calls.append("2026-03-08"), hour=23, minute=0
+    )
+    assert calls == ["2026-03-07", "2026-03-08"]
