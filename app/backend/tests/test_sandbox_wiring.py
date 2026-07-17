@@ -11,7 +11,7 @@ import sys
 
 sys.path.append(str(Path(__file__).resolve().parents[3]))
 
-from app.backend import bets, recommendations
+from app.backend import bets, main, recommendations
 from app.backend.historical_odds_client import HistoricalOddsClient
 from app.backend.scheduler_wiring import build_odds_client
 
@@ -79,3 +79,14 @@ def test_build_odds_client_returns_live_client_when_sandbox_inactive(monkeypatch
     client = build_odds_client()
 
     assert not isinstance(client, HistoricalOddsClient)
+
+
+def test_sandbox_job_runs_db_path_lives_under_app_data_sandbox_not_app_backend_data() -> None:
+    """Regression: main.py lives in app/backend/, so its sandbox path
+    constant needs .parent.parent (matching recommendations.py's/bets.py's
+    own _SANDBOX_*_DB_PATH constants) to land under app/data/sandbox/ --
+    not app/backend/data/sandbox/, which isn't covered by .gitignore and
+    isn't where W29 requires JobRunLog to write in sandbox mode."""
+    assert main._SANDBOX_JOB_RUNS_DB_PATH.parent.name == "sandbox"
+    assert main._SANDBOX_JOB_RUNS_DB_PATH.parent.parent.name == "data"
+    assert main._SANDBOX_JOB_RUNS_DB_PATH.parent.parent.parent.name == "app"

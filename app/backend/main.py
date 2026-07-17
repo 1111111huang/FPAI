@@ -36,7 +36,7 @@ from src.utils.logger import get_logger
 
 LOGGER = get_logger(__name__)
 
-_SANDBOX_JOB_RUNS_DB_PATH = Path(__file__).parent / "data" / "sandbox" / "job_runs.db"
+_SANDBOX_JOB_RUNS_DB_PATH = Path(__file__).parent.parent / "data" / "sandbox" / "job_runs.db"
 
 _fixtures_client: FootballDataClient | None = None
 
