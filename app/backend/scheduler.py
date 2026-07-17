@@ -40,12 +40,6 @@ NY_TZ = ZoneInfo("America/New_York")
 
 DEFAULT_DB_PATH = Path(__file__).parent.parent / "data" / "job_runs.db"
 
-# One-off (non-daily) jobs are keyed by (job_id, run_at) rather than a
-# constant run_key: job_id alone is not enough, since a postponed/
-# rescheduled fixture re-registers the *same* job_id (f"t30_{match_id}")
-# with a *new* run_at -- a constant run_key would let the old marker
-# permanently block the new time from ever firing (W33).
-
 
 class JobRunLog:
     """Persists 'job_id ran for run_key' markers so a restart can detect a
@@ -121,6 +115,11 @@ class RecoverableScheduler:
             self._run_and_mark(job_id, fn, run_key)
 
     def schedule_once(self, job_id: str, fn: Callable[[], None], run_at: datetime) -> None:
+        # Keyed on (job_id, run_at) rather than a constant: job_id alone is
+        # not enough, since a postponed/rescheduled fixture re-registers
+        # the *same* job_id (f"t30_{match_id}") with a *new* run_at -- a
+        # constant run_key would let the old marker permanently block the
+        # new time from ever firing (W33).
         run_key = run_at.isoformat()
         self._scheduler.add_job(
             lambda: self._run_and_mark(job_id, fn, run_key=run_key),
