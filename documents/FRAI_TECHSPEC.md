@@ -68,7 +68,7 @@ Feature families:
 - `INTERACTION_*`: shifted home/away matchup deltas.
 - `EFFICIENCY_*`: shifted attack-versus-defense matchup ratios.
 
-**Current Feature Availability (v1):** 114 selected features are currently configured for training in `config/schema.yaml`. Expected goals (xG) and luck-derived features (OFF_*_XG_R3/R5, DEF_*_XGA_R3/R5, OFF_*_LUCK_R3/R5) are not included until Understat data integration provides xG values in the ingestion pipeline. The current schema includes rolling form, discipline, shot-quality/save-rate, EMA, rest-context, market probability, strength-differential, interaction, efficiency-ratio, and opponent-adjusted rolling features. Market probability features (`MKT_*`) use `avgh/avgd/avga` where available and fall back to `odds_h/d/a` (B365, corr=0.994) for pre-2020 seasons where market-average odds are absent from source CSVs.
+**Current Feature Availability:** 167 selected features are currently configured for training in `config/schema.yaml` (verified via `training_setup.selected_features`, 2026-07-16). This count includes real Understat xG/xGA/LUCK rolling features (populated since Phase 10, Section 21), the 12 `SQUAD_*` player-derived features gated to `competition_specific` competitions (Phase 14c, Section 27.4), and the 8 Phase 15 lineup-derived features `FRDS_*`/`XOC_*`/`DEF_ANCHOR_*`/`LUCK_*_BURNOUT_R5` (Section 28), all likewise gated behind the `SQUAD` feature group. The schema also includes rolling form, discipline, shot-quality/save-rate, EMA, rest-context, market probability, strength-differential, interaction, efficiency-ratio, and opponent-adjusted rolling features. Market probability features (`MKT_*`) use `avgh/avgd/avga` where available and fall back to `odds_h/d/a` (B365, corr=0.994) for pre-2020 seasons where market-average odds are absent from source CSVs. See Section 12.2 for the fuller breakdown and Section 28 for the newest additions.
 
 Feature generation must use shifted rolling windows so a match never uses its own result or in-match statistics as features.
 
@@ -368,7 +368,12 @@ python main.py experiment-target --target btts --config_path experiments/forecas
 python main.py sweep-target --target result_3way --config_path experiments/forecast_xgb_classifier_broad.yaml --sweep_stage smoke --max_runs 1
 python main.py compare-models --target btts --output_path reports/model_comparison/btts_comparison.json --format json
 python main.py diagnose-model --target btts --model_path models/btts_lr_v1_20260526.joblib --output_path reports/diagnostics/btts.json
+python main.py fetch-lineups --date-from 2026-08-01 --date-to 2026-08-07 --league E0
+python main.py schedule-refresh --league E0 --day-of-week sun --hour 3 --minute 0
 ```
+
+- `fetch-lineups` (Phase 15a, US#101): fetches FotMob pre-match starting-XI data for the given date range/league into `match_lineups`. See Section 28.2.
+- `schedule-refresh` (Phase 17, US#109): starts a standing weekly scheduler that runs `refresh-data` on a cron trigger; blocks until interrupted. See Section 30.
 
 Legacy commands such as `backtest` and strategy recommendation commands may remain but should be documented as legacy.
 
@@ -443,8 +448,8 @@ When adding functionality, update this section with any new test files, changed 
 - **Processing:** `src/ingestion/data_loader.py` ingests CSVs into `raw_matches` with column mapping and validation.
 - **Feature Generation:** `src/features/feature_factory.py` computes rolling averages (R3, R5), exponential moving averages (EMA5), market probabilities, and context features.
 
-### 12.2 Feature Availability (as of 2026-06-07)
-- **Current selected features:** 133 features configured in `config/schema.yaml`
+### 12.2 Feature Availability (updated 2026-07-16, supersedes the 2026-06-07 snapshot below)
+- **Current selected features:** 167 features configured in `config/schema.yaml` (verified via `training_setup.selected_features`), up from 133 as of the original 2026-06-07 snapshot. The growth path: 133 (2026-06-07) → 147 (Phase 8 market/temporal features, Section 19.2–19.3) → 159 for `competition_specific` competitions after Phase 14c's 12 `SQUAD_*` features (Section 27.4) → **167** after Phase 15's 8 lineup-derived features (`FRDS_HOME/AWAY`, `XOC_HOME/AWAY`, `DEF_ANCHOR_HOME/AWAY`, `LUCK_HOME/AWAY_BURNOUT_R5` — Section 28).
   - Rolling stats R3/R5 (FTHG, FTAG, HS, AST, HC, AC, etc.)
   - Discipline features (cards and card rates)
   - Shot-quality, save-rate, and shot-accuracy derived features
@@ -456,13 +461,15 @@ When adding functionality, update this section with any new test files, changed 
   - **xG/xGA/LUCK** features: OFF_HOME/AWAY_XG_R3/R5, DEF_HOME/AWAY_XGA_R3/R5, OFF_HOME/AWAY_LUCK_R3/R5 — populated via `python main.py fetch-understat` (Understat JSON API, 91.6% match coverage)
   - **League standings context**: CTX_HOME/AWAY_CUM_PTS (cumulative points before match), CTX_HOME/AWAY_PPG_L10 (points-per-game last 10)
   - **Head-to-head rolling**: H2H_TOTAL_GOALS_R5, H2H_CORNERS_R5, H2H_HOME_WIN_RATE_R5 (last 5 fixture meetings, pre-match safe)
+  - **Squad-level (Phase 14c, `competition_specific` only)**: 12 `SQUAD_*` rolling xG/xA/rating features — see Section 27.4
+  - **Lineup-derived (Phase 15, `competition_specific` only)**: `FRDS_*`, `XOC_*`, `DEF_ANCHOR_*`, `LUCK_*_BURNOUT_R5` — see Section 28
 
 - **MKT_ odds fallback:** `avgh/avgd/avga` absent pre-2020; filled from `odds_h/d/a` (B365, corr=0.994 with market average). Result: MKT_ NaN rate 0%.
-- **Cold-start imputation (US#59):** After rolling computations, NaN values in all rolling feature columns (R3, R5, EMA5, H2H, league standings) are filled with column-wise means. Result: 0% NaN across all 133 features.
+- **Cold-start imputation (US#59):** After rolling computations, NaN values in all rolling feature columns (R3, R5, EMA5, H2H, league standings) are filled with column-wise means. Live check against `feature_store` (2026-07-16, 3,800 rows) confirms 0% NaN across `FRDS_*`/`DEF_ANCHOR_*`/`LUCK_*_BURNOUT_R5`; `XOC_HOME`/`XOC_AWAY` are non-null for all rows but legitimately zero-valued (rather than imputed) for the ~22% of matches where no FWD-position starter could be resolved to a rolling xG+xA figure.
 
 ### 12.3 Schema Configuration
 - **File:** `config/schema.yaml`
-- **Current:** `training_setup.selected_features` lists 133 selected features matching the active training contract
+- **Current:** `training_setup.selected_features` lists 167 selected features matching the active training contract (see 12.2 for the growth path from the original 133)
 - **Update policy:** When new data sources are integrated, expand `selected_features` list and run `python main.py ingest` to rebuild feature store
 - **Feature subset support (US#62):** `ModelManager(feature_subset=[...])` trains on a subset of schema features — useful for target-specific top-N feature selection post-sweep
 
@@ -1197,7 +1204,7 @@ All user stories completed through Phase 13. Active and blocked stories are trac
 | total_corners | MAE | 2.9299 | **2.7342** | — | −0.1956 |
 | total_corners | RMSE | 3.6410 | **3.3943** | — | −0.2467 |
 
-## 27. Phase 14: Player-Level Data & Competition Tiers (Planned — US#87–99)
+## 27. Phase 14: Player-Level Data & Competition Tiers (Completed — US#87–99)
 
 **Status: Phase 14a, 14b, and 14c (US#87–99) fully implemented.** All three phases complete: competition registry (27.2), FotMob player ingestion (27.3), and SQUAD_* squad features with competition-gated model training (27.4). Story breakdown lives in `documents/user_stories.md` Phase 14.
 
@@ -1216,7 +1223,7 @@ Two tiers, declared per competition via a new registry rather than hardcoded:
 - `tier`: `general_purpose` | `competition_specific`
 - `league_code`: existing football-data.co.uk code(s) this competition corresponds to (e.g. `E0`)
 - `enabled_feature_groups`: which feature families apply (e.g. `["OFF", "DEF", "DIS", "CTX", "MKT", "STRENGTH", "INTERACTION", "EFFICIENCY", "SQUAD"]`)
-- `player_data_sources`: list of ingestion sources feeding this competition's player features (empty until Phase 14b/c ships)
+- `player_data_sources`: list of ingestion sources feeding this competition's player features (populated once Phase 14b/c shipped — `config/competitions.yaml` now lists `fotmob` under `E0`'s `player_data_sources`)
 
 **Relationship to existing `context`/`match_type`**: the existing `--context league|international` flag (Section 25.6) and `match_type` field (Section 26.3) are kept as-is — no breaking rename. `international` becomes one specific caller of the `general_purpose` tier (ad-hoc matches with no resolvable `competition_id`); named competitions resolve their tier through the new registry instead.
 
@@ -1279,3 +1286,154 @@ Implementation: `FeatureFactory._compute_squad_features()` queries `raw_player_m
 - **Phase 14c** (squad features + model integration, 27.4): depends on **both** 14a (needs the tier/registry seam to gate `SQUAD_*`) and 14b (needs the ingested data).
 
 **Key findings:** (1) XGB MKT-only outperforms Dixon-Coles on all 8 targets — the improvement is statistically meaningful on `result_3way` (−22% log_loss) and corners (−8–10% MAE). (2) `btts` log_loss is marginally worse than naive market (+0.0058) — calibration at this sample size does not help enough to overcome the small MKT-only feature set; noted but not blocking, as the delta is tiny and DC is still worse. (3) Corners targets benefit most from XGBoost's non-linear capture of AH/Poisson features — DC has no corner model. (4) Naive market accuracy for result_3way (52.8%) exceeds both XGB and DC — market is well-calibrated for top-probability outcomes; XGB log_loss is still better, which is the production-relevant metric. |
+
+---
+
+## 28. Phase 15: Lineup Data & Lineup-Derived Features (Completed — US#100–106)
+
+### 28.1 Overview
+
+Phase 14 (Section 27) added roster-level squad form (`SQUAD_*`) from full-season player rosters. Phase 15 adds a second, distinct player-data layer: **confirmed pre-match starting-XI lineups**, sourced from the same FotMob `matchDetails` endpoint already used for player stats (Section 27.3), no new authentication or dependency required. Four new feature families are derived from lineup data (or, for luck burnout, from existing roster data without needing a lineup at all): FRDS, xOC, a defensive interception/recovery anchor, and luck burnout. All four are gated behind the `SQUAD` feature group in the Phase 14a competition registry — see 28.7 — so they only apply to `competition_specific` competitions (today, `E0`) and are absent from `general_purpose`/international forecasts by construction.
+
+Three features from the original Phase 15 proposal were explicitly scoped out as blocked before implementation began: xG Chain Concentration and Deep Completion Share (both require event-level spatial data — StatsBomb/FBref — not exposed by FotMob's summary player-stats API) and Big-League Minutes Ratio (requires multi-league global player history ingestion, a separate project-scale effort). These are not tracked as open work items; they were never started.
+
+### 28.2 Lineup Data Foundation (US#100–101)
+
+**Findings (US#100):** FotMob's existing `matchDetails` endpoint (`fotmob.com/api/data/matchDetails?matchId=...`) exposes a `content.lineup` block with no additional auth. `homeTeam`/`awayTeam` each carry a `starters[]` array (player `id` joins directly to `player_dim`, plus `name`, `positionId`, `usualPlayingPositionId`) and a `subs[]` array. Substitutes are excluded from ingestion because `subs[]` omits `positionId`, making position-group assignment unreliable. `positionId` ranges observed: `11` = GK, `30`–`39` = DEF, `60`–`69` = MID, `80`–`89` and `≥110` = FWD (ATT/WNG/ST). A `lineupType` field distinguishes confirmed vs. provisional lineups; pre-match values could only be confirmed once the season resumed, since the exploration was done against completed matches. Physical metrics (sprints, distance) were confirmed **absent** from all four FotMob stat groups (Top stats, Attack, Defense, Duels) — this directly informs the US#105 limitation in 28.6. Interceptions and recoveries **are** available in the "Defense" stat group, feeding the defensive anchor feature (28.5).
+
+**Implementation (US#101), verified against code:**
+
+- `src/ingestion/fotmob/lineup.py` exists with the described functions:
+  - `fetch_match_lineup(fotmob_match_id, delay=1.0) -> list[dict]` — fetches one match's starting XI (both teams combined), mapping `positionId` to a coarse `position_group` (GK/DEF/MID/FWD/UNK) via the ranges above.
+  - `upsert_match_lineups(fotmob_match_ids, db_manager, delay=1.0) -> int` — fetches and upserts rows for a batch of FotMob match IDs.
+  - `backfill_lineups_from_player_stats(db_manager, delay=1.0) -> int` — derives the date range covered by `raw_matches` and re-discovers FotMob match IDs over that range (since `raw_player_match_stats` stores an internal hashed `match_id`, not a FotMob ID, so FotMob IDs can't be recovered from it directly), then calls `upsert_match_lineups`.
+- **`match_lineups` DuckDB table** (created by `_create_lineup_table`):
+
+  | Column | Type | Notes |
+  | :--- | :--- | :--- |
+  | `fotmob_match_id` | BIGINT | Part of composite PK |
+  | `player_id` | BIGINT | Part of composite PK; joins to `player_dim` |
+  | `team_name` | TEXT | FotMob-native team name (standardized at feature-compute time) |
+  | `side` | TEXT | `home` / `away` |
+  | `position_group` | TEXT | `GK` / `DEF` / `MID` / `FWD` / `UNK` |
+  | `position_id` | INTEGER | Raw FotMob position ID |
+  | `shirt_number` | TEXT | |
+  | `player_name` | TEXT | |
+
+  `PRIMARY KEY (fotmob_match_id, player_id)`, upserted via `ON CONFLICT ... DO UPDATE`.
+- **CLI:** `python main.py fetch-lineups --date-from YYYY-MM-DD --date-to YYYY-MM-DD [--league E0] [--delay 1.0]` (confirmed present in `main.py`, `add_parser("fetch-lineups", ...)`).
+- **`refresh-data` extended:** `main.py::run_refresh_data` now runs `scrape → ingest → fetch-understat → fetch-fotmob → backfill_lineups_from_player_stats` in one call (confirmed at `main.py:482–492`), so lineup backfill rides the same weekly cadence as Phase 17's scheduler (Section 30) without a separate manual step.
+- **Verified live** against `data/fpai_core.db` (2026-07-16): `match_lineups` exists and contains 83,622 rows — the table is populated, not merely defined. Note that this contradicts an earlier, now-superseded observation recorded in `documents/bugs.md` BUG-012 ("`match_lineups` doesn't exist yet") — that note was accurate at the time BUG-012 was written (2026-07-11) but `fetch-lineups`/the backfill has since been run.
+- **Tests:** `tests/test_fotmob_lineup.py`, 6 tests, all pass (re-run live).
+
+### 28.3 FRDS — FotMob Rating Dominance Share (US#102)
+
+**Formula:** `FRDS = sum(rolling-avg rating of starting 11) / sum(rolling-avg rating of every player who appeared for the team in the trailing SQUAD_POOL_DAYS = 90 days)`, clamped to `[0, 1]`. The denominator proxies the full available squad pool, so FRDS reads as "how much of the team's typical squad strength did tonight's XI represent."
+
+**Implementation, verified against code:**
+- `compute_frds()` and `_resolve_fotmob_to_raw()` in `src/features/lineup_features.py`. Because `match_lineups` is keyed by FotMob's own `fotmob_match_id` and the rest of the pipeline is keyed by the Football-Data-derived `match_id`, `_resolve_fotmob_to_raw()` resolves the mapping via player co-occurrence voting: for each `(fotmob_match_id, team)`, it picks the `raw_matches` `match_id` where the most of that lineup's starters also appear in `raw_player_match_stats`, breaking ties by latest date.
+- `FeatureFactory._compute_frds_features()` wires this into the main feature-build path, querying `match_lineups` + `raw_player_match_stats` and returning an empty (`match_id`-only) frame if either table doesn't exist yet.
+- Schema: `FRDS_HOME`, `FRDS_AWAY` present in `config/schema.yaml`'s `selected_features` (confirmed).
+- Gated behind the `SQUAD` feature group in `src/models/model_manager.py` (`_load_selected_features`, ~line 122), alongside `SQUAD_*`, `LUCK_*`, `XOC_*`, and `DEF_ANCHOR_*`.
+- **Verified live:** `feature_store` (3,800 rows, 2026-07-16) shows `FRDS_HOME`/`FRDS_AWAY` with 0 nulls and all 3,800 rows non-zero.
+- **Tests:** `tests/test_frds_feature.py`, 6 tests, all pass (re-run live; `documents/user_stories.md`'s completion note also says "6 tests pass" for this story — matches).
+
+### 28.4 xOC — Top-3 Offensive Concentration (US#103)
+
+**Formula:** `xOC = sum of rolling (xG + xA) per 90 for the top-3 forward starters (by rolling xG+xA) / league coefficient`, where the coefficient is a static UEFA/FIFA-style strength multiplier per league, not FotMob-derived.
+
+**Implementation, verified against code:**
+- `config/league_coefficients.yaml` exists with a `coefficients:` map: `E0: 1.00` (baseline), `SP1: 0.95`, `D1: 0.90`, `I1: 0.88`, `F1: 0.85`, `international: 0.75`. `_load_coefficient()` in `lineup_features.py` falls back to `1.0` if the file or league code is absent.
+- `compute_xoc()` in `src/features/lineup_features.py` filters `match_lineups` to `position_group == "FWD"` starters, computes each player's `shift(1).rolling(5, min_periods=1)` mean of `(xG+xA)/90` from `raw_player_match_stats`, takes the top-3 per team per match, sums, and divides by the league coefficient.
+- `FeatureFactory._compute_xoc_features()` wires this in; `XOC_HOME`, `XOC_AWAY` are present in `config/schema.yaml` (confirmed) and gated behind `SQUAD` the same way as FRDS.
+- **Verified live:** `XOC_HOME`/`XOC_AWAY` have 0 nulls across all 3,800 `feature_store` rows, but only ~2,946–2,949 rows (≈78%) are non-zero — the remainder are legitimately `0.0` (not imputed) for matches where no FWD-position starter's rolling xG+xA could be resolved, e.g. lineup/stat join misses rather than a data-quality defect. This is a real, if imperfect, characteristic of the feature and not something `user_stories.md` called out explicitly.
+- **Tests:** `tests/test_xoc_feature.py`, 5 tests, all pass (re-run live; matches the completion note).
+
+### 28.5 Defensive Interception & Recovery Anchor (US#104)
+
+**Formula:** among each team's starting DEF/MID players, take the top-2 by rolling `(interceptions + recoveries) / 90` over the last 5 appearances (`shift(1).rolling(5, min_periods=1)`), and use their mean as the anchor signal — "how strong is this team's best defensive-recovery pairing tonight."
+
+**Implementation, verified against code:**
+- `src/ingestion/fotmob/fetcher.py` extended with `_extract_defense_stat()` to pull `interceptions`/`recoveries` from FotMob's "Defense" stat group per player.
+- `interceptions`/`recoveries` columns added to `raw_player_match_stats` via `merge.py` schema changes + `ALTER TABLE` migrations for existing databases.
+- `compute_defensive_anchor()` in `src/features/lineup_features.py`; `FeatureFactory._compute_defensive_anchor_features()` wires it into the build path (with a `duckdb.BinderException` fallback to an empty frame for databases that predate the column migration).
+- Schema: `DEF_ANCHOR_HOME`, `DEF_ANCHOR_AWAY` confirmed in `config/schema.yaml`, gated behind `SQUAD`.
+- **Verified live:** 0 nulls, all 3,800 rows non-zero.
+- **Tests:** `tests/test_defensive_anchor.py` — **6 tests pass** (re-run live). Note: `documents/user_stories.md`'s completion note for US#104 states "5 tests pass"; the actual current file has 6 passing tests. Minor discrepancy, flagged rather than silently carried into this spec — not investigated further since it doesn't affect correctness (all tests pass either way, just one more than documented).
+
+### 28.6 Luck Burnout (US#106)
+
+**Formula:** `(Goals + Assists) − (xG + xA)`, rolling 5-match window per team, aggregated at team level from `raw_player_match_stats`. Unlike FRDS/xOC/defensive-anchor, this feature does **not** require `match_lineups` — it only needs existing per-player match-stat rows, aggregated to the team and rolled forward.
+
+**Implementation, verified against code:**
+- `FeatureFactory._compute_luck_burnout_features()` / the static `_luck_burnout_from_data()` in `src/features/feature_factory.py` sum `goals + assists − xg − xa` per team per match, then build each team's full home-or-away match timeline (not just matches where the team has its own player-stats row) and apply `shift(1).rolling(5, min_periods=1).mean()`. Building the full timeline first — rather than joining only on `match_id`s present in `raw_player_match_stats` — is the same carry-forward pattern documented as the BUG-012 layer-2 fix, so an upcoming/synthetic match row (used by `build_for_match()` for spot inference) doesn't get silently dropped from the rolling window.
+- Schema: `LUCK_HOME_BURNOUT_R5`, `LUCK_AWAY_BURNOUT_R5` confirmed in `config/schema.yaml`, gated behind `SQUAD` in `model_manager.py` (the gate filters a `LUCK_` prefix specifically, distinct from and in addition to `SQUAD_`/`XOC_`/`FRDS_`/`DEF_ANCHOR_`).
+- The story's forward-only-filtered variant (extending the team-level aggregate to a starters-only computation once lineup data landed) was explicitly deferred — the team-level signal was judged sufficient for Phase 15 and the filtered variant was not built. This is a genuine scope reduction, not something to represent as shipped.
+- **Verified live:** 0 nulls; 3,794/3,800 rows non-zero (6 rows legitimately exactly zero — plausible for a difference-of-sums metric).
+- **Tests:** `tests/test_luck_burnout.py` — **6 tests pass** (re-run live). As with 28.5, `documents/user_stories.md`'s note says "5 tests pass" for this story; actual is 6. Same minor, inconsequential discrepancy.
+
+### 28.7 Known Limitation: Physical Performance Metrics (US#105 — Blocked, Not Shipped)
+
+US#105 proposed a "Physical Performance Intensity Delta" feature (sprints, high-intensity runs, distance covered). This was explored and found **blocked**, not completed: FotMob's `playerStats` payload exposes exactly four stat groups (Top stats, Attack, Defense, Duels), and none contain sprint counts, distance, or high-intensity-run data. Confirmed during the US#100 API exploration (28.2). Delivering this feature would require integrating a dedicated physical-tracking data provider (e.g. Opta, SkillCorner) as an entirely new ingestion source — out of scope for Phase 15. No `PHYS_*` or similarly-named feature exists in `config/schema.yaml`, and none should be assumed present. This is recorded here as an open gap, not a shipped capability.
+
+### 28.8 Feature Gating & Schema Impact
+
+All four new families (`FRDS_*`, `XOC_*`, `DEF_ANCHOR_*`, `LUCK_*_BURNOUT_R5`) ride the same `SQUAD` gate established in Phase 14c (Section 27.4) rather than a new, separate gate: `ModelManager._load_selected_features()` (`src/models/model_manager.py`, ~lines 117–129) strips any feature starting with `SQUAD_`, `LUCK_`, `XOC_`, `FRDS_`, or `DEF_ANCHOR_` whenever the resolved competition's registry entry does not list `"SQUAD"` in `enabled_feature_groups` (Section 27.2). Today only `E0` carries `"SQUAD"`; the `international`/`general_purpose` context never sees any of these columns, preserving the feature-superset invariant from Section 27.2.
+
+Net schema impact: Phase 15 added 8 selected features (2 each for FRDS, xOC, defensive anchor, luck burnout) on top of the 159-feature `competition_specific` baseline left by Phase 14c, bringing `config/schema.yaml`'s `selected_features` total to **167** (verified live, Section 12.2/12.3).
+
+---
+
+## 29. Phase 16: League-Aware Model Routing & Unknown-Team Cold Start (Completed — US#107–108)
+
+### 29.1 Motivation
+
+Two gaps were found while planning the web-app integration (`documents/app_user_stories.md`) and verified directly against the live code, both predating Phase 16:
+
+1. `ForecastService.forecast_upcoming()`'s league-history branch never consulted `config/competitions.yaml` (the Phase 14a registry, already used at training time by `model_manager.py`/`main.py` but not at inference time) — it unconditionally loaded the flat `"league"` model context for any `match_type="league"` call regardless of what `league` string was passed, so a non-registered or explicitly `general_purpose` competition wouldn't cleanly fall back to a market-odds-only forecast; it would instead silently get a cold-start-heavy forecast mislabeled `prediction_basis: "team_history_and_market"`.
+2. The existing cold-start imputation (US#59) handles missing **feature values** for teams that already have rows in `raw_matches`. It has no concept of a team with **zero** rows at all (newly promoted, or from a league never ingested) — such a team would be silently imputed with column means and reported only via a possibly-still-decent `feature_completeness` number, indistinguishable from ordinary partial cold start.
+
+### 29.2 Registry-Driven General-Purpose Fallback (US#107)
+
+**Verified against `src/forecast/forecast_service.py:335–360`:** `forecast_upcoming()` now resolves an `effective_context` before branching:
+- If `match_type == "international"` (explicit caller opt-in), `effective_context = "international"` as before.
+- Otherwise (`match_type == "league"`), it calls `get_competition_definition(league, registry_path=...)` from the Phase 14a registry (`src/logic/competition_registry.py`). If that raises `ValueError` (league not registered) **or** the resolved tier is `"general_purpose"`, `effective_context` is set to `"international"` — routing to exactly the same market-odds-only path (`prediction_basis: "market_odds_only"`) an explicit `match_type="international"` call would take. If the competition resolves to `"competition_specific"`, `effective_context = "league"` as before, so `E0` behavior is unaffected.
+- A missing or corrupt `competitions.yaml` file itself still raises `FileNotFoundError` uncaught — a broken deployment fails loudly rather than silently degrading every forecast to market-odds-only.
+
+**Tests:** `tests/test_forecast_registry_fallback.py` — 3 tests (unregistered league, an explicitly-registered `general_purpose` competition, and the E0 `competition_specific` regression case), all pass (re-run live). `documents/user_stories.md`'s completion note additionally states the full suite went from 286 to 288 passed/1 skipped at the time, with one pre-existing fixture (`test_forecast_league_feature_alignment.py`) needing an update to include a `competitions.yaml` file — not independently re-verified here since it is a historical point-in-time count; the current full suite (2026-07-16) is 345 passed/1 skipped.
+
+### 29.3 Unknown-Team Flag (US#108)
+
+**Verified against `src/features/feature_factory.py:887,1071` and `src/forecast/forecast_service.py:362,375,451`:** `FeatureFactory.build_for_match()` checks — against its own raw, pre-imputation history fetch — whether each side (home/away) has any row at all in `raw_matches`. It sets an `_unknown_team` boolean column on the single-row feature DataFrame it returns. This column is never added to any `feature_names_used` list, so it is naturally excluded from model input rather than requiring a defensive filter downstream.
+
+`ForecastService.forecast_upcoming()` reads this out and surfaces it as **`data_quality.unknown_team`** — a new, distinct sibling field to the existing `diagnostics.cold_start_risk` (which is a `feature_completeness < 0.85` threshold check). On the `international`/`general_purpose` path, `unknown_team` is hardcoded `False`, since no team-identity lookup happens on that path at all.
+
+**Tests:** `tests/test_unknown_team_flag.py` — 6 tests (home-unknown, away-unknown, both-unknown, known-teams-unaffected at the `FeatureFactory` level, plus two `ForecastService.forecast_upcoming` end-to-end tests), all pass (re-run live).
+
+### 29.4 Related Bug: BUG-014 (Found During US#107 Verification, Now Fixed)
+
+While verifying US#107 end-to-end, it was discovered that every `model_path` under `config/model_selection.yaml`'s `contexts.international` block pointed to a nonexistent file — 7 stale MLflow autolog artifact URIs (the same anti-pattern BUG-010 had fixed for the `league` context but which was never re-applied to `international`) plus one mismatched `btts` filename. This meant the `general_purpose` fallback added by US#107 was correct by construction (proven by tests using dummy models) but could not be exercised end-to-end against real models at the time US#107 shipped, since loading *any* `international`-context model failed identically whether or not US#107's registry check was involved.
+
+Per `documents/bugs.md`, **BUG-014's status is `fixed`** (not open) as of this writing. The fix, in `src/utils/model_selection.py`'s `ModelSelector`, made `_select_for_target_context` and `_best_run` verify that a candidate/champion's `model_path` actually resolves to a real file before it can be retained or selected as best, forcing re-promotion of any target whose registered path had gone stale — this closed the gap for all 8 `contexts.international` entries, which now point to real, `joblib.load()`-able files. This is recorded here for completeness since Phase 16's own story directly surfaced it, but it is not a Phase 16 deliverable and should not be attributed to US#107/108.
+
+---
+
+## 30. Phase 17: Scheduled Data Refresh (Completed — US#109)
+
+### 30.1 Weekly Refresh Scheduler
+
+**Verified against `src/scheduling/data_refresh_scheduler.py`:** a new standalone module built on `apscheduler` (`BackgroundScheduler` + `CronTrigger`, added to `requirements.txt`) exposes:
+- `build_weekly_refresh_scheduler(refresh_fn=None, day_of_week="sun", hour=3, minute=0, league="E0") -> BackgroundScheduler` — builds (but does not start) a scheduler with one cron job registered. `refresh_fn` defaults to `_default_refresh_fn(league)`, which calls `main.run_refresh_data(settings, DuckDBManager(), league=league)` — the same `scrape → ingest → fetch-understat → fetch-fotmob → backfill lineups` pipeline described in Section 28.2 (US#81/95/101). Tests inject a fake `refresh_fn` to avoid real network/scrape calls.
+- `run_refresh_job(refresh_fn)` — the job body: calls `refresh_fn()`, and on any exception logs via `LOGGER.exception` (visible in logs, not silently swallowed) and **re-raises**, so APScheduler's own error-event tracking also observes the failure.
+
+Off-season no-op behavior (no new matches available) and measurable `MAX(date)` advancement during an active season are properties of the underlying `run_refresh_data` pipeline itself (already covered by that pipeline's own tests), not independently re-tested by the scheduler's tests — the scheduler's job is purely to invoke that pipeline on a cadence and surface failures.
+
+### 30.2 CLI
+
+**Verified against `main.py`:** `python main.py schedule-refresh [--league E0] [--day-of-week sun] [--hour 3] [--minute 0]` (subcommand confirmed via `add_parser("schedule-refresh", ...)`) starts the scheduler and **blocks until interrupted** — intended to run under an external process supervisor (cron wrapper, systemd unit, launchd job, etc.), not as a one-shot CLI invocation.
+
+**Tests:** `tests/test_data_refresh_scheduler.py` — 5 tests (job registration, custom schedule parameters, the registered job actually invoking the injected refresh function, and the failure-logs-and-reraises case), all pass (re-run live).
+
+### 30.3 Relationship to the Web App's Own Scheduler
+
+This scheduler is deliberately **independent** of `documents/app_user_stories.md`'s W08 (the web app's own scheduler infrastructure), which was not yet built at the time US#109 shipped. Ownership of "which process actually runs the weekly refresh in production" was an explicitly open question this story did not resolve — `schedule-refresh` exists as a standalone CLI entry point today so it can be run under any supervisor immediately, with the option to fold it into W08 later if that turns out to be the better long-term home. Do not assume the two schedulers have been unified; as of this writing they remain two separate, independently-invokable mechanisms.

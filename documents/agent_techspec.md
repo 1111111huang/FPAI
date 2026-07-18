@@ -1,6 +1,6 @@
 # Technical Specification — FPAI Betting Agent
 
-Authoritative implementation reference for the agent described in `agent_prd.md`. This document reflects the actual code as built through Phase 5 (M1–M5 / stories A01–A16). Phase 6 (batch recommendation, A18) is **not yet implemented** — see [Implementation Status](#implementation-status) below.
+Authoritative implementation reference for the agent described in `agent_prd.md`. This document reflects the actual code as built through Phase 10 (M10 / stories A01–A29, excluding A18 and A22–A26). Phase 6 (batch recommendation, A18) and Phase 8 (full-season backtest expansion, A23–A26) are **not yet implemented**; Phase 7's A22 (config comparison against the Section 18 baseline) is also still future — see [Implementation Status](#implementation-status) below.
 
 ---
 
@@ -52,6 +52,7 @@ class AgentConfig:
     temperature: float
     max_tool_calls: int
     min_odds_threshold: float
+    max_odds_threshold: float
     min_value_edge: float
     markets: list[str]
     system_prompt_version: str
@@ -67,13 +68,14 @@ model: "llama3.1:8b"
 provider: "ollama"
 temperature: 0.1
 max_tool_calls: 10
-min_odds_threshold: 2.0
+min_odds_threshold: 1.2
+max_odds_threshold: 11.0
 min_value_edge: 0.05
 markets: [result_3way, btts, total_goals, home_corners, away_corners]
 system_prompt_version: "v1"
 ```
 
-`min_odds_threshold` and `min_value_edge` are **not enforced in code** — they are values the LLM is instructed to apply via the system prompt (Section 5). There is no programmatic check that the model actually respected them.
+**As of A29 (2026-07-11), `min_odds_threshold`/`max_odds_threshold` are code-enforced**, not just prompt-level instructions: `graph.py`'s `output_node` threads both values from `AgentConfig` into `extract_recommendation()` (Section 8), which downgrades any `direct_bet` market whose `current_odds` falls outside `[min_odds_threshold, max_odds_threshold]` to `conditional` regardless of what the LLM itself wrote. The floor widened from a bare `2.0` (previously prompt-only, with no ceiling at all) to `1.2`, and a `11.0` ceiling was added — see Section 19. `min_value_edge`, however, **remains prompt-only** — there is still no programmatic check that the model's `value_edge` computation actually respected the 0.05 minimum stated in the system prompt (Section 5).
 
 ---
 
@@ -164,6 +166,26 @@ Calls `ForecastService.forecast_upcoming(match_type="international")` directly. 
 
 Both forecast tools return the full forecast JSON dict verbatim (`json.dumps(result, default=str)`) — they do not pre-summarize or strip fields before returning to the LLM.
 
+### 4.4 `resolve_competition(competition_or_league: str) -> str` (A27)
+
+Wraps `src.logic.competition_registry.get_competition_definition()` to give the agent a tool-callable way to know whether a league/competition has real historical-data model coverage, instead of relying on the LLM's own judgment about how "well-known" a league sounds.
+
+```python
+def _resolve_competition_impl(competition_or_league: str) -> str:
+    try:
+        tier = get_competition_definition(competition_or_league).tier
+    except (ValueError, FileNotFoundError):
+        tier = "general_purpose"
+    recommended_tool = "forecast_league" if tier == "competition_specific" else "forecast_international"
+    return json.dumps({"competition": ..., "tier": tier, "recommended_tool": recommended_tool})
+```
+
+Both a `ValueError` (competition not registered) and a `FileNotFoundError` (registry file itself missing) are caught identically and default to `tier="general_purpose"` — the always-safe fallback rather than guessing. Returns a JSON object with `tier` (`"competition_specific"` | `"general_purpose"`) and `recommended_tool` (`"forecast_league"` | `"forecast_international"`); the docstring instructs the model to follow `recommended_tool` exactly rather than deciding domestic-vs-international itself.
+
+Registered first in `get_default_tools()`'s return list (`[resolve_competition, web_search, forecast_league, forecast_international]`) and wrapped by `_snapshot_store.wrap("resolve_competition", ...)` like every other tool (A10 convention, Section 9.1) — its snapshot key is a pure function of `competition_or_league`, stable across record and replay.
+
+See Section 19 for the story behind this tool (US#107 dependency, and an honest caveat about `llama3.1:8b` not always calling it first in practice).
+
 ---
 
 ## 5. System Prompt (`config/prompts/agent_v1.txt`)
@@ -171,14 +193,16 @@ Both forecast tools return the full forecast JSON dict verbatim (`json.dumps(res
 Loaded by `AgentConfig.system_prompt_version` → `agent_{version}.txt`. Structure, in order:
 
 1. **CRITICAL RULE** — never narrate a tool call as text, always either call a tool or output JSON
-2. **Workflow** — call forecast tool first (with explicit fallback odds defaults if none provided), then web_search once, then output
-3. **STOP RULES** — never call the same tool twice in a row; output JSON after 2 tool calls total; once a tool reports `TOOL_PERMANENTLY_UNAVAILABLE`, never call it again
-4. **Value Calculation** — implied probability, value edge formula, the 2.0 minimum odds rule
+2. **Workflow** — **(A27, 2026-07-11)** call `resolve_competition` first, with an explicit instruction not to decide domestic-vs-international itself based on how well-known the league sounds; follow its `recommended_tool` exactly to choose between `forecast_league`/`forecast_international` (with explicit fallback odds defaults if none provided), then web_search once, then output
+3. **STOP RULES** — never call the same tool twice in a row; output JSON after **3** tool calls total (raised from 2 in A27, to account for the new `resolve_competition` step); once a tool reports `TOOL_PERMANENTLY_UNAVAILABLE`, never call it again
+4. **Value Calculation** — implied probability, value edge formula, and **(A29, 2026-07-11)** both a floor and a ceiling on `direct_bet` odds — `[1.2, 11.0]` decimal (roughly −500 to +1000 American), replacing the old prompt-only `2.0`-floor-with-no-ceiling rule. The prompt now also states this is code-enforced at extraction time (Section 8), not just a suggestion, and that a market outside the range should be phrased as `conditional` rather than `direct_bet`.
 5. **insufficient_data criteria** — explicit list of when to use this overall value
 6. **Confidence Guidelines** — qualitative mapping of data completeness to `high`/`medium`/`low`
 7. **Output Format** — the literal `MatchRecommendation` JSON schema as a fenced example
 
 The STOP RULES section (item 3) was added after observing `llama3.2:3b` loop on `web_search` up to 10 times; it is the main lever for keeping weaker models within budget. If a future system prompt version removes it, re-test against a small model before assuming it's safe.
+
+See Section 19 for A27's live-run finding that `llama3.1:8b` doesn't always follow the workflow's step order exactly (in particular, calling `resolve_competition` first).
 
 ---
 
@@ -247,16 +271,28 @@ class MatchRecommendation(TypedDict):
     prediction_basis: str
 ```
 
-`extract_recommendation(text: str) -> MatchRecommendation`:
+```python
+def extract_recommendation(
+    text: str, min_odds_threshold: float = 1.2, max_odds_threshold: float = 11.0
+) -> MatchRecommendation
+```
 
 1. Collects all fenced ` ```json ` blocks, tried **last-to-first** (the model sometimes echoes an earlier tool result inside a fenced block before its real final answer — the last block is the one that matters).
 2. Falls back to the outermost bare `{...}` via regex if no fenced block parses.
 3. For each candidate, parses with `json.JSONDecoder().raw_decode()` (not `json.loads`) — tolerates trailing characters after the JSON object closes.
 4. If `raw_decode` still raises, falls back to `json_repair.loads()`, which tolerates structurally broken JSON (mismatched/duplicated brackets, etc.). Only accepted if the result is a `dict`.
-5. Validates all 7 required keys are present and `overall` is one of the four valid literals. Field values other than `overall` (e.g. `confidence`, `recommendation_type` inside markets) are **not validated** — a model could write `confidence: ""` and it would pass.
-6. Raises `RecommendationParseError(raw_text, reason)` if no candidate validates, carrying the original text for debugging.
+5. Validates all 7 required keys are present and `overall` is one of the four valid literals (unchanged since before A28 — same error wording, so no pre-existing test needed to change).
+6. **(A28, 2026-07-11) Structural/type validation via internal Pydantic v2 models.** `_MatchRecommendationModel`/`_MarketRecommendationModel` (module-private, not part of the public return type) are validated against the candidate dict *after* step 5 passes. This checks every market field's type (`current_odds`, `min_odds`, `ml_probability`, `implied_probability`, `value_edge` as `float`; `current_odds` nullable) and both enum fields (`recommendation_type` inside each market, top-level `confidence`) against their valid literals. A `pydantic.ValidationError` here is caught and folds into the same "try the next candidate, then raise `RecommendationParseError`" flow as steps 3–5 — the exception message is Pydantic's own field-path-qualified text (e.g. it names `value_edge` or `markets.0.confidence` directly), which is more diagnosable than the `TypeError` that used to surface later in `staking.py`. **This closes the gap this section previously documented** — a model writing `confidence: ""` or `value_edge: "high"` (a string) now fails extraction instead of silently passing through.
+
+   `extract_recommendation` still returns a plain `dict`, not a Pydantic instance — the Pydantic models are used purely as a validation pass; no downstream caller (`graph.py`, `backtest.py`, `staking.py`) changed its dict-style access.
+
+7. **(A28) Null-odds downgrade — `_downgrade_direct_bet_with_null_odds()`.** Applied after step 6 passes. This is the fix for **BUG-013** (`documents/bugs.md`, status `fixed`): a market with `recommendation_type == "direct_bet"` and `current_odds is None` is downgraded to `recommendation_type = "no_bet"` (the only other value valid for that field), with an explanatory note appended to top-level `limitations`. A `conditional`/`no_bet` market with null odds is a legitimate state and is left untouched.
+8. **(A29, 2026-07-11) Odds-bounds downgrade — `_downgrade_direct_bet_outside_odds_bounds()`.** Applied last, after step 7. A market still marked `direct_bet` whose (non-null) `current_odds` falls outside `[min_odds_threshold, max_odds_threshold]` (inclusive bounds; defaults `1.2`/`11.0`, matching `config/agent_config.yaml`) is downgraded to `recommendation_type = "conditional"` — **not** `"no_bet"`, unlike step 7's null-odds case. The distinction is deliberate: here a real price exists, just outside the accepted range, matching the pre-existing prompt convention that a market with value but an unfavorable price is a "conditional" opportunity rather than a non-bet; step 7's null-odds case has no price to act on at all, so `"no_bet"` is the only coherent downgrade target. A market with `current_odds` already `None` is skipped by this pass (step 7 already handled it). `graph.py`'s `output_node` passes `config.min_odds_threshold`/`config.max_odds_threshold` explicitly rather than relying on the function's defaults, so a non-default `AgentConfig` is actually respected end-to-end (Section 2).
+9. Raises `RecommendationParseError(raw_text, reason)` if no candidate validates through steps 3–6, carrying the original text for debugging.
 
 `json_repair` is a hard dependency (`requirements.txt`), not optional — without it, the multi-array bracket-nesting failure (Section 7, #6 follow-on) causes silent `insufficient_data` fallbacks even when the model's numbers were correct.
+
+**Residual gap, honestly noted:** the Pydantic validation in step 6 covers every *field on `MatchRecommendation`/`MarketRecommendation` itself*, but does not validate `match` (typed as a plain `dict`, no nested schema) or the contents of `limitations` (typed as `list[str]`, but a non-string element inside the list would still fail — this is enforced by Pydantic, not a gap) or cross-field semantic invariants beyond the two rules in steps 7–8 (e.g. nothing checks that `implied_probability` is actually `1 / current_odds`, or that `value_edge` is actually `ml_probability - implied_probability`). Those remain the LLM's responsibility, unchecked at extraction time.
 
 ---
 
@@ -464,7 +500,7 @@ def save_report(report, config, base_dir="reports/agent_backtest") -> Path   # w
 def print_report(report) -> None   # formatted stdout table
 ```
 
-`config_hash` is computed over exactly `AgentConfig`'s tuning-relevant fields (`model`, `provider`, `temperature`, `max_tool_calls`, `min_odds_threshold`, `min_value_edge`, `markets` sorted, `system_prompt_version`) — every field on the dataclass, so two configs differing in any tunable knob get distinguishable hashes, and `markets` order never matters. `save_report` filenames collide if two runs of the *same config* complete within the same UTC second — accepted as a non-issue for this tool's manual, human-paced usage pattern (a single backtest run takes at minimum seconds to minutes).
+`config_hash` is computed over exactly `AgentConfig`'s tuning-relevant fields (`model`, `provider`, `temperature`, `max_tool_calls`, `min_odds_threshold`, `min_value_edge`, `markets` sorted, `system_prompt_version`). **Stale claim corrected (found during A27–A29 documentation pass, 2026-07-18):** this section previously stated that hash covers "every field on the dataclass" — that was true when written, but `AgentConfig` gained `max_odds_threshold` in A29 (Section 2) and `config_hash`'s field list in `src/agent/evaluation.py` was **not** updated to include it. Two configs differing only in `max_odds_threshold` therefore currently hash identically, and `save_report`'s `{timestamp}_{config_hash}.json` filename would not distinguish them. This is a real, currently-open gap, not a documentation error to just silently fix here — worth a small follow-up story to add `max_odds_threshold` to `config_hash`'s canonical field dict. `markets` order never matters regardless. `save_report` filenames also collide if two runs of the *same config* complete within the same UTC second — accepted as a non-issue for this tool's manual, human-paced usage pattern (a single backtest run takes at minimum seconds to minutes).
 
 ---
 
@@ -601,6 +637,10 @@ Reflects `documents/agent_user_stories.md` as of this writing.
 | 4 — Backtest Harness | A12–A14 | ✅ Implemented — `BacktestHarness`, evaluation report, `agent-backtest` CLI with concurrency (Sections 11–13) |
 | 5 — Model & Prompt Tuning | A15–A16 | ✅ Implemented — Kelly staking, config comparison framework (Sections 12, 14) |
 | 6 — Batch Recommendation | A18 | ⬜ Future |
+| 7 — Backtest Execution Readiness | A19–A22 | A19–A21 ✅ Implemented — resolved BUG-010, collected the 24-match E0 pilot corpus, ran the first genuine backtest baseline (Section 18). A22 (config comparison against the baseline) ⬜ Future. |
+| 8 — Full Season Backtest Expansion | A23–A26 | ⬜ Future — temperature=0 determinism fix, full-season data refresh, full-corpus snapshot collection, and full-season backtest report, in that dependency order |
+| 9 — League-Aware Model Routing | A27 | ✅ Implemented — `resolve_competition` tool, updated tool-selection prompt and stop-rule budget (Sections 4.4, 5, 19.1) |
+| 10 — Output Validation Hardening | A28–A29 | ✅ Implemented — Pydantic-backed field validation, BUG-013 null-odds downgrade, code-enforced odds bounds (Sections 2, 8, 19.2–19.3) |
 
 **A17 dependency resolved.** A17 (this document) formally depends on A08 *and* A14; both are now implemented, so this document covers the full backtesting/evaluation/comparison surface (Sections 9–14) it previously only described as design intent. `agent_prd.md` §7's CLI command examples (`agent-snapshot`, `agent-backtest`) match the flags actually implemented; §8 does not yet show the `agent-compare` example added in A16 — a documentation gap in `agent_prd.md`, not in this document or the code.
 
@@ -610,16 +650,17 @@ Reflects `documents/agent_user_stories.md` as of this writing.
 
 ## 17. Known Limitations
 
-- `min_odds_threshold` / `min_value_edge` are prompt-level instructions, not code-enforced gates. A future stronger validation layer could reject/flag `direct_bet` recommendations that violate them programmatically.
+- ~~`min_odds_threshold` / `min_value_edge` are prompt-level instructions, not code-enforced gates.~~ **Partially resolved 2026-07-11 (A29).** `min_odds_threshold`/`max_odds_threshold` are now code-enforced — `extract_recommendation` downgrades an out-of-bounds `direct_bet` to `conditional` regardless of what the LLM wrote (Section 8, Section 19.3). `min_value_edge`, however, **remains prompt-only** — there is still no programmatic check that a recommendation's `value_edge` actually clears the configured 0.05 minimum.
 - ~~BUG-010 (league-context models not trained)~~ — **fixed 2026-06-27** (A19). `forecast_league` now returns `data_quality.prediction_basis == "team_history_and_market"` for E0 matches. The `forecast_league` fallback (Section 4.2) still exists and still fires for leagues without a selected league-context model.
 - No automated test exercises a live Ollama call — `tests/test_agent_graph.py` mocks the LLM and `ForecastService`. There is no CI coverage for "does the currently-configured model actually produce valid output," only for the graph routing logic and parsing functions in isolation. The same is true of the backtest stack: no test runs a real `agent-snapshot` → `agent-backtest` cycle end-to-end against a live model, only mocked unit tests per module. **This exact gap is what let BUG-011 (Section 18.4) ship undetected** — every `SnapshotStore` unit test calls `configure_snapshot_store()` and the tool function on the same thread, so none of them exercised the real `ToolNode`-driven thread-pool dispatch where the bug actually lived.
 - **Snapshot replay key misses on LLM-regenerated tool arguments** (Section 18.6) — `agent-backtest` runs over the identical snapshot corpus can evaluate a different subset of matches each time, since the LLM regenerates its own tool-call arguments (not just its final answer) and a SHA-256 key match requires byte-identical inputs. Not a crash (A14's fault tolerance skips cleanly), but means bet counts and even which matches get scored can shift run to run — average over multiple runs before trusting any single comparison.
 - **Result leakage can survive both leakage defenses** (Section 18.7) — observed on at least one match in the 24-match pilot despite the `before:<date>` web_search filter and the system-prompt instruction to discard final-score-bearing results. The model reported it honestly (`"Match result is known."` in `limitations`) rather than silently using it, but the defense is a mitigation, not a guarantee.
-- `extract_recommendation` does not validate `recommendation_type`, `confidence`, or numeric field types beyond presence — a model could emit `value_edge: "high"` (a string) and it would pass schema extraction. This flows downstream: `staking.py` calls `float(m["current_odds"])`/`float(m.get("value_edge", 0.0))`, which would raise `ValueError` at backtest time on such a malformed value rather than failing earlier at extraction time.
-- **Corners markets (`home_corners`/`away_corners`) cannot be scored in backtests.** `_market_correct` (Section 11.1) always returns `None` for them, so they are never staked and never contribute to ROI/hit-rate — `min_odds_threshold` enforcement only happens at recommendation time (the LLM, via the prompt), never validated against an actual outcome. Resolving this would require extending `MarketRecommendation` with a numeric line field and is out of scope for A09–A16.
+- ~~`extract_recommendation` does not validate `recommendation_type`, `confidence`, or numeric field types beyond presence...~~ **Resolved 2026-07-11 (A28).** `extract_recommendation` now runs every candidate through internal Pydantic v2 models after the key-presence/`overall` checks, validating every market field's type and both `recommendation_type`/`confidence` enums — a model emitting `value_edge: "high"` now fails extraction with a field-path-qualified `RecommendationParseError` instead of silently passing through to a downstream `TypeError` (Section 8, Section 19.2). **Residual gap, honestly noted:** this validation does not cover `match` (still a plain untyped `dict`) or cross-field semantic invariants — nothing checks that `implied_probability` is actually `1 / current_odds`, or that `value_edge` is actually `ml_probability - implied_probability`; a model could still pass a self-inconsistent-but-well-typed set of numbers.
+- **Corners markets (`home_corners`/`away_corners`) cannot be scored in backtests.** `_market_correct` (Section 11.1) always returns `None` for them, so they are never staked and never contribute to ROI/hit-rate — `min_odds_threshold`/`max_odds_threshold` enforcement only happens at recommendation time (code-enforced in `extract_recommendation` as of A29, Section 8, not just the LLM via the prompt), never validated against an actual outcome. Resolving this would require extending `MarketRecommendation` with a numeric line field and is out of scope for A09–A16.
 - **`agent-compare` is slower and less fault-tolerant than `agent-backtest`** for equivalent match counts — it runs each config strictly sequentially via `BacktestHarness.run()` rather than reusing `agent-backtest`'s concurrent, per-match-fault-tolerant path (Section 14). A single missing snapshot aborts the whole comparison. Accepted scope boundary for A16, not a defect, but worth revisiting if comparison runs grow large.
 - `save_report`/`save_comparison` filenames are timestamped to the second; two runs (of the same config, for `save_report`; of any size, for `save_comparison`) completing within the same UTC second will silently overwrite each other's report file. Low risk given this tool's manual, human-paced usage pattern.
 - `agent-backtest --concurrency` is also capped by Python's default `ThreadPoolExecutor` size (`min(32, os.cpu_count() + 4)`) — values above that have no further effect on actual parallelism.
+- **`config_hash` (Section 12.2) does not include `max_odds_threshold`.** A29 added this field to `AgentConfig` but `src/agent/evaluation.py::config_hash`'s canonical field dict was not updated to hash it. Two `agent_config.yaml` variants differing only in `max_odds_threshold` currently produce the identical `config_hash` and, therefore, the identical `save_report` filename — discovered during this documentation pass (2026-07-18), not fixed here; a small follow-up story should add the field to the hash before `max_odds_threshold` is ever used as the varying knob in an `agent-compare` run.
 
 ---
 
@@ -687,3 +728,39 @@ One recorded snapshot (Sunderland vs Brighton, 2026-03-14) produced a recommenda
 ### 18.8 Recommended next step
 
 Re-run `agent-compare` guidance from 18.6 applies before any config comparison work (A22). Scaling the pilot beyond 24 matches is reasonable now that record/replay isolation is genuinely verified, but each additional match still costs one full live Ollama+Tavily round trip at snapshot-collection time — there is no shortcut around that cost, and the 18.7 leakage finding is worth addressing first if the snapshot corpus is going to grow and get reused for repeated experiments.
+
+---
+
+## 19. League-Aware Routing and Output Validation Hardening (2026-07-11, A27-A29)
+
+Three stories landed the same day, closing gaps this document had carried since Phase 5–6: the agent's own domestic-vs-international judgment was unreliable in exactly the cases where it mattered most (Section 19.1), and `extract_recommendation`'s validation stopped at key presence — a model could emit a structurally valid but semantically nonsensical `MatchRecommendation` and nothing downstream would catch it before a `TypeError` in `staking.py` (Section 19.2–19.3). All three are also motivated by the web app (`documents/app_user_stories.md`) becoming a second, independent consumer of `MatchRecommendation` output — a validation gap that only mattered to the backtest stack (which crashes loudly and gets skipped by A14's fault tolerance, Section 13) now also matters to a live-serving API and UI, which don't get that same safety net for free.
+
+### 19.1 A27 — League-Aware Model Routing
+
+Before A27, the agent decided between `forecast_league` and `forecast_international` purely from the system prompt's step ordering and its own judgment about whether a league "sounded" domestic. This was unreliable specifically for well-known leagues with zero actual historical-data coverage in this system (e.g. La Liga) — the model would guess `forecast_league`, hit `forecast_league`'s existing BUG-010 fallback (Section 4.2), and get a usable answer anyway, but only by accident of that fallback existing, not because the agent made an informed choice.
+
+`resolve_competition` (Section 4.4) makes the underlying signal — whether a competition has `competition_specific` model coverage in the registry, per `US#107` on the forecast-engine side — directly tool-callable, and the system prompt (Section 5) now instructs the agent to call it first and follow its `recommended_tool` verbatim. The tool-call stop-rule budget was raised from 2 to 3 to accommodate the extra call without starving the agent of its `web_search` step.
+
+**Verification.** TDD via `tests/test_agent_tool_selection.py` (4 tests: `competition_specific` resolution, `general_purpose` resolution, unregistered-competition resolution, and an end-to-end case showing that following the tool's advice for an unregistered league yields `market_odds_only`, not a cold-start `team_history_and_market` result) — all failed with `ImportError` before the tool existed, as expected. Full suite at merge: 335 passed / 1 skipped, zero regressions.
+
+**Honest caveat from the live run.** A27 was verified against the real `llama3.1:8b` model, not just mocked tests, and that run surfaced a limitation worth recording rather than glossing over: the acceptance criterion's literal wording — "no case where the agent calls `forecast_league` for a competition with only `general_purpose` coverage" — **cannot be guaranteed** against a small local model. The live run showed `llama3.1:8b` calling `web_search` before `resolve_competition` (violating the prompt's own step order) and calling `forecast_league` multiple times after `resolve_competition` had already recommended `forecast_international`, eventually exhausting the tool-call budget. This is consistent with, not a new instance separate from, the weak-local-model behavior already documented in Section 7 — it is a pre-existing characteristic of this model tier, not a defect introduced by A27.
+
+What *is* guaranteed regardless of the LLM's compliance: because of `US#107` on the forecast-engine side, even when the agent disobeys and calls `forecast_league` for an unregistered league anyway, the result it gets back is still the honest `market_odds_only` — never a silently mislabeled cold-start prediction. The regression suite covers `resolve_competition`'s own correctness deterministically; a small model's adherence to the prompt's tool-call ordering is a separate, ongoing concern, relevant to future prompt-tuning work (e.g. a future A22 config-comparison pass), not something this story could fully close by itself.
+
+### 19.2 A28 — Output Validation Hardening (closes BUG-013)
+
+Prior to A28, `extract_recommendation` (Section 8) validated only the 7 top-level key names and the `overall` enum — every other field, including every market's `recommendation_type`/numeric fields and the top-level `confidence` enum, passed through unchecked. A model could return `value_edge: "high"` (a string) or `confidence: ""` and extraction would succeed; the failure would only surface later, as a `TypeError`/`ValueError` inside `staking.py`'s `float(...)` calls at backtest time — or, post-A27's web-app integration, inside a second, independent consumer with its own (possibly absent) defensive handling.
+
+A28 adds internal (non-return-type-changing) Pydantic v2 validation — `_MatchRecommendationModel`/`_MarketRecommendationModel` — applied after the pre-existing key-presence/`overall` checks (see Section 8 for the full field-by-field description). It also closes **BUG-013** (`documents/bugs.md`, status `fixed`): the agent occasionally emitted `recommendation_type: "direct_bet"` with `current_odds: null` — a logically incoherent combination that had previously only been patched at its downstream symptom (`staking.py`'s skip-gate, added during the Section 18.3 baseline). A28 fixes the actual root cause at extraction time via `_downgrade_direct_bet_with_null_odds()`.
+
+**Verification.** TDD via `tests/test_agent_schema_validation.py` (6 tests: the three specific gaps this section previously documented in Section 17 — `value_edge` as a string, `confidence` as an empty string, an arbitrary `recommendation_type` string — plus the BUG-013 null-odds downgrade, a conditional-market-with-null-odds non-interference case, and a populated-markets-list regression), all failing correctly before the fix. Existing `tests/test_agent_schema.py` (9 tests) required zero changes — the pre-existing error wording for the key-presence/`overall` checks was preserved verbatim. Full suite at merge: 305 passed / 1 skipped, zero regressions. `documents/bugs.md` BUG-013 updated to `fixed`.
+
+### 19.3 A29 — Widened, Code-Enforced Odds Bounds
+
+A29 extends A28's validation layer with a second semantic rule, immediately after: the prompt's old `2.0`-decimal-floor-with-no-ceiling convention is replaced with an explicit, code-enforced band, `[1.2, 11.0]` decimal (roughly −500 to +1000 American) — see Section 2 for the `AgentConfig` field addition and Section 8 for `_downgrade_direct_bet_outside_odds_bounds()`'s exact behavior. The key design decision worth calling out here: **A29's downgrade target is `conditional`, not `no_bet`** — the opposite of A28's null-odds downgrade — because a real price exists in this case, just outside the accepted range, matching the prompt's pre-existing "conditional" convention for markets with value at an unfavorable price. A28's null-odds case has no price to act on at all, so `no_bet` is the only coherent target there. The two downgrade passes run in a fixed order (null-odds first, then bounds) and don't conflict: a market already downgraded to `no_bet` by A28's pass is no longer `direct_bet`, so A29's pass skips it.
+
+**Verification.** TDD via `tests/test_agent_odds_bounds.py` (8 tests: below floor, above ceiling, both exact bounds accepted as inclusive, custom thresholds, an explicit regression proving the old `2.0`-only behavior is gone, a `conditional` market left untouched, and BUG-013 precedence — i.e. a null-odds market is downgraded to `no_bet` by A28's pass and never reaches A29's bounds check), plus 2 new/updated tests in `tests/test_agent_config.py` for the new required field. Every other `AgentConfig(...)` construction site in the test suite (`test_agent_graph.py`, `test_backtest.py`, `test_agent_evaluation.py`, `app/backend/tests/test_llm_check.py`) was updated to supply `max_odds_threshold`, since it is now a required field with no default in `AgentConfig.from_yaml`'s `_REQUIRED` set (Section 2). Full suite at merge: 344 passed / 1 skipped, zero regressions.
+
+### 19.4 Cross-references
+
+The factual specification of what changed lives in Sections 2 (`AgentConfig`), 4.4 (`resolve_competition`), 5 (system prompt workflow/stop-rule/value-calculation updates), and 8 (`extract_recommendation`'s new validation layer) — this section intentionally does not restate those details, only the narrative of why each story existed and what was learned running it live. Section 16's Implementation Status table and Section 17's Known Limitations have also been updated to reflect A27–A29.
