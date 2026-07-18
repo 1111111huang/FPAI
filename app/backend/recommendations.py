@@ -18,6 +18,9 @@ from app.backend.sandbox_clock import is_sandbox_mode, sandbox_scoped_path
 from src.agent import tools as agent_tools
 from src.agent.graph import run_agent as _real_run_agent
 from src.agent.snapshot_store import SnapshotMissingError
+from src.utils.logger import get_logger
+
+_LOG = get_logger(__name__)
 
 _cache_singleton: RecommendationCache | None = None
 _SANDBOX_CACHE_DB_PATH = sandbox_scoped_path("recommendation_cache.db")
@@ -36,6 +39,9 @@ def _composite_match_key(home_team: str, away_team: str, date: str) -> str:
 
 
 def _run_agent_in_mode(mode: str, match_info: dict, config, match_key: str):
+    """Configure the snapshot store for `mode` and run the real agent,
+    always resetting the store to live mode afterward regardless of
+    outcome."""
     agent_tools.configure_snapshot_store(
         mode, match_id=match_key, match_date=match_info.get("date"), base_dir=_SANDBOX_SNAPSHOT_BASE_DIR,
     )
@@ -76,6 +82,9 @@ def run_agent(match_info: dict, config=None):
     except SnapshotMissingError:
         if mode != "replay":
             raise
+        _LOG.warning(
+            "sandbox_agent_replay_miss | match=%s | retrying_in_record_mode", match_key,
+        )
         mode = "record"
         result = _run_agent_in_mode(mode, match_info, config, match_key)
     if mode == "record":
