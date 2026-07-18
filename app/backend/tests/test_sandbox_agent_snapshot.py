@@ -16,6 +16,7 @@ import pytest
 sys.path.append(str(Path(__file__).resolve().parents[3]))
 
 from app.backend import recommendations
+from src.agent.snapshot_store import SnapshotMissingError
 
 
 _MATCH_INFO = {"home_team": "Arsenal", "away_team": "Everton", "date": "2026-03-01"}
@@ -24,6 +25,7 @@ _RECOMMENDATION = {
     "overall": "no_bet", "markets": [], "explanation": "test", "confidence": "low",
     "limitations": [], "prediction_basis": "market_odds_only",
 }
+_MATCH_KEY = f"{_MATCH_INFO['home_team']}__{_MATCH_INFO['away_team']}__{_MATCH_INFO['date']}"
 
 
 @pytest.fixture(autouse=True)
@@ -91,3 +93,59 @@ def test_configure_snapshot_store_resets_to_live_and_match_not_recorded_on_agent
     modes_used = [call.args[0] for call in mock_configure.call_args_list]
     assert modes_used == ["record", "live"]
     assert match_key not in recommendations._sandbox_recorded_matches
+
+
+def test_run_agent_retries_once_in_record_mode_after_a_replay_snapshot_miss(monkeypatch) -> None:
+    """W43: a replay-mode SnapshotMissingError (e.g. the LLM phrased its
+    web_search query differently than the first, recorded run) must not
+    surface as a raw 500 -- run_agent() should transparently fall back to a
+    fresh record-mode pass for that one request and return its result."""
+    monkeypatch.setenv("SANDBOX_MODE", "1")
+    monkeypatch.setenv("SANDBOX_DATE", "2026-03-01")
+    # Simulate that this match was already recorded in an earlier request,
+    # so this call starts out in replay mode.
+    recommendations._sandbox_recorded_matches.add(_MATCH_KEY)
+
+    miss = SnapshotMissingError("web_search", _MATCH_KEY, "deadbeef")
+    with patch(
+        "app.backend.recommendations._real_run_agent", side_effect=[miss, _RECOMMENDATION],
+    ) as mock_run, patch("app.backend.recommendations.agent_tools.configure_snapshot_store") as mock_configure:
+        result = recommendations.run_agent(_MATCH_INFO)
+
+    assert result == _RECOMMENDATION
+    assert mock_run.call_count == 2
+    modes_used = [call.args[0] for call in mock_configure.call_args_list]
+    assert modes_used == ["replay", "live", "record", "live"]
+
+
+def test_run_agent_does_not_swallow_a_genuinely_different_exception_on_retry(monkeypatch) -> None:
+    """W43: the SnapshotMissingError fallback must not become a silent
+    catch-all -- if the record-mode retry itself fails with a different,
+    real exception, that exception must still propagate uncaught."""
+    monkeypatch.setenv("SANDBOX_MODE", "1")
+    monkeypatch.setenv("SANDBOX_DATE", "2026-03-01")
+    recommendations._sandbox_recorded_matches.add(_MATCH_KEY)
+
+    miss = SnapshotMissingError("web_search", _MATCH_KEY, "deadbeef")
+    with patch(
+        "app.backend.recommendations._real_run_agent", side_effect=[miss, RuntimeError("real failure")],
+    ), patch("app.backend.recommendations.agent_tools.configure_snapshot_store"):
+        with pytest.raises(RuntimeError, match="real failure"):
+            recommendations.run_agent(_MATCH_INFO)
+
+
+def test_run_agent_does_not_retry_a_snapshot_miss_that_happens_during_record_mode(monkeypatch) -> None:
+    """A SnapshotMissingError should only trigger the record-mode fallback
+    when it originates from a *replay*-mode call -- if it somehow occurs
+    while already in record mode (mode logic bug, corrupted state, etc.) it
+    must propagate uncaught rather than retry forever."""
+    monkeypatch.setenv("SANDBOX_MODE", "1")
+    monkeypatch.setenv("SANDBOX_DATE", "2026-03-01")
+    # Match not yet recorded -- this call starts out in record mode.
+    miss = SnapshotMissingError("web_search", _MATCH_KEY, "deadbeef")
+    with patch("app.backend.recommendations._real_run_agent", side_effect=miss) as mock_run, \
+         patch("app.backend.recommendations.agent_tools.configure_snapshot_store"):
+        with pytest.raises(SnapshotMissingError):
+            recommendations.run_agent(_MATCH_INFO)
+
+    mock_run.assert_called_once()

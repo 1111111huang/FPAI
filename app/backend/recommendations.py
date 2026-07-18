@@ -17,6 +17,7 @@ from app.backend.recommendation_cache import RecommendationCache
 from app.backend.sandbox_clock import is_sandbox_mode, sandbox_scoped_path
 from src.agent import tools as agent_tools
 from src.agent.graph import run_agent as _real_run_agent
+from src.agent.snapshot_store import SnapshotMissingError
 
 _cache_singleton: RecommendationCache | None = None
 _SANDBOX_CACHE_DB_PATH = sandbox_scoped_path("recommendation_cache.db")
@@ -34,12 +35,34 @@ def _composite_match_key(home_team: str, away_team: str, date: str) -> str:
     return f"{home_team}__{away_team}__{date}".replace(" ", "_")
 
 
+def _run_agent_in_mode(mode: str, match_info: dict, config, match_key: str):
+    agent_tools.configure_snapshot_store(
+        mode, match_id=match_key, match_date=match_info.get("date"), base_dir=_SANDBOX_SNAPSHOT_BASE_DIR,
+    )
+    try:
+        return _real_run_agent(match_info, config=config)
+    finally:
+        agent_tools.configure_snapshot_store("live")
+
+
 def run_agent(match_info: dict, config=None):
     """W37: routes through SnapshotStore record/replay when sandbox mode is
     active, so a sandboxed match's real web_search calls are date-filtered
     (record) and every subsequent run of the same match makes zero live
     calls at all (replay) -- otherwise passes straight through to the real,
-    live run_agent, unchanged from before this story."""
+    live run_agent, unchanged from before this story.
+
+    W43: a replay-mode SnapshotMissingError can happen even for a match
+    that's genuinely already been recorded -- SnapshotStore's replay lookup
+    key is a hash of the tool call's exact input arguments (e.g. the
+    web_search query text the LLM itself generates), and LLM output isn't
+    reproducible run-to-run (agent_techspec.md Sec 18.6, a known/accepted
+    limitation). Rather than let that 500 the request, fall back to one
+    fresh record-mode pass for this request -- matching this codebase's
+    "never assume the agent/its own optimizations hold, degrade gracefully"
+    philosophy (W02/W15/W16's validate_and_degrade). Any other exception --
+    including a second failure from the record-mode retry itself -- is not
+    caught here and propagates uncaught, so this isn't a silent catch-all."""
     if not is_sandbox_mode():
         return _real_run_agent(match_info, config=config)
 
@@ -48,13 +71,13 @@ def run_agent(match_info: dict, config=None):
     )
     with _recorded_matches_lock:
         mode = "replay" if match_key in _sandbox_recorded_matches else "record"
-    agent_tools.configure_snapshot_store(
-        mode, match_id=match_key, match_date=match_info.get("date"), base_dir=_SANDBOX_SNAPSHOT_BASE_DIR,
-    )
     try:
-        result = _real_run_agent(match_info, config=config)
-    finally:
-        agent_tools.configure_snapshot_store("live")
+        result = _run_agent_in_mode(mode, match_info, config, match_key)
+    except SnapshotMissingError:
+        if mode != "replay":
+            raise
+        mode = "record"
+        result = _run_agent_in_mode(mode, match_info, config, match_key)
     if mode == "record":
         with _recorded_matches_lock:
             _sandbox_recorded_matches.add(match_key)
