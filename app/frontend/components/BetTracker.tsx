@@ -30,6 +30,7 @@ function ManualBetForm({ onLogged }: { onLogged: () => void }) {
   const [errorMsg, setErrorMsg] = useState("");
 
   useEffect(() => {
+    let cancelled = false;
     const from = new Date(asOf);
     const to = new Date(asOf);
     // UTC methods, not local getDate/setDate: from/to are read back via
@@ -38,8 +39,15 @@ function ManualBetForm({ onLogged }: { onLogged: () => void }) {
     // day in negative-UTC-offset timezones.
     to.setUTCDate(to.getUTCDate() + 90);
     getFixtures(from.toISOString().slice(0, 10), to.toISOString().slice(0, 10))
-      .then(setFixtures)
-      .catch(() => setFixtures([]));
+      .then((result) => {
+        if (!cancelled) setFixtures(result);
+      })
+      .catch(() => {
+        if (!cancelled) setFixtures([]);
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [asOf]);
 
   const results = useMemo(() => {

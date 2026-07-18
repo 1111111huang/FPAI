@@ -566,23 +566,33 @@ export function DashboardPage() {
   const { asOf, sandboxMode } = useSandboxAsOf();
   const [matches, setMatches] = useState<Match[] | null>(null);
   const [error, setError] = useState<string | null>(null);
-
-  async function load() {
-    setError(null);
-    setMatches(null);
-    try {
-      const today = asOf.toISOString().slice(0, 10);
-      const fixtures = await getFixtures(today, today);
-      setMatches(fixtures.map(fixtureToMatch));
-    } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Could not load today's fixtures.");
-    }
-  }
+  // W42: bumped by the retry button to force a fresh load() run through the
+  // same cancellation guard below, rather than calling load() imperatively
+  // from outside the effect (which would have no way to invalidate an
+  // in-flight request from a *previous* run if the two race).
+  const [retryTick, setRetryTick] = useState(0);
 
   useEffect(() => {
+    let cancelled = false;
+
+    async function load() {
+      setError(null);
+      setMatches(null);
+      try {
+        const today = asOf.toISOString().slice(0, 10);
+        const fixtures = await getFixtures(today, today);
+        if (!cancelled) setMatches(fixtures.map(fixtureToMatch));
+      } catch (err) {
+        if (!cancelled) setError(err instanceof ApiError ? err.message : "Could not load today's fixtures.");
+      }
+    }
+
     load();
+    return () => {
+      cancelled = true;
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [asOf]);
+  }, [asOf, retryTick]);
 
   function updateMatch(updated: Match) {
     setMatches((prev) => prev?.map((m) => (m.id === updated.id ? updated : m)) ?? null);
@@ -598,7 +608,7 @@ export function DashboardPage() {
       </p>
 
       <div className="mt-6">
-        {error && <ErrorState message={error} onRetry={load} />}
+        {error && <ErrorState message={error} onRetry={() => setRetryTick((t) => t + 1)} />}
         {!error && matches === null && <LoadingRows />}
         {!error && matches !== null && matches.length === 0 && (
           <p className="py-8 text-center text-sm text-ink-secondary">No E0 fixtures today.</p>
@@ -624,32 +634,42 @@ export function MatchExplorerPage() {
   const [query, setQuery] = useState("");
   const [matches, setMatches] = useState<Match[] | null>(null);
   const [error, setError] = useState<string | null>(null);
-
-  async function load() {
-    setError(null);
-    setMatches(null);
-    try {
-      const from = new Date(asOf);
-      const to = new Date(asOf);
-      // Widened from 30 to 90 days after live verification showed the
-      // off-season gap between fixture windows can exceed 30 days (e.g.
-      // 2026-07-11 -> next real fixture 2026-08-21, 41 days out).
-      // UTC methods, not local getDate/setDate: from/to are read back via
-      // toISOString() (always UTC) below, and asOf is UTC midnight (W30) --
-      // mixing local date arithmetic with a UTC value shifts the window by
-      // a day in negative-UTC-offset timezones.
-      to.setUTCDate(to.getUTCDate() + 90);
-      const fixtures = await getFixtures(from.toISOString().slice(0, 10), to.toISOString().slice(0, 10));
-      setMatches(fixtures.map(fixtureToMatch));
-    } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Could not load fixtures.");
-    }
-  }
+  // W42: bumped by the retry button to force a fresh load() run through the
+  // same cancellation guard below, rather than calling load() imperatively
+  // from outside the effect (which would have no way to invalidate an
+  // in-flight request from a *previous* run if the two race).
+  const [retryTick, setRetryTick] = useState(0);
 
   useEffect(() => {
+    let cancelled = false;
+
+    async function load() {
+      setError(null);
+      setMatches(null);
+      try {
+        const from = new Date(asOf);
+        const to = new Date(asOf);
+        // Widened from 30 to 90 days after live verification showed the
+        // off-season gap between fixture windows can exceed 30 days (e.g.
+        // 2026-07-11 -> next real fixture 2026-08-21, 41 days out).
+        // UTC methods, not local getDate/setDate: from/to are read back via
+        // toISOString() (always UTC) below, and asOf is UTC midnight (W30) --
+        // mixing local date arithmetic with a UTC value shifts the window by
+        // a day in negative-UTC-offset timezones.
+        to.setUTCDate(to.getUTCDate() + 90);
+        const fixtures = await getFixtures(from.toISOString().slice(0, 10), to.toISOString().slice(0, 10));
+        if (!cancelled) setMatches(fixtures.map(fixtureToMatch));
+      } catch (err) {
+        if (!cancelled) setError(err instanceof ApiError ? err.message : "Could not load fixtures.");
+      }
+    }
+
     load();
+    return () => {
+      cancelled = true;
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [asOf]);
+  }, [asOf, retryTick]);
 
   function updateMatch(updated: Match) {
     setMatches((prev) => prev?.map((m) => (m.id === updated.id ? updated : m)) ?? null);
@@ -680,7 +700,7 @@ export function MatchExplorerPage() {
       </div>
 
       <div className="mt-6">
-        {error && <ErrorState message={error} onRetry={load} />}
+        {error && <ErrorState message={error} onRetry={() => setRetryTick((t) => t + 1)} />}
         {!error && rows === null && <LoadingRows />}
         {!error && rows !== null && rows.length === 0 && (
           <p className="py-8 text-center text-sm text-ink-secondary">No matches found.</p>
