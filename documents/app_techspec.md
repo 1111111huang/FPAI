@@ -1,6 +1,6 @@
 # Technical Specification — FPAI Web App
 
-Authoritative implementation reference for the bettor-facing web app described in `app_prd.md`. This document reflects the actual code as built through **40 completed stories** (`W01`–`W44`, excluding `W18`/`W19`/`W24`/`W26`/`W32`/`W44`, which remain `future`, and `W40`/`W41`, which are `active`/not yet started — see [Implementation Status](#14-implementation-status)). All open design discussions in `documents/app_user_stories.md` (D1–D7) are resolved; that document's "Confirmed So Far" section is the settled-decisions record this spec formalizes, and its per-story "Completion notes" are the primary source for everything below. Where this app depends on the agent's or forecast engine's internal behavior, this document points at `agent_techspec.md`/`FRAI_TECHSPEC.md` rather than re-explaining it.
+Authoritative implementation reference for the bettor-facing web app described in `app_prd.md`. This document reflects the actual code as built through **41 completed stories** (`W01`–`W44`, excluding `W18`/`W19`/`W24`/`W26`/`W32`, which remain `future`, and `W40`/`W41`, which are `active`/not yet started — see [Implementation Status](#14-implementation-status)). All open design discussions in `documents/app_user_stories.md` (D1–D7) are resolved; that document's "Confirmed So Far" section is the settled-decisions record this spec formalizes, and its per-story "Completion notes" are the primary source for everything below. Where this app depends on the agent's or forecast engine's internal behavior, this document points at `agent_techspec.md`/`FRAI_TECHSPEC.md` rather than re-explaining it.
 
 The app wraps `src/agent` and `src/forecast` directly as Python libraries — no MCP, no subprocess, no HTTP hop through `src/mcp_server.py` (that server is for external third-party agent consumers, not this first-party app; see `app_user_stories.md` W01).
 
@@ -60,7 +60,8 @@ app/
     tailwind.config.js / postcss.config.js / next.config.js / vitest.config.ts / vitest.setup.ts
 
 scripts/
-  sandbox_runbook.py              # W31 -- repeatable end-to-end sandbox scenario driver
+  sandbox_runbook.py              # W31 -- repeatable end-to-end sandbox scenario driver (backend-only, no server)
+  launch_sandbox.py               # W44 -- one-command interactive launch: preflight + real backend/frontend servers
 
 documents/
   app_prd.md
@@ -320,7 +321,27 @@ A flat, linear `main()` driving the full real user journey against `SANDBOX_MODE
 
 The real run (`SANDBOX_DATE=2026-05-24`) surfaced a genuine plumbing bug: bets were initially logged under `RecommendationRequest.effective_match_id()`'s synthetic `home__away__date` key, but `settle_open_bets()` matches by football-data.org's real numeric `match_id` — settlement silently matched 0 of 2 bets on the first attempt. Fixed by passing `match_id=fixture.match_id` explicitly (the same convention `eod_batch.py`/`t30_refresh.py` already use). Results recorded in `documents/sandbox_testing_runbook.md`: a real Sunderland vs Chelsea fixture (2-1), 10 real odds events, a real `llama3.1:8b` + Tavily call producing `overall="conditional"`, two bets logged and correctly settled (`lost`/`-10.0`, `won`/`+5.0`) — real `app/data/*.db` mtimes confirmed byte-identical before/after, only `app/data/sandbox/*.db` written.
 
-### 9.8 Bugs found by actually running the app (W42, W43)
+### 9.8 One-command interactive launch — `scripts/launch_sandbox.py` (W44)
+
+`scripts/sandbox_runbook.py` (Section 9.7) drives the backend-only pipeline with no server involved — good for a scripted regression check, useless for a human who wants to click through the actual UI. `launch_sandbox.py` fills that gap: `python scripts/launch_sandbox.py <date>` runs a preflight, then boots real `uvicorn`/`next dev` servers for interactive browsing.
+
+**Preflight** (`find_preflight_info()`, also reachable standalone via `--dry-run`, no live calls):
+
+- Queries `raw_matches` for real fixtures on the requested date; if none exist, finds and reports the nearest date that does (day-difference arithmetic over the distinct dates in `raw_matches`, not a hardcoded lookback window).
+- Reports a **best-effort** count of existing `data/agent_snapshots/sandbox/` directories for that date (`*__*__<date>` suffix match) — explicitly *not* an exact per-fixture match, since snapshot directory names are keyed on whatever team-name spelling the live caller used at record time, which does not reliably resolve against `raw_matches`'s own Football-Data CSV spelling. Confirmed directly in this repo's own snapshot corpus: `"Nott'm Forest"` (raw_matches), `"Nottingham Forest"`, and `"Nottingham"` all exist as real, different snapshot-directory prefixes for the same team.
+- Checks Ollama reachability and `FOOTBALL_DATA_API_KEY`/`TAVILY_API_KEY` presence — reported as warnings, not blockers, since some pages don't need the agent at all.
+
+**Launch:** starts backend (`SANDBOX_MODE=1 SANDBOX_DATE=<date> uvicorn app.backend.main:app`) and frontend (`NEXT_PUBLIC_API_BASE=...` `next dev`) as **separate process groups** (`preexec_fn=os.setsid`), polls each for HTTP health, confirms `GET /api/sandbox/status` reports the requested `as_of`, then writes a `{backend_pid, frontend_pid, ports, started_at}` state file to `/tmp/fpai_sandbox_launch_state.json`. A second launch attempt while the state file is present is rejected rather than silently double-starting.
+
+**Teardown (`--stop`):** reads the state file and `SIGTERM`s both recorded process groups (via `os.killpg`, not the parent PID alone) before clearing the file — verified this avoids the orphaned-child problem a plain PID kill has with `npm run dev` spawning `next dev` as a separate child process; a bare `kill <npm-pid>` leaves `next dev` running.
+
+TDD: `scripts/test_launch_sandbox.py` (17 tests) covers the deterministic, non-networked logic — preflight queries against a temp DuckDB (exact match, nearest-matchday suggestion, no-data case), state-file read/write/clear, `--stop`'s teardown including the already-gone-process case, and argument parsing — matching `sandbox_runbook.py`'s own precedent (Section 9.7's test file only covers its argument guard; real server launches are verified live, not simulated).
+
+**Verified live** against `SANDBOX_DATE=2025-03-08`: preflight correctly listed the date's 6 real fixtures; both servers passed their health checks; `/api/sandbox/status` confirmed `as_of: "2025-03-08"`; a concurrent second-launch attempt was correctly rejected; `--stop` cleanly terminated both process groups with zero orphaned processes (confirmed via `ps aux`). **One bug this live run caught that the unit tests didn't**: a leftover reference to a renamed `datetime` import crashed `main()` at the final state-write step — *after* both servers had already started successfully, which would have left them running, untracked, with no way to `--stop` them cleanly. Fixed and re-verified end-to-end.
+
+**Not included** (out of scope for what was actually requested — a way to launch and browse the app manually, not to automate verifying what renders): a Playwright-driven frontend check (screenshot + fixture-list assertion) was floated as a possible shape for this story before it was scoped, but was not built into this script.
+
+### 9.9 Bugs found by actually running the app (W42, W43)
 
 Found 2026-07-18 by launching the app with `SANDBOX_DATE=2025-03-05` and driving it manually — neither was caught by any prior automated test.
 
@@ -405,12 +426,11 @@ Stories still `future` or `active` as of this writing — described briefly, sin
 - **W32 (future) — Sandbox odds-movement scenario.** `raw_matches` carries a single pre-match/closing odds snapshot, not a time series — exercising T-30's "odds changed → agent re-runs" path against a chosen sandbox date would need a synthetic odds-change sequence layered on `HistoricalOddsClient`. Explicitly deferred, not part of the W27–W31 batch.
 - **W40 (active) — Frontend timezone standardization.** Pins production's non-sandboxed frontend "now" to `America/New_York` everywhere (a single `nowInEasternTime()` helper), matching the backend's `NY_TZ` convention throughout `scheduler.py`, rather than falling back to the browser's ambient local timezone. Intended to also collapse `formatDay()`'s `sandboxMode` UTC/local-getter branching (Section 9.4) to one code path, since there would then be only one canonical reference frame, real or sandboxed.
 - **W41 (active) — Scheduler live-fire smoke test.** Every existing scheduler test (W08/W21/W33) exercises `RecoverableScheduler`'s own immediate catch-up check, never APScheduler's live `CronTrigger` actually firing on a background thread — a `CronTrigger`-specific bug (version quirk, timezone-object mismatch) would slip through today. Planned as a short, real-wall-clock-wait test marked `@pytest.mark.live` (excluded from the default fast run).
-- **W44 (future) — Automate the sandbox preflight/drive/verify workflow.** `scripts/sandbox_runbook.py` (W31) already automates the backend-only "drive it" half for a date already known to have data; W44 would add a `--preflight` dry-run (raw_matches + snapshot-existence report, no live calls, including suggesting the nearest real matchday if the requested one is empty) and a Playwright-driven frontend check — turning the ad hoc investigation that found W42/W43 into one repeatable command.
 
 **Standing, accepted limitations (not tracked as stories — see `app_user_stories.md` Integration Gaps for the full table):**
 
 - Corners markets (`home_corners`/`away_corners`) cannot be auto-scored (Section 7.3) — a cross-team-owned gap requiring a `MarketRecommendation` schema change, deferred indefinitely.
-- LLM output isn't reproducible run-to-run (`agent_techspec.md` §18.6) — mitigated but not eliminated by W10's skip-if-odds-unchanged logic and W12's snapshot-at-log-time design; W43's replay-miss retry (Section 9.8) is the sandbox-specific mitigation.
+- LLM output isn't reproducible run-to-run (`agent_techspec.md` §18.6) — mitigated but not eliminated by W10's skip-if-odds-unchanged logic and W12's snapshot-at-log-time design; W43's replay-miss retry (Section 9.9) is the sandbox-specific mitigation.
 - Result-leakage defenses (`web_search`'s `before:<date>` filter, the system-prompt instruction) are a mitigation, not a guarantee (`agent_techspec.md` §18.7) — accepted, low relevance for genuinely-upcoming live fixtures, worth revisiting before any "review past agent calls" feature is built on `SnapshotStore`.
 - The forecast engine requires a local Ollama daemon (or an Anthropic API key) to answer anything — confirmed as an accepted operational dependency, not a gap, per the 2026-07-11 decision to stay on local Ollama for now.
 - The `Odds API`'s free tier (~500 credits/month) leaves no slack for adding markets, regions, or leagues without a paid tier — the credit counter (Section 5.3) makes this visible and gates gracefully, but doesn't create headroom.
@@ -432,9 +452,9 @@ Reflects `documents/app_user_stories.md` as of this writing.
 | 7 — Sandbox / Point-in-Time Testing Environment | W27–W31, W32 | W27–W31 ✅ Implemented (Section 9); W32 ⬜ Future, deliberately deferred |
 | 8 — Time-Related Correctness Testing | W33–W39 | ✅ Implemented (Section 6.4) |
 | 9 — Frontend Timezone Standardization & Scheduler Live-Fire Coverage | W40–W41 | 🟡 Active — not yet started (Section 13) |
-| 10 — Bugs Found By Actually Running The App | W42–W44 | W42–W43 ✅ Implemented (Section 9.8); W44 ⬜ Future |
+| 10 — Bugs Found By Actually Running The App | W42–W44 | ✅ Implemented — W42–W43 (Section 9.9), W44 (Section 9.8) |
 
-**Test counts as of the most recent completed story (W43, 2026-07-18):** 494 passed / 23 skipped / 1 deselected in the combined `tests/` + `app/backend/tests/` suite (zero regressions across the full W01–W43 sequence); the frontend suite (Vitest + RTL) stands at 29 tests across 6 files (`tsc --noEmit` clean).
+**Test counts as of the most recent completed story (W44, 2026-07-19):** 533 passed / 1 skipped / 1 deselected in the combined `tests/` + `app/backend/tests/` + `scripts/` suite (zero regressions across the full W01–W44 sequence). The remaining skip is unrelated to this work (`tests/test_feature_quality.py`: a feature removed under US#77 Tier 1). 17 of the new passes are `scripts/test_launch_sandbox.py`; the rest of the delta from the previously-recorded 494/23 count was not investigated as part of this story. The frontend suite (Vitest + RTL) stands at 29 tests across 6 files (`tsc --noEmit` clean).
 
 ---
 
