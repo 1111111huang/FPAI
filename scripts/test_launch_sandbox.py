@@ -11,17 +11,22 @@ from pathlib import Path
 import sys
 from unittest.mock import MagicMock
 
+import os
+from unittest.mock import AsyncMock, patch
+
 import duckdb
 import pytest
 
 sys.path.append(str(Path(__file__).resolve().parent.parent))
 
+from app.backend.eod_batch import EodBatchResult
 from app.backend.football_data_client import NormalizedMatch
 from scripts.launch_sandbox import (
     clear_state,
     fetch_sandbox_fixtures,
     find_preflight_info,
     parse_args,
+    precompute_recommendations,
     read_state,
     stop_running,
     write_state,
@@ -213,3 +218,56 @@ class TestFetchSandboxFixtures:
         fixtures_client.get_results.return_value = []
 
         assert fetch_sandbox_fixtures(fixtures_client, "2025-03-08") == []
+
+
+class TestPrecomputeRecommendationsOrdering:
+    """W50 code-quality review finding: precompute_recommendations()'s
+    critical property is that SANDBOX_MODE/SANDBOX_DATE are set in the
+    environment *before* build_odds_client()/get_cache() are constructed
+    (both resolve their sandbox-scoped variants by reading os.environ at
+    call time), and before run_eod_batch() itself runs -- a later refactor
+    could silently reorder this without any of the other unit tests (which
+    mock these dependencies individually, not together) catching it. This
+    test mocks the full chain and snapshots os.environ at the moment each
+    dependency is actually invoked, so a reordering regression fails here
+    even though no real network/LLM call happens."""
+
+    def test_sandbox_env_vars_are_set_before_odds_client_cache_and_batch_are_constructed(self):
+        date_str = "2025-03-08"
+        env_snapshots: dict[str, tuple[str | None, str | None]] = {}
+
+        def _snapshot(name: str):
+            env_snapshots[name] = (os.environ.get("SANDBOX_MODE"), os.environ.get("SANDBOX_DATE"))
+
+        fixture = NormalizedMatch(
+            match_id="1", utc_date="2025-03-08T15:00:00Z", status="FINISHED",
+            home_team="Arsenal", away_team="Everton", home_goals=2, away_goals=1,
+        )
+
+        with patch("scripts.launch_sandbox.FootballDataClient") as mock_client_cls, \
+             patch("app.backend.scheduler_wiring.build_odds_client") as mock_build_odds, \
+             patch("app.backend.recommendations.get_cache") as mock_get_cache, \
+             patch("app.backend.eod_batch.run_eod_batch", new_callable=AsyncMock) as mock_run_batch:
+            mock_client_cls.return_value.get_results.side_effect = lambda **_: (
+                _snapshot("fetch_fixtures"), [fixture]
+            )[1]
+            mock_build_odds.side_effect = lambda: (_snapshot("build_odds_client"), None)[1]
+            mock_get_cache.side_effect = lambda: (_snapshot("get_cache"), object())[1]
+            mock_run_batch.side_effect = lambda **_: (
+                _snapshot("run_eod_batch"), EodBatchResult(fixtures=[fixture], generated=1, skipped=0)
+            )[1]
+
+            try:
+                precompute_recommendations(date_str)
+            finally:
+                os.environ.pop("SANDBOX_MODE", None)
+                os.environ.pop("SANDBOX_DATE", None)
+
+        # Every dependency must observe the env vars already set to this
+        # date's sandbox values -- not (None, None), not a stale prior value.
+        for name in ("fetch_fixtures", "build_odds_client", "get_cache", "run_eod_batch"):
+            assert env_snapshots[name] == ("1", date_str), (
+                f"{name} was called before SANDBOX_MODE/SANDBOX_DATE were correctly set "
+                f"(observed {env_snapshots[name]!r})"
+            )
+        mock_run_batch.assert_awaited_once()

@@ -100,6 +100,9 @@ async def run_eod_batch(
     A sandbox caller sources its fixtures via get_results() (status=FINISHED)
     instead and hands them in through this parameter. Omitting `fixtures`
     (the default) preserves this function's exact pre-W50 behavior.
+    `fixtures_client` itself goes otherwise unused in that branch -- it
+    remains a required parameter only because the default/live path still
+    needs it.
 
     `on_progress`, when supplied, is called once per fixture as its
     generation finishes (order not guaranteed -- fixtures generate
