@@ -7,6 +7,7 @@ third-party agent consumers, not this first-party app)."""
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
+from datetime import date, datetime, timedelta, timezone
 import os
 
 from dotenv import load_dotenv
@@ -122,16 +123,75 @@ def get_status() -> dict:
     return {"data_freshness": get_data_freshness(), "model_status": get_model_status()}
 
 
+def _current_real_date() -> date:
+    """Genuine wall-clock UTC 'today' -- deliberately NOT
+    sandbox_clock.sandbox_now(). football-data.org's own SCHEDULED/FINISHED
+    match status reflects whether a match has actually been played in the
+    real world, independent of what date SANDBOX_MODE/SANDBOX_DATE is
+    pretending "today" is, so the split below must be computed against real
+    time, not the app's sandbox-overridable clock."""
+    return datetime.now(timezone.utc).date()
+
+
+def _split_fixture_date_range(
+    date_from: str | None, date_to: str | None, today: date,
+) -> tuple[tuple[str, str] | None, tuple[str | None, str | None] | None]:
+    """Splits a requested [date_from, date_to] range into a (results_range,
+    fixtures_range) pair relative to real wall-clock `today`, so the caller
+    can source the past portion from get_results() (status=FINISHED) and the
+    future/today portion from get_fixtures() (status=SCHEDULED) -- either
+    element is None if that side contributes nothing.
+
+    Either bound omitted (or unparseable) falls back to the pre-W45
+    single-call behavior: everything goes through fixtures_range unchanged,
+    since a half-open/unbounded range can't be meaningfully split against a
+    boundary, and this preserves however football-data.org's API itself
+    already interprets missing date params by default.
+    """
+    if date_from is None or date_to is None:
+        return None, (date_from, date_to)
+    try:
+        parsed_from = date.fromisoformat(date_from)
+        parsed_to = date.fromisoformat(date_to)
+    except ValueError:
+        return None, (date_from, date_to)
+
+    if parsed_to < today:
+        return (date_from, date_to), None
+    if parsed_from >= today:
+        return None, (date_from, date_to)
+
+    # Spans the boundary: date_from is in the past, date_to is today or later.
+    yesterday = (today - timedelta(days=1)).isoformat()
+    return (date_from, yesterday), (today.isoformat(), date_to)
+
+
 @app.get("/api/fixtures")
 async def get_fixtures(date_from: str | None = None, date_to: str | None = None) -> list[NormalizedMatch]:
     """Thin wrapper over W05's FootballDataClient -- gives the frontend a real
     fixture list to render (Dashboard/Match Explorer). Still used directly
     even after W09 shipped -- W09 populates the recommendation cache in the
     background, but the frontend still needs a live fixture list to render
-    cards for, cached recommendation or not."""
+    cards for, cached recommendation or not.
+
+    W45: a date range entirely in the past needs get_results()
+    (status=FINISHED) -- get_fixtures() (status=SCHEDULED) structurally can
+    never return anything for a range that's already happened, regardless of
+    real data availability. A range spanning real "today" is split and the
+    two sides merged, past-then-future (already chronological, since the
+    split is on whole days and each side is independently date-ordered by
+    the API)."""
     client = get_fixtures_client()
-    fixtures = await run_in_threadpool(client.get_fixtures, date_from=date_from, date_to=date_to)
-    return fixtures
+    results_range, fixtures_range = _split_fixture_date_range(date_from, date_to, _current_real_date())
+
+    matches: list[NormalizedMatch] = []
+    if results_range is not None:
+        past_from, past_to = results_range
+        matches += await run_in_threadpool(client.get_results, date_from=past_from, date_to=past_to)
+    if fixtures_range is not None:
+        future_from, future_to = fixtures_range
+        matches += await run_in_threadpool(client.get_fixtures, date_from=future_from, date_to=future_to)
+    return matches
 
 
 @app.post("/api/recommendations")
