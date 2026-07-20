@@ -15,7 +15,7 @@ sys.path.append(str(Path(__file__).resolve().parents[3]))
 from fastapi.testclient import TestClient
 
 from app.backend.football_data_client import NormalizedMatch
-from app.backend.main import app
+from app.backend.main import _split_fixture_date_range, app
 
 
 def test_fixtures_endpoint_returns_normalized_matches():
@@ -123,10 +123,12 @@ def test_fixtures_endpoint_wholly_future_range_still_uses_get_fixtures_only():
 
 
 def test_fixtures_endpoint_boundary_spanning_range_merges_results_and_fixtures():
-    """A range spanning real 'today' must be split at the boundary: the
-    past portion (date_from..yesterday) goes through get_results(), the
-    future portion (today..date_to) goes through get_fixtures(), and both
-    are merged back in chronological order."""
+    """A range spanning real 'today' must be split at the boundary: the past
+    portion (date_from..today) goes through get_results(), the future
+    portion (today..date_to) goes through get_fixtures() -- today is queried
+    on *both* sides, since a same-day match may already be FINISHED or still
+    SCHEDULED depending on kickoff time -- and both are merged back in
+    chronological order."""
     with patch("app.backend.main._current_real_date", return_value=date(2025, 3, 10)):
         with patch("app.backend.main.get_fixtures_client") as mock_get_client:
             mock_client = mock_get_client.return_value
@@ -140,5 +142,97 @@ def test_fixtures_endpoint_boundary_spanning_range_merges_results_and_fixtures()
     assert response.status_code == 200
     body = response.json()
     assert [m["home_team"] for m in body] == ["Liverpool", "Chelsea"]
-    mock_client.get_results.assert_called_once_with(date_from="2025-03-08", date_to="2025-03-09")
+    mock_client.get_results.assert_called_once_with(date_from="2025-03-08", date_to="2025-03-10")
     mock_client.get_fixtures.assert_called_once_with(date_from="2025-03-10", date_to="2025-03-12")
+
+
+def test_fixtures_endpoint_today_only_query_checks_both_finished_and_scheduled():
+    """A single-day query for exactly 'today' must check both statuses --
+    an already-finished early-kickoff match must not vanish just because
+    it's also technically 'today', which was a real gap found in code
+    review of the first version of this fix (it previously treated 'today'
+    as future-only, matching the pre-W45 behavior it was meant to close)."""
+    with patch("app.backend.main._current_real_date", return_value=date(2025, 3, 10)):
+        with patch("app.backend.main.get_fixtures_client") as mock_get_client:
+            mock_client = mock_get_client.return_value
+            mock_client.get_results.return_value = [_REAL_RESULT]
+            mock_client.get_fixtures.return_value = [_REAL_FIXTURE]
+            with TestClient(app) as client:
+                response = client.get(
+                    "/api/fixtures", params={"date_from": "2025-03-10", "date_to": "2025-03-10"}
+                )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert [m["home_team"] for m in body] == ["Liverpool", "Chelsea"]
+    mock_client.get_results.assert_called_once_with(date_from="2025-03-10", date_to="2025-03-10")
+    mock_client.get_fixtures.assert_called_once_with(date_from="2025-03-10", date_to="2025-03-10")
+
+
+class TestSplitFixtureDateRange:
+    """Direct unit tests for the pure split helper -- cheaper and more
+    precise than only exercising it through full HTTP round-trips."""
+
+    def test_wholly_past_range(self):
+        results, fixtures = _split_fixture_date_range("2025-03-01", "2025-03-05", date(2025, 3, 10))
+
+        assert results == ("2025-03-01", "2025-03-05")
+        assert fixtures is None
+
+    def test_wholly_future_range(self):
+        results, fixtures = _split_fixture_date_range("2025-03-15", "2025-03-20", date(2025, 3, 10))
+
+        assert results is None
+        assert fixtures == ("2025-03-15", "2025-03-20")
+
+    def test_range_spanning_today(self):
+        results, fixtures = _split_fixture_date_range("2025-03-05", "2025-03-15", date(2025, 3, 10))
+
+        assert results == ("2025-03-05", "2025-03-10")
+        assert fixtures == ("2025-03-10", "2025-03-15")
+
+    def test_today_only(self):
+        results, fixtures = _split_fixture_date_range("2025-03-10", "2025-03-10", date(2025, 3, 10))
+
+        assert results == ("2025-03-10", "2025-03-10")
+        assert fixtures == ("2025-03-10", "2025-03-10")
+
+    def test_range_ending_exactly_on_today(self):
+        results, fixtures = _split_fixture_date_range("2025-03-05", "2025-03-10", date(2025, 3, 10))
+
+        assert results == ("2025-03-05", "2025-03-10")
+        assert fixtures == ("2025-03-10", "2025-03-10")
+
+    def test_range_starting_exactly_on_today(self):
+        results, fixtures = _split_fixture_date_range("2025-03-10", "2025-03-15", date(2025, 3, 10))
+
+        assert results == ("2025-03-10", "2025-03-10")
+        assert fixtures == ("2025-03-10", "2025-03-15")
+
+    def test_both_bounds_omitted_falls_back_to_fixtures_only(self):
+        results, fixtures = _split_fixture_date_range(None, None, date(2025, 3, 10))
+
+        assert results is None
+        assert fixtures == (None, None)
+
+    def test_one_bound_omitted_falls_back_to_fixtures_only(self):
+        results, fixtures = _split_fixture_date_range("2025-03-01", None, date(2025, 3, 10))
+
+        assert results is None
+        assert fixtures == ("2025-03-01", None)
+
+    def test_malformed_date_falls_back_to_fixtures_only(self):
+        results, fixtures = _split_fixture_date_range("not-a-date", "2025-03-15", date(2025, 3, 10))
+
+        assert results is None
+        assert fixtures == ("not-a-date", "2025-03-15")
+
+    def test_inverted_range_is_not_split_into_a_negative_window(self):
+        """date_from > date_to is a malformed request the client will
+        presumably reject/no-op on -- confirm the split doesn't silently
+        produce a backwards or nonsensical sub-range for it."""
+        results, fixtures = _split_fixture_date_range("2025-03-15", "2025-03-05", date(2025, 3, 10))
+
+        # Wholly-past check (parsed_to < today) fires first: 2025-03-05 < 2025-03-10.
+        assert results == ("2025-03-15", "2025-03-05")
+        assert fixtures is None

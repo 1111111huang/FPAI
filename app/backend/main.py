@@ -7,7 +7,7 @@ third-party agent consumers, not this first-party app)."""
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, timezone
 import os
 
 from dotenv import load_dotenv
@@ -139,8 +139,11 @@ def _split_fixture_date_range(
     """Splits a requested [date_from, date_to] range into a (results_range,
     fixtures_range) pair relative to real wall-clock `today`, so the caller
     can source the past portion from get_results() (status=FINISHED) and the
-    future/today portion from get_fixtures() (status=SCHEDULED) -- either
-    element is None if that side contributes nothing.
+    future portion from get_fixtures() (status=SCHEDULED) -- either element
+    is None if that side contributes nothing. A range that includes `today`
+    queries `today` from *both* sides, since a same-day match may already be
+    FINISHED or still SCHEDULED depending on kickoff time relative to right
+    now -- there is no way to know which without asking both.
 
     Either bound omitted (or unparseable) falls back to the pre-W45
     single-call behavior: everything goes through fixtures_range unchanged,
@@ -158,12 +161,17 @@ def _split_fixture_date_range(
 
     if parsed_to < today:
         return (date_from, date_to), None
-    if parsed_from >= today:
+    if parsed_from > today:
         return None, (date_from, date_to)
 
-    # Spans the boundary: date_from is in the past, date_to is today or later.
-    yesterday = (today - timedelta(days=1)).isoformat()
-    return (date_from, yesterday), (today.isoformat(), date_to)
+    # Range includes today: query today from *both* sides. A match kicking
+    # off today may already be FINISHED (e.g. an early kickoff, viewed later
+    # the same day) or still SCHEDULED, depending on kickoff time relative to
+    # right now -- excluding today from get_results() would silently drop
+    # already-finished same-day matches, which is exactly the gap this fix
+    # exists to close (found in code review of the first version of this
+    # function, which stopped the results side at yesterday).
+    return (date_from, today.isoformat()), (today.isoformat(), date_to)
 
 
 @app.get("/api/fixtures")
