@@ -1570,3 +1570,48 @@ New `src/logic/feature_groups.py::resolve_feature_group_tag(feature_name) -> str
 Full suite: 578 passed, 23 skipped, zero regressions (up from 530 passed at Section 32, exactly the +48 new tests here, net of no removals).
 
 Sweden (`SWE`) itself is **not** registered by this story — deliberately out of scope, matching Section 32's precedent.
+
+---
+
+## 34. Competition-Aware Cold-Start Imputation (Completed — US#134)
+
+### 34.1 Motivation
+
+Section 33 (US#133) closed the *selection*-layer half of the "second competition with a structurally different data profile" problem: a competition can now exclude shot/corner-dependent sub-features from its `enabled_feature_groups` instead of receiving them cold-start-imputed from another competition's column mean. Section 33.1 explicitly flagged the other half as out of scope: "making the cold-start imputation itself competition-aware... is separate follow-on work." This story is that follow-on work.
+
+Even for a feature family a competition *does* legitimately keep enabled, `_apply_cold_start_imputation()` (`src/features/feature_factory.py`, US#59) fills NaN rolling-feature values with a column-wise mean as the last step of feature computation. The concern was two-fold: (1) a genuinely-cold-start gap in one competition (e.g. a team's first two matches, R5 window not yet full) would get diluted by unrelated rows from another competition if the mean were computed globally, and (2) more acutely, a feature family a competition structurally can't populate at all would have its entire column silently backfilled with another competition's typical values — actively misleading, not merely noisy.
+
+### 34.2 Verifying the Bug Was Real
+
+Before changing anything, the actual call structure was traced rather than assumed:
+
+- `FeatureFactory.compute_rolling_stats()` — the offline pipeline that builds `feature_store` — selects `SELECT * ... FROM raw_matches` with **no league filter**, builds one `features` DataFrame spanning every competition present in the table, and calls `_apply_cold_start_imputation(features)` as the final step. With only `E0` in the table today, a flat `.mean()` over "the whole table" and "this competition's rows" are mathematically identical, which is exactly why this never surfaced. Once a second competition's rows share the table, they stop being identical — confirmed by a regression test that reproduces the exact contaminated value (see 34.4).
+- `FeatureFactory.build_for_match()` — the live spot-forecast path — was checked too, since the story explicitly warned not to assume every call site behaves the same way. Its `raw_df` query filters by team name (`WHERE home_team = ? OR away_team = ? ...`), not by league, and its `combined` history is only ever one specific team pair's matches plus a single synthetic row for one target match. In practice this is already effectively single-competition per call. It was fixed identically anyway (34.3) for defense-in-depth: nothing today prevents a future competition's team name from colliding with an existing one, and the fix is free once the shared helper supports it.
+
+### 34.3 Mechanism
+
+`_apply_cold_start_imputation(features, league=None)` gained an optional `league` parameter: a `pandas.Series` positionally aligned to `features` (not index-joined — passed through `.to_numpy()` before use as a `groupby` key, so it's immune to any index-alignment surprises from upstream merges). When supplied and not entirely null, fill values are computed as:
+
+```python
+group_means = features[imputable].groupby(league.to_numpy()).transform("mean")
+features[imputable] = features[imputable].fillna(group_means)
+```
+
+`groupby(...).transform("mean")` was chosen over manually computing `groupby(...).mean()` and joining it back, because `transform` broadcasts each group's mean back to every row of that group in one step, and — critically — a group whose entire column is `NaN` produces `NaN` via `transform`, with no cross-group fallback. That is exactly the desired behavior for case (2) in 34.1: a competition that structurally can't populate a feature family keeps `NaN` for that family rather than inheriting another competition's typical values. When `league` is omitted (or entirely null), the function falls back to the original flat `.mean()` — byte-identical to pre-story behavior, so any caller that doesn't pass `league` is unaffected.
+
+Both real call sites were updated to supply it:
+
+- `compute_rolling_stats()`: the `raw_matches` SQL query now selects `league` alongside the existing columns; `league_by_match_id = raw_df.set_index("match_id")["league"]` is built once, and `features["match_id"].map(league_by_match_id)` is passed to the imputation call.
+- `build_for_match()`: its own `raw_df` query and its empty-history fallback `pd.DataFrame(columns=[...])` both gained a `league` column; the **synthetic row** (the one match actually being forecast) sets `"league": league` directly from the function's own `league` parameter rather than looking it up, since it *is* the target competition by definition. `combined` (history + synthetic row concatenated) therefore carries `league` for every row, and `combined.set_index("match_id")["league"]` feeds the same `features["match_id"].map(...)` pattern.
+
+**Deliberately not persisted onto `feature_store`.** `league` is threaded through only as a local, in-memory `Series` for the `groupby` call — it is never added as a column to the `features` DataFrame that `compute_rolling_stats()`/`build_for_match()` return. Two reasons: `FeatureFactory.save_features()` emits a `FLOAT` column definition for every non-`match_id` column in the DataFrame it's given, so a string `league` column would either break the schema or need special-casing; and every downstream consumer of `feature_store` (`ModelManager`, `ForecastService`, `src/tools/data_tools.py`) already builds an explicit `SELECT f.{feature_name}, ...` list sourced from the feature registry rather than `SELECT *`, so a persisted `league` column would just be dead weight, not something those call sites would ever pick up. Keeping it purely local avoids both problems and keeps this story's blast radius to the two functions that actually needed it.
+
+### 34.4 Tests
+
+New `tests/test_feature_factory.py::test_cold_start_imputation_is_scoped_per_competition`: builds a synthetic two-competition fixture — `E0` (`Alpha FC`, six home matches giving a real, non-NaN `OFF_HOME_FTHG_R5` of `3.0` on the sixth, plus `Gamma FC`'s first-ever home match as the genuine cold-start row under test) and a structurally unrelated `L2` competition (`Beta United`, much larger goal totals) — and runs `compute_rolling_stats()` twice, changing only one of `L2`'s raw goal values between runs. Asserts `Gamma FC`'s imputed `OFF_HOME_FTHG_R5` equals `E0`'s own mean (`3.0`) and is identical in both runs, while independently confirming `L2`'s own valid rolling value did change between runs (so the test is actually exercising cross-competition variation, not vacuously passing because nothing changed).
+
+Per the acceptance criterion's own instruction to verify the test would actually fail pre-fix: the fix was temporarily reverted (`git stash` on `feature_factory.py` alone) and the new test was re-run — it failed with `12.5`, exactly the predicted contaminated value (`mean(3.0, 22.0)`, the flat mean of `E0`'s and `L2`'s two valid column entries under the old global-mean code). The fix was then re-applied and the test re-run to confirm it passes.
+
+Full suite: 579 passed, 23 skipped, zero regressions (up from 578 passed at Section 33, exactly the one new test here).
+
+Sweden (`SWE`) itself is **not** registered by this story — deliberately out of scope, matching Section 32/33's precedent.
