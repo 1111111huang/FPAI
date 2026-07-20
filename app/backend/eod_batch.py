@@ -18,6 +18,14 @@ raw case-insensitive string equality silently dropped odds for 6/10 real
 fixtures in that check. A fixture with no matching odds event (even after
 canonical mapping) proceeds with odds omitted (the agent's existing
 no-odds handling) rather than blocking the whole batch.
+
+W50: run_eod_batch() also accepts an optional pre-fetched `fixtures` list
+(bypassing its own internal fixtures_client.get_fixtures() call, which only
+ever queries status=SCHEDULED) and an optional `on_progress` callback -- see
+run_eod_batch()'s docstring. Added for scripts/launch_sandbox.py's opt-in
+--precompute step, which needs a *past* sandbox date's fixtures
+(get_results(), status=FINISHED) and terminal progress output; the real
+live scheduler path (scheduler_wiring.py) passes neither and is unaffected.
 """
 
 from __future__ import annotations
@@ -76,8 +84,30 @@ async def run_eod_batch(
     schedule_t30: Callable[[NormalizedMatch], None],
     date_str: str,
     concurrency: int = 5,
+    fixtures: list[NormalizedMatch] | None = None,
+    on_progress: Callable[[NormalizedMatch, str], None] | None = None,
 ) -> EodBatchResult:
-    fixtures = fixtures_client.get_fixtures(competition_code=COMPETITION_CODE, date_from=date_str, date_to=date_str)
+    """W50: `fixtures`, when supplied, is used as-is and
+    fixtures_client.get_fixtures() is never called. This matters because
+    get_fixtures() only ever queries status=SCHEDULED -- fine for the real
+    live scheduler path (this always runs for *tomorrow*, still-scheduled
+    fixtures), but structurally unable to return anything for a date that's
+    already in the past, which W50's sandbox precompute caller needs (a
+    SANDBOX_DATE is always historical by construction). This is the exact
+    same root cause W45 already fixed for /api/fixtures
+    (main.py's _split_fixture_date_range) -- applied here to this module's
+    own separate direct FootballDataClient usage, which W45 never touched.
+    A sandbox caller sources its fixtures via get_results() (status=FINISHED)
+    instead and hands them in through this parameter. Omitting `fixtures`
+    (the default) preserves this function's exact pre-W50 behavior.
+
+    `on_progress`, when supplied, is called once per fixture as its
+    generation finishes (order not guaranteed -- fixtures generate
+    concurrently, bounded by `concurrency`), with the fixture and one of
+    "generated"/"skipped". A CLI progress hook for W50's sandbox precompute
+    step; the real scheduler path never passes it."""
+    if fixtures is None:
+        fixtures = fixtures_client.get_fixtures(competition_code=COMPETITION_CODE, date_from=date_str, date_to=date_str)
 
     odds_events = odds_client.get_odds() if odds_client is not None else None
     odds_by_teams = odds_lookup(odds_events or [])
@@ -104,6 +134,8 @@ async def run_eod_batch(
                     fixture.match_id, fixture.home_team, fixture.away_team, exc,
                 )
                 result.skipped += 1
+                if on_progress is not None:
+                    on_progress(fixture, "skipped")
                 return
 
         degraded = validate_and_degrade(raw)
@@ -112,6 +144,8 @@ async def run_eod_batch(
             odds=odds or {}, recommendation=degraded.model_dump(), triggered_by="scheduled",
         )
         result.generated += 1
+        if on_progress is not None:
+            on_progress(fixture, "generated")
 
     await asyncio.gather(*[_generate_one(fixture) for fixture in fixtures])
 

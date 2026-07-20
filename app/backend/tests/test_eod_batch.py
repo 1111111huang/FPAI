@@ -229,3 +229,88 @@ def test_no_odds_client_at_all_proceeds_without_odds(tmp_path: Path) -> None:
         )
 
     assert result.generated == 1
+
+
+def test_supplied_fixtures_bypass_fixtures_client_get_fixtures(tmp_path: Path) -> None:
+    """W50: a caller sourcing a *past* sandbox date's fixtures via
+    get_results() (since get_fixtures() only ever queries status=SCHEDULED,
+    and can never return anything for an already-played date) hands them in
+    directly -- fixtures_client.get_fixtures() must never be called in that
+    case, and generation must proceed against the supplied list."""
+    fixtures_client = MagicMock()
+    supplied = [
+        _fixture("m1", "Arsenal", "Everton"),
+        _fixture("m2", "Chelsea", "Fulham"),
+    ]
+    odds_client = MagicMock()
+    odds_client.get_odds.return_value = []
+    cache = RecommendationCache(db_path=tmp_path / "cache.db")
+    config = AgentConfig.default()
+
+    with patch("app.backend.recommendations.run_agent", return_value=_RECOMMENDATION):
+        result = asyncio.run(
+            run_eod_batch(
+                fixtures_client=fixtures_client, odds_client=odds_client, cache=cache, config=config,
+                schedule_t30=lambda f: None, date_str="2026-08-22", fixtures=supplied,
+            )
+        )
+
+    fixtures_client.get_fixtures.assert_not_called()
+    assert result.generated == 2
+    assert result.fixtures == supplied
+    agent_config_hash = compute_agent_config_hash(config)
+    for match_id in ("m1", "m2"):
+        assert cache.get_latest(match_id, "2026-08-22", agent_config_hash) is not None
+
+
+def test_omitting_fixtures_preserves_default_get_fixtures_call(tmp_path: Path) -> None:
+    """Default (no injection) behavior is unchanged: fixtures_client.get_fixtures()
+    is still called exactly as before, with the same arguments."""
+    fixtures_client = MagicMock()
+    fixtures_client.get_fixtures.return_value = [_fixture("m1", "Arsenal", "Everton")]
+    odds_client = MagicMock()
+    odds_client.get_odds.return_value = []
+    cache = RecommendationCache(db_path=tmp_path / "cache.db")
+    config = AgentConfig.default()
+
+    with patch("app.backend.recommendations.run_agent", return_value=_RECOMMENDATION):
+        result = asyncio.run(
+            run_eod_batch(
+                fixtures_client=fixtures_client, odds_client=odds_client, cache=cache, config=config,
+                schedule_t30=lambda f: None, date_str="2026-08-22",
+            )
+        )
+
+    fixtures_client.get_fixtures.assert_called_once_with(
+        competition_code="PL", date_from="2026-08-22", date_to="2026-08-22",
+    )
+    assert result.generated == 1
+
+
+def test_on_progress_called_once_per_fixture_with_outcome(tmp_path: Path) -> None:
+    fixtures_client = MagicMock()
+    fixtures_client.get_fixtures.return_value = [
+        _fixture("m1", "Arsenal", "Everton"),
+        _fixture("m2", "Chelsea", "Fulham"),
+    ]
+    odds_client = MagicMock()
+    odds_client.get_odds.return_value = []
+    cache = RecommendationCache(db_path=tmp_path / "cache.db")
+    config = AgentConfig.default()
+    progress: list[tuple[str, str]] = []
+
+    def _run_agent_side_effect(match_info, config):
+        if match_info["home_team"] == "Chelsea":
+            raise RuntimeError("LLM timeout")
+        return _RECOMMENDATION
+
+    with patch("app.backend.recommendations.run_agent", side_effect=_run_agent_side_effect):
+        asyncio.run(
+            run_eod_batch(
+                fixtures_client=fixtures_client, odds_client=odds_client, cache=cache, config=config,
+                schedule_t30=lambda f: None, date_str="2026-08-22",
+                on_progress=lambda fixture, outcome: progress.append((fixture.match_id, outcome)),
+            )
+        )
+
+    assert sorted(progress) == [("m1", "generated"), ("m2", "skipped")]

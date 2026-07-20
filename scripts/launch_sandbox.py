@@ -20,6 +20,7 @@ renders is still a manual step -- this script does not drive a browser.
 from __future__ import annotations
 
 import argparse
+import asyncio
 import json
 import os
 import signal
@@ -35,6 +36,14 @@ import requests
 from dotenv import load_dotenv
 
 ROOT = Path(__file__).resolve().parent.parent
+# Allows `python scripts/launch_sandbox.py` (script dir on sys.path, not
+# ROOT) to import app.backend/src modules directly for the --precompute
+# step below -- same convention scripts/sandbox_runbook.py (W31) already
+# uses.
+sys.path.append(str(ROOT))
+
+from app.backend.football_data_client import FootballDataClient, NormalizedMatch  # noqa: E402
+
 DB_PATH = ROOT / "data" / "fpai_core.db"
 SNAPSHOT_DIR = ROOT / "data" / "agent_snapshots" / "sandbox"
 STATE_FILE = Path("/tmp/fpai_sandbox_launch_state.json")
@@ -50,6 +59,14 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("date", nargs="?", help="Date to treat as 'today', YYYY-MM-DD (required unless --stop)")
     parser.add_argument("--dry-run", action="store_true", help="Run the preflight check only, launch nothing")
     parser.add_argument("--stop", action="store_true", help="Tear down a previously launched sandbox instance")
+    parser.add_argument(
+        "--precompute", action="store_true",
+        help="Before starting servers, pre-populate the sandbox recommendation cache for all of the date's "
+             "real fixtures using the same batch-generation logic as the live EOD job (odds-fetching + "
+             "per-match fault tolerance included), so cards are already populated when the browser opens "
+             "instead of each needing an individual click-and-wait. Opt-in: makes real network/LLM calls "
+             "and can take several minutes for a full matchday.",
+    )
     parser.add_argument("--backend-port", type=int, default=DEFAULT_BACKEND_PORT)
     parser.add_argument("--frontend-port", type=int, default=DEFAULT_FRONTEND_PORT)
     parser.add_argument("--startup-timeout", type=float, default=45.0, help="Seconds to wait for each server to become healthy")
@@ -264,6 +281,90 @@ def launch_frontend(backend_port: int, frontend_port: int) -> subprocess.Popen:
     )
 
 
+# ---------------------------------------------------------------------------
+# W50: opt-in precompute -- runs the sandbox date's real fixtures through
+# the same batch-generation logic the live EOD job (W09) uses, before the
+# servers start, so the frontend doesn't open to an empty "Not yet
+# generated" state.
+# ---------------------------------------------------------------------------
+
+def fetch_sandbox_fixtures(
+    fixtures_client: FootballDataClient, date_str: str, competition_code: str = "PL",
+) -> list[NormalizedMatch]:
+    """A sandbox date is always in the past relative to real wall-clock time
+    (SANDBOX_DATE names a historical scenario by construction), so unlike
+    main.py's _split_fixture_date_range (W45 -- a general-purpose endpoint
+    that must handle a range spanning past/today/future), sourcing here is
+    unconditionally get_results() (status=FINISHED): get_fixtures()
+    (status=SCHEDULED) structurally can never return anything for an
+    already-played date. Same root cause W45 fixed for /api/fixtures,
+    applied here for this script's own fixture sourcing -- see
+    eod_batch.py's run_eod_batch() `fixtures` parameter (W50), which this
+    feeds."""
+    return fixtures_client.get_results(competition_code=competition_code, date_from=date_str, date_to=date_str)
+
+
+def precompute_recommendations(date_str: str) -> None:
+    """Pre-populates the sandbox-scoped RecommendationCache (W29) for every
+    real fixture on `date_str`, using run_eod_batch()'s exact
+    generation/odds-matching/fault-tolerance logic (W09, benefiting from
+    W49's odds-attachment fix) -- the same code path the live EOD batch
+    uses, just fed this date's already-played fixtures (via
+    fetch_sandbox_fixtures() above) instead of tomorrow's scheduled ones.
+
+    Sets SANDBOX_MODE/SANDBOX_DATE in this process's own environment (mirroring
+    launch_backend()'s subprocess env) so recommendations.get_cache() and
+    scheduler_wiring.build_odds_client() route to the same sandbox-scoped
+    cache/odds source the backend subprocess will use once it starts --
+    results land in the same on-disk cache file, so they're already there
+    when the backend (started afterward, in main()) opens it.
+
+    No T-30 job is scheduled here (schedule_t30 is a no-op) -- there's no
+    long-lived scheduler process behind this one-shot CLI step, and a
+    sandbox fixture's kickoff is always already in the past, so a T-30
+    "refresh before kickoff" has nothing left to do.
+
+    Backend modules (agent/LLM/ML dependencies) are imported here, not at
+    module load time, so a plain launch/--stop/--dry-run invocation that
+    never passes --precompute doesn't pay for importing them."""
+    os.environ["SANDBOX_MODE"] = "1"
+    os.environ["SANDBOX_DATE"] = date_str
+
+    from app.backend import recommendations
+    from app.backend.eod_batch import run_eod_batch
+    from app.backend.scheduler_wiring import build_odds_client
+    from src.agent.agent_config import AgentConfig
+
+    fixtures_client = FootballDataClient(api_key=os.environ.get("FOOTBALL_DATA_API_KEY", ""))
+    fixtures = fetch_sandbox_fixtures(fixtures_client, date_str)
+    print(f"Precompute: {len(fixtures)} real fixture(s) found for {date_str}.")
+    if not fixtures:
+        print("Precompute: nothing to generate.")
+        return
+
+    odds_client = build_odds_client()
+    cache = recommendations.get_cache()
+    config = AgentConfig.default()
+    tally = {"generated": 0, "skipped": 0}
+
+    def _on_progress(fixture: NormalizedMatch, outcome: str) -> None:
+        tally[outcome] += 1
+        done = tally["generated"] + tally["skipped"]
+        print(
+            f"Precompute: [{done}/{len(fixtures)}] {fixture.home_team} vs {fixture.away_team}: {outcome} "
+            f"(generated={tally['generated']} skipped={tally['skipped']})"
+        )
+
+    result = asyncio.run(
+        run_eod_batch(
+            fixtures_client=fixtures_client, odds_client=odds_client, cache=cache, config=config,
+            schedule_t30=lambda fixture: None, date_str=date_str, fixtures=fixtures,
+            on_progress=_on_progress,
+        )
+    )
+    print(f"Precompute complete: generated={result.generated} skipped={result.skipped} of {len(fixtures)} fixture(s).")
+
+
 def main(argv: list[str] | None = None) -> None:
     args = parse_args(argv)
 
@@ -288,6 +389,11 @@ def main(argv: list[str] | None = None) -> None:
     if not (ROOT / "app" / "frontend" / "node_modules").exists():
         print("app/frontend/node_modules is missing -- run `npm install` in app/frontend first.")
         sys.exit(1)
+
+    if args.precompute:
+        print(f"=== Precompute (SANDBOX_DATE={args.date}) === -- this can take several minutes")
+        precompute_recommendations(args.date)
+        print()
 
     print(f"Starting backend on :{args.backend_port} (SANDBOX_DATE={args.date}) -- log: {BACKEND_LOG}")
     backend = launch_backend(args.date, args.backend_port)

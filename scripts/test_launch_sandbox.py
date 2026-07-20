@@ -9,14 +9,17 @@ from __future__ import annotations
 
 from pathlib import Path
 import sys
+from unittest.mock import MagicMock
 
 import duckdb
 import pytest
 
 sys.path.append(str(Path(__file__).resolve().parent.parent))
 
+from app.backend.football_data_client import NormalizedMatch
 from scripts.launch_sandbox import (
     clear_state,
+    fetch_sandbox_fixtures,
     find_preflight_info,
     parse_args,
     read_state,
@@ -159,3 +162,54 @@ class TestParseArgs:
 
         assert args.backend_port == 9000
         assert args.frontend_port == 4000
+
+    def test_precompute_flag_defaults_off(self):
+        args = parse_args(["2025-03-08"])
+
+        assert args.precompute is False
+
+    def test_precompute_flag(self):
+        args = parse_args(["2025-03-08", "--precompute"])
+
+        assert args.precompute is True
+
+
+class TestFetchSandboxFixtures:
+    """W50: a sandbox date is always in the past, so fixture sourcing must
+    go through get_results() (status=FINISHED) -- get_fixtures()
+    (status=SCHEDULED) structurally can never return anything for an
+    already-played date (the same root cause W45 fixed for /api/fixtures)."""
+
+    def test_calls_get_results_not_get_fixtures(self):
+        fixtures_client = MagicMock()
+        expected = [
+            NormalizedMatch(
+                match_id="1", utc_date="2025-03-08T15:00:00Z", status="FINISHED",
+                home_team="Arsenal", away_team="Everton", home_goals=2, away_goals=1,
+            ),
+        ]
+        fixtures_client.get_results.return_value = expected
+
+        result = fetch_sandbox_fixtures(fixtures_client, "2025-03-08")
+
+        assert result == expected
+        fixtures_client.get_results.assert_called_once_with(
+            competition_code="PL", date_from="2025-03-08", date_to="2025-03-08",
+        )
+        fixtures_client.get_fixtures.assert_not_called()
+
+    def test_passes_through_custom_competition_code(self):
+        fixtures_client = MagicMock()
+        fixtures_client.get_results.return_value = []
+
+        fetch_sandbox_fixtures(fixtures_client, "2025-03-08", competition_code="SP1")
+
+        fixtures_client.get_results.assert_called_once_with(
+            competition_code="SP1", date_from="2025-03-08", date_to="2025-03-08",
+        )
+
+    def test_no_fixtures_returns_empty_list(self):
+        fixtures_client = MagicMock()
+        fixtures_client.get_results.return_value = []
+
+        assert fetch_sandbox_fixtures(fixtures_client, "2025-03-08") == []
