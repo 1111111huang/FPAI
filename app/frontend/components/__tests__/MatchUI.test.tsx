@@ -5,21 +5,22 @@
  * the bet-logging modal's locked-except-stake behavior. Runs headless via
  * Vitest + React Testing Library -- no live backend; @/lib/api is mocked.
  */
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi, beforeEach } from "vitest";
 
-import { LogBetButton, MatchCard, StatusBadge, TeamBadge, type Match, type Overall } from "../MatchUI";
+import { LogBetButton, MatchAnalysisPage, MatchCard, StatusBadge, TeamBadge, type Match, type Overall } from "../MatchUI";
 import type { MatchRecommendationOut } from "@/lib/types";
 
 vi.mock("@/lib/api", () => ({
   generateRecommendation: vi.fn(),
+  getCachedRecommendation: vi.fn(),
   getFixtures: vi.fn(),
   logBetFromRecommendation: vi.fn(),
   ApiError: class ApiError extends Error {},
 }));
 
-import { logBetFromRecommendation } from "@/lib/api";
+import { generateRecommendation, getCachedRecommendation, logBetFromRecommendation } from "@/lib/api";
 
 const ALL_OVERALL_STATES: { overall: Overall; label: string }[] = [
   { overall: "direct_bet", label: "Direct Bet" },
@@ -79,6 +80,115 @@ describe("MatchCard", () => {
     const match = baseMatch({ hasRecommendation: false });
     render(<MatchCard match={match} onUpdate={vi.fn()} />);
     expect(screen.getByText("Not yet generated")).toBeInTheDocument();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// W47: MatchCard.handleExpand / MatchAnalysisPage.load must check the
+// precomputed cache (getCachedRecommendation) before falling back to the
+// live "regenerate now" call (generateRecommendation).
+// ---------------------------------------------------------------------------
+
+function makeRecommendation(overrides: Partial<MatchRecommendationOut> = {}): MatchRecommendationOut {
+  return {
+    match: { home: "Arsenal", away: "Everton", date: "2026-08-22", league: "E0" },
+    overall: "direct_bet",
+    markets: [],
+    explanation: "test explanation",
+    confidence: "medium",
+    limitations: [],
+    prediction_basis: "team_history_and_market",
+    invalid_market_count: 0,
+    cold_start_risk: false,
+    feature_completeness: 0.9,
+    unknown_team: false,
+    ...overrides,
+  };
+}
+
+describe("MatchCard -- cache-first expand (W47)", () => {
+  beforeEach(() => {
+    vi.mocked(getCachedRecommendation).mockReset();
+    vi.mocked(generateRecommendation).mockReset();
+  });
+
+  it("on a cache hit, applies the cached recommendation and never calls generateRecommendation", async () => {
+    const cachedRec = makeRecommendation({ explanation: "cached explanation" });
+    vi.mocked(getCachedRecommendation).mockResolvedValue(cachedRec);
+    const user = userEvent.setup();
+    const onUpdate = vi.fn();
+    const match = baseMatch({ hasRecommendation: false });
+
+    render(<MatchCard match={match} onUpdate={onUpdate} />);
+    await user.click(screen.getByText("Not yet generated"));
+
+    await waitFor(() => expect(onUpdate).toHaveBeenCalled());
+    expect(getCachedRecommendation).toHaveBeenCalledWith("m1", "2026-08-22");
+    expect(generateRecommendation).not.toHaveBeenCalled();
+    expect(onUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({ hasRecommendation: true, explanation: "cached explanation" })
+    );
+  });
+
+  it("on a cache miss (null), falls back to generateRecommendation and applies its result unchanged", async () => {
+    vi.mocked(getCachedRecommendation).mockResolvedValue(null);
+    const liveRec = makeRecommendation({ explanation: "live explanation" });
+    vi.mocked(generateRecommendation).mockResolvedValue(liveRec);
+    const user = userEvent.setup();
+    const onUpdate = vi.fn();
+    const match = baseMatch({ hasRecommendation: false });
+
+    render(<MatchCard match={match} onUpdate={onUpdate} />);
+    await user.click(screen.getByText("Not yet generated"));
+
+    await waitFor(() => expect(onUpdate).toHaveBeenCalled());
+    expect(getCachedRecommendation).toHaveBeenCalledWith("m1", "2026-08-22");
+    expect(generateRecommendation).toHaveBeenCalledWith({
+      home_team: "Arsenal",
+      away_team: "Everton",
+      date: "2026-08-22",
+      league: "E0",
+      match_id: "m1",
+    });
+    expect(onUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({ hasRecommendation: true, explanation: "live explanation" })
+    );
+  });
+});
+
+describe("MatchAnalysisPage -- cache-first load (W47)", () => {
+  beforeEach(() => {
+    vi.mocked(getCachedRecommendation).mockReset();
+    vi.mocked(generateRecommendation).mockReset();
+  });
+
+  it("on a cache hit, renders the cached recommendation and never calls generateRecommendation", async () => {
+    const cachedRec = makeRecommendation({ explanation: "cached explanation" });
+    vi.mocked(getCachedRecommendation).mockResolvedValue(cachedRec);
+
+    render(<MatchAnalysisPage id="m1" home="Arsenal" away="Everton" date="2026-08-22" />);
+
+    await waitFor(() => expect(screen.getByText("cached explanation")).toBeInTheDocument());
+    expect(getCachedRecommendation).toHaveBeenCalledWith("m1", "2026-08-22");
+    expect(generateRecommendation).not.toHaveBeenCalled();
+  });
+
+  it("on a cache miss (null), falls back to generateRecommendation and renders its result unchanged", async () => {
+    vi.mocked(getCachedRecommendation).mockResolvedValue(null);
+    const liveRec = makeRecommendation({ explanation: "live explanation" });
+    vi.mocked(generateRecommendation).mockResolvedValue(liveRec);
+
+    render(<MatchAnalysisPage id="m1" home="Arsenal" away="Everton" date="2026-08-22" />);
+
+    await waitFor(() => expect(screen.getByText("live explanation")).toBeInTheDocument());
+    expect(getCachedRecommendation).toHaveBeenCalledWith("m1", "2026-08-22");
+    expect(generateRecommendation).toHaveBeenCalledWith({
+      home_team: "Arsenal",
+      away_team: "Everton",
+      date: "2026-08-22",
+      league: "E0",
+      match_id: "m1",
+    });
   });
 });
 

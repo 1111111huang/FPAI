@@ -28,7 +28,13 @@ import {
   WarningCircle,
 } from "@phosphor-icons/react";
 
-import { ApiError, generateRecommendation, getFixtures, logBetFromRecommendation } from "@/lib/api";
+import {
+  ApiError,
+  generateRecommendation,
+  getCachedRecommendation,
+  getFixtures,
+  logBetFromRecommendation,
+} from "@/lib/api";
 import type { Fixture, MatchRecommendationOut } from "@/lib/types";
 import { useSandboxAsOf } from "@/lib/useSandboxAsOf";
 
@@ -446,14 +452,27 @@ export function MatchCard({
     if (next && !match.hasRecommendation && !loading) {
       setLoading(true);
       setError(null);
+      const date = match.kickoffIso.slice(0, 10);
       try {
-        const rec = await generateRecommendation({
-          home_team: match.home,
-          away_team: match.away,
-          date: match.kickoffIso.slice(0, 10),
-          league: match.league,
-          match_id: match.id,
-        });
+        // W47: check the precomputed cache (D2a) first -- only fall back to
+        // the live "regenerate now" call on a real miss. A cache-check
+        // failure is treated as a miss (not surfaced as an error) since
+        // generateRecommendation below is still a fully valid fallback.
+        let rec: MatchRecommendationOut | null = null;
+        try {
+          rec = await getCachedRecommendation(match.id, date);
+        } catch {
+          rec = null;
+        }
+        if (!rec) {
+          rec = await generateRecommendation({
+            home_team: match.home,
+            away_team: match.away,
+            date,
+            league: match.league,
+            match_id: match.id,
+          });
+        }
         onUpdate(applyRecommendation(match, rec));
       } catch (err) {
         setError(err instanceof ApiError ? err.message : "Could not reach the agent.");
@@ -928,7 +947,19 @@ export function MatchAnalysisPage({
     setLoading(true);
     setError(null);
     try {
-      const rec = await generateRecommendation({ home_team: home, away_team: away, date, league: "E0", match_id: id });
+      // W47: check the precomputed cache (D2a) first -- only fall back to
+      // the live "regenerate now" call on a real miss. A cache-check
+      // failure is treated as a miss (not surfaced as an error) since
+      // generateRecommendation below is still a fully valid fallback.
+      let rec: MatchRecommendationOut | null = null;
+      try {
+        rec = await getCachedRecommendation(id, date);
+      } catch {
+        rec = null;
+      }
+      if (!rec) {
+        rec = await generateRecommendation({ home_team: home, away_team: away, date, league: "E0", match_id: id });
+      }
       setRawRecommendation(rec);
       setMatch(
         applyRecommendation(
