@@ -48,7 +48,7 @@ class FeatureFactory:
             self._ensure_raw_matches_schema(conn)
             raw_df = conn.execute(
                 """
-                SELECT match_id, date, home_team, away_team,
+                SELECT match_id, league, date, home_team, away_team,
                        fthg, ftag, hs, "as", hst, ast, hc, ac, hy, ay, hr, ar,
                        odds_h, odds_d, odds_a,
                        avgh, avgd, avga, xg_h, xg_a, xga_h, xga_a,
@@ -329,8 +329,13 @@ class FeatureFactory:
         if not def_anchor.empty:
             features = features.merge(def_anchor, on="match_id", how="left")
 
-        # US#59: cold-start imputation — fill NaN rolling values with column means
-        features = self._apply_cold_start_imputation(features)
+        # US#59/US#134: cold-start imputation — fill NaN rolling values with
+        # column means, computed per competition so cross-league data never
+        # contaminates another league's fill values (see docstring for detail).
+        league_by_match_id = raw_df.set_index("match_id")["league"]
+        features = self._apply_cold_start_imputation(
+            features, league=features["match_id"].map(league_by_match_id)
+        )
 
         return features
 
@@ -740,12 +745,28 @@ class FeatureFactory:
         return home_feat.merge(away_feat, on="match_id", how="left")
 
     @staticmethod
-    def _apply_cold_start_imputation(features: pd.DataFrame) -> pd.DataFrame:
+    def _apply_cold_start_imputation(
+        features: pd.DataFrame, league: pd.Series | None = None
+    ) -> pd.DataFrame:
         """Fill rolling-feature NaN values (cold-start rows) with column-wise means.
 
         Teams with fewer prior matches than the window size produce NaN rolling
-        features. We impute with the overall column mean as a league-average prior.
+        features. We impute with a column mean as a league-average prior.
         MKT_ features are excluded — their NaN encodes genuine missing odds data.
+
+        US#134: the fill value is computed *per competition* when ``league`` is
+        supplied (a Series aligned positionally to ``features``, e.g.
+        ``features["match_id"].map(match_id_to_league)``). Before this, the mean
+        was taken across the whole DataFrame regardless of competition, so once a
+        second competition's rows enter the same table, a genuinely-cold-start gap
+        in one competition would get diluted by another competition's statistics
+        -- or, for a feature family a competition structurally can't populate,
+        would silently import another competition's typical values wholesale.
+        Grouping by league also means a competition whose entire column is NaN
+        stays NaN (no cross-competition fallback), which is the correct signal.
+        When ``league`` is omitted (or entirely null) we fall back to a single
+        global mean -- correct for call sites already scoped to one competition,
+        such as ``build_for_match``'s single-team-pair history.
         """
         skip_prefix = ("MKT_", "match_id")
         imputable = [
@@ -754,7 +775,12 @@ class FeatureFactory:
             and pd.api.types.is_float_dtype(features[col])
             and features[col].isna().any()
         ]
-        if imputable:
+        if not imputable:
+            return features
+        if league is not None and league.notna().any():
+            group_means = features[imputable].groupby(league.to_numpy()).transform("mean")
+            features[imputable] = features[imputable].fillna(group_means)
+        else:
             col_means = features[imputable].mean()
             features[imputable] = features[imputable].fillna(col_means)
         return features
@@ -865,7 +891,7 @@ class FeatureFactory:
             self._ensure_raw_matches_schema(conn)
             raw_df = conn.execute(
                 """
-                SELECT match_id, date, home_team, away_team,
+                SELECT match_id, league, date, home_team, away_team,
                        fthg, ftag, hs, "as", hst, ast, hc, ac, hy, ay, hr, ar,
                        odds_h, odds_d, odds_a,
                        avgh, avgd, avga, xg_h, xg_a, xga_h, xga_a,
@@ -889,7 +915,7 @@ class FeatureFactory:
         if raw_df.empty:
             # No history — build empty history, synthetic row only; cold-start imputation covers NaNs
             raw_df = pd.DataFrame(columns=[
-                "match_id", "date", "home_team", "away_team", "fthg", "ftag",
+                "match_id", "league", "date", "home_team", "away_team", "fthg", "ftag",
                 "hs", "as", "hst", "ast", "hc", "ac", "hy", "ay", "hr", "ar",
                 "odds_h", "odds_d", "odds_a", "avgh", "avgd", "avga",
                 "xg_h", "xg_a", "xga_h", "xga_a",
@@ -902,6 +928,7 @@ class FeatureFactory:
         avga_val = odds_a
         synthetic_row: dict = {
             "match_id": SYNTHETIC_ID,
+            "league": league,
             "date": pd.Timestamp(match_date),
             "home_team": home_norm,
             "away_team": away_norm,
@@ -1061,7 +1088,14 @@ class FeatureFactory:
         if not def_anchor.empty:
             features = features.merge(def_anchor, on="match_id", how="left")
 
-        features = self._apply_cold_start_imputation(features)
+        # US#134: group by league (see _apply_cold_start_imputation docstring).
+        # combined's "league" column covers each historical row's own
+        # competition plus the synthetic row's target league, so a team-name
+        # collision across competitions can't cross-contaminate fill values.
+        league_by_match_id = combined.set_index("match_id")["league"]
+        features = self._apply_cold_start_imputation(
+            features, league=features["match_id"].map(league_by_match_id)
+        )
 
         # Return the synthetic match row only
         row = features[features["match_id"] == SYNTHETIC_ID].copy()

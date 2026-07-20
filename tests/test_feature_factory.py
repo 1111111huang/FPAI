@@ -291,6 +291,82 @@ def test_compute_rolling_stats_no_data_leakage_for_sixth_match(tmp_path: Path) -
     assert pd.isna(match_6["OFF_AWAY_FTAG_R5"])
 
 
+def test_cold_start_imputation_is_scoped_per_competition(tmp_path: Path) -> None:
+    """US#134: the column-mean cold-start fill must be computed per competition.
+
+    Before this fix, _apply_cold_start_imputation() took a single mean across
+    the whole feature_store DataFrame, so once a second competition's rows
+    share the table, competition A's cold-start fill value would be diluted
+    by (and would shift whenever) competition B's unrelated statistics
+    changed. This regression test proves competition A ("E0") is unaffected
+    by changes to competition B's ("L2") data.
+    """
+
+    def _make_features(l2_fifth_fthg: int) -> pd.DataFrame:
+        db_path = tmp_path / f"test_fpai_{l2_fifth_fthg}.db"
+        config_path = tmp_path / f"config_{l2_fifth_fthg}.yaml"
+        config_path.write_text(
+            yaml.safe_dump({"paths": {"database_path": str(db_path)}}),
+            encoding="utf-8",
+        )
+        with duckdb.connect(str(db_path)) as conn:
+            _create_raw_matches_table(conn)
+            _insert_raw_matches(
+                conn,
+                [
+                    # Competition A (E0): Alpha FC builds a full 5-match R5
+                    # history, so a_m6 gets a real (non-NaN) OFF_HOME_FTHG_R5.
+                    ("a_m1", "E0", 1, "2025-08-01 20:00:00", "Alpha FC", "A-Opp1", 1, 0, 1.8, 3.4, 4.2, 1.8, 3.4, 4.2),
+                    ("a_m2", "E0", 1, "2025-08-08 20:00:00", "Alpha FC", "A-Opp2", 2, 1, 1.8, 3.4, 4.2, 1.8, 3.4, 4.2),
+                    ("a_m3", "E0", 1, "2025-08-15 20:00:00", "Alpha FC", "A-Opp3", 3, 0, 1.8, 3.4, 4.2, 1.8, 3.4, 4.2),
+                    ("a_m4", "E0", 1, "2025-08-22 20:00:00", "Alpha FC", "A-Opp4", 4, 1, 1.8, 3.4, 4.2, 1.8, 3.4, 4.2),
+                    ("a_m5", "E0", 1, "2025-08-29 20:00:00", "Alpha FC", "A-Opp5", 5, 0, 1.8, 3.4, 4.2, 1.8, 3.4, 4.2),
+                    ("a_m6", "E0", 1, "2025-09-05 20:00:00", "Alpha FC", "A-Opp6", 10, 10, 1.8, 3.4, 4.2, 1.8, 3.4, 4.2),
+                    # Competition A's cold-start row: Gamma FC's first-ever
+                    # home match (0 prior appearances) -- OFF_HOME_FTHG_R5 is
+                    # NaN pre-imputation and must be filled using E0 data alone.
+                    ("a_g1", "E0", 1, "2025-09-05 20:00:00", "Gamma FC", "A-Opp7", 2, 2, 1.8, 3.4, 4.2, 1.8, 3.4, 4.2),
+                    # Competition B (L2): a structurally unrelated competition
+                    # with much larger goal totals. b_m5's fthg is varied
+                    # between the two calls of this helper, which changes
+                    # b_m6's valid (non-NaN) OFF_HOME_FTHG_R5 -- exactly the
+                    # kind of cross-competition value that would leak into
+                    # competition A's fill under the old global-mean behavior.
+                    ("b_m1", "L2", 1, "2025-08-01 20:00:00", "Beta United", "B-Opp1", 20, 0, 1.8, 3.4, 4.2, 1.8, 3.4, 4.2),
+                    ("b_m2", "L2", 1, "2025-08-08 20:00:00", "Beta United", "B-Opp2", 21, 1, 1.8, 3.4, 4.2, 1.8, 3.4, 4.2),
+                    ("b_m3", "L2", 1, "2025-08-15 20:00:00", "Beta United", "B-Opp3", 22, 0, 1.8, 3.4, 4.2, 1.8, 3.4, 4.2),
+                    ("b_m4", "L2", 1, "2025-08-22 20:00:00", "Beta United", "B-Opp4", 23, 1, 1.8, 3.4, 4.2, 1.8, 3.4, 4.2),
+                    ("b_m5", "L2", 1, "2025-08-29 20:00:00", "Beta United", "B-Opp5", l2_fifth_fthg, 0, 1.8, 3.4, 4.2, 1.8, 3.4, 4.2),
+                    ("b_m6", "L2", 1, "2025-09-05 20:00:00", "Beta United", "B-Opp6", 10, 10, 1.8, 3.4, 4.2, 1.8, 3.4, 4.2),
+                ],
+            )
+
+        feature_factory = FeatureFactory(config_path=str(config_path))
+        return feature_factory.compute_rolling_stats(window=5)
+
+    features_low = _make_features(l2_fifth_fthg=24)
+    features_high = _make_features(l2_fifth_fthg=990)
+
+    # Sanity check the fixture actually varies competition B's own valid R5
+    # value between runs -- otherwise this test wouldn't exercise contamination.
+    beta_low = features_low.loc[features_low["match_id"] == "b_m6"].iloc[0]
+    beta_high = features_high.loc[features_high["match_id"] == "b_m6"].iloc[0]
+    assert beta_low["OFF_HOME_FTHG_R5"] == pytest.approx((20 + 21 + 22 + 23 + 24) / 5)
+    assert beta_high["OFF_HOME_FTHG_R5"] == pytest.approx((20 + 21 + 22 + 23 + 990) / 5)
+    assert beta_low["OFF_HOME_FTHG_R5"] != pytest.approx(beta_high["OFF_HOME_FTHG_R5"])
+
+    gamma_low = features_low.loc[features_low["match_id"] == "a_g1"].iloc[0]
+    gamma_high = features_high.loc[features_high["match_id"] == "a_g1"].iloc[0]
+
+    # Competition A's cold-start fill must equal the E0-only mean (Alpha FC's
+    # single valid R5 value, 3.0) and stay identical across both runs --
+    # unaffected by competition B's wildly different, changing data.
+    e0_only_mean = (1 + 2 + 3 + 4 + 5) / 5
+    assert gamma_low["OFF_HOME_FTHG_R5"] == pytest.approx(e0_only_mean)
+    assert gamma_high["OFF_HOME_FTHG_R5"] == pytest.approx(e0_only_mean)
+    assert gamma_low["OFF_HOME_FTHG_R5"] == pytest.approx(gamma_high["OFF_HOME_FTHG_R5"])
+
+
 def test_new_team_has_missing_rolling_history_in_expanded_schema(tmp_path: Path) -> None:
     db_path = tmp_path / "test_fpai.db"
     config_path = tmp_path / "config.yaml"
