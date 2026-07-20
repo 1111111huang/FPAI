@@ -17,7 +17,7 @@ from starlette.concurrency import run_in_threadpool
 
 load_dotenv()
 
-from app.backend import bets, recommendations, sandbox_clock
+from app.backend import bets, eod_batch, recommendations, sandbox_clock
 from app.backend.agent_config_hash import compute_agent_config_hash
 from app.backend.bet_tracker import BetTracker
 from app.backend.bets import BetFromRecommendationRequest, BetManualRequest, BetOut
@@ -202,6 +202,42 @@ async def get_fixtures(date_from: str | None = None, date_to: str | None = None)
     return matches
 
 
+def _fetch_odds_for_manual_request(request: RecommendationRequest) -> dict[str, float] | None:
+    """W49: best-effort odds lookup for the manual 'regenerate now' path,
+    reusing eod_batch.py's exact odds_client + match_odds team-matching
+    logic (BUG-015's canonical-name matching included) rather than
+    reimplementing it. Unlike run_eod_batch's build_odds_client() call
+    (fetched once for a whole batch of same-day fixtures), this fetches
+    fresh odds per manual request -- acceptable here since it's a single
+    user-triggered click, not a batch loop.
+
+    Every failure mode degrades to None (no odds attached) rather than
+    raising: no odds client configured (build_odds_client() returns None
+    when no ODDS_API_KEY/sandbox override is set), no matching odds event
+    for this fixture, or the odds client call itself raising (e.g. a
+    network error). This must never turn a previously-working no-odds
+    request into a 500 -- it's strictly additive over the pre-W49
+    behavior."""
+    try:
+        odds_client = build_odds_client()
+        if odds_client is None:
+            return None
+        odds_events = odds_client.get_odds()
+        odds_by_teams = eod_batch.odds_lookup(odds_events or [])
+        fixture = NormalizedMatch(
+            match_id=request.effective_match_id(), utc_date="", status="",
+            home_team=request.home_team, away_team=request.away_team,
+            home_goals=None, away_goals=None,
+        )
+        return eod_batch.match_odds(fixture, odds_by_teams)
+    except Exception:
+        LOGGER.warning(
+            "manual_recommendation_odds_fetch_failed | home=%s | away=%s | date=%s",
+            request.home_team, request.away_team, request.date, exc_info=True,
+        )
+        return None
+
+
 @app.post("/api/recommendations")
 async def create_recommendation(
     request: RecommendationRequest,
@@ -209,10 +245,28 @@ async def create_recommendation(
 ) -> MatchRecommendationOut:
     """The explicit 'regenerate now' escape hatch (W11) -- always calls the
     agent and writes the result into the cache, tagged manual_regenerate so
-    it's distinguishable from a scheduled (W09/W10) generation."""
+    it's distinguishable from a scheduled (W09/W10) generation.
+
+    W49: unlike the scheduled EOD/T-30 pipeline (eod_batch.py), this path
+    used to never fetch odds itself -- match_info["odds"] was purely
+    caller-supplied, and neither MatchCard nor MatchAnalysisPage ever
+    populate it, leaving the agent to rely on its own web_search (which
+    structurally can't succeed for a historical/sandboxed match, and
+    frequently fails for real matches too). Now mirrors run_eod_batch's
+    odds-fetch-before-run_agent sequence whenever the caller didn't already
+    supply odds explicitly -- an explicit request.odds always wins."""
+    match_info = request.to_match_info()
+    if request.odds is None:
+        # build_odds_client()/get_odds() make a real synchronous HTTP or DB
+        # call (HistoricalOddsClient/OddsAPIClient) -- off the event loop,
+        # same convention as the run_agent call directly below.
+        fetched_odds = await run_in_threadpool(_fetch_odds_for_manual_request, request)
+        if fetched_odds is not None:
+            match_info["odds"] = fetched_odds
+
     # run_agent is a real ~10-30s synchronous call (LLM + Tavily) -- must run
     # off the event loop or it blocks every other request.
-    raw = await run_in_threadpool(recommendations.run_agent, request.to_match_info())
+    raw = await run_in_threadpool(recommendations.run_agent, match_info)
     result = validate_and_degrade(raw)
 
     cache.record_generation(
