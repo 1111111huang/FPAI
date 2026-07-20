@@ -273,7 +273,13 @@ async def create_recommendation(
         match_id=request.effective_match_id(),
         date=request.date,
         agent_config_hash=compute_agent_config_hash(AgentConfig.default()),
-        odds=request.odds.model_dump() if request.odds else {},
+        # W49: record what was actually used for generation, not just what
+        # the caller explicitly supplied -- match_info["odds"] reflects the
+        # server-side fetch too. Recording request.odds alone would persist
+        # {} even when real odds were fetched and used, spuriously tricking
+        # t30_refresh.py's "odds unchanged, skip regeneration" dedup check
+        # into always seeing a change on the next comparison.
+        odds=match_info.get("odds", {}),
         recommendation=result.model_dump(),
         triggered_by="manual_regenerate",
     )

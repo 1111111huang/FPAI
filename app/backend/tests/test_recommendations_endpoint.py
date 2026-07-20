@@ -12,6 +12,7 @@ sys.path.append(str(Path(__file__).resolve().parents[3]))
 
 from fastapi.testclient import TestClient
 
+from app.backend import recommendations
 from app.backend.main import app
 from app.backend.odds_api_client import NormalizedOdds
 
@@ -197,3 +198,33 @@ def test_odds_client_raising_degrades_to_no_odds_not_a_500():
     assert response.status_code == 200
     match_info = mock_run.call_args.args[0]
     assert "odds" not in match_info
+
+
+def test_fetched_odds_are_recorded_in_the_cache_not_just_used_for_generation():
+    """W49 follow-up (code review finding): the cache write must persist
+    what was actually used for generation (match_info["odds"], including a
+    server-side fetch), not just request.odds -- otherwise a fetched-odds
+    generation is cached with odds={}, and t30_refresh.py's "odds unchanged,
+    skip regeneration" dedup check sees a spurious change on every
+    subsequent comparison."""
+    fetched_event = NormalizedOdds(
+        home_team="Arsenal", away_team="Everton", commence_time="2026-08-22T15:00:00Z",
+        home_odds=1.5, draw_odds=4.0, away_odds=6.0,
+    )
+    mock_cache = MagicMock()
+    app.dependency_overrides[recommendations.get_cache] = lambda: mock_cache
+    try:
+        with patch("app.backend.recommendations.run_agent", return_value=_VALID_RECOMMENDATION):
+            with patch("app.backend.main.build_odds_client", return_value=_odds_client_returning(fetched_event)):
+                with TestClient(app) as client:
+                    response = client.post(
+                        "/api/recommendations",
+                        json={"home_team": "Arsenal", "away_team": "Everton", "date": "2026-08-22", "league": "E0"},
+                    )
+    finally:
+        app.dependency_overrides.pop(recommendations.get_cache, None)
+
+    assert response.status_code == 200
+    mock_cache.record_generation.assert_called_once()
+    recorded_odds = mock_cache.record_generation.call_args.kwargs["odds"]
+    assert recorded_odds == {"home": 1.5, "draw": 4.0, "away": 6.0}
