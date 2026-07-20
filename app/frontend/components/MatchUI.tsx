@@ -598,20 +598,32 @@ export function DashboardPage() {
           // MatchExplorerPage already searches below (this codebase's
           // established precedent for "how far to look for the next real
           // fixtures"), sourced through the same W45-fixed /api/fixtures.
-          const to = new Date(asOf);
-          to.setUTCDate(to.getUTCDate() + 90);
-          const upcoming = await getFixtures(today, to.toISOString().slice(0, 10));
-          // Second await in this same guarded run -- re-check `cancelled`
-          // (it may have flipped while this fetch was in flight, e.g.
-          // asOf/retryTick changed again) before touching state, same as
-          // the primary fetch above.
-          if (cancelled) return;
-          const sorted = upcoming
-            .map(fixtureToMatch)
-            // API ordering isn't guaranteed -- sort so "next" is actually
-            // nearest-first. ISO 8601 strings sort correctly as strings.
-            .sort((a, b) => a.kickoffIso.localeCompare(b.kickoffIso));
-          setNextMatches(sorted.slice(0, 10));
+          //
+          // This fetch has its own try/catch, deliberately separate from
+          // the outer one: today's fixtures query already succeeded (0
+          // results, correctly recorded above) by the time this runs, so a
+          // failure here must not replace that already-correct "no
+          // fixtures today" state with a misleading top-level error --
+          // degrade to the plain empty message instead (code review
+          // finding on the first version of this fix).
+          try {
+            const to = new Date(asOf);
+            to.setUTCDate(to.getUTCDate() + 90);
+            const upcoming = await getFixtures(today, to.toISOString().slice(0, 10));
+            // Second await in this same guarded run -- re-check `cancelled`
+            // (it may have flipped while this fetch was in flight, e.g.
+            // asOf/retryTick changed again) before touching state, same as
+            // the primary fetch above.
+            if (cancelled) return;
+            const sorted = upcoming
+              .map(fixtureToMatch)
+              // API ordering isn't guaranteed -- sort so "next" is actually
+              // nearest-first. ISO 8601 strings sort correctly as strings.
+              .sort((a, b) => a.kickoffIso.localeCompare(b.kickoffIso));
+            setNextMatches(sorted.slice(0, 10));
+          } catch {
+            if (!cancelled) setNextMatches([]);
+          }
         }
       } catch (err) {
         if (!cancelled) setError(err instanceof ApiError ? err.message : "Could not load today's fixtures.");

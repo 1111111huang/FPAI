@@ -130,6 +130,28 @@ describe("Dashboard empty-window fallback (W46)", () => {
     expect(screen.queryByText(/next matches/i)).not.toBeInTheDocument();
   });
 
+  it("degrades to the plain empty state, not a misleading error, when the fallback fetch itself fails", async () => {
+    // Code review finding: today's query already succeeded (0 results,
+    // correctly recorded) by the time the fallback fetch runs -- a failure
+    // in that second, independent fetch must not replace the already-
+    // correct "no fixtures today" state with a top-level error implying
+    // the whole page failed to load.
+    const today = new Date().toISOString().slice(0, 10);
+
+    vi.mocked(getFixtures)
+      .mockResolvedValueOnce([]) // primary: today, genuinely empty
+      .mockRejectedValueOnce(new Error("network blip")); // fallback: fails
+
+    render(<DashboardPage />);
+
+    await waitFor(() => expect(getFixtures).toHaveBeenCalledWith(today, today));
+    await waitFor(() => expect(getFixtures).toHaveBeenCalledTimes(2));
+
+    expect(await screen.findByText("No E0 fixtures today.")).toBeInTheDocument();
+    expect(screen.queryByText(/could not load/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/next matches/i)).not.toBeInTheDocument();
+  });
+
   it("a stale fallback response from a superseded (cancelled) run does not overwrite the correct one", async () => {
     // Mirrors MatchUI.race.test.tsx (W42): useSandboxAsOf resolves
     // asynchronously, so DashboardPage's effect can fire twice in quick
