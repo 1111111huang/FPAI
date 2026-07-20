@@ -565,6 +565,11 @@ export function MatchCard({
 export function DashboardPage() {
   const { asOf, sandboxMode } = useSandboxAsOf();
   const [matches, setMatches] = useState<Match[] | null>(null);
+  // W46: populated only when the same-day query above comes back empty --
+  // null means "not attempted yet / still loading", [] means "attempted,
+  // genuinely nothing found in the forward window either" (still a
+  // non-crashing empty state, just without a fallback list to show).
+  const [nextMatches, setNextMatches] = useState<Match[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   // W42: bumped by the retry button to force a fresh load() run through the
   // same cancellation guard below, rather than calling load() imperatively
@@ -578,10 +583,36 @@ export function DashboardPage() {
     async function load() {
       setError(null);
       setMatches(null);
+      setNextMatches(null);
       try {
         const today = asOf.toISOString().slice(0, 10);
         const fixtures = await getFixtures(today, today);
-        if (!cancelled) setMatches(fixtures.map(fixtureToMatch));
+        if (cancelled) return;
+        setMatches(fixtures.map(fixtureToMatch));
+
+        if (fixtures.length === 0) {
+          // W46: same-day window empty (real off-season, or a past sandbox
+          // date before W45 fixed the underlying data source) -- fall back
+          // to the nearest matches going forward instead of leaving the
+          // Dashboard blank. Reuses the same 90-day forward window
+          // MatchExplorerPage already searches below (this codebase's
+          // established precedent for "how far to look for the next real
+          // fixtures"), sourced through the same W45-fixed /api/fixtures.
+          const to = new Date(asOf);
+          to.setUTCDate(to.getUTCDate() + 90);
+          const upcoming = await getFixtures(today, to.toISOString().slice(0, 10));
+          // Second await in this same guarded run -- re-check `cancelled`
+          // (it may have flipped while this fetch was in flight, e.g.
+          // asOf/retryTick changed again) before touching state, same as
+          // the primary fetch above.
+          if (cancelled) return;
+          const sorted = upcoming
+            .map(fixtureToMatch)
+            // API ordering isn't guaranteed -- sort so "next" is actually
+            // nearest-first. ISO 8601 strings sort correctly as strings.
+            .sort((a, b) => a.kickoffIso.localeCompare(b.kickoffIso));
+          setNextMatches(sorted.slice(0, 10));
+        }
       } catch (err) {
         if (!cancelled) setError(err instanceof ApiError ? err.message : "Could not load today's fixtures.");
       }
@@ -598,6 +629,10 @@ export function DashboardPage() {
     setMatches((prev) => prev?.map((m) => (m.id === updated.id ? updated : m)) ?? null);
   }
 
+  function updateNextMatch(updated: Match) {
+    setNextMatches((prev) => prev?.map((m) => (m.id === updated.id ? updated : m)) ?? null);
+  }
+
   return (
     <main className="mx-auto max-w-4xl px-4 py-8 sm:px-6">
       <DraftNav active="dashboard" />
@@ -611,7 +646,32 @@ export function DashboardPage() {
         {error && <ErrorState message={error} onRetry={() => setRetryTick((t) => t + 1)} />}
         {!error && matches === null && <LoadingRows />}
         {!error && matches !== null && matches.length === 0 && (
-          <p className="py-8 text-center text-sm text-ink-secondary">No E0 fixtures today.</p>
+          <>
+            {nextMatches === null && (
+              <>
+                <p className="py-4 text-center text-sm text-ink-secondary">No E0 fixtures today.</p>
+                <LoadingRows />
+              </>
+            )}
+            {nextMatches !== null && nextMatches.length === 0 && (
+              <p className="py-8 text-center text-sm text-ink-secondary">No E0 fixtures today.</p>
+            )}
+            {nextMatches !== null && nextMatches.length > 0 && (
+              <div>
+                {/* W46: explicitly not "today's" fixtures -- keep the
+                    distinction honest rather than presenting these as if
+                    they were happening today. */}
+                <p className="py-2 text-center text-sm text-ink-secondary">
+                  No E0 fixtures today — next matches:
+                </p>
+                <div className="flex flex-col gap-2.5">
+                  {nextMatches.map((m) => (
+                    <MatchCard key={m.id} match={m} onUpdate={updateNextMatch} asOf={asOf} sandboxMode={sandboxMode} />
+                  ))}
+                </div>
+              </div>
+            )}
+          </>
         )}
         {!error && matches && matches.length > 0 && (
           <div className="flex flex-col gap-2.5">
