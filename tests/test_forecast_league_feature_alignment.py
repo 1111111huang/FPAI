@@ -107,7 +107,10 @@ def _write_league_model(
 
     selection_path = config_path.parent / "config" / "model_selection.yaml"
     selection_path.write_text(
-        yaml.safe_dump({"contexts": {"league": {target: entry}}}),
+        # US#110: E0's model_selection.yaml bucket is now keyed by its own
+        # competition_id ("E0"), not the flat "league" string every
+        # competition_specific competition used to share.
+        yaml.safe_dump({"contexts": {"E0": {target: entry}}}),
         encoding="utf-8",
     )
 
@@ -128,7 +131,7 @@ def test_load_context_models_uses_model_own_metadata_feature_names(tmp_path: Pat
     )
 
     service = ForecastService(config_path=str(config_path), targets=["home_goals"])
-    loaded = service._load_context_models("league")
+    loaded = service._load_context_models("E0")
 
     assert "home_goals" in loaded
     _, __, metadata = loaded["home_goals"]

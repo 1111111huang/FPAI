@@ -174,7 +174,9 @@ def test_forecast_upcoming_e0_still_uses_competition_specific_tier(tmp_path: Pat
         {"E0": {"competition_id": "E0", "tier": "competition_specific", "league_code": "E0"}},
     )
     _write_raw_matches(config_path)
-    _write_model(config_path, context="league", target="home_goals", feature_names=["OFF_HOME_FTHG_R5", "MKT_IMPLIED_HOME"])
+    # US#110: E0's model_selection.yaml bucket is now keyed by its own
+    # competition_id ("E0"), not the flat "league" string.
+    _write_model(config_path, context="E0", target="home_goals", feature_names=["OFF_HOME_FTHG_R5", "MKT_IMPLIED_HOME"])
 
     service = ForecastService(config_path=str(config_path), targets=["home_goals"])
     result = service.forecast_upcoming(

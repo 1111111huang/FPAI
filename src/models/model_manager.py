@@ -42,7 +42,7 @@ class ModelManager:
         feature_version: str = "v1",
         target_config: dict[str, str | float | int] | None = None,
         feature_subset: list[str] | None = None,
-        context: str = "league",
+        context: str = "E0",
         competition_id: str = "E0",
     ) -> None:
         """Initialize manager with a model instance and YAML config path."""

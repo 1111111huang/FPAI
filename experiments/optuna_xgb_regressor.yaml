@@ -4,7 +4,7 @@ version: v1
 model_type: xgb_regressor
 feature_schema_version: v1
 league: E0
-context: league
+context: E0
 test_season: time_split
 
 # US#70: Optuna TPE sampler — continuous search space for XGBoost regressors (goals/corners)

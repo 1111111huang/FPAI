@@ -1,182 +1,5 @@
 contexts:
-  international:
-    away_corners:
-      feature_subset:
-      - MKT_IMPLIED_HOME
-      - MKT_IMPLIED_DRAW
-      - MKT_IMPLIED_AWAY
-      - MKT_OVERROUND
-      - MKT_LAMBDA_TOTAL
-      - MKT_LAMBDA_HOME
-      - MKT_LAMBDA_AWAY
-      - MKT_POISSON_BTTS_PROB
-      - MKT_LAMBDA_AH_DIFF
-      - MKT_AH_LINE
-      - MKT_AH_HOME_ODDS
-      - MKT_AH_AWAY_ODDS
-      - MKT_IMPLIED_OVER25
-      metric_name: test_mae
-      metric_value: 2.112464
-      mlflow_run_id: c1e6414ed0ab41ae83d017d4e4405c98
-      model_path: models/away_corners_xgboostregressor_v1_20260711.joblib
-      model_type: xgboostregressor
-      previous_model_path: file:///Users/tianqihuang/Documents/GitHub/FPAI/mlruns/987034761344100564/2be793ef5ff54691b169883a0ed11bbf/artifacts/model
-      selected_at: '2026-07-12T03:58:53Z'
-    away_goals:
-      feature_subset:
-      - MKT_IMPLIED_HOME
-      - MKT_IMPLIED_DRAW
-      - MKT_IMPLIED_AWAY
-      - MKT_OVERROUND
-      - MKT_LAMBDA_TOTAL
-      - MKT_LAMBDA_HOME
-      - MKT_LAMBDA_AWAY
-      - MKT_POISSON_BTTS_PROB
-      - MKT_LAMBDA_AH_DIFF
-      - MKT_AH_LINE
-      - MKT_AH_HOME_ODDS
-      - MKT_AH_AWAY_ODDS
-      - MKT_IMPLIED_OVER25
-      metric_name: test_mae
-      metric_value: 0.830741
-      mlflow_run_id: 8fd627a45f214077bf2508ce07f3e818
-      model_path: models/away_goals_xgboostregressor_v1_20260711.joblib
-      model_type: xgboostregressor
-      previous_model_path: file:///Users/tianqihuang/Documents/GitHub/FPAI/mlruns/576788159280847753/1900a62a24464f329680cfcb6ee7dbe5/artifacts/model
-      selected_at: '2026-07-12T03:26:28Z'
-    btts:
-      feature_subset:
-      - MKT_IMPLIED_HOME
-      - MKT_IMPLIED_DRAW
-      - MKT_IMPLIED_AWAY
-      - MKT_OVERROUND
-      - MKT_LAMBDA_TOTAL
-      - MKT_LAMBDA_HOME
-      - MKT_LAMBDA_AWAY
-      - MKT_POISSON_BTTS_PROB
-      - MKT_LAMBDA_AH_DIFF
-      - MKT_AH_LINE
-      - MKT_AH_HOME_ODDS
-      - MKT_AH_AWAY_ODDS
-      - MKT_IMPLIED_OVER25
-      metric_name: test_log_loss
-      metric_value: 0.68626
-      mlflow_run_id: 3b6dd967406b46e68c383c51b52b44fd
-      model_path: models/btts_lr_v1_20260711.joblib
-      model_type: lr
-      previous_model_path: models/btts_xgboost_v1_20260628.joblib
-      selected_at: '2026-07-12T02:57:27Z'
-    home_corners:
-      feature_subset:
-      - MKT_IMPLIED_HOME
-      - MKT_IMPLIED_DRAW
-      - MKT_IMPLIED_AWAY
-      - MKT_OVERROUND
-      - MKT_LAMBDA_TOTAL
-      - MKT_LAMBDA_HOME
-      - MKT_LAMBDA_AWAY
-      - MKT_POISSON_BTTS_PROB
-      - MKT_LAMBDA_AH_DIFF
-      - MKT_AH_LINE
-      - MKT_AH_HOME_ODDS
-      - MKT_AH_AWAY_ODDS
-      - MKT_IMPLIED_OVER25
-      metric_name: test_mae
-      metric_value: 2.189879
-      mlflow_run_id: f2ebcc1fa37d4804a8e626deb143cc32
-      model_path: models/home_corners_xgboostregressor_v1_20260711.joblib
-      model_type: xgboostregressor
-      previous_model_path: file:///Users/tianqihuang/Documents/GitHub/FPAI/mlruns/802690824096537957/f81f1d2ccf34434b8fec592e90160d0f/artifacts/model
-      selected_at: '2026-07-12T04:09:59Z'
-    home_goals:
-      feature_subset:
-      - MKT_IMPLIED_HOME
-      - MKT_IMPLIED_DRAW
-      - MKT_IMPLIED_AWAY
-      - MKT_OVERROUND
-      - MKT_LAMBDA_TOTAL
-      - MKT_LAMBDA_HOME
-      - MKT_LAMBDA_AWAY
-      - MKT_POISSON_BTTS_PROB
-      - MKT_LAMBDA_AH_DIFF
-      - MKT_AH_LINE
-      - MKT_AH_HOME_ODDS
-      - MKT_AH_AWAY_ODDS
-      - MKT_IMPLIED_OVER25
-      metric_name: test_mae
-      metric_value: 0.949844
-      mlflow_run_id: 1f9ddc9adbea4089932d66e9258049c6
-      model_path: models/home_goals_xgboostregressor_v1_20260711.joblib
-      model_type: xgboostregressor
-      previous_model_path: file:///Users/tianqihuang/Documents/GitHub/FPAI/mlruns/446108612046927721/da0e66ad9df44e9cbb01055c3a8b24ca/artifacts/model
-      selected_at: '2026-07-12T03:36:54Z'
-    result_3way:
-      feature_subset:
-      - MKT_IMPLIED_HOME
-      - MKT_IMPLIED_DRAW
-      - MKT_IMPLIED_AWAY
-      - MKT_OVERROUND
-      - MKT_LAMBDA_TOTAL
-      - MKT_LAMBDA_HOME
-      - MKT_LAMBDA_AWAY
-      - MKT_POISSON_BTTS_PROB
-      - MKT_LAMBDA_AH_DIFF
-      - MKT_AH_LINE
-      - MKT_AH_HOME_ODDS
-      - MKT_AH_AWAY_ODDS
-      - MKT_IMPLIED_OVER25
-      metric_name: test_log_loss
-      metric_value: 1.023317
-      mlflow_run_id: 199f90ad28324237ade03798fad6b541
-      model_path: models/result_3way_lr_v1_20260711.joblib
-      model_type: lr
-      previous_model_path: file:///Users/tianqihuang/Documents/GitHub/FPAI/mlruns/276600809103990075/487b5974470a4c9ab12ea60d8f08d010/artifacts/model
-      selected_at: '2026-07-12T03:07:38Z'
-    total_corners:
-      feature_subset:
-      - MKT_IMPLIED_HOME
-      - MKT_IMPLIED_DRAW
-      - MKT_IMPLIED_AWAY
-      - MKT_OVERROUND
-      - MKT_LAMBDA_TOTAL
-      - MKT_LAMBDA_HOME
-      - MKT_LAMBDA_AWAY
-      - MKT_POISSON_BTTS_PROB
-      - MKT_LAMBDA_AH_DIFF
-      - MKT_AH_LINE
-      - MKT_AH_HOME_ODDS
-      - MKT_AH_AWAY_ODDS
-      - MKT_IMPLIED_OVER25
-      metric_name: test_mae
-      metric_value: 2.688234
-      mlflow_run_id: 25a780e1ce9340548892eed7662f520c
-      model_path: models/total_corners_xgboostregressor_v1_20260711.joblib
-      model_type: xgboostregressor
-      previous_model_path: file:///Users/tianqihuang/Documents/GitHub/FPAI/mlruns/602613335574691346/5e3ce6f50030401d9a0ce6b33a21d19e/artifacts/model
-      selected_at: '2026-07-12T03:43:48Z'
-    total_goals:
-      feature_subset:
-      - MKT_IMPLIED_HOME
-      - MKT_IMPLIED_DRAW
-      - MKT_IMPLIED_AWAY
-      - MKT_OVERROUND
-      - MKT_LAMBDA_TOTAL
-      - MKT_LAMBDA_HOME
-      - MKT_LAMBDA_AWAY
-      - MKT_POISSON_BTTS_PROB
-      - MKT_LAMBDA_AH_DIFF
-      - MKT_AH_LINE
-      - MKT_AH_HOME_ODDS
-      - MKT_AH_AWAY_ODDS
-      - MKT_IMPLIED_OVER25
-      metric_name: test_mae
-      metric_value: 1.247302
-      mlflow_run_id: 87d2de082817491f8f4d4aae59f7a792
-      model_path: models/total_goals_xgboostregressor_v1_20260711.joblib
-      model_type: xgboostregressor
-      previous_model_path: file:///Users/tianqihuang/Documents/GitHub/FPAI/mlruns/734852998282319003/b7d7fb3622b041929cc20dd92ba10bda/artifacts/model
-      selected_at: '2026-07-12T03:47:16Z'
-  league:
+  E0:
     away_corners:
       metric_name: test_mae
       metric_value: 2.0786
@@ -388,3 +211,180 @@ contexts:
       model_type: xgb_regressor
       previous_model_path: models/total_goals_randomforestregressor_v1_20260705.joblib
       selected_at: '2026-07-06T08:04:44Z'
+  international:
+    away_corners:
+      feature_subset:
+      - MKT_IMPLIED_HOME
+      - MKT_IMPLIED_DRAW
+      - MKT_IMPLIED_AWAY
+      - MKT_OVERROUND
+      - MKT_LAMBDA_TOTAL
+      - MKT_LAMBDA_HOME
+      - MKT_LAMBDA_AWAY
+      - MKT_POISSON_BTTS_PROB
+      - MKT_LAMBDA_AH_DIFF
+      - MKT_AH_LINE
+      - MKT_AH_HOME_ODDS
+      - MKT_AH_AWAY_ODDS
+      - MKT_IMPLIED_OVER25
+      metric_name: test_mae
+      metric_value: 2.112464
+      mlflow_run_id: c1e6414ed0ab41ae83d017d4e4405c98
+      model_path: models/away_corners_xgboostregressor_v1_20260711.joblib
+      model_type: xgboostregressor
+      previous_model_path: file:///Users/tianqihuang/Documents/GitHub/FPAI/mlruns/987034761344100564/2be793ef5ff54691b169883a0ed11bbf/artifacts/model
+      selected_at: '2026-07-12T03:58:53Z'
+    away_goals:
+      feature_subset:
+      - MKT_IMPLIED_HOME
+      - MKT_IMPLIED_DRAW
+      - MKT_IMPLIED_AWAY
+      - MKT_OVERROUND
+      - MKT_LAMBDA_TOTAL
+      - MKT_LAMBDA_HOME
+      - MKT_LAMBDA_AWAY
+      - MKT_POISSON_BTTS_PROB
+      - MKT_LAMBDA_AH_DIFF
+      - MKT_AH_LINE
+      - MKT_AH_HOME_ODDS
+      - MKT_AH_AWAY_ODDS
+      - MKT_IMPLIED_OVER25
+      metric_name: test_mae
+      metric_value: 0.830741
+      mlflow_run_id: 8fd627a45f214077bf2508ce07f3e818
+      model_path: models/away_goals_xgboostregressor_v1_20260711.joblib
+      model_type: xgboostregressor
+      previous_model_path: file:///Users/tianqihuang/Documents/GitHub/FPAI/mlruns/576788159280847753/1900a62a24464f329680cfcb6ee7dbe5/artifacts/model
+      selected_at: '2026-07-12T03:26:28Z'
+    btts:
+      feature_subset:
+      - MKT_IMPLIED_HOME
+      - MKT_IMPLIED_DRAW
+      - MKT_IMPLIED_AWAY
+      - MKT_OVERROUND
+      - MKT_LAMBDA_TOTAL
+      - MKT_LAMBDA_HOME
+      - MKT_LAMBDA_AWAY
+      - MKT_POISSON_BTTS_PROB
+      - MKT_LAMBDA_AH_DIFF
+      - MKT_AH_LINE
+      - MKT_AH_HOME_ODDS
+      - MKT_AH_AWAY_ODDS
+      - MKT_IMPLIED_OVER25
+      metric_name: test_log_loss
+      metric_value: 0.68626
+      mlflow_run_id: 3b6dd967406b46e68c383c51b52b44fd
+      model_path: models/btts_lr_v1_20260711.joblib
+      model_type: lr
+      previous_model_path: models/btts_xgboost_v1_20260628.joblib
+      selected_at: '2026-07-12T02:57:27Z'
+    home_corners:
+      feature_subset:
+      - MKT_IMPLIED_HOME
+      - MKT_IMPLIED_DRAW
+      - MKT_IMPLIED_AWAY
+      - MKT_OVERROUND
+      - MKT_LAMBDA_TOTAL
+      - MKT_LAMBDA_HOME
+      - MKT_LAMBDA_AWAY
+      - MKT_POISSON_BTTS_PROB
+      - MKT_LAMBDA_AH_DIFF
+      - MKT_AH_LINE
+      - MKT_AH_HOME_ODDS
+      - MKT_AH_AWAY_ODDS
+      - MKT_IMPLIED_OVER25
+      metric_name: test_mae
+      metric_value: 2.189879
+      mlflow_run_id: f2ebcc1fa37d4804a8e626deb143cc32
+      model_path: models/home_corners_xgboostregressor_v1_20260711.joblib
+      model_type: xgboostregressor
+      previous_model_path: file:///Users/tianqihuang/Documents/GitHub/FPAI/mlruns/802690824096537957/f81f1d2ccf34434b8fec592e90160d0f/artifacts/model
+      selected_at: '2026-07-12T04:09:59Z'
+    home_goals:
+      feature_subset:
+      - MKT_IMPLIED_HOME
+      - MKT_IMPLIED_DRAW
+      - MKT_IMPLIED_AWAY
+      - MKT_OVERROUND
+      - MKT_LAMBDA_TOTAL
+      - MKT_LAMBDA_HOME
+      - MKT_LAMBDA_AWAY
+      - MKT_POISSON_BTTS_PROB
+      - MKT_LAMBDA_AH_DIFF
+      - MKT_AH_LINE
+      - MKT_AH_HOME_ODDS
+      - MKT_AH_AWAY_ODDS
+      - MKT_IMPLIED_OVER25
+      metric_name: test_mae
+      metric_value: 0.949844
+      mlflow_run_id: 1f9ddc9adbea4089932d66e9258049c6
+      model_path: models/home_goals_xgboostregressor_v1_20260711.joblib
+      model_type: xgboostregressor
+      previous_model_path: file:///Users/tianqihuang/Documents/GitHub/FPAI/mlruns/446108612046927721/da0e66ad9df44e9cbb01055c3a8b24ca/artifacts/model
+      selected_at: '2026-07-12T03:36:54Z'
+    result_3way:
+      feature_subset:
+      - MKT_IMPLIED_HOME
+      - MKT_IMPLIED_DRAW
+      - MKT_IMPLIED_AWAY
+      - MKT_OVERROUND
+      - MKT_LAMBDA_TOTAL
+      - MKT_LAMBDA_HOME
+      - MKT_LAMBDA_AWAY
+      - MKT_POISSON_BTTS_PROB
+      - MKT_LAMBDA_AH_DIFF
+      - MKT_AH_LINE
+      - MKT_AH_HOME_ODDS
+      - MKT_AH_AWAY_ODDS
+      - MKT_IMPLIED_OVER25
+      metric_name: test_log_loss
+      metric_value: 1.023317
+      mlflow_run_id: 199f90ad28324237ade03798fad6b541
+      model_path: models/result_3way_lr_v1_20260711.joblib
+      model_type: lr
+      previous_model_path: file:///Users/tianqihuang/Documents/GitHub/FPAI/mlruns/276600809103990075/487b5974470a4c9ab12ea60d8f08d010/artifacts/model
+      selected_at: '2026-07-12T03:07:38Z'
+    total_corners:
+      feature_subset:
+      - MKT_IMPLIED_HOME
+      - MKT_IMPLIED_DRAW
+      - MKT_IMPLIED_AWAY
+      - MKT_OVERROUND
+      - MKT_LAMBDA_TOTAL
+      - MKT_LAMBDA_HOME
+      - MKT_LAMBDA_AWAY
+      - MKT_POISSON_BTTS_PROB
+      - MKT_LAMBDA_AH_DIFF
+      - MKT_AH_LINE
+      - MKT_AH_HOME_ODDS
+      - MKT_AH_AWAY_ODDS
+      - MKT_IMPLIED_OVER25
+      metric_name: test_mae
+      metric_value: 2.688234
+      mlflow_run_id: 25a780e1ce9340548892eed7662f520c
+      model_path: models/total_corners_xgboostregressor_v1_20260711.joblib
+      model_type: xgboostregressor
+      previous_model_path: file:///Users/tianqihuang/Documents/GitHub/FPAI/mlruns/602613335574691346/5e3ce6f50030401d9a0ce6b33a21d19e/artifacts/model
+      selected_at: '2026-07-12T03:43:48Z'
+    total_goals:
+      feature_subset:
+      - MKT_IMPLIED_HOME
+      - MKT_IMPLIED_DRAW
+      - MKT_IMPLIED_AWAY
+      - MKT_OVERROUND
+      - MKT_LAMBDA_TOTAL
+      - MKT_LAMBDA_HOME
+      - MKT_LAMBDA_AWAY
+      - MKT_POISSON_BTTS_PROB
+      - MKT_LAMBDA_AH_DIFF
+      - MKT_AH_LINE
+      - MKT_AH_HOME_ODDS
+      - MKT_AH_AWAY_ODDS
+      - MKT_IMPLIED_OVER25
+      metric_name: test_mae
+      metric_value: 1.247302
+      mlflow_run_id: 87d2de082817491f8f4d4aae59f7a792
+      model_path: models/total_goals_xgboostregressor_v1_20260711.joblib
+      model_type: xgboostregressor
+      previous_model_path: file:///Users/tianqihuang/Documents/GitHub/FPAI/mlruns/734852998282319003/b7d7fb3622b041929cc20dd92ba10bda/artifacts/model
+      selected_at: '2026-07-12T03:47:16Z'

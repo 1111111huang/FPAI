@@ -136,7 +136,10 @@ def _write_e0_league_model(config_path: Path, feature_names: list[str]) -> None:
         encoding="utf-8",
     )
     (config_path.parent / "config" / "model_selection.yaml").write_text(
-        yaml.safe_dump({"contexts": {"league": {"home_goals": {
+        # US#110: E0's bucket is keyed by its own competition_id ("E0"), not
+        # the flat "league" string every competition_specific competition
+        # used to share.
+        yaml.safe_dump({"contexts": {"E0": {"home_goals": {
             "model_path": str(model_path.relative_to(config_path.parent)),
             "model_type": "DummyRegressorModel", "metric_name": "test_mae", "metric_value": 1.0,
             "selected_at": "2026-07-01T00:00:00Z", "feature_subset": feature_names,

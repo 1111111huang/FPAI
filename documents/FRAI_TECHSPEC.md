@@ -1437,3 +1437,45 @@ Off-season no-op behavior (no new matches available) and measurable `MAX(date)` 
 ### 30.3 Relationship to the Web App's Own Scheduler
 
 This scheduler is deliberately **independent** of `documents/app_user_stories.md`'s W08 (the web app's own scheduler infrastructure), which was not yet built at the time US#109 shipped. Ownership of "which process actually runs the weekly refresh in production" was an explicitly open question this story did not resolve — `schedule-refresh` exists as a standalone CLI entry point today so it can be run under any supervisor immediately, with the option to fold it into W08 later if that turns out to be the better long-term home. Do not assume the two schedulers have been unified; as of this writing they remain two separate, independently-invokable mechanisms.
+
+## 31. Phase 18: Per-Competition Model Context (Completed — US#110)
+
+### 31.1 Motivation
+
+Section 27.2 established two model tiers — `general_purpose` (market-odds-only, usable for any competition) and `competition_specific` (full team-form feature set) — via the `config/competitions.yaml` registry. Only one `competition_specific` competition (`E0`) exists today, but a second (Sweden's Allsvenskan, `league_code: SWE`) is planned in a later, separate story. Before that registration can happen safely, a latent bug had to be fixed: `ForecastService.forecast_upcoming()` resolved model context as a flat binary —
+
+```python
+effective_context = "international" if tier == "general_purpose" else "league"
+```
+
+— meaning **every** `competition_specific` competition, present or future, shared the single `contexts.league` bucket in `config/model_selection.yaml`. Had a second competition_specific competition been trained under this code, its models would have silently collided with (overwritten, or been overwritten by) E0's entries in that file — the collision would surface as a runtime feature-shape mismatch or a mislabeled prediction, not a loud error at training time.
+
+### 31.2 Per-Competition Context Resolution
+
+**Verified against `src/forecast/forecast_service.py`:** `forecast_upcoming()`'s registry lookup (added by US#107, Section 29.2) now also captures `competition_def.competition_id`, not just `.tier`. `effective_context` is `"international"` for any `general_purpose`-tier (or unregistered) competition — unchanged from US#107 — but for a `competition_specific` competition it is now the competition's own `competition_id` (e.g. `"E0"`), not the literal string `"league"`. `_load_context_models(context)` is unchanged (already generic on the context string); it now simply gets called with `"E0"` instead of `"league"`.
+
+**Verified against `src/logic/competition_registry.py`:** a new `list_context_keys(registry_path=DEFAULT_REGISTRY_PATH) -> list[str]` derives the full set of `model_selection.yaml` context-bucket keys from the registry: every `competition_specific` `competition_id`, sorted, plus a single trailing `"international"` bucket shared by *all* `general_purpose` competitions (that collapsing is intentional and predates this story — `general_purpose` models are market-odds-only and usable for any competition, so they don't need per-competition buckets). Today this returns `["E0", "international"]`; once `SWE` is registered `competition_specific`, it will return `["E0", "SWE", "international"]` with no further code change.
+
+**Verified against `src/models/model_manager.py`:** `ModelManager.__init__`'s `context` parameter default changed from `"league"` to `"E0"`, matching its existing `competition_id: str = "E0"` default (both already existed pre-US#110; this story just made their defaults consistent). The `context` value is used verbatim as the `tags.context` MLflow tag `ModelSelector._fetch_eligible_runs()` filters on.
+
+### 31.3 ModelSelector: Dynamic Context Enumeration & Deprecated Alias
+
+**Verified against `src/utils/model_selection.py`:** `ModelSelector.run()`'s default behavior (when `--context` is omitted) changed from the hardcoded `contexts = ["league", "international"]` to `contexts = _default_contexts(self.registry_path)`, which calls `list_context_keys()` (Section 31.2) — so a newly-registered `competition_specific` competition is automatically promoted into its own bucket by a bare `select-best-models` invocation, rather than silently never being selected (the old hardcoded pair had no way to "see" a third competition). `ModelSelector.__init__` gained an optional `registry_path` constructor argument (defaults to `config/competitions.yaml`) so this is testable without touching the real registry.
+
+`"league"` is retained as a **deprecated alias for `"E0"`**, not removed and not reinterpreted as "all competition_specific competitions" — `_resolve_context_alias()` maps it before use (in `ModelSelector.run()`) and logs a warning, so `select-best-models --context league` (or a caller still passing that string) keeps promoting into `contexts.E0` exactly as before, rather than silently changing behavior underneath an unmigrated caller. `main.py`'s `run_train_target`/`run_train_forecast_suite` apply the same one-line alias check before resolving `competition_id` via the registry.
+
+`_fetch_eligible_runs`, `_best_run`, and `_select_for_target_context` were **not** changed — they already treated `context` as an opaque string, with no embedded assumption about its value being `"league"` or `"international"`.
+
+### 31.4 CLI & Status Surfaces
+
+**Verified against `main.py`:** `train-target`/`train-forecast-suite --context` now accepts any competition_id string (default `"E0"`; the `choices=["league", "international"]` restriction was removed, since valid values are registry-dependent, not a fixed compile-time set) and is passed straight through to `ModelManager` as both `context=competition_id` and `competition_id=competition_id` — previously these were two separately-resolved values (`context` was the raw CLI string, `competition_id` was hardcoded `"E0"`/`"international"`) that could in principle drift apart; they're now derived from the same resolved value. The `status` command's per-context listing and `src/tools/model_tools.get_model_status()` (MCP-facing) both switched from the hardcoded `["league", "international"]` pair to `list_context_keys()` (unioned with whatever keys are actually present on disk, so a stale/legacy bucket still displays rather than being silently hidden).
+
+### 31.5 Migration
+
+`config/model_selection.yaml`'s `contexts.league` block was renamed to `contexts.E0` — verified programmatically to be byte-for-byte equivalent aside from the key rename (no model paths, metrics, or MLflow run IDs were touched). `experiments/optuna_xgb_classifier.yaml` and `experiments/optuna_xgb_regressor.yaml` (the actual Optuna sweep configs that produce E0's champion runs) had their `context: league` field updated to `context: E0` to match, and `src/utils/sweep_runner.py`'s `OptunaRunner` fallback default (used when a sweep config omits `context` entirely) was updated from `"league"` to `"E0"` for the same reason — without this, a future optuna sweep run omitting `context` would have tagged itself `"league"`, which `ModelSelector` would no longer look for under the new `"E0"` bucket.
+
+### 31.6 Tests
+
+New `tests/test_per_competition_context.py` (6 tests): `list_context_keys()` unit tests (real registry regression; a fictional second `competition_specific` competition getting its own bucket; the `general_purpose`-collapse-to-one-bucket regression); an end-to-end `ForecastService` test registering a fictional second competition_specific competition (`"T2"`) alongside E0 with distinct dummy models and confirming each forecast call returns the correct model's output with no cross-contamination in either direction; two `ModelSelector` tests (default-context enumeration writing two independent buckets from mocked MLflow runs; the `--context league` alias resolving to `contexts.E0`). Sweden (`SWE`) itself is **not** registered anywhere by this story — deliberately out of scope, planned as a separate follow-up.
+
+Existing tests that constructed a `config/model_selection.yaml` fixture under the old `contexts.league` key (`tests/test_forecast_league_feature_alignment.py`, `tests/test_forecast_registry_fallback.py`, `tests/test_unknown_team_flag.py`) were updated to `contexts.E0` — each failed correctly (`FileNotFoundError: No target model artifacts found for context 'E0'`) against the pre-fix bucket lookup before being updated, confirming the fixtures were actually exercising the changed code path rather than passing vacuously. Full suite: 518 passed / 23 skipped, zero regressions.

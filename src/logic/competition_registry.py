@@ -104,3 +104,21 @@ def resolve_feature_subset_for_tier(tier: str) -> list[str] | None:
     if tier == "competition_specific":
         return None
     raise ValueError(f"Unknown tier '{tier}'. Must be one of {VALID_TIERS}.")
+
+
+def list_context_keys(registry_path: str | Path = DEFAULT_REGISTRY_PATH) -> list[str]:
+    """Return the model_selection.yaml `contexts` bucket keys implied by the registry (US#110).
+
+    Every `competition_specific` competition gets its own bucket keyed by its
+    `competition_id` (e.g. "E0", "SWE"), so two competition_specific competitions
+    never collide over the same model_selection.yaml entry. All `general_purpose`
+    competitions still share a single "international" bucket, since that tier's
+    models are market-odds-only and usable for any competition — that collapsing
+    is intentional and predates this story (see forecast_upcoming's
+    effective_context resolution in src/forecast/forecast_service.py).
+    """
+    definitions = list_competition_definitions(registry_path)
+    competition_specific_ids = sorted(
+        definition.competition_id for definition in definitions if definition.tier == "competition_specific"
+    )
+    return [*competition_specific_ids, "international"]

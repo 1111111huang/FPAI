@@ -322,7 +322,10 @@ class OptunaRunner:
                         "sweep_stage": stage,
                         "experiment_version": version,
                         "sampler": "optuna_tpe",
-                        "context": str(config.get("context", "league")),
+                        # US#110: default context is now the E0 competition_id
+                        # bucket, not the flat "league" string every
+                        # competition_specific competition used to share.
+                        "context": str(config.get("context", "E0")),
                     }
                 )
                 extra_tags = config.get("tags", {})

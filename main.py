@@ -20,7 +20,7 @@ from src.evaluation.mlflow_cleanup import MLflowStoreCleanup, save_cleanup_repor
 from src.forecast import ForecastService
 from src.ingestion import CSVLoader, FootballDataScraper
 from src.logic.target_registry import get_target_definition, list_target_definitions
-from src.logic.competition_registry import get_competition_definition, resolve_feature_subset_for_tier
+from src.logic.competition_registry import get_competition_definition, list_context_keys, resolve_feature_subset_for_tier
 from src.models import (
     LRModel,
     ModelFactory,
@@ -99,8 +99,9 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Optional model override. Defaults to lr for classification and rf_regressor for regression.",
     )
     train_target_parser.add_argument(
-        "--context", type=str, default="league", choices=["league", "international"],
-        help="Training context: league (all features) or international (MKT_* only).",
+        "--context", type=str, default="E0",
+        help="Training context: a registered competition_id (e.g. E0, international). "
+             "'league' is accepted as a deprecated alias for E0.",
     )
 
     # train-forecast-suite
@@ -111,8 +112,9 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Optional subset of forecast targets to train.",
     )
     train_suite_parser.add_argument(
-        "--context", type=str, default="league", choices=["league", "international"],
-        help="Training context: league (all features) or international (MKT_* only).",
+        "--context", type=str, default="E0",
+        help="Training context: a registered competition_id (e.g. E0, international). "
+             "'league' is accepted as a deprecated alias for E0.",
     )
 
     # forecast
@@ -148,8 +150,8 @@ def _build_parser() -> argparse.ArgumentParser:
     compare_parser.add_argument("--output_path", type=str, default=None, help="Optional output report path.")
     compare_parser.add_argument("--format", type=str, default="csv", choices=["csv", "json", "html"], help="Report format.")
     compare_parser.add_argument(
-        "--context", type=str, default=None, choices=["league", "international"],
-        help="Filter MLflow runs by context tag (league or international).",
+        "--context", type=str, default=None,
+        help="Filter MLflow runs by context tag (a competition_id, e.g. E0, international).",
     )
 
     # sweep-target
@@ -253,8 +255,9 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Restrict selection to one target.",
     )
     select_parser.add_argument(
-        "--context", type=str, default=None, choices=["league", "international"],
-        help="Restrict selection to one context.",
+        "--context", type=str, default=None,
+        help="Restrict selection to one context (a competition_id, e.g. E0, international, "
+             "or the deprecated alias 'league' for E0). Omit to process every registered context.",
     )
     select_parser.add_argument("--dry-run", action="store_true", help="Print proposed changes without writing.")
     select_parser.add_argument("--min_improvement", type=float, default=0.005, help="Minimum metric improvement required to replace current selection.")
@@ -528,7 +531,7 @@ def _xgb_params_for_target(target_name: str, model_key: str) -> dict:
     return {"objective": "binary:logistic", "eval_metric": "logloss"}
 
 
-def run_train_target(target_name: str, model_name: str | None = None, context: str = "league") -> Path:
+def run_train_target(target_name: str, model_name: str | None = None, context: str = "E0") -> Path:
     """Train one registry-backed forecast target model."""
     definition = get_target_definition(target_name)
     selected_model = (model_name or _default_model_for_target(definition.name)).strip().lower()
@@ -543,17 +546,19 @@ def run_train_target(target_name: str, model_name: str | None = None, context: s
         xgb_params = _xgb_params_for_target(target_name, selected_model)
         model = model_cls(**xgb_params)
 
-    # US#88: resolve tier/feature-subset through the competition registry
-    # instead of a hardcoded context check. "league" has no fixed competition_id
-    # input yet, so it maps to the one currently-registered league competition (E0).
-    competition_id = "international" if context == "international" else "E0"
+    # US#110: --context IS the competition_id to train for (e.g. "E0", "SWE",
+    # "international"), resolved through the registry rather than a hardcoded
+    # binary. "league" is kept as a deprecated alias for "E0" -- the one
+    # competition_specific competition it used to unambiguously mean -- so it
+    # keeps working rather than silently doing the wrong thing.
+    competition_id = "E0" if context == "league" else context
     competition_def = get_competition_definition(competition_id)
     feature_subset = resolve_feature_subset_for_tier(competition_def.tier)
     model_manager = ModelManager(
         model=model,
         target_config={"target": definition.name},
         feature_subset=feature_subset,
-        context=context,
+        context=competition_id,
         competition_id=competition_id,
     )
     model_path = model_manager.run_pipeline()
@@ -561,7 +566,7 @@ def run_train_target(target_name: str, model_name: str | None = None, context: s
     return model_path
 
 
-def run_train_forecast_suite(targets: list[str] | None = None, context: str = "league") -> None:
+def run_train_forecast_suite(targets: list[str] | None = None, context: str = "E0") -> None:
     """Train the full forecast model suite or a selected target subset."""
     selected_targets = targets or [
         definition.name for definition in list_target_definitions() if definition.name != "home_win"
@@ -1138,7 +1143,13 @@ def run_status(db_manager: DuckDBManager) -> None:
         selector = ModelSelector()
         config = selector.load_config()
         contexts_data = config.get("contexts", {})
-        for ctx in ["league", "international"]:
+        # US#110: show every registered context (e.g. E0, a future SWE,
+        # international), plus any legacy bucket still on disk that the
+        # current registry no longer accounts for -- rather than the old
+        # hardcoded ["league", "international"], which silently hid any
+        # second competition_specific competition's selections.
+        known_contexts = sorted(set(list_context_keys()) | set(contexts_data.keys()))
+        for ctx in known_contexts:
             ctx_data = contexts_data.get(ctx, {})
             if not ctx_data:
                 print(f"  [{ctx}] no selections")
