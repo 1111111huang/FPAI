@@ -217,7 +217,16 @@ def _fetch_odds_for_manual_request(request: RecommendationRequest) -> dict[str, 
     for this fixture, or the odds client call itself raising (e.g. a
     network error). This must never turn a previously-working no-odds
     request into a 500 -- it's strictly additive over the pre-W49
-    behavior."""
+    behavior.
+
+    Cost note (code review, W49): in production this draws from the same
+    CreditCounter-guarded monthly Odds API budget the scheduled EOD/T-30
+    jobs use (build_odds_client() -> the same on-disk counter path) --
+    manual regenerate previously cost zero Odds API credits. would_exceed()
+    still protects the safety margin (degrades to no-odds, never errors),
+    but frequent manual clicks now measurably compete with the scheduler
+    for the same budget within a given month -- worth watching if usage
+    patterns change, not something this fix can size in advance."""
     try:
         odds_client = build_odds_client()
         if odds_client is None:
@@ -232,7 +241,7 @@ def _fetch_odds_for_manual_request(request: RecommendationRequest) -> dict[str, 
         return eod_batch.match_odds(fixture, odds_by_teams)
     except Exception:
         LOGGER.warning(
-            "manual_recommendation_odds_fetch_failed | home=%s | away=%s | date=%s",
+            "Manual recommendation odds fetch failed for %s v %s (%s)",
             request.home_team, request.away_team, request.date, exc_info=True,
         )
         return None

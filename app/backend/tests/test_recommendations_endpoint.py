@@ -222,7 +222,7 @@ def test_fetched_odds_are_recorded_in_the_cache_not_just_used_for_generation():
                         json={"home_team": "Arsenal", "away_team": "Everton", "date": "2026-08-22", "league": "E0"},
                     )
     finally:
-        app.dependency_overrides.pop(recommendations.get_cache, None)
+        app.dependency_overrides.clear()
 
     assert response.status_code == 200
     mock_cache.record_generation.assert_called_once()
