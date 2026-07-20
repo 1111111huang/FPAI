@@ -116,18 +116,36 @@ class ModelManager:
                     return subset
         # US#97: filter SQUAD_* features for competitions whose registry entry
         # does not include "SQUAD" in enabled_feature_groups.
+        # US#133: additionally gate OFF/DEF/OPP_ADJ/STRENGTH/INTERACTION
+        # sub-features by their raw-data dependency (goals vs. shots/SOT vs.
+        # corners), so a competition whose data source lacks shots/corners
+        # entirely (e.g. Sweden's football-data.co.uk "New Leagues" CSVs) can
+        # opt out of those specific sub-features via the registry instead of
+        # silently cold-start-imputing a wholesale-missing column with
+        # another competition's column mean. See src/logic/feature_groups.py.
         try:
             from src.logic.competition_registry import get_competition_definition
+            from src.logic.feature_groups import resolve_feature_group_tag
             comp_def = get_competition_definition(self.competition_id)
-            if "SQUAD" not in comp_def.enabled_feature_groups:
+            enabled_groups = set(comp_def.enabled_feature_groups)
+            if "SQUAD" not in enabled_groups:
                 all_features = [f for f in all_features if not f.startswith("SQUAD_")]
                 all_features = [f for f in all_features if not f.startswith("LUCK_")]
                 all_features = [f for f in all_features if not f.startswith("XOC_")]
                 all_features = [f for f in all_features if not f.startswith("FRDS_")]
                 all_features = [f for f in all_features if not f.startswith("DEF_ANCHOR_")]
+
+            def _passes_group_gate(feature: str) -> bool:
+                tag = resolve_feature_group_tag(feature)
+                # None means "not governed by this mechanism" (e.g. DIS/CTX/MKT/
+                # EFFICIENCY/H2H/SQUAD-managed prefixes) -- always pass through,
+                # unchanged from behavior before US#133.
+                return tag is None or tag in enabled_groups
+
+            all_features = [f for f in all_features if _passes_group_gate(f)]
         except Exception as exc:  # noqa: BLE001
             LOGGER.warning(
-                "SQUAD gating skipped for competition_id=%r — registry unavailable or unknown: %s",
+                "Feature-group gating skipped for competition_id=%r — registry unavailable or unknown: %s",
                 self.competition_id,
                 exc,
             )

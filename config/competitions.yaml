@@ -3,19 +3,38 @@
 # tier: "general_purpose" (market-odds-only, works for any competition)
 #       or "competition_specific" (full team-form feature set; player
 #       features are added here in Phase 14c, gated by enabled_feature_groups).
+#
+# US#133: OFF/DEF/OPP_ADJ/STRENGTH/INTERACTION are split into per-dependency
+# sub-tags (_GOALS/_SHOTS/_CORNERS) instead of one bare family tag, so a
+# competition whose data source is missing shots/SOT/corners entirely (e.g.
+# Sweden's Allsvenskan, football-data.co.uk "New Leagues" format -- goals and
+# 1X2 odds only) can enable "goals" sub-features while omitting "shots"/
+# "corners" ones, rather than falling back to cold-start imputation of a
+# wholesale-missing column with another competition's mean. See
+# src/logic/feature_groups.py for the classification and
+# ModelManager._load_selected_features for where this is enforced.
 competitions:
   E0:
     competition_id: E0
     tier: competition_specific
     league_code: E0
     enabled_feature_groups:
-      - "OFF"
-      - DEF
+      - OFF_GOALS
+      - OFF_SHOTS
+      - OFF_CORNERS
+      - DEF_GOALS
+      - DEF_SHOTS
+      - DEF_CORNERS
+      - OPP_ADJ_GOALS
+      - OPP_ADJ_SHOTS
+      - OPP_ADJ_CORNERS
+      - STRENGTH_GOALS
+      - STRENGTH_SHOTS
+      - INTERACTION_GOALS
+      - INTERACTION_SHOTS
       - DIS
       - CTX
       - MKT
-      - STRENGTH
-      - INTERACTION
       - EFFICIENCY
       - SQUAD
     player_data_sources:

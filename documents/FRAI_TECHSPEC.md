@@ -1517,3 +1517,56 @@ Instead, `scripts/migrate_match_id_add_league.py` performs an **in-place remap**
 Full suite: 530 passed, 23 skipped, zero regressions.
 
 Existing tests that constructed a `config/model_selection.yaml` fixture under the old `contexts.league` key (`tests/test_forecast_league_feature_alignment.py`, `tests/test_forecast_registry_fallback.py`, `tests/test_unknown_team_flag.py`) were updated to `contexts.E0` — each failed correctly (`FileNotFoundError: No target model artifacts found for context 'E0'`) against the pre-fix bucket lookup before being updated, confirming the fixtures were actually exercising the changed code path rather than passing vacuously. Full suite: 518 passed / 23 skipped, zero regressions.
+
+---
+
+## 33. Granular Competition-Registry Feature Gating (Completed — US#133)
+
+### 33.1 Motivation
+
+Section 32 fixed `match_id` collisions in preparation for registering Sweden's Allsvenskan (`league_code: SWE`) as a second `competition_specific` competition — still a separate, later story. Sweden's data source (football-data.co.uk's "New Leagues" CSV format) has **no shots, shots-on-target, corners, or cards columns at all** — only goals and 1X2 market odds.
+
+`config/competitions.yaml`'s `enabled_feature_groups` gates which of `config/schema.yaml`'s 167 `selected_features` a competition's models train on, via family tags (`OFF`, `DEF`, `DIS`, `CTX`, `MKT`, `STRENGTH`, `INTERACTION`, `EFFICIENCY`, `SQUAD`). The problem: `OFF`, `DEF`, and `OPP_ADJ` each mix goals-based features (computable for Sweden) with shots/SOT/corners-based features (not computable). A bare family tag can't express "goals yes, shots no" — if Sweden's future registry entry naively enabled `OFF`/`DEF` wholesale, the shot/corner sub-features would be 100%-NaN-from-source and cold-start-imputed (US#59, a separate mechanism) with a column mean computed across the *whole* `feature_store` table — i.e. Sweden's shot features would silently be filled with EPL's typical shot volume, actively misleading rather than merely lower-signal.
+
+This story's scope is purely the *gating* mechanism: making it expressive enough for a competition to exclude shot/corner-dependent features from its enabled set in the first place. Making the cold-start imputation itself competition-aware (rather than pooling across all competitions) is separate follow-on work, not addressed here.
+
+### 33.2 Feature Classification
+
+Every one of the 167 `selected_features` was classified against `src/features/feature_factory.py`'s actual computation (not name-pattern guessing) into which raw columns it depends on. Five families mix dependencies and needed splitting:
+
+| Family | Sub-tags | Split by |
+|---|---|---|
+| `OFF` | `OFF_GOALS` / `OFF_SHOTS` / `OFF_CORNERS` | `fthg`/`ftag`/xG/luck vs. `hs`/`as`/`hst`/`ast`/shot_accuracy vs. `hc`/`ac` |
+| `DEF` | `DEF_GOALS` / `DEF_SHOTS` / `DEF_CORNERS` | same, defensive side (incl. `save_rate`, itself `ast`-derived → SHOTS) |
+| `OPP_ADJ` | `OPP_ADJ_GOALS` / `OPP_ADJ_SHOTS` / `OPP_ADJ_CORNERS` | goals-scored/conceded + GOAL_MATCHUP vs. SOT-scored vs. corners-scored/conceded + CORNER_MATCHUP |
+| `STRENGTH` | `STRENGTH_GOALS` / `STRENGTH_SHOTS` | `STRENGTH_Goal_Diff` (goals) vs. `STRENGTH_SoT_Diff` (SOT) — the family is not uniformly one or the other |
+| `INTERACTION` | `INTERACTION_GOALS` / `INTERACTION_SHOTS` | two goals-diff features vs. one SOT-diff feature — same mixed-family issue |
+
+`EFFICIENCY_*` (`documents/FRAI_TECHSPEC.md`'s own Section 27 language called it "shifted attack-versus-defense matchup ratios," ambiguous by name alone) was verified directly: all three features are `OFF_HOME_FTHG_R5 / (DEF_AWAY_FTHG_R5 + 0.1)` and its mirror/diff — entirely goals-ratio-based, no shots/corners term anywhere. Left as a single unsplit `EFFICIENCY` tag.
+
+`DIS` (cards: `hy`/`ay`/`hr`/`ar`) already has its own group tag and was not touched.
+
+Two families were found to have gone completely ungated before this story — `OPP_ADJ_*` and `H2H_*` were never listed in E0's `enabled_feature_groups` at all, yet flowed through unfiltered, because (pre-US#133) `ModelManager._load_selected_features` only ever checked for the `"SQUAD"` tag; every other family tag was effectively decorative. Splitting `OPP_ADJ` into real sub-tags therefore introduces first-time enforcement for that family (E0's registry entry now must list all three `OPP_ADJ_*` sub-tags to keep resolving the same features it did before). `H2H` was left as-is (not named in this story's scope, and has no natural single family tag to split from) — see the residual gap noted in 33.4.
+
+**Residual gap, explicitly out of scope for this story:** `CTX_HOME_CORNERS_STD_R5`/`CTX_AWAY_CORNERS_STD_R5` and `H2H_CORNERS_R5` are also corners-dependent (verified in `_compute_temporal_features`/`_compute_h2h_rolling`) but were not split out of `CTX`/`H2H`, since those families weren't named in the story's explicit "OFF/DEF/OPP_ADJ" scope and had no pre-existing gating tag to extend. A competition that opts out of corners today (by omitting the `*_CORNERS` sub-tags) still receives these three features. A follow-up could extend the same `resolve_feature_group_tag()` mechanism to `CTX`/`H2H` if/when that becomes a real problem (e.g. once Sweden is actually registered).
+
+Also worth flagging: `OFF_HOME_XG_R3`/`DEF_HOME_XGA_R3`/`OFF_HOME_LUCK_R3` and their away/EMA equivalents are Understat-sourced (a third raw-data dependency, distinct from football-data.co.uk's shots/corners columns) and were classified under `_GOALS` by elimination, since this story's scope was bounded to goals-vs-shots-vs-corners. Whether Understat covers Sweden's Allsvenskan is unverified; if it doesn't, these features would face the same wholesale-missing-column problem this story was built to solve, just via a different tag. Not addressed here.
+
+### 33.3 Mechanism
+
+New `src/logic/feature_groups.py::resolve_feature_group_tag(feature_name) -> str | None`: a pure, deterministic classifier (not a config file) implementing the table above, returning `None` for anything not in a split family (pass-through, unchanged behavior). One collision required special-casing: `DEF_ANCHOR_HOME`/`DEF_ANCHOR_AWAY` (Phase 15's SQUAD-gated defensive-anchor feature, Section 28) also starts with `DEF_`, which would otherwise be misclassified as `DEF_GOALS`; explicitly excluded before the generic `DEF_` branch.
+
+`ModelManager._load_selected_features` (`src/models/model_manager.py`) applies this after the existing US#97 SQUAD-prefix strip, inside the same try/except (registry-unavailable-or-unknown-competition still degrades to a logged warning + unfiltered features, as before): a feature whose `resolve_feature_group_tag()` is `None` passes through unconditionally; a feature with a resolved tag is kept only if that exact tag is present in the competition's `enabled_feature_groups`.
+
+`config/competitions.yaml`'s `E0` entry lists all 17 resulting tags (the 9 old bare tags minus `OFF`/`DEF`/`STRENGTH`/`INTERACTION`, plus the 12 new sub-tags: 3 each for `OFF`/`DEF`/`OPP_ADJ`, 2 each for `STRENGTH`/`INTERACTION`) so it keeps resolving the identical 167-feature set. `international` (`general_purpose` tier) is unaffected — its fixed 13-feature `MKT_*` list is resolved via `feature_subset` before `_load_selected_features` ever reaches this gating code.
+
+### 33.4 Tests
+
+`tests/test_feature_group_gating.py` (new, 48 tests):
+- Parametrized `resolve_feature_group_tag()` classification covering every split-family sub-tag plus the "not gated here" families (`DIS`, `CTX` — including the corners-std residual-gap case, `MKT`, `EFFICIENCY`, `H2H`, `SQUAD`-managed prefixes) and the `DEF_ANCHOR_*` collision case.
+- Regression: `get_competition_definition("E0")`'s new `enabled_feature_groups` resolves to exactly `config/schema.yaml`'s 167-feature list, both directly and end-to-end through a real `ModelManager("E0")._load_selected_features()` call.
+- New capability: a synthetic goals-only competition (`enabled_feature_groups` = `*_GOALS` sub-tags + `DIS`/`CTX`/`MKT`/`EFFICIENCY`, no `*_SHOTS`/`*_CORNERS`/`SQUAD`) correctly excludes every shots- and corners-dependent feature named in the story's own acceptance criteria while keeping goals-only features, `DIS`, and the pre-existing `SQUAD` exclusion behavior intact.
+
+Full suite: 578 passed, 23 skipped, zero regressions (up from 530 passed at Section 32, exactly the +48 new tests here, net of no removals).
+
+Sweden (`SWE`) itself is **not** registered by this story — deliberately out of scope, matching Section 32's precedent.
