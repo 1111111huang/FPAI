@@ -89,7 +89,21 @@ export type Match = {
 // Adapters -- real API shapes -> UI Match shape
 // ---------------------------------------------------------------------------
 
-function fixtureToMatch(fixture: Fixture): Match {
+function fixtureToMatch(fixture: Fixture, asOf?: Date, sandboxMode = false): Match {
+  // W48: a fixture whose kickoff date is strictly after asOf's date hasn't
+  // "happened yet" in the sandbox's own pretend timeline, even when it's
+  // already really been played (real FINISHED status + real score) relative
+  // to actual wall-clock time -- render it as upcoming, exactly like a
+  // genuinely future real fixture, so the Dashboard/Match Explorer don't
+  // leak future real-world outcomes through the raw fixture list (the same
+  // leakage class agent_techspec.md's own defenses cover for agent
+  // web-search results, just via a different surface). Only applies in
+  // sandbox mode -- outside it, or for a fixture on/before asOf, real-world
+  // status is exactly what should show, unchanged. asOf is optional/
+  // sandboxMode defaults false so every existing non-sandbox call site
+  // keeps its current behavior even without passing them.
+  const isFutureInSandbox = sandboxMode && asOf !== undefined && dayDiff(fixture.utc_date, asOf, sandboxMode) > 0;
+  const status: Match["status"] = fixture.status === "FINISHED" && !isFutureInSandbox ? "completed" : "upcoming";
   return {
     id: fixture.match_id,
     league: "E0",
@@ -97,9 +111,14 @@ function fixtureToMatch(fixture: Fixture): Match {
     kickoffIso: fixture.utc_date,
     home: fixture.home_team,
     away: fixture.away_team,
-    status: fixture.status === "FINISHED" ? "completed" : "upcoming",
+    status,
+    // Gated on the (sandbox-aware) status above, not just goals-present --
+    // a FINISHED-but-future-in-sandbox fixture must not carry a real score
+    // on the Match object at all, not merely have it hidden at render time
+    // (defense in depth: nothing downstream that later reads match.result
+    // without re-checking status can leak it).
     result:
-      fixture.home_goals !== null && fixture.away_goals !== null
+      status === "completed" && fixture.home_goals !== null && fixture.away_goals !== null
         ? { home: fixture.home_goals, away: fixture.away_goals }
         : undefined,
     hasRecommendation: false,
@@ -147,26 +166,34 @@ function formatKickoff(iso: string): string {
   return d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
 }
 
-function formatDay(iso: string, asOf: Date, sandboxMode: boolean): string {
+// Shared date-only (whole-day) diff between an ISO kickoff and asOf, in the
+// direction (kickoff day) - (asOf day) -- positive means the kickoff is
+// after asOf. asOf's meaning depends on sandboxMode, and the two are not
+// interchangeable: in sandbox mode, asOf is UTC midnight of a deliberately
+// timezone-agnostic chosen calendar date (W30) -- reading it via local
+// getters would misread it by a day in non-UTC-zero timezones (the same bug
+// class already fixed in Dashboard/Match Explorer's own asOf consumption),
+// so UTC getters are required here. Outside sandbox mode, asOf is a real
+// new Date() instant, and the viewer's own local calendar day is what
+// "today" means for a human reading this -- reading it via UTC getters
+// there would wrongly relabel "today" as "yesterday" for roughly half the
+// day, every day, for any non-UTC viewer (the exact frame-mismatch class
+// this branch keeps re-deriving; caught by review before this shipped).
+// Don't unify these into one getter choice -- the branch is load-bearing,
+// not incidental. Extracted (W48) so formatDay's relative-day label and
+// fixtureToMatch's sandbox-future-fixture check share one implementation of
+// this getter choice instead of two copies that could drift out of sync.
+function dayDiff(iso: string, asOf: Date, sandboxMode: boolean): number {
   const date = new Date(iso);
   const dOnly = new Date(date.getFullYear(), date.getMonth(), date.getDate());
-  // asOf's meaning depends on sandboxMode, and the two are not
-  // interchangeable: in sandbox mode, asOf is UTC midnight of a
-  // deliberately timezone-agnostic chosen calendar date (W30) -- reading it
-  // via local getters would misread it by a day in non-UTC-zero timezones
-  // (the same bug class already fixed in Dashboard/Match Explorer's own
-  // asOf consumption), so UTC getters are required here. Outside sandbox
-  // mode, asOf is a real new Date() instant, and the viewer's own local
-  // calendar day is what "today" means for a human reading this label --
-  // reading it via UTC getters there would wrongly relabel "today" as
-  // "yesterday" for roughly half the day, every day, for any non-UTC
-  // viewer (the exact frame-mismatch class this branch keeps re-deriving;
-  // caught by review before this shipped). Don't unify these into one
-  // getter choice -- the branch is load-bearing, not incidental.
   const tOnly = sandboxMode
     ? new Date(asOf.getUTCFullYear(), asOf.getUTCMonth(), asOf.getUTCDate())
     : new Date(asOf.getFullYear(), asOf.getMonth(), asOf.getDate());
-  const diffDays = Math.round((dOnly.getTime() - tOnly.getTime()) / 86_400_000);
+  return Math.round((dOnly.getTime() - tOnly.getTime()) / 86_400_000);
+}
+
+function formatDay(iso: string, asOf: Date, sandboxMode: boolean): string {
+  const diffDays = dayDiff(iso, asOf, sandboxMode);
   if (diffDays === 0) return "today";
   if (diffDays === 1) return "tomorrow";
   if (diffDays === -1) return "yesterday";
@@ -607,7 +634,7 @@ export function DashboardPage() {
         const today = asOf.toISOString().slice(0, 10);
         const fixtures = await getFixtures(today, today);
         if (cancelled) return;
-        setMatches(fixtures.map(fixtureToMatch));
+        setMatches(fixtures.map((f) => fixtureToMatch(f, asOf, sandboxMode)));
 
         if (fixtures.length === 0) {
           // W46: same-day window empty (real off-season, or a past sandbox
@@ -635,7 +662,7 @@ export function DashboardPage() {
             // the primary fetch above.
             if (cancelled) return;
             const sorted = upcoming
-              .map(fixtureToMatch)
+              .map((f) => fixtureToMatch(f, asOf, sandboxMode))
               // API ordering isn't guaranteed -- sort so "next" is actually
               // nearest-first. ISO 8601 strings sort correctly as strings.
               .sort((a, b) => a.kickoffIso.localeCompare(b.kickoffIso));
@@ -749,7 +776,7 @@ export function MatchExplorerPage() {
         // a day in negative-UTC-offset timezones.
         to.setUTCDate(to.getUTCDate() + 90);
         const fixtures = await getFixtures(from.toISOString().slice(0, 10), to.toISOString().slice(0, 10));
-        if (!cancelled) setMatches(fixtures.map(fixtureToMatch));
+        if (!cancelled) setMatches(fixtures.map((f) => fixtureToMatch(f, asOf, sandboxMode)));
       } catch (err) {
         if (!cancelled) setError(err instanceof ApiError ? err.message : "Could not load fixtures.");
       }
