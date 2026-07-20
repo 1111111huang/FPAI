@@ -67,10 +67,25 @@ def _load_registry(registry_path: str | Path = DEFAULT_REGISTRY_PATH) -> dict[st
             raise ValueError(
                 f"Competition '{competition_id}' has invalid tier '{tier}'. Must be one of {VALID_TIERS}."
             )
+        league_code = entry.get("league_code")
+        # US#140: exactly one canonical casing per league code (e.g. always
+        # "E0", always "SWE") must hold across raw_matches.league, this
+        # registry's league_code, model_selection.yaml context keys, and the
+        # CLI --league flag -- this is the one place all of those trace back
+        # to, so it's the natural spot to catch a mismatch early rather than
+        # letting it silently reach match_id hashing or forecast lookups.
+        if league_code is not None and league_code != league_code.upper():
+            raise ValueError(
+                f"Competition '{competition_id}' has league_code '{league_code}' "
+                "that is not canonically uppercase. Use one consistent casing "
+                "(e.g. 'E0', 'SWE') everywhere: raw_matches.league, "
+                "competitions.yaml's league_code, model_selection.yaml context "
+                "keys, and the CLI --league flag."
+            )
         registry[competition_id] = CompetitionDefinition(
             competition_id=competition_id,
             tier=tier,
-            league_code=entry.get("league_code"),
+            league_code=league_code,
             enabled_feature_groups=tuple(entry.get("enabled_feature_groups") or ()),
             player_data_sources=tuple(entry.get("player_data_sources") or ()),
         )

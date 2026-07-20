@@ -211,6 +211,7 @@ class CSVLoader:
                 date=match_datetime.date().isoformat(),
                 home_team=validated.home_team,
                 away_team=validated.away_team,
+                league=league_code,
             )
 
             def _f(v: object) -> float | None:

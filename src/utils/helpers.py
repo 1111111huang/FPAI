@@ -10,9 +10,23 @@ def _normalize(value: str) -> str:
     return " ".join(value.strip().lower().split())
 
 
-def generate_match_id(date: str, home_team: str, away_team: str) -> str:
-    """Generate a deterministic SHA-256 ID from date, home team, and away team."""
-    normalized_parts = (_normalize(date), _normalize(home_team), _normalize(away_team))
+def generate_match_id(date: str, home_team: str, away_team: str, league: str) -> str:
+    """Generate a deterministic SHA-256 ID from date, home team, away team, and league.
+
+    ``league`` is a required hashed component (US#140): two different
+    competitions with a match on the same date between similarly-named teams
+    must never collide onto the same match_id, since match_id is the
+    dedup/join key throughout raw_matches, feature_store, and forecast
+    payloads. Pass the canonical league/competition code as already stored
+    in raw_matches.league (e.g. "E0") -- the same exact-casing code used
+    across raw_matches.league, competitions.yaml's league_code,
+    model_selection.yaml context keys, and the CLI --league flag (see
+    src/logic/competition_registry.py, which enforces that casing on load).
+    Hashing normalizes case/whitespace like the other fields, so mismatched
+    casing alone won't produce a duplicate match_id, but callers should
+    still pass the canonical code to keep stored data consistent.
+    """
+    normalized_parts = (_normalize(date), _normalize(home_team), _normalize(away_team), _normalize(league))
     payload = "|".join(normalized_parts)
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 

@@ -80,6 +80,34 @@ def test_invalid_tier_in_yaml_raises(tmp_path: Path) -> None:
         get_competition_definition("X0", registry_path=bad_registry)
 
 
+def test_lowercase_league_code_in_yaml_raises(tmp_path: Path) -> None:
+    # US#140: exactly one canonical casing per league code must be enforced
+    # here, since this registry is the shared source of truth that
+    # raw_matches.league, model_selection.yaml context keys, and the CLI
+    # --league flag are all expected to line up with.
+    bad_registry = tmp_path / "bad_league_code.yaml"
+    bad_registry.write_text(
+        yaml.dump(
+            {"competitions": {"SWE": {"competition_id": "SWE", "tier": "general_purpose", "league_code": "swe"}}}
+        )
+    )
+    with pytest.raises(ValueError, match="not canonically uppercase"):
+        get_competition_definition("SWE", registry_path=bad_registry)
+
+
+def test_null_league_code_in_yaml_is_allowed(tmp_path: Path) -> None:
+    # "international" legitimately has no single league_code -- must not be
+    # rejected by the casing check.
+    registry = tmp_path / "ok_competitions.yaml"
+    registry.write_text(
+        yaml.dump(
+            {"competitions": {"international": {"competition_id": "international", "tier": "general_purpose", "league_code": None}}}
+        )
+    )
+    definition = get_competition_definition("international", registry_path=registry)
+    assert definition.league_code is None
+
+
 def test_general_purpose_features_are_subset_of_full_schema() -> None:
     # US#89: enforce the feature-superset invariant. competition_specific
     # resolves to "all of config/schema.yaml's selected_features" (feature_subset=None),

@@ -1478,4 +1478,42 @@ effective_context = "international" if tier == "general_purpose" else "league"
 
 New `tests/test_per_competition_context.py` (6 tests): `list_context_keys()` unit tests (real registry regression; a fictional second `competition_specific` competition getting its own bucket; the `general_purpose`-collapse-to-one-bucket regression); an end-to-end `ForecastService` test registering a fictional second competition_specific competition (`"T2"`) alongside E0 with distinct dummy models and confirming each forecast call returns the correct model's output with no cross-contamination in either direction; two `ModelSelector` tests (default-context enumeration writing two independent buckets from mocked MLflow runs; the `--context league` alias resolving to `contexts.E0`). Sweden (`SWE`) itself is **not** registered anywhere by this story — deliberately out of scope, planned as a separate follow-up.
 
+## 32. `match_id` League Collision Fix (Completed — US#140)
+
+### 32.1 Motivation
+
+Section 31 noted Sweden's Allsvenskan (`league_code: SWE`) is planned as a second `competition_specific` competition in a later story. Before any second league's matches can be safely ingested, a latent collision bug in `src/utils/helpers.py`'s `generate_match_id(date, home_team, away_team)` had to be fixed: it hashed only those three normalized fields, with **no league/competition component**. Since `match_id` is the dedup/join key throughout `raw_matches`, `feature_store`, and downstream forecast payloads, two different competitions with a match on the same date between similarly-named teams would have produced an identical `match_id` — a real collision would have silently merged two unrelated matches (one competition's row overwriting or joining against the other's).
+
+### 32.2 `generate_match_id` Signature Change
+
+`generate_match_id(date, home_team, away_team, league)` — `league` is now a required fourth positional/keyword argument, hashed alongside the other three via the same `_normalize()` (trim + lowercase + whitespace-collapse) before SHA-256. This is a breaking change: every previously-computed `match_id` value differs from what the new signature produces for the same date/teams, since the hash payload itself changed shape (`date|home|away` → `date|home|away|league`).
+
+The sole call site, `src/ingestion/football_data/loader.py`'s `process_v1_csv()`, now passes `league=league_code` (the same value it already writes into `raw_matches.league`) — no new normalization scheme was introduced; the function uses whichever canonical league value the caller already has.
+
+### 32.3 League-Code Canonicalization
+
+Investigated whether `raw_matches.league`, `competitions.yaml`'s `league_code`, `model_selection.yaml` context keys, and the CLI `--league` flag were already inconsistent: they were not — only `E0` exists today and every touchpoint already uses that exact uppercase casing. Since hashing lowercases before comparing, mismatched casing alone can't actually create a `match_id` collision; the risk is purely about *stored* casing drifting (e.g. a future ingestion run writing `raw_matches.league = "swe"` while `competitions.yaml` registers `SWE`, breaking lookups that join on exact string equality elsewhere).
+
+Rather than building a new league-registry validation subsystem, a small check was added to the one place all of those touchpoints already trace back to: `src/logic/competition_registry.py`'s `_load_registry()` now rejects any `competitions.yaml` entry whose `league_code` is not already uppercase (`league_code != league_code.upper()`), raising `ValueError` at load time. `league_code: null` (the `international` entry) is unaffected. This catches a future casing typo (e.g. registering Sweden as `swe` instead of `SWE`) at config-load time rather than letting it reach `match_id` hashing or a `model_selection.yaml` context lookup.
+
+### 32.4 Migration of Existing Data
+
+The existing `data/fpai_core.db` (122MB, 3,800 E0 matches spanning 2016–2026) had every `raw_matches.match_id` computed under the old scheme, and both `feature_store` (3,800 rows) and `raw_player_match_stats` (145,445 FotMob per-player rows, Section 27.3) are keyed by that same `match_id` value with no `league` column of their own.
+
+**A full re-ingest (`python main.py ingest --force`) was considered and rejected.** There is direct precedent for "just re-ingest" as a migration strategy (Section 27.3's migration note: CSV re-ingestion is idempotent because `raw_matches` inserts are keyed by `match_id`) — but that precedent assumed `match_id`'s *computation* was stable across re-ingests, which this story breaks by construction. Tracing `run_ingest(force=True)` in `main.py` shows it only clears and rebuilds `raw_matches` and `feature_store` from the CSVs on disk; it does not touch `raw_player_match_stats` or `match_lineups`. A full re-ingest under the new `match_id` scheme would have silently orphaned all 145,445 FotMob player-stat rows (a separate, slow, rate-limited pipeline — not something to casually re-run to recover from a migration).
+
+Instead, `scripts/migrate_match_id_add_league.py` performs an **in-place remap**: for every `raw_matches` row it recomputes `match_id` via the new `generate_match_id(date, home_team, away_team, league)` using that row's own stored `league` value, then updates `match_id` in `raw_matches`, `feature_store`, and `raw_player_match_stats` (via `UPDATE ... FROM` against a temporary old→new mapping table) inside a single transaction. `match_lineups` is untouched — it keys off FotMob's own `fotmob_match_id`, not `generate_match_id`'s output, so it was never affected. Before writing anything, the script asserts the newly-computed ids contain no duplicates (would abort rather than risk a merge); it is idempotent (a second run reports zero rows changed) and supports `--dry-run` for a report-only pass.
+
+**Verified against the real database** (`data/fpai_core.db.pre_us140_backup` kept as a pre-migration backup): all 3,800 `raw_matches` rows' new `match_id` values match `generate_match_id()`'s output exactly; row counts are identical before/after in all three tables (`raw_matches`: 3,800, `feature_store`: 3,800, `raw_player_match_stats`: 145,445); zero orphaned rows in either dependent table after migration; a join of `raw_matches ⋈ feature_store` and `raw_matches ⋈ raw_player_match_stats` produces byte-identical result sets (by `(date, home_team, away_team, ...)` content) before and after — proving the remap preserved not just row counts but the correct match-to-feature/match-to-player association, not just avoided a count mismatch that could still hide a shuffled join. `match_lineups` (83,622 rows) and `processed_files` (20 tracked CSVs) were confirmed unchanged.
+
+### 32.5 Tests
+
+`tests/test_helpers.py`: existing determinism/normalization tests updated to the 4-argument signature; new tests assert two different leagues with the same date/teams produce different `match_id` values, and that omitting `league` raises `TypeError`.
+
+`tests/test_competition_registry.py`: new tests for the casing check (Section 32.3) — a lowercase `league_code` in a temp registry raises `ValueError`, `league_code: null` is unaffected.
+
+`scripts/test_migrate_match_id_add_league.py` (8 tests, new): built against a synthetic DuckDB mirroring production shape (old-scheme `match_id` in `raw_matches`/`feature_store`/`raw_player_match_stats`) — dry-run makes no changes; migration recomputes ids matching `generate_match_id()`; row counts preserved in dependent tables; no orphaned dependent rows; each `feature_store`/`raw_player_match_stats` row still joins to the *same logical match* it belonged to before (not just "no orphans," which alone wouldn't catch a shuffled remap); idempotent on a second run; a missing `raw_matches` table is a no-op; `build_id_mapping()` matches `generate_match_id()` directly.
+
+Full suite: 530 passed, 23 skipped, zero regressions.
+
 Existing tests that constructed a `config/model_selection.yaml` fixture under the old `contexts.league` key (`tests/test_forecast_league_feature_alignment.py`, `tests/test_forecast_registry_fallback.py`, `tests/test_unknown_team_flag.py`) were updated to `contexts.E0` — each failed correctly (`FileNotFoundError: No target model artifacts found for context 'E0'`) against the pre-fix bucket lookup before being updated, confirming the fixtures were actually exercising the changed code path rather than passing vacuously. Full suite: 518 passed / 23 skipped, zero regressions.
