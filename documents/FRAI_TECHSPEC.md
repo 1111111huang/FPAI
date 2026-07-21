@@ -2017,3 +2017,11 @@ New `tests/test_refresh_data_sweden.py` (8 tests, TDD — written and confirmed 
 - `run_schedule_refresh(league="SWE", day_of_week=None)` dispatches to `build_sweden_refresh_scheduler` (not the EPL one) and resolves the `None` default to `DEFAULT_SWEDEN_DAY_OF_WEEK`.
 
 Full suite: 661 passed / 1 skipped, zero regressions (up from 654 passed / 1 skipped at Section 42).
+
+## 44. Phase 20 (cont.): General-Purpose Pooling Was Already Solved (Completed — US#138)
+
+US#131's `prepare_training_data()` league fix (Section 42) filters `raw_matches.league` by the requesting competition's own `league_code`, except when `league_code is None` — exactly `international`'s registry entry (`tier: general_purpose`, `league_code: null`). That competition therefore already stays unfiltered by design, pooling every registered competition's rows automatically. No new pooling mechanism needed to be built for this story.
+
+Verified directly against the real repo (not assumed): `ModelManager(competition_id="international").prepare_training_data()` against the real `config/competitions.yaml` and this worktree's real, populated `data/fpai_core.db` returns all 7,289 rows (3,800 E0 + 3,489 SWE), with both leagues genuinely present in the resulting chronological test split. New test: `tests/test_prepare_training_data_league_scoping.py::test_international_context_pools_e0_and_swe_against_real_registry`.
+
+Full suite: 662 passed / 1 skipped, zero regressions.

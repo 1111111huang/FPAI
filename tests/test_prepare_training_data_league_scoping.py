@@ -212,3 +212,43 @@ def test_prepare_training_data_falls_back_gracefully_for_unregistered_competitio
 
     total_rows = len(X_train) + len(X_val) + len(X_test)
     assert total_rows == 20  # unfiltered fallback, both competitions' rows
+
+
+# ---------------------------------------------------------------------------
+# US#138: real-registry pooling regression, against the actual repo's
+# config/competitions.yaml and the real populated data/fpai_core.db in this
+# worktree -- not a synthetic fixture. Proves the acceptance criterion this
+# story was scoped for ("with SWE also registered, the training set visibly
+# includes both leagues' rows") is genuinely satisfied by the US#131 league
+# filter, since general_purpose competitions (league_code=None, e.g.
+# "international") intentionally stay unfiltered by that fix -- no separate
+# pooling mechanism needed to be built; US#138 turned out to already be done.
+# ---------------------------------------------------------------------------
+
+
+def test_international_context_pools_e0_and_swe_against_real_registry() -> None:
+    """No mocking, no tmp_path fixture -- exercises the real repo's own
+    config/competitions.yaml and this worktree's real, populated
+    data/fpai_core.db directly."""
+    from src.models.base_model import XGBoostModel
+
+    manager = ModelManager(
+        model=XGBoostModel(),
+        target_config={"target": "result_3way"},
+        competition_id="international",
+    )
+    X_train, X_val, X_test, y_train, y_val, y_test, test_meta = manager.prepare_training_data()
+    total_rows = len(X_train) + len(X_val) + len(X_test)
+
+    with manager.db_manager.connection(read_only=True) as conn:
+        placeholders = ",".join("?" * len(test_meta["match_id"]))
+        leagues = conn.execute(
+            f"SELECT DISTINCT league FROM raw_matches WHERE match_id IN ({placeholders})",
+            list(test_meta["match_id"]),
+        ).fetchall()
+
+    # Both E0 and SWE rows genuinely present -- real pooling, not just a
+    # feature-list restriction. 7,289 = 3,800 (E0) + 3,489 (SWE), matching the
+    # real ingested row counts from US#124/125.
+    assert total_rows == 7289
+    assert {row[0] for row in leagues} == {"E0", "SWE"}
