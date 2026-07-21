@@ -1710,3 +1710,54 @@ New `tests/test_sweden_loader.py` (10 tests), building `fetch_sweden_csv`-shaped
 Full suite: 599 passed / 23 skipped, zero regressions (up from 589 passed at Section 35 — net new here is exactly this story's 10 tests).
 
 Sweden (`SWE`) itself is still **not** registered as a competition by this story — that remains out of scope, matching Section 32/33/34/35's precedent. `raw_matches` now has real Sweden rows; US#126 (team-name mapping) is next.
+
+## 37. Allsvenskan Club Names in `config/team_mapping.json` (Completed — US#126)
+
+### 37.1 Motivation
+
+Section 36 (US#125) inserts Sweden rows into `raw_matches` using the CSV's own raw team-name spelling (e.g. `Malmo FF`, `Goteborg`, `Djurgarden`), passed only through `standardize_team_name`'s whitespace normalization — deliberately with no `TeamNameMapper`/`config/team_mapping.json` fuzzy-matching applied. This story closes that gap: it extends the flat `{full/variant name: canonical short name}` mapping file with an Allsvenskan section, following the exact structure/pattern already used for EPL clubs, and re-runs the Section 34 (US#141)-established Sweden/EPL collision check against the real names added.
+
+### 37.2 Sourcing the Real Team-Name List
+
+`data/fpai_core.db` (the `config.yaml`-configured DB path) did not exist in this worktree — US#125 only landed the ingestion code path, not a populated database. Per the story's fallback instruction, the real team-name list was sourced from a **live** `fetch_sweden_csv()` pull instead (3489 rows spanning 2012–2026). `df["Home"]`/`df["Away"]` yielded 36 distinct raw strings. Cross-checked against `sweden_loader.py`: `standardize_team_name`'s alias map is EPL-specific (`man utd`, `spurs`, etc.) and is a pure whitespace-normalization no-op for every one of these 36 Swedish names — so the 36 raw strings pulled live are exactly what ends up in `raw_matches.home_team`/`away_team` once US#125 actually runs against this data.
+
+Two of the 36 strings turned out to be the **same club under two different source-era spellings**, not two different clubs: `Oster` (32 rows, dated 2022-11-10 through 2025-11-09) and `Osters` (30 rows, dated 2013-04-01 through 2013-11-03) — non-overlapping date ranges, both referring to Östers IF (Växjö). Consolidated onto one canonical short name, `Oster` (the more recent, currently-relevant spelling). The remaining 34 raw strings are 34 distinct clubs — no other same-club spelling split was found among them (checked pairwise similarity across all 36 raw names with the mapper's own `_similarity_score`; only `Oster`/`Osters` scored at/above the 0.82 threshold, at 0.83).
+
+### 37.3 Mapping Entries Added
+
+81 new keys across 35 canonical clubs, in the same "full name / suffix-or-diacritic variant / short name" grouping the EPL section already uses (e.g. `Wolverhampton Wanderers` / `Wolverhampton Wanderers FC` / `Wolves`). For each club: the raw CSV spelling is its own canonical self-map (the value every variant resolves to, matching what's actually stored in `raw_matches`), plus a diacritic-restored form and the club's full official name, e.g.:
+
+- `IFK Göteborg`, `Göteborg` → `Goteborg`
+- `Djurgårdens IF`, `Djurgården` → `Djurgarden`
+- `Malmö FF` → `Malmo FF`
+- `Östers IF`, `Öster`, `Östers` → `Oster`
+- `Örebro SK`, `Örebro` → `Orebro`
+- `BK Häcken`, `Häcken` → `Hacken`
+
+The diacritic-restored and full-name variants exist so Understat/FotMob (both of which reference this same mapping file per `team_mapping.py`'s module docstring) resolve their own likely spelling of these clubs onto the same canonical value the raw CSV already uses — the same reason the EPL section carries `Brighton & Hove Albion FC` even though no raw football-data.co.uk CSV spells it that way.
+
+### 37.4 Collision Re-Check (Section 34/US#141 Pattern)
+
+Ran the mapper's own `_similarity_score` (Levenshtein-based, `min_similarity=0.82`) between every one of the 35 new canonical Sweden values plus every added full/diacritic-name variant, against every existing EPL key/value in the file — computed, not eyeballed. Result: **zero pairs at or above 0.82.** Highest scores found, recorded for posterity same as Section 34's review:
+
+| Score | Sweden name | EPL name |
+|---|---|---|
+| 0.56 | `Syrianska` | `Swansea` |
+| 0.50 | `Sundsvall` | `Sunderland` |
+| 0.50 | `Dalkurd FF` | `Cardiff` |
+
+All well clear of the threshold; no ambiguous cases requiring a judgment call. This confirms Section 34's finding still holds after the real Allsvenskan roster (not just a hypothetical one) was added.
+
+### 37.5 Tests
+
+New `tests/test_sweden_team_mapping.py` (5 tests):
+
+- All 36 raw Sweden team-name strings (the live-fetched list from §37.2) round-trip through `TeamNameMapper.map_team()` to their canonical short name.
+- `Oster`/`Osters` specifically resolve to the same canonical value (`Oster`).
+- A representative set of diacritic-restored and full official club names resolve to the correct canonical short form.
+- The §37.4 collision re-check itself runs as a regression test — reads the live `config/team_mapping.json`, partitions it into Sweden vs. EPL name sets, and asserts no pair scores `>= min_similarity`. Fails loudly if a future edit to either roster introduces a real collision.
+- A lightweight structural sanity check on `config/team_mapping.json` (valid JSON object, every key/value a non-empty string) — no dedicated schema test existed for this file before this story.
+
+Full suite: 604 passed / 23 skipped, zero regressions (up from 599 passed at Section 36 — net new here is exactly this story's 5 tests).
+
+Sweden (`SWE`) is still not registered as a competition (Section 32/33/34/35/36's precedent continues) — this story is scoped purely to the mapping file, per US#126's text.
