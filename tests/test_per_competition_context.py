@@ -224,6 +224,64 @@ def test_forecast_upcoming_second_competition_specific_competition_does_not_coll
     assert e0_result_again["forecast"]["home_goals"]["expected"] == pytest.approx(1.5)
 
 
+def test_forecast_upcoming_real_sweden_registration(tmp_path: Path) -> None:
+    """US#131: end-to-end forecast_upcoming(league='SWE', match_type='league')
+    using SWE's real competition_id (not the fictional 'T2' stand-in above,
+    now that US#128 has actually registered Sweden) -- confirms the whole
+    registry-driven resolution chain (US#107) correctly routes a real 'SWE'
+    league string to its own team-history-and-market model, distinct from E0's,
+    with prediction_basis reflecting that (not silently falling back to
+    market-odds-only, and not accidentally reusing E0's model)."""
+    config_path = _write_config(tmp_path, schema_features=["MKT_IMPLIED_HOME"])
+    (config_path.parent / "config" / "competitions.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "competitions": {
+                    "E0": {"competition_id": "E0", "tier": "competition_specific", "league_code": "E0"},
+                    "SWE": {"competition_id": "SWE", "tier": "competition_specific", "league_code": "SWE"},
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    with duckdb.connect(config["paths"]["database_path"]) as conn:
+        conn.execute(
+            """
+            CREATE TABLE raw_matches (
+                match_id TEXT PRIMARY KEY, league TEXT, tier INTEGER, date TIMESTAMP,
+                home_team TEXT, away_team TEXT, fthg INTEGER, ftag INTEGER,
+                hs FLOAT, "as" FLOAT, hst FLOAT, ast FLOAT, hc FLOAT, ac FLOAT,
+                hy FLOAT, ay FLOAT, hr FLOAT, ar FLOAT,
+                odds_h FLOAT, odds_d FLOAT, odds_a FLOAT,
+                avgh FLOAT, avgd FLOAT, avga FLOAT,
+                xg_h FLOAT, xg_a FLOAT, xga_h FLOAT, xga_a FLOAT,
+                over25_odds FLOAT, under25_odds FLOAT,
+                ah_line FLOAT, ah_home_odds FLOAT, ah_away_odds FLOAT
+            )
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO raw_matches
+            (match_id, league, tier, date, home_team, away_team, fthg, ftag, odds_h, odds_d, odds_a, avgh, avgd, avga)
+            VALUES ('sw1', 'SWE', NULL, '2025-08-10 15:00:00', 'Malmo FF', 'AIK', 2, 1, 2.0, 3.3, 3.8, 2.0, 3.3, 3.8)
+            """
+        )
+    _write_model(config_path, context="E0", target="home_goals", feature_names=["MKT_IMPLIED_HOME"], constant=1.5)
+    _write_model(config_path, context="SWE", target="home_goals", feature_names=["MKT_IMPLIED_HOME"], constant=2.4)
+
+    service = ForecastService(config_path=str(config_path), targets=["home_goals"])
+    result = service.forecast_upcoming(
+        home_team="Malmo FF", away_team="AIK", date="2025-08-24", league="SWE",
+        odds_h=2.0, odds_d=3.3, odds_a=3.8, match_type="league",
+    )
+
+    assert result["forecast"]["home_goals"]["expected"] == pytest.approx(2.4)
+    assert result["data_quality"]["prediction_basis"] == "team_history_and_market"
+    assert result["league"] == "SWE"
+
+
 # ---------------------------------------------------------------------------
 # ModelSelector: default enumeration + deprecated 'league' alias
 # ---------------------------------------------------------------------------

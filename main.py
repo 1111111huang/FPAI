@@ -180,6 +180,13 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     diagnose_parser.add_argument("--model_path", type=str, required=True, help="Path to local model artifact.")
     diagnose_parser.add_argument("--output_path", type=str, default="reports/diagnostics.json", help="Path for diagnostics JSON output.")
+    diagnose_parser.add_argument(
+        "--context", type=str, default="E0",
+        help="Competition context the artifact was trained for (e.g. E0, SWE, international). "
+        "US#131: previously hardcoded to E0's feature set/training data regardless of which "
+        "artifact was passed -- diagnosing a non-E0 model silently used the wrong feature list "
+        "and training rows.",
+    )
 
     # permutation-importance
     importance_parser = subparsers.add_parser("permutation-importance", help="Run permutation importance analysis on a trained model")
@@ -1281,6 +1288,7 @@ def main() -> None:
             target_name=str(args.target),
             model_path=str(args.model_path),
             output_path=str(args.output_path),
+            competition_id=str(args.context),
         )
         print(f"Diagnostics report written to {report_path}")
     elif args.command == "permutation-importance":

@@ -1937,3 +1937,44 @@ No Dixon-Coles sanity baseline (Section 22's model, already competition-agnostic
 Running the full suite against real multi-competition data surfaced one more EPL-only assumption: `tests/test_feature_quality.py`'s NaN-rate-ceiling checks (`test_nan_rate`) query `feature_store` with no league filter, and their thresholds were calibrated purely against EPL's data profile (the file's own docstring cites Understat-coverage domain knowledge). Once Sweden's by-design-permanently-NaN shots/corners/cards columns entered the shared table, 7 of these checks broke — not a real regression, but the same class of single-competition assumption already fixed elsewhere in this phase (match_id, team-mapping, cold-start imputation). Scoped the `feature_df`/`labelled_df` fixtures to `WHERE r.league = 'E0'`, restoring the file's actual intent (EPL pipeline regression detection) without weakening any threshold. A Sweden-specific quality suite with its own recalibrated thresholds is a legitimate future story, not attempted here.
 
 Full suite: 648 passed / 1 skipped, zero regressions. The skip count dropping from 23 to 1 is a side effect of real data now existing in the worktree — 22 previously-skipped integration tests that need a real DB now run and pass.
+
+## 42. Phase 20 (cont.): Sweden Verified End-to-End; Critical Training Bug Found & Fixed (Completed — US#131)
+
+### 42.1 The Bug: `prepare_training_data()` Had No League Filter
+
+While verifying Sweden's forecasts end-to-end, a real CLI forecast's `feature_completeness` (71.6%) looked implausibly low for a match between two of Allsvenskan's most established clubs. Tracing it back: `build_for_match()`'s 111/167 null columns were expected (Sweden's structural gaps, Section 38), but the trail led one layer deeper, into training itself. `ModelManager.prepare_training_data()`'s SQL query joined `raw_matches`/`feature_store` with **no league/competition filter at all** — invisible while only E0 existed, since there was nothing else in the shared tables to accidentally include.
+
+Reproduced directly against the real DB: training with `context=SWE` had pulled all 7,289 rows (both leagues). Sweden's registry-gated 74-feature list still includes 9 `MKT_AH_*`/`MKT_LAMBDA_*`/`MKT_IMPLIED_OVER25` features (ungated — `MKT_*` is never split by `resolve_feature_group_tag()`, Section 33/38) that are permanently NaN for Sweden but populated for E0. The mandatory non-null-features `dropna()` for non-XGBoost models then silently kept only E0's 3,799 rows — meaning **US#130's "Sweden models" were secretly EPL models mislabeled `context=SWE`**, with no error and plausible-looking metrics.
+
+### 42.2 The Fix
+
+`prepare_training_data()` now resolves the requesting competition's `league_code` from the registry and filters `WHERE r.league = ?`. A competition with no single `league_code` (`general_purpose`, e.g. `"international"`) intentionally stays unfiltered — pooling across every competition is that tier's actual design (US#138, not yet built), not something this fix restricts. Falls back to unfiltered with a logged warning if the competition isn't registered at all, matching `_load_selected_features`'s existing defensive posture.
+
+5 new tests in `tests/test_prepare_training_data_league_scoping.py` prove both the bug (against a synthetic two-competition fixture reproducing the exact failure shape) and the fix.
+
+### 42.3 Sweden Retrained For Real
+
+Once the league filter correctly isolated Sweden's own rows, training with the default LR/RF models genuinely failed (`"No rows left after dropping records with missing labels or features"`) — Sweden's own rows are *also* 100%-NaN on those same 9 MKT columns, and non-XGBoost models can't tolerate that. Retrained all 5 targets with XGBoost instead (`train-target --context SWE --model xgb`/`xgb_regressor`), which handles NaN features natively — the same established pattern this project already relies on elsewhere (e.g. pre-Understat xG columns for EPL itself).
+
+**Real, corrected Sweden results (2026-07-21):**
+
+| Target | Model | Metric | Value |
+| :--- | :--- | :--- | :--- |
+| `result_3way` | XGBoost | log_loss / accuracy | 1.0114 / 0.4981 |
+| `btts` | XGBoost | log_loss / accuracy | 0.6873 / 0.5477 |
+| `home_goals` | XGBoost regressor | MAE / RMSE | 1.0153 / 1.2866 |
+| `away_goals` | XGBoost regressor | MAE / RMSE | 0.8779 / 1.1288 |
+| `total_goals` | XGBoost regressor | MAE / RMSE | 1.3401 / 1.7405 |
+
+The 5 invalid LR/RF artifacts and their MLflow runs were deleted, not left alongside the real ones. `select-best-models --context SWE` re-run and correctly promoted all 5 real models — BUG-014's stale-artifact-path guard (Phase 16) caught and force-refreshed 3 of them live, since their raw metrics alone would have lost to the (invalid but numerically competitive) deleted runs.
+
+### 42.4 CLI Smoke Test (Real, Not Mocked)
+
+- `forecast --home "Malmo FF" --away "Djurgarden" --league SWE ...` → full 5-target payload, `prediction_basis: "team_history_and_market"`, corners targets simply absent (not an error).
+- `status` → lists `[SWE]` as a third bucket alongside `[E0]`/`[international]`. Confirmed `src/tools/model_tools.py`'s `get_model_status()` was **already fixed as an unlisted side effect of US#110** (`_known_contexts()` already derives from `list_context_keys()`) — the phase-level scoping note's concern about this file was stale; US#136's real remaining scope is `forecast_tools.py`/`data_tools.py` only.
+- `compare-models --target result_3way --context SWE` → correctly filtered to real Sweden runs.
+- `diagnose-model --target result_3way --model_path <SWE artifact> --context SWE` → found and fixed a real gap: `diagnose-model` had **no `--context` argument at all**, always defaulting to E0. Fixed (`main.py`, `src/evaluation/diagnostics.py`). That fix then surfaced **BUG-016** (`documents/bugs.md`), a separate, pre-existing label-encoding bug when reloading a saved multiclass XGBoost model for diagnostics — confirmed not Sweden-specific (also breaks on E0's own older artifacts), left open as orthogonal to this phase.
+
+New `tests/test_per_competition_context.py::test_forecast_upcoming_real_sweden_registration` uses SWE's real `competition_id` (not the earlier fictional `T2` stand-in) to prove `forecast_upcoming(league="SWE", ...)` resolves to Sweden's own model via the real registry chain (US#107).
+
+Full suite: 654 passed / 1 skipped, zero regressions.
