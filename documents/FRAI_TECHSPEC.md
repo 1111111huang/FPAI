@@ -2070,3 +2070,13 @@ New `tests/test_artifact_filename_collision.py` (4 tests). Full test suite: 666 
 **Fix**: the query now `GROUP BY league`. All pre-existing top-level keys stay byte-identical for a single-competition table (zero behavior change for any existing caller); a new `by_league` dict adds the same per-target shape scoped to each competition. Verified live post-fix: `by_league.E0.is_stale == true`, `by_league.SWE.is_stale == false`.
 
 4 new tests in `tests/test_data_tools.py`; 4 pre-existing tests updated to the new `GROUP BY`-shaped mock fixture. Full suite: 670 passed / 1 skipped, zero regressions.
+
+## 48. Phase 20 (cont.): MLflow Multi-Competition Reporting Warning (Completed — US#142)
+
+`model_comparison.py`'s `get_runs_by_target(..., context=...)` already filtered correctly by the `tags.context` run tag — not a structural bug. The residual gap: `context` is optional and defaults to unfiltered, so `compare-models --target <name>` with no `--context` silently blends runs from every competition into one report, since MLflow experiment *names* (`FPAI_<target>_<model_family>_<sweep_stage>_<version>`) don't include league — only run tags do.
+
+**Fix**: `get_runs_by_target()` now checks, only when `context` wasn't passed, whether the returned runs' `tags.context` values span more than one distinct competition; if so, logs a warning naming the target and every distinct context found. An explicit `--context` call is unaffected; a call returning only one competition's runs also stays silent.
+
+Verified live against the real MLflow store: `compare-models --target result_3way` (no `--context`) now prints `"...spans multiple competition contexts (SWE, international) with no --context filter applied..."`.
+
+4 new tests in `tests/test_model_comparison_context_warning.py` (this module had zero prior test coverage). Full suite: 674 passed / 1 skipped, zero regressions.

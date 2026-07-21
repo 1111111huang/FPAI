@@ -43,6 +43,27 @@ class ModelComparison:
             experiment_ids=experiment_ids,
             filter_string=" AND ".join(filter_parts),
         )
+
+        # US#142: MLflow experiment *names* aren't scoped by competition (e.g.
+        # "FPAI_result_3way_lr_broad_v1" holds both E0's and SWE's runs for
+        # result_3way), only the tags.context run tag distinguishes them. A
+        # `compare-models` call with no --context omits the tag filter above
+        # and would otherwise silently blend two different competitions'
+        # runs into one report with no indication anything was mixed. This
+        # is not a structural bug (an explicit --context still filters
+        # correctly), just an ergonomic gap for the common "I forgot the
+        # flag" case -- surfaced as a warning rather than an error, since a
+        # caller may genuinely want the blended view.
+        if not context and runs:
+            distinct_contexts = {run.data.tags.get("context") for run in runs} - {None}
+            if len(distinct_contexts) > 1:
+                LOGGER.warning(
+                    "compare-models for target=%r spans multiple competition contexts (%s) with no "
+                    "--context filter applied -- results below blend runs from different competitions. "
+                    "Pass --context <competition_id> to scope to one.",
+                    target_name,
+                    ", ".join(sorted(distinct_contexts)),
+                )
         return runs
 
     def extract_metrics_for_run(self, run: Run) -> dict[str, Any]:
