@@ -291,8 +291,8 @@ contexts:
       metric_name: test_mae
       metric_value: 0.877866
       mlflow_run_id: 4d2cdaaf892140478233c9b6ec608b7d
-      model_path: models/away_goals_xgboostregressor_v1_20260721.joblib
-      model_type: xgboostregressor
+      model_path: models/away_goals_swe_xgboostregressor_v1_20260721.joblib
+      model_type: XGBoostRegressorModel
       previous_model_path: models/away_goals_randomforestregressor_v1_20260721.joblib
       selected_at: '2026-07-21T19:39:48Z'
     btts:
@@ -374,8 +374,8 @@ contexts:
       metric_name: test_log_loss
       metric_value: 0.687322
       mlflow_run_id: 7834a39299f3435984dde548940e0f3a
-      model_path: models/btts_xgboost_v1_20260721.joblib
-      model_type: xgboost
+      model_path: models/btts_swe_xgboost_v1_20260721.joblib
+      model_type: XGBoostModel
       previous_model_path: models/btts_lr_v1_20260721.joblib
       selected_at: '2026-07-21T19:39:48Z'
     home_goals:
@@ -457,8 +457,8 @@ contexts:
       metric_name: test_mae
       metric_value: 1.01528
       mlflow_run_id: 84a3e7e8518f483cabc598e6fdaf2d9b
-      model_path: models/home_goals_xgboostregressor_v1_20260721.joblib
-      model_type: xgboostregressor
+      model_path: models/home_goals_swe_xgboostregressor_v1_20260721.joblib
+      model_type: XGBoostRegressorModel
       previous_model_path: models/home_goals_randomforestregressor_v1_20260721.joblib
       selected_at: '2026-07-21T19:38:44Z'
     result_3way:
@@ -540,8 +540,8 @@ contexts:
       metric_name: test_log_loss
       metric_value: 1.011438
       mlflow_run_id: fb3b2449926c4b36afffcfa958d1c458
-      model_path: models/result_3way_xgboost_v1_20260721.joblib
-      model_type: xgboost
+      model_path: models/result_3way_swe_xgboost_v1_20260721.joblib
+      model_type: XGBoostModel
       previous_model_path: models/result_3way_lr_v1_20260721.joblib
       selected_at: '2026-07-21T19:38:44Z'
     total_goals:
@@ -623,8 +623,8 @@ contexts:
       metric_name: test_mae
       metric_value: 1.340076
       mlflow_run_id: a087a4690337466aa1cd55dbd265727e
-      model_path: models/total_goals_xgboostregressor_v1_20260721.joblib
-      model_type: xgboostregressor
+      model_path: models/total_goals_swe_xgboostregressor_v1_20260721.joblib
+      model_type: XGBoostRegressorModel
       previous_model_path: models/total_goals_randomforestregressor_v1_20260721.joblib
       selected_at: '2026-07-21T19:39:48Z'
   international:
@@ -710,12 +710,12 @@ contexts:
       - MKT_AH_AWAY_ODDS
       - MKT_IMPLIED_OVER25
       metric_name: test_mae
-      metric_value: 2.189879
-      mlflow_run_id: f2ebcc1fa37d4804a8e626deb143cc32
-      model_path: models/home_corners_xgboostregressor_v1_20260711.joblib
+      metric_value: 2.174542
+      mlflow_run_id: 20d8374b74704454ae9650a8f00c0a44
+      model_path: models/home_corners_xgboostregressor_v1_20260721.joblib
       model_type: xgboostregressor
-      previous_model_path: file:///Users/tianqihuang/Documents/GitHub/FPAI/mlruns/802690824096537957/f81f1d2ccf34434b8fec592e90160d0f/artifacts/model
-      selected_at: '2026-07-12T04:09:59Z'
+      previous_model_path: models/home_corners_xgboostregressor_v1_20260711.joblib
+      selected_at: '2026-07-21T20:08:48Z'
     home_goals:
       feature_subset:
       - MKT_IMPLIED_HOME
@@ -754,12 +754,12 @@ contexts:
       - MKT_AH_AWAY_ODDS
       - MKT_IMPLIED_OVER25
       metric_name: test_log_loss
-      metric_value: 1.023317
-      mlflow_run_id: 199f90ad28324237ade03798fad6b541
-      model_path: models/result_3way_lr_v1_20260711.joblib
-      model_type: lr
-      previous_model_path: file:///Users/tianqihuang/Documents/GitHub/FPAI/mlruns/276600809103990075/487b5974470a4c9ab12ea60d8f08d010/artifacts/model
-      selected_at: '2026-07-12T03:07:38Z'
+      metric_value: 1.01446
+      mlflow_run_id: b9b1fd6ccfa04920a2c7aff50e3d1ca8
+      model_path: models/result_3way_xgboost_v1_20260721.joblib
+      model_type: xgboost
+      previous_model_path: models/result_3way_lr_v1_20260711.joblib
+      selected_at: '2026-07-21T20:08:48Z'
     total_corners:
       feature_subset:
       - MKT_IMPLIED_HOME

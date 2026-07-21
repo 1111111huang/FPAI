@@ -30,6 +30,25 @@ from src.utils.logger import get_logger
 LOGGER = get_logger(__name__)
 
 
+def build_artifact_filename(target_name: str, competition_id: str | None, model_prefix: str, date_tag: str) -> str:
+    """Construct a model artifact filename, disambiguated by competition (US#139 follow-up).
+
+    Confirmed live: before this fix, filenames had no competition_id component
+    at all (just f"{target}_{model_prefix}_v1_{date}.joblib"), so training two
+    different competitions' models for the same target+model-type+date
+    silently collided on disk -- training international's result_3way on the
+    same day as SWE's result_3way overwrote SWE's already-committed artifact
+    with international's content, while config/model_selection.yaml's
+    contexts.SWE entry kept pointing at the now-wrong file.
+
+    E0 keeps its pre-existing unsuffixed filename shape (competition_id "E0"
+    or None collapses to no suffix) so none of E0's already-recorded
+    model_selection.yaml entries needed to be re-pointed by this fix.
+    """
+    competition_tag = "" if competition_id in ("E0", None) else f"_{competition_id.lower()}"
+    return f"{target_name}{competition_tag}_{model_prefix}_v1_{date_tag}.joblib"
+
+
 class ModelManager:
     """Handle training data preparation, model evaluation, and model versioning."""
 
@@ -598,7 +617,9 @@ class ModelManager:
 
                 date_tag = datetime.now().strftime("%Y%m%d")
                 model_prefix = self.model.__class__.__name__.lower().replace("model", "")
-                save_path = self.model_dir / f"{target_name}_{model_prefix}_v1_{date_tag}.joblib"
+                save_path = self.model_dir / build_artifact_filename(
+                    target_name, self.competition_id, model_prefix, date_tag
+                )
                 self.model.save(str(save_path))
                 metadata = self._build_artifact_metadata(save_path, selected_features, X_val, y_val)
                 metadata["metrics"] = {metric_name: float(value) for metric_name, value in metrics.items()}

@@ -2025,3 +2025,38 @@ US#131's `prepare_training_data()` league fix (Section 42) filters `raw_matches.
 Verified directly against the real repo (not assumed): `ModelManager(competition_id="international").prepare_training_data()` against the real `config/competitions.yaml` and this worktree's real, populated `data/fpai_core.db` returns all 7,289 rows (3,800 E0 + 3,489 SWE), with both leagues genuinely present in the resulting chronological test split. New test: `tests/test_prepare_training_data_league_scoping.py::test_international_context_pools_e0_and_swe_against_real_registry`.
 
 Full suite: 662 passed / 1 skipped, zero regressions.
+
+## 45. Phase 20 (cont.): General-Purpose Models Retrained on Pooled Data — Mixed, Honestly-Measured Result (Completed — US#139)
+
+All 8 `international`-context targets retrained with XGBoost on the now-pooled E0+SWE dataset (US#138's confirmed pooling), since the fixed 13-feature `GENERAL_PURPOSE_FEATURES` set includes 9 `MKT_AH_*`/`MKT_LAMBDA_*`/`MKT_IMPLIED_OVER25` features permanently NaN for Sweden — the same reason Section 42 had to use XGBoost for Sweden's own models rather than the LR/RF defaults.
+
+**Result: genuinely mixed, measured rather than assumed.** `select-best-models --context international` promoted only 2 of 8 targets:
+
+| Target | Old (E0-only) | New (pooled) | Outcome |
+| :--- | :--- | :--- | :--- |
+| `result_3way` | log_loss 1.023317 | **1.0145** | Promoted — improved |
+| `home_corners` | MAE 2.189879 | **2.1745** | Promoted — improved |
+| `btts` | log_loss 0.68626 | 0.6861 | Not promoted — below improvement threshold |
+| `home_goals` | MAE 0.949844 | 0.9757 | Not promoted — worse |
+| `away_goals` | MAE 0.830741 | 0.8722 | Not promoted — worse |
+| `total_goals` | MAE 1.247302 | 1.2875 | Not promoted — worse |
+| `away_corners` | MAE 2.112464 | 2.1187 | Not promoted — below improvement threshold |
+| `total_corners` | MAE 2.688234 | 2.6964 | Not promoted — worse |
+
+Goals targets got measurably worse when pooled (2.7–5.0%) — a real signal Sweden's goal-scoring/market-calibration patterns differ enough from EPL's to dilute the shared model's goals accuracy specifically, while `result_3way` and `home_corners` benefited from the larger pool.
+
+**Caveat, flagged rather than glossed over:** the pooled models' test-split metrics were measured against a *mixed* E0+SWE chronological test set, not an E0-only one — a "worse" pooled MAE doesn't strictly prove the pooled model is worse *for EPL callers specifically*, it may partly reflect a harder, more heterogeneous evaluation set. `select-best-models`'s promotion decision is still the right practical outcome (only takes the pooled model where unambiguously not worse on its own merits), but a same-test-set (E0-only holdout) re-evaluation of both champions would be needed to answer the narrower "does this hurt existing EPL callers" question precisely — not done here.
+
+Net effect: `config/model_selection.yaml`'s `contexts.international` bucket is now a genuine mix of pooled-trained (`result_3way`, `home_corners`) and E0-only-trained (the other 6) models, not uniformly pooled — the honest, disciplined outcome of measuring rather than blindly promoting.
+
+Full suite: 662 passed / 1 skipped, zero regressions (no code changes required for this story — a live retraining/selection action).
+
+## 46. Critical Live Finding: Artifact Filename Collision Across Competitions (BUG-017, Fixed)
+
+While executing Section 45's retraining, `ModelManager.run_pipeline()`'s artifact filenames were discovered to have no competition_id component at all (`f"{target_name}_{model_prefix}_v1_{date_tag}.joblib"`). Training all 8 `international`-context targets with XGBoost reused the exact same filename pattern as Sweden's 5 targets trained earlier the same day — the `international` write silently **overwrote all 5 of Sweden's already-committed model files** with `international`'s 13-feature MKT-only content. `config/model_selection.yaml`'s `contexts.SWE` entries kept pointing at the now-corrupted files; BUG-014's existence-only guard didn't catch it, since the corrupted path still resolved to a real (just wrong) file.
+
+**Fix:** new `build_artifact_filename(target_name, competition_id, model_prefix, date_tag)` (`src/models/model_manager.py`) includes a lowercase competition_id suffix for any competition other than `E0`/`None`, which keep the pre-existing unsuffixed shape so no already-recorded E0 entries needed to move. `run_pipeline()` now calls this helper.
+
+**Recovery:** retrained Sweden's 5 affected targets again (now saved as `*_swe_*` files) and manually re-pointed `config/model_selection.yaml`'s `contexts.SWE` entries to the recovered files — `select-best-models` alone couldn't auto-detect this, since the corrupted and recovered candidates had numerically identical metrics (an exact tie the selector correctly-but-insufficiently treats as "no change needed"). Verified live: Sweden's forecast payload is byte-identical to its pre-corruption state; E0 unaffected.
+
+New `tests/test_artifact_filename_collision.py` (4 tests). Full test suite: 666 passed / 1 skipped, zero regressions. Full writeup: `documents/bugs.md` BUG-017.
