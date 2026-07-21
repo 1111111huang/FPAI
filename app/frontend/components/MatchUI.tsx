@@ -161,6 +161,36 @@ function applyRecommendation(match: Match, rec: MatchRecommendationOut): Match {
   };
 }
 
+/** W53: bulk-resolve the recommendation cache for an initial fixture list so
+ * a precomputed (W50/W51) match shows its real recommendation immediately,
+ * with no click required -- fixtureToMatch() alone always leaves
+ * hasRecommendation: false, and until this, the only two callers of
+ * getCachedRecommendation() were both lazy/per-card (MatchCard.handleExpand
+ * on click, MatchAnalysisPage.load on navigation), so a fully-precomputed
+ * cache never visually manifested until every card was clicked individually.
+ *
+ * Runs one getCachedRecommendation() call per match concurrently (Promise.all,
+ * not a sequential loop) -- the list is capped at 10 and this hits a local
+ * SQLite-backed cache, so N concurrent local calls is the simple, correctly
+ * scoped choice (no rate-limit concern like W52's football-data.org calls,
+ * and no new backend bulk endpoint needed). A miss (null) or a thrown error
+ * is treated identically -- same "degrade to miss" reasoning
+ * MatchCard.handleExpand's own cache-check catch already established --
+ * leaving the match unchanged (still hasRecommendation: false) so the
+ * existing W47 lazy click-through fallback still applies untouched. */
+async function resolveCachedRecommendations(matches: Match[]): Promise<Match[]> {
+  return Promise.all(
+    matches.map(async (m) => {
+      try {
+        const rec = await getCachedRecommendation(m.id, m.kickoffIso.slice(0, 10));
+        return rec ? applyRecommendation(m, rec) : m;
+      } catch {
+        return m;
+      }
+    })
+  );
+}
+
 function formatKickoff(iso: string): string {
   const d = new Date(iso);
   return d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
@@ -634,7 +664,13 @@ export function DashboardPage() {
         const today = asOf.toISOString().slice(0, 10);
         const fixtures = await getFixtures(today, today);
         if (cancelled) return;
-        setMatches(fixtures.map((f) => fixtureToMatch(f, asOf, sandboxMode)));
+        const initialMatches = fixtures.map((f) => fixtureToMatch(f, asOf, sandboxMode));
+        // W53: resolve the precomputed cache for the whole initial list
+        // before rendering -- an additional await in this same guarded run,
+        // so re-check `cancelled` again before touching state.
+        const resolvedMatches = await resolveCachedRecommendations(initialMatches);
+        if (cancelled) return;
+        setMatches(resolvedMatches);
 
         if (fixtures.length === 0) {
           // W46: same-day window empty (real off-season, or a past sandbox
@@ -672,8 +708,15 @@ export function DashboardPage() {
               .map((f) => fixtureToMatch(f, asOf, sandboxMode))
               // API ordering isn't guaranteed -- sort so "next" is actually
               // nearest-first. ISO 8601 strings sort correctly as strings.
-              .sort((a, b) => a.kickoffIso.localeCompare(b.kickoffIso));
-            setNextMatches(sorted.slice(0, 10));
+              .sort((a, b) => a.kickoffIso.localeCompare(b.kickoffIso))
+              .slice(0, 10);
+            // W53: resolve the precomputed cache for this (already-capped-
+            // to-10) fallback list too -- another await in this same
+            // guarded run, so re-check `cancelled` again before touching
+            // state.
+            const resolvedNext = await resolveCachedRecommendations(sorted);
+            if (cancelled) return;
+            setNextMatches(resolvedNext);
           } catch {
             if (!cancelled) setNextMatches([]);
           }
@@ -783,7 +826,13 @@ export function MatchExplorerPage() {
         // a day in negative-UTC-offset timezones.
         to.setUTCDate(to.getUTCDate() + 90);
         const fixtures = await getFixtures(from.toISOString().slice(0, 10), to.toISOString().slice(0, 10));
-        if (!cancelled) setMatches(fixtures.map((f) => fixtureToMatch(f, asOf, sandboxMode)));
+        if (cancelled) return;
+        const initialMatches = fixtures.map((f) => fixtureToMatch(f, asOf, sandboxMode));
+        // W53: resolve the precomputed cache for the whole initial list
+        // before rendering -- an additional await in this same guarded run,
+        // so re-check `cancelled` again before touching state.
+        const resolvedMatches = await resolveCachedRecommendations(initialMatches);
+        if (!cancelled) setMatches(resolvedMatches);
       } catch (err) {
         if (!cancelled) setError(err instanceof ApiError ? err.message : "Could not load fixtures.");
       }

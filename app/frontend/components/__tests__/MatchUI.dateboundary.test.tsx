@@ -1,6 +1,5 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
 import { DashboardPage, MatchExplorerPage, MatchCard, type Match } from "../MatchUI";
 import { generateRecommendation, getCachedRecommendation, getFixtures, getSandboxStatus } from "@/lib/api";
 import type { Fixture, MatchRecommendationOut } from "@/lib/types";
@@ -214,14 +213,15 @@ describe("sandbox mode does not leak real results for fixtures still-future rela
     };
     vi.mocked(getCachedRecommendation).mockResolvedValue(rec);
 
-    const user = userEvent.setup();
     render(<MatchExplorerPage />);
 
-    const trigger = await screen.findByText("Not yet generated");
-    await user.click(trigger);
-
+    // W53: the initial-list bulk cache check (Promise.all over
+    // getCachedRecommendation) now resolves this cache hit up front -- no
+    // click needed for a fixture rendered as upcoming under the sandbox
+    // future-fixture rule to show its precomputed recommendation.
     await waitFor(() => expect(getCachedRecommendation).toHaveBeenCalledWith("future-finished", "2026-03-14"));
     expect(await screen.findByText("Direct Bet")).toBeInTheDocument();
+    expect(screen.queryByText("Not yet generated")).not.toBeInTheDocument();
     expect(generateRecommendation).not.toHaveBeenCalled();
   });
 });
