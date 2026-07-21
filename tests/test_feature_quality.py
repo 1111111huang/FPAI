@@ -10,6 +10,19 @@ NaN rate ceilings (assert < threshold):
                                                   older seasons.
   STRENGTH_ / INTERACTION_ / EFFICIENCY_ < 15 %
   OPP_ADJ_                              < 8  %  (combined venue timeline; typically 2 %)
+
+US#130 note: every threshold/comment above was calibrated against EPL data
+only (Understat/odds-coverage domain knowledge is EPL-specific). Since
+Sweden's Allsvenskan was registered (US#128) and real-ingested, feature_store
+now also contains ~3,489 Sweden rows with permanently-NaN shots/corners/cards
+sub-features -- not a quality regression, but a documented, by-design
+consequence of a data source that structurally lacks those columns (see
+FRAI_TECHSPEC.md Section 38/US#127). Scoping this file's fixtures to
+league='E0' keeps it doing its actual job -- catching regressions in the
+established EPL pipeline -- rather than incorrectly holding a goals-only
+competition to shots/corners-dependent thresholds it can never meet. A
+Sweden-specific quality suite, if wanted, is a separate future story with
+its own recalibrated thresholds, not a change to this file's intent.
 """
 
 from __future__ import annotations
@@ -45,20 +58,31 @@ def real_db():
 
 @pytest.fixture(scope="module")
 def feature_df(real_db):
+    # US#130: scoped to E0 -- see module docstring. feature_store may also
+    # contain other competitions (e.g. Sweden) whose data source structurally
+    # lacks shots/corners/cards, which these EPL-calibrated thresholds were
+    # never meant to hold them to.
     features = _selected_features()
     return real_db.execute(
-        f"SELECT {', '.join(features)} FROM feature_store"
+        f"""
+        SELECT f.{', f.'.join(features)}
+        FROM feature_store f
+        JOIN raw_matches r USING (match_id)
+        WHERE r.league = 'E0'
+        """
     ).fetchdf()
 
 
 @pytest.fixture(scope="module")
 def labelled_df(real_db):
+    # US#130: scoped to E0 -- see module docstring / feature_df fixture above.
     features = _selected_features()
     return real_db.execute(
         f"""
         SELECT f.{', f.'.join(features)}, r.fthg, r.ftag, r.hc, r.ac
         FROM feature_store f
         JOIN raw_matches r USING (match_id)
+        WHERE r.league = 'E0'
         """
     ).fetchdf()
 

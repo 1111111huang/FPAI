@@ -1903,3 +1903,37 @@ Two pre-existing tests broke as an expected consequence of a third competition n
 Full suite: 626 passed / 23 skipped, zero regressions (up from 619 passed at Section 39).
 
 Sweden is now a fully registered `competition_specific` competition, but **no models have been trained for it yet** — that's US#130, the next story.
+
+## 41. Phase 20 (cont.): Sweden's First Trained Models (Completed — US#130)
+
+### 41.1 Getting Real Data Into the Worktree
+
+This worktree had no local database at all going into this story — `data/*.db` is gitignored, so `git worktree`/`EnterWorktree` never copies it. All prior Sweden stories (US#124–129) had correctly used synthetic fixtures or their own live-fetch verification rather than assuming a populated local DB existed. Before training could produce anything meaningful, a snapshot of the main checkout's real `data/fpai_core.db` (3,800 EPL matches) was copied into the worktree — a deliberate, user-approved choice to keep this worktree isolated after discovering US#140's migration had already touched the main checkout's file directly (`data/` falls outside git's branch isolation entirely). Sweden's real data was then ingested for real (not a fixture) via US#124/125's `fetch_sweden_csv()`/`upsert_sweden_matches()` — 3,489 rows — and `feature_store` was rebuilt end-to-end (7,289 total rows, both leagues).
+
+Verified live that the whole US#127/US#133/US#134 gating design holds against real data: a real Sweden row shows `OFF_HOME_FTHG_R5=2.0` (goals-based, populated) alongside `OFF_HOME_HS_R5=NaN` (shots-based, permanently absent by design — not a bug).
+
+### 41.2 Bug Found During Real Ingestion: BOM Not Actually Stripped
+
+US#124's `fetch_sweden_csv()` claimed pandas' C parser "auto-detects and strips a UTF-8 BOM ... no explicit encoding needed" and read from `response.text`. Running the real pipeline surfaced this as false: `requests`' own text-decoding happens before pandas ever sees the bytes, so the BOM became visible `"ï»¿"` mojibake prefixed onto the first column name (`"ï»¿Country"`). Harmless in practice (`Country` isn't consumed downstream) but produced a persistent false "Sweden CSV missing expected columns" warning on every fetch. Fixed by reading `response.content` (raw bytes) with `encoding="utf-8-sig"` instead — verified against the live site: columns now parse cleanly as `['Country', 'League', ...]`.
+
+### 41.3 Training Results (2026-07-21, single-shot defaults, no sweep)
+
+`train-forecast-suite --context SWE` correctly skipped the 3 corners targets with US#129's exact designed log format, then trained the 5 available targets with `train-forecast-suite`'s existing plain defaults (LR for classifiers, RF regressor for regression — the same starting point EPL itself used before its own later sweep phases, not a claim these are Sweden's best achievable numbers):
+
+| Target | Model | Metric | Value |
+| :--- | :--- | :--- | :--- |
+| `result_3way` | LogisticRegression | log_loss / accuracy | 1.0218 / 0.5193 |
+| `btts` | LogisticRegression | log_loss / accuracy | 0.6919 / 0.5526 (calibrated: 0.6563) |
+| `home_goals` | RandomForestRegressor | MAE / RMSE | 1.1021 / 1.3345 |
+| `away_goals` | RandomForestRegressor | MAE / RMSE | 0.8526 / 1.0631 |
+| `total_goals` | RandomForestRegressor | MAE / RMSE | 1.2635 / 1.5935 |
+
+`select-best-models --context SWE` populated `config/model_selection.yaml`'s new `contexts.SWE` bucket (the per-competition bucketing US#110 built for exactly this). Spot-checked `away_goals`'s written `feature_subset`: exactly the 74 goals-only features from US#127/US#128 — no shots/corners/cards features present, confirming the registry gating reaches all the way through to the artifact actually selected for serving.
+
+No Dixon-Coles sanity baseline (Section 22's model, already competition-agnostic) or Optuna/hyperparameter sweep was run for Sweden in this story — both are reasonable, explicitly out-of-scope follow-ups once this baseline is validated in practice.
+
+### 41.4 Fixed: EPL-Only Assumption in `test_feature_quality.py`
+
+Running the full suite against real multi-competition data surfaced one more EPL-only assumption: `tests/test_feature_quality.py`'s NaN-rate-ceiling checks (`test_nan_rate`) query `feature_store` with no league filter, and their thresholds were calibrated purely against EPL's data profile (the file's own docstring cites Understat-coverage domain knowledge). Once Sweden's by-design-permanently-NaN shots/corners/cards columns entered the shared table, 7 of these checks broke — not a real regression, but the same class of single-competition assumption already fixed elsewhere in this phase (match_id, team-mapping, cold-start imputation). Scoped the `feature_df`/`labelled_df` fixtures to `WHERE r.league = 'E0'`, restoring the file's actual intent (EPL pipeline regression detection) without weakening any threshold. A Sweden-specific quality suite with its own recalibrated thresholds is a legitimate future story, not attempted here.
+
+Full suite: 648 passed / 1 skipped, zero regressions. The skip count dropping from 23 to 1 is a side effect of real data now existing in the worktree — 22 previously-skipped integration tests that need a real DB now run and pass.
