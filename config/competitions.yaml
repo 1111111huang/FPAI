@@ -13,6 +13,12 @@
 # wholesale-missing column with another competition's mean. See
 # src/logic/feature_groups.py for the classification and
 # ModelManager._load_selected_features for where this is enforced.
+#
+# US#127: DIS (cards) is now a real, enforced tag (previously listed here but
+# not actually gated by any code -- a docstring-only claim in US#133). Two
+# new corner-dependent sub-tags, CTX_CORNERS and H2H_CORNERS, close the
+# residual gap US#133 flagged (CTX_HOME/AWAY_CORNERS_STD_R5, H2H_CORNERS_R5
+# previously passed through ungated regardless of enabled_feature_groups).
 competitions:
   E0:
     competition_id: E0
@@ -34,6 +40,8 @@ competitions:
       - INTERACTION_SHOTS
       - DIS
       - CTX
+      - CTX_CORNERS
+      - H2H_CORNERS
       - MKT
       - EFFICIENCY
       - SQUAD

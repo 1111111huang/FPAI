@@ -1,9 +1,11 @@
-"""Tests for goals/shots/corners feature-group gating (US#133).
+"""Tests for goals/shots/corners feature-group gating (US#133, extended US#127).
 
 Covers:
 - `resolve_feature_group_tag` classification of the split families (OFF,
-  DEF, OPP_ADJ, STRENGTH, INTERACTION) and the "not gated here" families
-  (DIS, CTX, MKT, EFFICIENCY, H2H, SQUAD-managed prefixes).
+  DEF, OPP_ADJ, STRENGTH, INTERACTION), the newly-gated families added by
+  US#127 (DIS, CTX_CORNERS, H2H_CORNERS), and the families still "not gated
+  here" (the rest of CTX, MKT, EFFICIENCY, the rest of H2H, SQUAD-managed
+  prefixes).
 - The E0 regression: with the new sub-tag `enabled_feature_groups` entry,
   E0 must still resolve to the exact same 167-feature set as
   `config/schema.yaml`'s `selected_features` list (unchanged from before
@@ -12,6 +14,9 @@ Covers:
   Allsvenskan, whose football-data.co.uk "New Leagues" source has goals and
   1X2 market odds only) can express "OFF minus shot-based/corner-based"
   through the registry instead of pulling in wholesale-missing columns.
+- US#127: the actual Sweden `enabled_feature_groups` list (goals-only,
+  no cards, no corners) correctly excludes DIS_*, CTX_*_CORNERS_STD_R5, and
+  H2H_CORNERS_R5, closing the residual gap US#133 flagged.
 """
 
 from __future__ import annotations
@@ -83,16 +88,27 @@ def _full_schema_features() -> list[str]:
         ("INTERACTION_ATTACK_GOALS_DIFF_R5", "INTERACTION_GOALS"),
         ("INTERACTION_DEFENSE_GOALS_DIFF_R5", "INTERACTION_GOALS"),
         ("INTERACTION_ATTACK_SOT_DIFF_R5", "INTERACTION_SHOTS"),
-        # Families untouched by this mechanism -> None (pass through)
-        ("DIS_HOME_HY_R3", None),
-        ("DIS_HOME_DISCIPLINE_SCORE_R3", None),
+        # DIS (cards): US#127 made this a real, enforced tag (previously
+        # claimed as "already has its own group tag" by US#133's docstring,
+        # but no code actually checked for it).
+        ("DIS_HOME_HY_R3", "DIS"),
+        ("DIS_HOME_DISCIPLINE_SCORE_R3", "DIS"),
+        # CTX: only the two corners-dependent (hc/ac) features are gated;
+        # the rest of the family (rest days, cum pts, PPG, goals/conceded
+        # std, streaks) is goals/date-only and stays ungated.
         ("CTX_HOME_REST_DAYS", None),
-        ("CTX_HOME_CORNERS_STD_R5", None),
+        ("CTX_HOME_CORNERS_STD_R5", "CTX_CORNERS"),
+        ("CTX_AWAY_CORNERS_STD_R5", "CTX_CORNERS"),
+        ("CTX_HOME_GOALS_STD_R5", None),
+        ("CTX_HOME_SCORE_STREAK", None),
         ("MKT_IMPLIED_HOME", None),
         ("EFFICIENCY_HOME_ATTACK_VS_AWAY_DEF_R5", None),
         ("EFFICIENCY_ATTACK_MATCHUP_DIFF_R5", None),
+        # H2H: only the corners-dependent (hc/ac) feature is gated; the
+        # goals-only H2H features stay ungated.
         ("H2H_TOTAL_GOALS_R5", None),
-        ("H2H_CORNERS_R5", None),
+        ("H2H_HOME_WIN_RATE_R5", None),
+        ("H2H_CORNERS_R5", "H2H_CORNERS"),
         ("SQUAD_HOME_XG_MEAN_R3", None),
         ("LUCK_HOME_BURNOUT_R5", None),
         ("XOC_HOME", None),
@@ -227,5 +243,107 @@ def test_goals_only_competition_excludes_shot_and_corner_features(tmp_path: Path
     # SQUAD_* (and friends) still excluded via the pre-existing US#97 mechanism.
     assert not any(f.startswith("SQUAD_") for f in features)
 
-    # DIS (cards) is untouched by this story -- passes through whole since "DIS" is enabled.
+    # DIS (cards) is enabled in this fixture -- passes through since "DIS" is present.
     assert "DIS_HOME_HY_R3" in features
+
+    # This fixture enables "CTX"/"MKT" but not "CTX_CORNERS"/"H2H_CORNERS" --
+    # US#127: the two corners-dependent CTX features and H2H_CORNERS_R5 must
+    # now be excluded (previously they passed through ungated regardless).
+    assert "CTX_HOME_CORNERS_STD_R5" not in features
+    assert "CTX_AWAY_CORNERS_STD_R5" not in features
+    assert "H2H_CORNERS_R5" not in features
+    # The rest of CTX/H2H (goals/date-only) still passes through unchanged.
+    assert "CTX_HOME_GOALS_STD_R5" in features
+    assert "CTX_HOME_SCORE_STREAK" in features
+    assert "H2H_TOTAL_GOALS_R5" in features
+    assert "H2H_HOME_WIN_RATE_R5" in features
+
+
+# --- US#127: the actual Sweden `enabled_feature_groups` list -----------
+
+
+def _sweden_definition() -> CompetitionDefinition:
+    """The final, concrete `enabled_feature_groups` list US#127 recommends
+    for Sweden's real `config/competitions.yaml` entry (registered by
+    US#128, the next story). Unlike `_sweden_like_definition()` above (a
+    generic "goals-only" mechanism stand-in from US#133), this fixture is
+    Sweden's actual proposed list: goals-only sub-tags, no cards (DIS), no
+    corners (CTX_CORNERS/H2H_CORNERS), no SQUAD (no FotMob player data
+    source), but CTX/MKT/EFFICIENCY still enabled since most of their
+    features are goals/date/1X2-odds-only and computable from Sweden's
+    football-data.co.uk "New Leagues" source.
+    """
+    return CompetitionDefinition(
+        competition_id="SWE",
+        tier="competition_specific",
+        league_code="SWE",
+        enabled_feature_groups=(
+            "OFF_GOALS",
+            "DEF_GOALS",
+            "OPP_ADJ_GOALS",
+            "STRENGTH_GOALS",
+            "INTERACTION_GOALS",
+            "CTX",
+            "MKT",
+            "EFFICIENCY",
+            # deliberately excluded: OFF_SHOTS/DEF_SHOTS/OPP_ADJ_SHOTS/
+            # STRENGTH_SHOTS/INTERACTION_SHOTS/OFF_CORNERS/DEF_CORNERS/
+            # OPP_ADJ_CORNERS (no shots/SOT/corners data), DIS (no cards
+            # data), CTX_CORNERS/H2H_CORNERS (no corners data), SQUAD (no
+            # FotMob player data source for Sweden).
+        ),
+        player_data_sources=(),
+    )
+
+
+def test_sweden_enabled_feature_groups_excludes_all_uncomputable_features(tmp_path: Path) -> None:
+    """US#127 acceptance: Sweden's real proposed list excludes every feature
+    family Sweden's goals + closing-1X2-odds-only source can't populate --
+    shots/SOT, corners (including the CTX/H2H corners gap US#133 flagged),
+    cards, and squad-level data -- while keeping every goals/odds-based
+    feature intact."""
+    with patch(
+        "src.logic.competition_registry.get_competition_definition",
+        return_value=_sweden_definition(),
+    ):
+        manager = _make_manager_with_patched_registry(tmp_path, "SWE")
+        features = set(manager._load_selected_features())
+
+    uncomputable = [
+        # Shots/SOT
+        "OFF_HOME_HS_R3", "OFF_HOME_HST_R3", "DEF_HOME_AS_R3", "DEF_HOME_AST_R3",
+        "OFF_HOME_SHOT_ACCURACY_R3", "DEF_HOME_SAVE_RATE_R3",
+        "STRENGTH_SoT_Diff", "INTERACTION_ATTACK_SOT_DIFF_R5",
+        "OPP_ADJ_HOME_SOT_SCORED_R3",
+        # Corners
+        "OFF_HOME_HC_R3", "DEF_HOME_AC_R3",
+        "OPP_ADJ_HOME_CORNERS_SCORED_R3", "OPP_ADJ_CORNER_MATCHUP_HOME_R3",
+        "CTX_HOME_CORNERS_STD_R5", "CTX_AWAY_CORNERS_STD_R5", "H2H_CORNERS_R5",
+        # Cards
+        "DIS_HOME_HY_R3", "DIS_AWAY_DISCIPLINE_SCORE_R5",
+        # Squad (FotMob)
+        "SQUAD_HOME_XG_MEAN_R3", "LUCK_HOME_BURNOUT_R5", "XOC_HOME", "FRDS_HOME",
+        "DEF_ANCHOR_HOME",
+    ]
+    for feature in uncomputable:
+        assert feature not in features, f"{feature} should be excluded for Sweden"
+
+    computable = [
+        "OFF_HOME_FTHG_R3", "DEF_HOME_FTAG_R3", "OFF_HOME_XG_R3", "OFF_HOME_LUCK_R3",
+        "OPP_ADJ_HOME_GOALS_SCORED_R3", "OPP_ADJ_GOAL_MATCHUP_HOME_R3",
+        "STRENGTH_Goal_Diff", "INTERACTION_ATTACK_GOALS_DIFF_R5",
+        "EFFICIENCY_HOME_ATTACK_VS_AWAY_DEF_R5", "EFFICIENCY_ATTACK_MATCHUP_DIFF_R5",
+        "CTX_HOME_REST_DAYS", "CTX_HOME_CUM_PTS", "CTX_HOME_PPG_L10",
+        "CTX_HOME_GOALS_STD_R5", "CTX_HOME_SCORE_STREAK",
+        "H2H_TOTAL_GOALS_R5", "H2H_HOME_WIN_RATE_R5",
+        "MKT_IMPLIED_HOME", "MKT_OVERROUND",
+        # Known accepted gap (documented, not excluded): these MKT_* features
+        # depend on over25/AH odds Sweden's source never populates, so they
+        # will always be NaN for Sweden -- but MKT_* is excluded from
+        # cold-start mean-imputation by design (NaN = genuine missing), so
+        # this is not a misleading-value bug like the CTX/H2H corners gap
+        # was, and is intentionally left unsplit (see feature_groups.py).
+        "MKT_AH_LINE", "MKT_IMPLIED_OVER25", "MKT_LAMBDA_TOTAL",
+    ]
+    for feature in computable:
+        assert feature in features, f"{feature} should be included for Sweden"

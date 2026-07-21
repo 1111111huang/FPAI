@@ -1761,3 +1761,63 @@ New `tests/test_sweden_team_mapping.py` (5 tests):
 Full suite: 604 passed / 23 skipped, zero regressions (up from 599 passed at Section 36 — net new here is exactly this story's 5 tests).
 
 Sweden (`SWE`) is still not registered as a competition (Section 32/33/34/35/36's precedent continues) — this story is scoped purely to the mapping file, per US#126's text.
+
+---
+
+## 38. Sweden Feature-Family Computability Audit + Residual Gating Gaps (Completed — US#127)
+
+### 38.1 Motivation
+
+Section 33 (US#133) built the goals/shots/corners sub-tag mechanism (`resolve_feature_group_tag()`) and flagged two things it deliberately left out of scope: (1) whether its own `STRENGTH`/`INTERACTION`/`EFFICIENCY` classification was actually correct, and (2) a residual gap — `CTX_HOME/AWAY_CORNERS_STD_R5` and `H2H_CORNERS_R5` are corners-dependent but were never gated by any tag, since neither `CTX` nor `H2H` had a pre-existing bare tag to split. This story (a) re-verified Section 33's classification against `feature_factory.py` directly rather than trusting its own completion notes, (b) audited every untagged family (`CTX_*`, `H2H_*`, `MKT_*`, plus `DIS_*`) by hand against the real Sweden ingestion path (`src/ingestion/football_data/sweden_loader.py`, US#125), and (c) closed two gating gaps found in the process, one of which is the residual gap Section 33 already named and one of which is new.
+
+### 38.2 Re-Verifying Section 33's STRENGTH/INTERACTION/EFFICIENCY Split
+
+Read `feature_factory.py` lines 1045–1059 directly (the second, `_compute_form_deltas`-equivalent code path that actually runs at feature-build time, not just the earlier `build_for_match` copy at lines 253–286 — both were checked and are consistent). Confirmed exactly as Section 33 claimed: `STRENGTH_Goal_Diff` and both `INTERACTION_*_GOALS_DIFF_R5` features are pure `OFF_*_FTHG/FTAG_R5` arithmetic (goals-only); `STRENGTH_SoT_Diff` and `INTERACTION_ATTACK_SOT_DIFF_R5` are the sole SOT-based feature in each family; all three `EFFICIENCY_*` features are `OFF_HOME_FTHG_R5 / (DEF_AWAY_FTHG_R5 + 0.1)` and its mirror/diff — entirely goals-ratio-based, no shots/corners term anywhere. `resolve_feature_group_tag()`'s existing `"SOT" in upper` branch logic for `STRENGTH_`/`INTERACTION_` was confirmed to implement this correctly (verified against `config/schema.yaml`'s actual 4 feature names, not just read). No changes needed to this part of Section 33's work.
+
+### 38.3 New Finding: `DIS` Was Never Actually Gated
+
+Section 33's own docstring (`src/logic/feature_groups.py`, pre-story) asserted `"DIS (cards) already has its own group tag"`. This turned out to be false: `resolve_feature_group_tag()` had no branch for `DIS_*` (fell through to `return None`), and a repo-wide search found no other code checking for a bare `"DIS"` string anywhere — unlike `SQUAD`, which has an explicit `if "SQUAD" not in enabled_groups: ...` strip in `ModelManager._load_selected_features`. `DIS` being listed in E0's `enabled_feature_groups` was therefore purely decorative, same as `CTX`/`MKT`/`EFFICIENCY` (which is correct for those three — no useful gate exists to attach for CTX/MKT/EFFICIENCY as a *whole* family, since most of their sub-features are always computable — but incorrect for `DIS`, which is 100% cards-dependent and 100% unavailable for Sweden). Left unfixed, a Sweden registry entry that "correctly" omitted `DIS` would have gotten all 10 `DIS_*` (cards) features anyway. Fixed: `resolve_feature_group_tag()` now returns `"DIS"` for any `DIS_`-prefixed feature, making it a real, enforceable gate for the first time.
+
+### 38.4 Residual Gap Closed: `CTX_CORNERS` / `H2H_CORNERS`
+
+Per Section 33.4's own framing, three options were available: (a) extend `resolve_feature_group_tag()` with new sub-tags, (b) leave it as a documented, accepted gap, (c) something narrower. Chose (a), consistent with the mechanism Section 33 already established and proportionate to the fix size (two new `if` branches, substring-matched on `"CORNER" in upper` the same way `OPP_ADJ`'s corner check already works): `CTX_HOME_CORNERS_STD_R5`/`CTX_AWAY_CORNERS_STD_R5` → `"CTX_CORNERS"`; `H2H_CORNERS_R5` → `"H2H_CORNERS"`. The rest of `CTX_*` (rest days, cumulative points, PPG, goals/conceded std, streaks — all goals/date-only, verified against `_compute_standings_context`/`_compute_temporal_features`) and the rest of `H2H_*` (`H2H_TOTAL_GOALS_R5`/`H2H_HOME_WIN_RATE_R5`, verified against `_compute_h2h_rolling` — both purely `fthg`/`ftag`-derived) remain ungated (`None`, always pass), matching their actual computability.
+
+Chose (a) over (b) specifically because this gap is a *misleading-value* problem, not just a *reduced-signal* one: `_apply_cold_start_imputation()` fills NaN rolling features (everything except `MKT_*`) with a per-competition column mean (Section 34/US#134). A Sweden competition enabling `CTX`/`H2H` without this fix would get its permanently-`NaN` corners columns filled with Sweden's own per-competition mean — but since the column is NaN for *every* Sweden row, that mean is itself NaN, so `fillna` is a no-op and the columns stay NaN. (Confirmed via `groupby(...).transform("mean")` semantics: a group whose entire column is NaN produces NaN, not a fallback to another competition.) So in practice, post-US#134, this was already not the *cross-competition-contamination* risk Section 33.1 originally worried about for `OFF`/`DEF` — but it was still worth closing because (1) it's exactly the gap Section 33 explicitly flagged as a follow-up, (2) it makes `enabled_feature_groups` an honest description of what a competition actually receives (omitting `CTX_CORNERS` from Sweden's list now actually removes those columns from `selected_features`, rather than training on 3 permanently-empty columns), and (3) it is a small, well-tested, symmetric extension of a mechanism that already exists for this exact purpose.
+
+**E0 regression requirement:** since these two features were previously ungated (always passed regardless of tag content), E0's `enabled_feature_groups` list in `config/competitions.yaml` needed `CTX_CORNERS` and `H2H_CORNERS` added explicitly to keep resolving its full 167-feature set — done, alongside the pre-existing (now functional) `DIS` entry which required no change since it was already listed.
+
+### 38.5 Audited and Left As-Is: `MKT_*`'s AH/Over-Under Sub-Family
+
+Sweden's real ingestion path (`sweden_loader.py`'s `_NULL_COLUMNS`) confirmed: Sweden has `avgh`/`avgd`/`avga` (closing 1X2 odds, with a `B365C*`-fallback the same pattern BUG-009 established for pre-2020 EPL rows) but **no** `over25_odds`, `under25_odds`, `ah_line`, `ah_home_odds`, or `ah_away_odds` — all explicitly `NULL` for every Sweden row. Cross-referencing `_compute_odds_features()`: `MKT_IMPLIED_HOME/DRAW/AWAY` and `MKT_OVERROUND` depend only on `avgh`/`avgd`/`avga` (computable for Sweden); `MKT_IMPLIED_OVER25`, `MKT_AH_LINE`, `MKT_AH_HOME_ODDS`, `MKT_AH_AWAY_ODDS`, `MKT_LAMBDA_TOTAL`, `MKT_LAMBDA_HOME`, `MKT_LAMBDA_AWAY`, `MKT_POISSON_BTTS_PROB`, and `MKT_LAMBDA_AH_DIFF` all depend on the missing AH/O-U columns and will be permanently `NaN` for Sweden — 9 of `MKT`'s ~17 sub-features.
+
+Deliberately **not** split into a new sub-tag, unlike the `CTX_CORNERS`/`H2H_CORNERS` case: `_apply_cold_start_imputation()` already excludes the entire `MKT_` prefix from mean-imputation by design ("their NaN encodes genuine missing odds data" — the same accepted behavior pre-2020 EPL rows already rely on for these exact columns). So Sweden's permanently-missing AH/O-U columns stay honestly `NaN`, not silently backfilled — there is no misleading-value bug here to fix, just a real, permanent, already-correctly-signaled gap. XGBoost (the model family used for `competition_specific` tiers) handles this NaN-natively; a non-XGBoost model would currently `dropna` every Sweden row on these always-missing columns if ever pointed at the `MKT` tag; flagged here for whoever picks that up, not acted on. This finding traces back to US#117's superseded note ("Sweden's gap is broader than just xG — also corners, discipline, and several MKT_ sub-families"), which this section resolves for the MKT part.
+
+### 38.6 The Final Sweden `enabled_feature_groups` List
+
+```
+- OFF_GOALS
+- DEF_GOALS
+- OPP_ADJ_GOALS
+- STRENGTH_GOALS
+- INTERACTION_GOALS
+- CTX
+- MKT
+- EFFICIENCY
+```
+
+Deliberately excluded: `OFF_SHOTS`, `OFF_CORNERS`, `DEF_SHOTS`, `DEF_CORNERS`, `OPP_ADJ_SHOTS`, `OPP_ADJ_CORNERS`, `STRENGTH_SHOTS`, `INTERACTION_SHOTS` (no shots/SOT/corners columns at all), `DIS` (no cards columns — now an enforced exclusion per §38.3), `CTX_CORNERS`, `H2H_CORNERS` (no corners columns — now an enforced exclusion per §38.4), `SQUAD` (no FotMob player-data source registered for Sweden). Resolved end-to-end through `ModelManager._load_selected_features()`'s actual two-step gate (US#97 SQUAD-prefix strip, then `resolve_feature_group_tag()`), this list keeps **74 of the 167** schema features (all `_GOALS` sub-features across `OFF`/`DEF`/`OPP_ADJ`/`STRENGTH`/`INTERACTION`, plus every ungated `CTX`/`MKT`/`EFFICIENCY`/`H2H` feature minus the 3 now-gated corners ones) — the remaining 93 are shots/SOT (30), corners (23, including the 3 from §38.4), cards (20), and squad-managed (20) features Sweden's source can't populate. Handed to US#128 to register verbatim; this story does not touch `config/competitions.yaml`'s `competitions:` block beyond E0's regression fix (§38.4).
+
+### 38.7 Mechanism and Test Changes
+
+`src/logic/feature_groups.py::resolve_feature_group_tag()`: two new unconditional-prefix branches (`DIS_` → `"DIS"`) and two new substring-matched branches (`CTX_`/`H2H_` + `"CORNER" in upper` → `"CTX_CORNERS"`/`"H2H_CORNERS"`), placed after the existing `OFF_`/`DEF_` branch and before the final `return None`. Module docstring rewritten to describe the new tags and to correct the false `DIS` claim.
+
+`config/competitions.yaml`: E0's `enabled_feature_groups` gained `CTX_CORNERS` and `H2H_CORNERS` (regression fix, §38.4); `DIS` was already present and needed no change.
+
+`tests/test_feature_group_gating.py`:
+- Updated the parametrized `resolve_feature_group_tag()` cases: `DIS_HOME_HY_R3`/`DIS_HOME_DISCIPLINE_SCORE_R3` now expect `"DIS"` (previously `None`); `CTX_HOME/AWAY_CORNERS_STD_R5` now expect `"CTX_CORNERS"`; `H2H_CORNERS_R5` now expects `"H2H_CORNERS"`. Added cases confirming the rest of `CTX`/`H2H` remain `None`.
+- Extended the existing goals-only stand-in test with assertions that `CTX_*_CORNERS_STD_R5`/`H2H_CORNERS_R5` are now excluded (previously always included) while the rest of `CTX`/`H2H` remain included.
+- New `test_sweden_enabled_feature_groups_excludes_all_uncomputable_features`: exercises §38.6's exact proposed list end-to-end through `ModelManager._load_selected_features()`, asserting every shots/corners/cards/squad feature is excluded and every goals/odds-based feature (including the 9 permanently-NaN-but-intentionally-included `MKT_*` AH/O-U features from §38.5) is included.
+
+Full suite: 609 passed / 23 skipped, zero regressions (up from 604 passed at Section 37 — net new here is exactly 4 new `resolve_feature_group_tag()` parametrize cases (`CTX_AWAY_CORNERS_STD_R5`, `CTX_HOME_GOALS_STD_R5`, `CTX_HOME_SCORE_STREAK`, `H2H_HOME_WIN_RATE_R5`) plus 1 new test function (`test_sweden_enabled_feature_groups_excludes_all_uncomputable_features`) = 5 new tests; several existing `DIS_*`/`CTX_HOME_CORNERS_STD_R5`/`H2H_CORNERS_R5` cases had their expected value updated in place, not added).
+
+Sweden (`SWE`) is still not registered as a competition — that remains US#128's job, using §38.6's list verbatim.
