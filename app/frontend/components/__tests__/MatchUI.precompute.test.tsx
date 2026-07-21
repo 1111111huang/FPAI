@@ -19,7 +19,7 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { DashboardPage } from "../MatchUI";
+import { DashboardPage, MatchExplorerPage } from "../MatchUI";
 import { generateRecommendation, getCachedRecommendation, getFixtures, getSandboxStatus } from "@/lib/api";
 import type { Fixture, MatchRecommendationOut } from "@/lib/types";
 
@@ -146,5 +146,63 @@ describe("Dashboard initial-list precompute visibility (W53)", () => {
 
     resolvers.forEach((r) => r());
     await waitFor(() => expect(screen.getAllByText("Not yet generated")).toHaveLength(2));
+  });
+});
+
+// ---------------------------------------------------------------------------
+// W53 follow-up (code review): unlike Dashboard's two call sites (each
+// capped at 10), MatchExplorerPage's 90-day search window can realistically
+// return 50-100+ fixtures in-season. Blocking first paint on every one of
+// those fixtures' cache checks resolving would queue behind the browser's
+// per-origin connection cap, making this specific page *slower* to first
+// paint than before this story. MatchExplorerPage must render its fixture
+// list immediately (unblocked, exactly like pre-W53 behavior) and then patch
+// precomputed results in via a follow-up state update once the bulk check
+// resolves in the background -- not gate the first render on it.
+// ---------------------------------------------------------------------------
+
+describe("Match Explorer initial render is not blocked by the bulk cache check (W53 follow-up)", () => {
+  beforeEach(() => {
+    vi.mocked(getFixtures).mockReset();
+    vi.mocked(getCachedRecommendation).mockReset();
+    vi.mocked(generateRecommendation).mockReset();
+    vi.mocked(getSandboxStatus).mockReset();
+    vi.mocked(getSandboxStatus).mockResolvedValue({ sandbox_mode: false, as_of: "" });
+  });
+
+  it("renders the fixture list immediately (before any cache-check promise resolves), then patches a precomputed recommendation in once it resolves", async () => {
+    const today = new Date().toISOString().slice(0, 10);
+    const f = fixture("explorer-match", `${today}T15:00:00Z`, "Arsenal", "Everton");
+    vi.mocked(getFixtures).mockResolvedValue([f]);
+
+    // A cache-check promise under this test's own control -- never resolved
+    // until asserted otherwise, so the initial render cannot be depending on
+    // it having settled.
+    let resolveCache!: (rec: MatchRecommendationOut | null) => void;
+    vi.mocked(getCachedRecommendation).mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveCache = resolve;
+        })
+    );
+
+    render(<MatchExplorerPage />);
+
+    // The fixture must appear -- as "Not yet generated" -- while its
+    // cache-check promise is still outstanding. If the fix regresses back to
+    // awaiting the bulk check before the first setMatches, this would still
+    // be showing LoadingRows here and neither assertion below would find
+    // anything (a timeout, not a false pass).
+    expect(await screen.findByText("Not yet generated")).toBeInTheDocument();
+    expect(getCachedRecommendation).toHaveBeenCalledWith("explorer-match", today);
+
+    // Now resolve the cache hit -- the recommendation must be patched into
+    // the already-rendered list, not require a click.
+    const cachedRec = makeRecommendation({ explanation: "patched in after first paint" });
+    resolveCache(cachedRec);
+
+    expect(await screen.findByText("Direct Bet")).toBeInTheDocument();
+    expect(screen.queryByText("Not yet generated")).not.toBeInTheDocument();
+    expect(generateRecommendation).not.toHaveBeenCalled();
   });
 });

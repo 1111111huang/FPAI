@@ -828,11 +828,22 @@ export function MatchExplorerPage() {
         const fixtures = await getFixtures(from.toISOString().slice(0, 10), to.toISOString().slice(0, 10));
         if (cancelled) return;
         const initialMatches = fixtures.map((f) => fixtureToMatch(f, asOf, sandboxMode));
-        // W53: resolve the precomputed cache for the whole initial list
-        // before rendering -- an additional await in this same guarded run,
-        // so re-check `cancelled` again before touching state.
-        const resolvedMatches = await resolveCachedRecommendations(initialMatches);
-        if (!cancelled) setMatches(resolvedMatches);
+        // W53: unlike Dashboard's two call sites (each capped at 10 --
+        // "today" is one E0 matchday, and the W46 fallback is explicitly
+        // sliced to 10), this 90-day search window can realistically return
+        // 50-100+ fixtures in-season. Blocking first paint on every one of
+        // those cache checks resolving would queue behind the browser's
+        // per-origin concurrent-connection cap (~6 for HTTP/1.1) -- N=50-100
+        // becomes ~10-17 sequential batches, making this page *slower* to
+        // first paint than before this story, the opposite of its goal.
+        // Render the list immediately (unblocked), then patch precomputed
+        // results in via a follow-up setMatches once the bulk check
+        // resolves in the background -- still behind the same `cancelled`
+        // guard so a superseded run can't clobber a later one's state.
+        setMatches(initialMatches);
+        resolveCachedRecommendations(initialMatches).then((resolvedMatches) => {
+          if (!cancelled) setMatches(resolvedMatches);
+        });
       } catch (err) {
         if (!cancelled) setError(err instanceof ApiError ? err.message : "Could not load fixtures.");
       }
