@@ -1661,3 +1661,52 @@ New `tests/test_sweden_fetcher.py` (6 tests), all HTTP-mocked against a 3-row lo
 Full suite: 589 passed / 23 skipped, zero regressions (up from 583 passed on this branch immediately prior — net new here is exactly this story's 6 tests).
 
 Sweden (`SWE`) itself is **not** registered as a competition by this story — deliberately out of scope, matching Section 32/33/34's precedent. This story only makes the raw data fetchable; US#125 is what actually gets it into `raw_matches`.
+
+## 36. Sweden raw_matches Normalization + Upsert (Completed — US#125)
+
+### 36.1 Motivation
+
+Section 35's `fetch_sweden_csv()` returns the Sweden CSV's own 25 columns, unrenamed, deliberately fetch-and-parse only. This story is the mapping step that actually gets Sweden rows into `raw_matches`, the same table EPL data lives in (differentiated by `league`), so that US#126 (team-name mapping) and later feature/model work have something to build on.
+
+### 36.2 Mechanism
+
+New `src/ingestion/football_data/sweden_loader.py::upsert_sweden_matches(df, db_manager, overwrite=False)`, following `loader.py::process_v1_csv` as the primary pattern reference:
+
+- **Direct mapping:** `Home`/`Away`/`Date` → `home_team`/`away_team`/`date`; `HG`/`AG` → `fthg`/`ftag`.
+- **`Time` deliberately dropped, not combined into `date`.** `loader.py`'s EPL path ignores `Time` entirely even though modern E0 CSVs carry one (never in its rename map, required-columns set, or final column selection) — matching that precedent avoids giving Sweden rows sub-day timestamp precision EPL rows don't have in the same shared `TIMESTAMP` column.
+- **Odds fallback (BUG-009/US#56 pattern):** `AvgCH/AvgCD/AvgCA` (closing average across bookmakers) map to `avgh/avgd/avga`, falling back **per field** to `B365CH/B365CD/B365CA` when the corresponding `AvgC*` value is blank. Verified per-field (not all-or-nothing row) behavior with a test where only `AvgCD` is blank.
+- **Judgment call — `odds_h/odds_d/odds_a` also populated.** The story's text only specifies the `avgh/avgd/avga` mapping. Sweden has no separate "always-present base" odds column distinct from the closing average the way EPL has `B365H/D/A` (the required field `avgh` falls back to at feature-computation time). Rather than leaving `odds_h/odds_d/odds_a` NULL, the same AvgC*-with-B365C*-fallback value is written to both `avgh/avgd/avga` and `odds_h/odds_d/odds_a`, so Sweden rows are usable by the odds-keyed strategy/backtest modules (`strategy_engine.py`, `backtester.py`) the same way EPL rows are. Flagged here for review since it goes beyond the story's literal text.
+- **`tier` left NULL, not defaulted through `map_league_code_to_tier`.** That function's fallback for an unrecognized code is `4`, a real English "League Two" tier value with no meaning for Sweden; storing it would be actively misleading. Confirmed `raw_matches.tier` is not read anywhere downstream of ingestion (`feature_factory.py` never selects it), so NULL has no functional impact.
+- **`hs/as/hst/ast/hc/ac/hy/ay/hr/ar/xg_h/xg_a/xga_h/xga_a/over25_odds/under25_odds/ah_line/ah_home_odds/ah_away_odds`** are always NULL for Sweden rows — this source has no data for any of them.
+- **Team names inserted as-is** (e.g. `"Malmo FF"`), passed only through `standardize_team_name` (whitespace normalization + a small EPL-specific alias map that's a no-op for Swedish names) — the exact, and only, normalization `loader.py`'s EPL path applies. `TeamNameMapper`/`config/team_mapping.json` fuzzy matching is deliberately not invoked — that's US#126.
+- **`match_id` via `generate_match_id(date, home_team, away_team, league="SWE")`** — the US#140 league-aware version. Verified in a test that the resulting hash differs from what the same date/teams would hash to under `league="E0"`.
+- **Row validity:** a row is skipped (not erroring the whole batch) if `Date` doesn't parse, `Home`/`Away` is blank, or `HG`/`AG` is missing (e.g. an unplayed fixture row) — mirrors `process_v1_csv`'s "skip rather than crash" posture for rows with missing critical odds.
+- **Idempotency:** `INSERT OR IGNORE` into `raw_matches` keyed on `match_id` (the primary key) by default — re-running against the same data (e.g. `refresh-data` re-fetching Sweden's whole single-file history weekly) adds no duplicate rows and raises no error. `overwrite=True` switches to `INSERT OR REPLACE`, the same escape hatch `process_v1_csv` offers.
+- **Table creation reused, not re-declared:** calls `CSVLoader._create_raw_matches_table(conn)` (the same static method the EPL path uses) rather than duplicating the DDL, so the two ingestion paths can never drift out of sync on schema.
+
+### 36.3 NULL-Tolerance Confirmation
+
+Read `loader.py`'s `_create_raw_matches_table` DDL directly: none of `hs/as/hst/ast/hc/ac/hy/ay/hr/ar/avgh/avgd/avga/xg_h/xg_a/xga_h/xga_a/over25_odds/under25_odds/ah_line/ah_home_odds/ah_away_odds/tier` carry a `NOT NULL` constraint (only `match_id` does, implicitly, as the `PRIMARY KEY`). This was also verified empirically, not just by reading the DDL: the new tests insert real rows with all of those columns `None` into a real (temp-file) DuckDB database via `db_manager.connection()` and assert the values read back as `NULL` — no constraint violation. **No `raw_matches` migration was needed for Sweden**, confirming the story's expectation.
+
+### 36.4 Season Convention
+
+Confirmed `raw_matches` has no `season` column at all — Sweden's single-calendar-year `Season` value was never going to collide with or need conversion to EPL's `year1year2` (`2526`) convention, since nothing downstream reads a season value off `raw_matches` in the first place.
+
+### 36.5 Tests
+
+New `tests/test_sweden_loader.py` (10 tests), building `fetch_sweden_csv`-shaped DataFrames in-memory rather than depending on live network:
+
+- Column mapping + `league='SWE'` tagging on a straightforward row, with all documented-NULL columns asserted `None`.
+- `AvgC*` fully blank → full fallback to `B365C*`.
+- Only `AvgCD` blank → per-field fallback (confirms the fallback isn't all-or-nothing across the row).
+- `match_id` matches `generate_match_id(..., league="SWE")` exactly, and differs from the `league="E0"` hash of the same date/teams (sanity check that league genuinely changes the hash, not just theoretically).
+- Calling the upsert twice with identical input data is a no-op the second time (`upserted: 0`) and leaves the row count unchanged — idempotency.
+- A row with blank `HG`/`AG` (unplayed fixture) is skipped, not errored; skip count reported correctly alongside a valid row in the same batch.
+- Blank/empty `Time` values don't block ingestion (the column is read but never used for `date`).
+- Team names are inserted with their raw CSV spelling, unchanged by any fuzzy-matching layer.
+- An empty input DataFrame is a no-op.
+- An end-to-end test: the real `tests/fixtures/football_data_sweden_sample.csv` fixture through `fetch_sweden_csv` (HTTP mocked) then `upsert_sweden_matches`, asserting the final `raw_matches` rows' `league`/`home_team`/`away_team`/`fthg`/`ftag` shape.
+
+Full suite: 599 passed / 23 skipped, zero regressions (up from 589 passed at Section 35 — net new here is exactly this story's 10 tests).
+
+Sweden (`SWE`) itself is still **not** registered as a competition by this story — that remains out of scope, matching Section 32/33/34/35's precedent. `raw_matches` now has real Sweden rows; US#126 (team-name mapping) is next.
