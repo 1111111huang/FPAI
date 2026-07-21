@@ -78,9 +78,14 @@ def fetch_sweden_csv(timeout_seconds: int = 30) -> pd.DataFrame:
     response = requests.get(SWEDEN_CSV_URL, headers=_HEADERS, timeout=timeout_seconds)
     response.raise_for_status()
 
-    # pandas' C parser auto-detects and strips a UTF-8 BOM if present (the
-    # live file has one on its header line), so no explicit encoding needed.
-    df = pd.read_csv(io.StringIO(response.text))
+    # US#130 follow-up fix: `response.text` decodes bytes using `requests`'
+    # own encoding guess *before* pandas ever sees the content, so a UTF-8
+    # BOM (present on the live file's header line) gets mis-decoded into
+    # visible "ï»¿" mojibake prefixed onto the first column name ("ï»¿Country")
+    # rather than being stripped -- pandas' BOM-handling only works on the
+    # raw bytes it reads itself. Read from `response.content` (raw bytes)
+    # with `encoding="utf-8-sig"` instead, which correctly strips the BOM.
+    df = pd.read_csv(io.BytesIO(response.content), encoding="utf-8-sig")
 
     missing_columns = [column for column in EXPECTED_COLUMNS if column not in df.columns]
     if missing_columns:

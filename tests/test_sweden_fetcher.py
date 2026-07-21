@@ -32,6 +32,11 @@ def _mock_response(text: str, status_code: int = 200) -> MagicMock:
     mock = MagicMock()
     mock.status_code = status_code
     mock.text = text
+    # US#130 follow-up fix: fetch_sweden_csv() reads response.content (raw
+    # bytes) with encoding="utf-8-sig", not response.text -- see that
+    # module's docstring for why (BOM mis-decoding via requests' own text
+    # decoding). Mock both so tests exercise the real code path.
+    mock.content = text.encode("utf-8-sig")
     if status_code >= 400:
         mock.raise_for_status.side_effect = requests.HTTPError(f"{status_code} error")
     else:

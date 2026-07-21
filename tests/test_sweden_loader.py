@@ -247,6 +247,7 @@ def test_end_to_end_fetch_then_upsert_from_real_fixture(tmp_path: Path) -> None:
     mock_response = MagicMock()
     mock_response.status_code = 200
     mock_response.text = fixture_text
+    mock_response.content = fixture_text.encode("utf-8-sig")
     mock_response.raise_for_status = MagicMock()
 
     with patch("src.ingestion.football_data.sweden_fetcher.requests.get", return_value=mock_response):
