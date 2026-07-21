@@ -8,6 +8,8 @@ from __future__ import annotations
 from datetime import date
 from pathlib import Path
 import sys
+import threading
+import time
 from unittest.mock import MagicMock, patch
 
 sys.path.append(str(Path(__file__).resolve().parents[3]))
@@ -17,18 +19,21 @@ import requests
 from fastapi.testclient import TestClient
 
 from app.backend.football_data_client import NormalizedMatch
-from app.backend.main import _fixture_cache, _split_fixture_date_range, app
+from app.backend.main import _fixture_cache, _fixture_cache_pending, _split_fixture_date_range, app
 
 
 @pytest.fixture(autouse=True)
 def _clear_fixture_cache():
-    """W52: the TTL cache is module-level state (mirroring the existing
-    `_fixtures_client` singleton pattern) -- clear it before every test so
-    identical date ranges reused across unrelated test cases in this file
-    don't leak cached results between them."""
+    """W52: the TTL cache (and its in-flight-request tracking dict) is
+    module-level state (mirroring the existing `_fixtures_client` singleton
+    pattern) -- clear it before every test so identical date ranges reused
+    across unrelated test cases in this file don't leak cached results (or
+    a stuck pending entry) between them."""
     _fixture_cache.clear()
+    _fixture_cache_pending.clear()
     yield
     _fixture_cache.clear()
+    _fixture_cache_pending.clear()
 
 
 def test_fixtures_endpoint_returns_normalized_matches():
@@ -229,6 +234,114 @@ def test_fixtures_endpoint_upstream_http_error_returns_clean_degraded_response()
     assert response.status_code == 503
     body = response.json()
     assert "detail" in body
+    # Nitpick from code review: the detail must be a clean, user-facing
+    # message -- not a passthrough of the raw upstream exception text (which
+    # would leak implementation details and isn't something a frontend
+    # error banner should show verbatim).
+    assert "429" not in body["detail"]
+    assert "football-data.org" not in body["detail"].lower()
+    assert "temporarily unavailable" in body["detail"].lower()
+
+
+def test_fixtures_endpoint_concurrent_requests_dedupe_to_a_single_upstream_call():
+    """Code review follow-up (post-21e6bf9): the sequential dedup test above
+    only proves a *second* request arriving after the first has already
+    finished (and cached) hits the client once. It does NOT prove anything
+    about two requests that are genuinely in flight *at the same time* --
+    e.g. React StrictMode's double-effect-invocation in dev, or two browser
+    tabs loading at once -- both racing past an empty cache before either
+    has finished and populated it. This test forces that exact overlap: the
+    mocked client blocks (via a real thread, since it's invoked through
+    run_in_threadpool) until both requests have demonstrably started, then
+    releases them together.
+
+    Both requests are issued from their own background thread (neither from
+    the main test thread) -- if either ran inline on the main thread, that
+    thread would be synchronously blocked inside client.get() and could
+    never reach the `release.set()` call below, deadlocking the test
+    regardless of whether de-duplication works. Using two threads lets the
+    main thread stay free to observe both are in flight and then unblock
+    them."""
+    entered = threading.Event()
+    release = threading.Event()
+
+    def slow_get_fixtures(date_from=None, date_to=None):
+        entered.set()
+        assert release.wait(timeout=5), "release was never signalled -- test deadlocked"
+        return []
+
+    with patch("app.backend.main.get_fixtures_client") as mock_get_client:
+        mock_client = mock_get_client.return_value
+        mock_client.get_fixtures.side_effect = slow_get_fixtures
+        with TestClient(app) as client:
+            responses: dict[str, object] = {}
+
+            def run_request(name: str):
+                responses[name] = client.get(
+                    "/api/fixtures", params={"date_from": "2027-05-01", "date_to": "2027-05-05"}
+                )
+
+            first_thread = threading.Thread(target=run_request, args=("first",))
+            first_thread.start()
+
+            assert entered.wait(timeout=5), "first request never reached the upstream client call"
+
+            # A second, genuinely concurrent request for the identical key,
+            # started while the first upstream call is still in flight (the
+            # cache has nothing to serve yet). Without in-flight
+            # de-duplication this would start its own second upstream call
+            # (which would also call entered.set()/release.wait() -- either
+            # way, both requests are guaranteed to be blocked on `release`
+            # by the time the short sleep below elapses).
+            second_thread = threading.Thread(target=run_request, args=("second",))
+            second_thread.start()
+            time.sleep(0.3)
+
+            release.set()
+            first_thread.join(timeout=5)
+            second_thread.join(timeout=5)
+            assert not first_thread.is_alive(), "first request thread never completed"
+            assert not second_thread.is_alive(), "second request thread never completed"
+
+    assert responses["first"].status_code == 200
+    assert responses["second"].status_code == 200
+    mock_client.get_fixtures.assert_called_once_with(date_from="2027-05-01", date_to="2027-05-05")
+
+
+def test_fixtures_endpoint_cache_expires_after_ttl_and_refetches():
+    """The within-TTL dedup test proves two quick, sequential requests only
+    hit the client once. This proves the other half: once the TTL has
+    genuinely elapsed, a third request for the same key must hit the client
+    again -- the cache must not pin stale data (or suppress real calls)
+    forever. Patches `_fixture_cache_now` (mirrors this file's existing
+    `_current_real_date` patching convention) to advance time deterministically
+    rather than a real 60-second sleep."""
+    with patch("app.backend.main.get_fixtures_client") as mock_get_client:
+        mock_client = mock_get_client.return_value
+        mock_client.get_fixtures.return_value = []
+
+        fake_now = [1_000.0]
+        with patch("app.backend.main._fixture_cache_now", side_effect=lambda: fake_now[0]):
+            with TestClient(app) as client:
+                first = client.get(
+                    "/api/fixtures", params={"date_from": "2027-06-01", "date_to": "2027-06-05"}
+                )
+                # Still within the 60s TTL -- must serve the cached entry.
+                fake_now[0] += 30.0
+                second = client.get(
+                    "/api/fixtures", params={"date_from": "2027-06-01", "date_to": "2027-06-05"}
+                )
+                # Past the 60s TTL from the first call -- must re-fetch.
+                fake_now[0] += 31.0
+                third = client.get(
+                    "/api/fixtures", params={"date_from": "2027-06-01", "date_to": "2027-06-05"}
+                )
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert third.status_code == 200
+    assert mock_client.get_fixtures.call_count == 2
+    mock_client.get_fixtures.assert_called_with(date_from="2027-06-01", date_to="2027-06-05")
 
 
 class TestSplitFixtureDateRange:

@@ -427,7 +427,7 @@ export function DraftNav({ active }: { active: "dashboard" | "matches" | "bets" 
   );
 }
 
-function ErrorState({ message, onRetry }: { message: string; onRetry?: () => void }) {
+export function ErrorState({ message, onRetry }: { message: string; onRetry?: () => void }) {
   return (
     <div className="flex items-center gap-2 rounded-lg border border-serious/40 p-3.5 text-sm text-serious">
       <WarningCircle size={16} weight="fill" />

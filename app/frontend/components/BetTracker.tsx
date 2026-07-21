@@ -11,7 +11,7 @@ import { MagnifyingGlass, WarningCircle } from "@phosphor-icons/react";
 import { ApiError, getBetStats, getBets, getFixtures, logBetManual, settleOpenBets } from "@/lib/api";
 import type { Bet, BetStats, Fixture } from "@/lib/types";
 import { useSandboxAsOf } from "@/lib/useSandboxAsOf";
-import { DraftNav, TeamBadge } from "./MatchUI";
+import { DraftNav, ErrorState, TeamBadge } from "./MatchUI";
 
 function formatDate(iso: string): string {
   return iso.slice(0, 10);
@@ -36,6 +36,13 @@ function ManualBetForm({ onLogged }: { onLogged: () => void }) {
   // result -- same ApiError-vs-generic-fallback pattern MatchExplorerPage
   // already uses (MatchUI.tsx).
   const [fixturesError, setFixturesError] = useState<string | null>(null);
+  // W52 code review follow-up: matches DashboardPage/MatchExplorerPage's
+  // established retry pattern (MatchUI.tsx) -- bumped by the Retry button
+  // to force a fresh fetch through this same effect, rather than calling
+  // getFixtures() imperatively from outside it (which would have no
+  // cancellation guard against a stale in-flight request from a previous
+  // run).
+  const [retryTick, setRetryTick] = useState(0);
 
   useEffect(() => {
     let cancelled = false;
@@ -59,7 +66,7 @@ function ManualBetForm({ onLogged }: { onLogged: () => void }) {
     return () => {
       cancelled = true;
     };
-  }, [asOf]);
+  }, [asOf, retryTick]);
 
   const results = useMemo(() => {
     if (!fixtures) return [];
@@ -115,10 +122,9 @@ function ManualBetForm({ onLogged }: { onLogged: () => void }) {
             />
           </div>
           {fixturesError && (
-            <p className="mt-2 flex items-center gap-1.5 text-xs text-serious">
-              <WarningCircle weight="fill" size={13} />
-              {fixturesError}
-            </p>
+            <div className="mt-2">
+              <ErrorState message={fixturesError} onRetry={() => setRetryTick((t) => t + 1)} />
+            </div>
           )}
           {results.length > 0 && (
             <div className="mt-2 flex flex-col gap-1.5">

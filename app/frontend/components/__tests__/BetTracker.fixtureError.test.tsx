@@ -75,4 +75,25 @@ describe("ManualBetForm surfaces a visible error when the fixture fetch fails (W
       ).toBeInTheDocument()
     );
   });
+
+  it("clicking Retry on the fixture error re-runs the fetch and clears the error once it succeeds (W52 code review follow-up)", async () => {
+    vi.mocked(getFixtures)
+      .mockRejectedValueOnce(new ApiError("Fixture data is temporarily unavailable.", 503))
+      .mockResolvedValueOnce([]);
+
+    const user = userEvent.setup();
+    render(<BetTrackerPage />);
+
+    await waitFor(() =>
+      expect(screen.getByText(/Fixture data is temporarily unavailable/i)).toBeInTheDocument()
+    );
+    expect(getFixtures).toHaveBeenCalledTimes(1);
+
+    await user.click(screen.getByRole("button", { name: /retry/i }));
+
+    await waitFor(() => expect(getFixtures).toHaveBeenCalledTimes(2));
+    await waitFor(() =>
+      expect(screen.queryByText(/Fixture data is temporarily unavailable/i)).not.toBeInTheDocument()
+    );
+  });
 });

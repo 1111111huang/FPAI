@@ -6,6 +6,7 @@ third-party agent consumers, not this first-party app)."""
 
 from __future__ import annotations
 
+import asyncio
 from contextlib import asynccontextmanager
 from datetime import date, datetime, timezone
 import os
@@ -64,29 +65,40 @@ def get_fixtures_client() -> FootballDataClient:
 _FIXTURE_CACHE_TTL_SECONDS = 60.0
 _fixture_cache: dict[tuple[str, str | None, str | None], tuple[float, list[NormalizedMatch]]] = {}
 
+# Code review follow-up (post-21e6bf9): a bare cache dict only de-dupes
+# requests that arrive *after* an earlier one has already completed and
+# populated the cache -- two genuinely concurrent cache-miss requests for
+# the same key (e.g. React StrictMode's double-effect-invocation in dev, or
+# two browser tabs loading at once) would both race past the cache check
+# and both hit the upstream client for real. This tracks the in-flight
+# asyncio.Task for each key so a second concurrent request awaits the same
+# task instead of starting its own.
+_fixture_cache_pending: dict[tuple[str, str | None, str | None], "asyncio.Task[list[NormalizedMatch]]"] = {}
 
-async def _cached_fixture_call(
+
+def _fixture_cache_now() -> float:
+    """Split out from _cached_fixture_call so tests can monkeypatch the
+    clock -- mirrors this file's existing `_current_real_date()` patchable-
+    function pattern -- to deterministically exercise TTL expiry without a
+    real 60-second sleep."""
+    return time.monotonic()
+
+
+async def _fetch_and_cache_fixtures(
     cache_key: tuple[str, str | None, str | None],
     fetch: Callable[..., list[NormalizedMatch]],
-    **fetch_kwargs: str | None,
+    fetch_kwargs: dict[str, str | None],
 ) -> list[NormalizedMatch]:
-    """Look up `cache_key` in the module-level TTL cache; on a miss, run
-    `fetch` in the threadpool and cache the result. A requests.HTTPError
-    raised by `fetch` (e.g. football-data.org's 429 rate-limit response)
-    is turned into a clean 503 HTTPException rather than left to propagate
-    as an unhandled 500 -- and is NOT cached, so it doesn't wrongly suppress
-    the next genuine request."""
-    now = time.monotonic()
-    cached = _fixture_cache.get(cache_key)
-    if cached is not None:
-        expires_at, matches = cached
-        if expires_at > now:
-            return matches
-
+    """Runs the actual upstream call (in the threadpool) and populates the
+    cache on success. A requests.HTTPError raised by `fetch` (e.g.
+    football-data.org's 429 rate-limit response) is turned into a clean 503
+    HTTPException rather than left to propagate as an unhandled 500 -- and
+    is NOT cached, so it doesn't wrongly suppress the next genuine
+    request."""
     try:
         matches = await run_in_threadpool(fetch, **fetch_kwargs)
     except requests.exceptions.HTTPError as exc:
-        LOGGER.warning("Upstream fixture provider call failed for %s: %s", cache_key, exc)
+        LOGGER.warning("Upstream fixture provider call failed for %s: %s", cache_key, exc, exc_info=True)
         raise HTTPException(
             status_code=503,
             detail=(
@@ -95,8 +107,38 @@ async def _cached_fixture_call(
             ),
         ) from exc
 
-    _fixture_cache[cache_key] = (now + _FIXTURE_CACHE_TTL_SECONDS, matches)
+    _fixture_cache[cache_key] = (_fixture_cache_now() + _FIXTURE_CACHE_TTL_SECONDS, matches)
     return matches
+
+
+async def _cached_fixture_call(
+    cache_key: tuple[str, str | None, str | None],
+    fetch: Callable[..., list[NormalizedMatch]],
+    **fetch_kwargs: str | None,
+) -> list[NormalizedMatch]:
+    """Look up `cache_key` in the module-level TTL cache; on a miss, either
+    join an already-in-flight call for the same key (`_fixture_cache_pending`)
+    or kick off a new one. The pending task is registered *before* the first
+    `await` inside it runs -- since asyncio is single-threaded/cooperative,
+    a second concurrent call checking `_fixture_cache_pending` between that
+    registration and the task's completion is guaranteed to see it, closing
+    the race a bare cache dict would leave open."""
+    cached = _fixture_cache.get(cache_key)
+    if cached is not None:
+        expires_at, matches = cached
+        if expires_at > _fixture_cache_now():
+            return matches
+
+    pending = _fixture_cache_pending.get(cache_key)
+    if pending is None:
+        pending = asyncio.ensure_future(_fetch_and_cache_fixtures(cache_key, fetch, fetch_kwargs))
+        _fixture_cache_pending[cache_key] = pending
+
+    try:
+        return await pending
+    finally:
+        if _fixture_cache_pending.get(cache_key) is pending:
+            del _fixture_cache_pending[cache_key]
 
 
 @asynccontextmanager
