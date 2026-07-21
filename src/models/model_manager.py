@@ -333,6 +333,38 @@ class ModelManager:
         feature_select = ",\n                    ".join(f"f.{name}" for name in feature_columns)
         label_columns = list(dict.fromkeys(self.target_definition.label_columns))
         label_select = ",\n                    ".join(f"r.{name}" for name in label_columns)
+
+        # US#131 fix: this query previously had NO competition/league filter at
+        # all, joining the *entire* raw_matches/feature_store tables regardless
+        # of self.competition_id. That was invisible while only E0 existed, but
+        # once Sweden's rows also existed in the shared tables, training with
+        # context=SWE silently trained on E0 data instead: Sweden's 74-feature
+        # list includes 9 MKT_AH_*/MKT_LAMBDA_*/MKT_IMPLIED_OVER25 features that
+        # are permanently NaN for Sweden (no O/U-2.5 or AH odds in its source)
+        # but populated for E0 -- the mandatory non-null dropna below (for
+        # non-XGBoost models) then silently dropped every Sweden row and kept
+        # only E0's, training an EPL model mislabeled context=SWE. Filter by
+        # this competition's own league_code so training data always matches
+        # the context it's tagged with. A competition with no single league_code
+        # (e.g. "international"/general_purpose, league_code=None) intentionally
+        # stays unfiltered -- pooling across every competition is that tier's
+        # actual design (see US#138), not a gap to close here.
+        league_filter_sql = ""
+        params: list[str] = []
+        try:
+            from src.logic.competition_registry import get_competition_definition
+
+            comp_def = get_competition_definition(self.competition_id)
+            if comp_def.league_code is not None:
+                league_filter_sql = "WHERE r.league = ?"
+                params.append(comp_def.league_code)
+        except Exception as exc:  # noqa: BLE001
+            LOGGER.warning(
+                "League filter skipped for competition_id=%r — registry unavailable or unknown: %s",
+                self.competition_id,
+                exc,
+            )
+
         with self.db_manager.connection(read_only=True) as conn:
             df = conn.execute(
                 f"""
@@ -344,8 +376,10 @@ class ModelManager:
                     {feature_select}
                 FROM raw_matches r
                 INNER JOIN feature_store f ON r.match_id = f.match_id
+                {league_filter_sql}
                 ORDER BY r.date, r.match_id
-                """
+                """,
+                params,
             ).fetchdf()
 
         if df.empty:

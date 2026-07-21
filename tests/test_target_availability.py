@@ -71,6 +71,11 @@ def _write_minimal_config(tmp_path: Path) -> Path:
 
 
 def _seed_raw_matches_with_null_corners(config_path: Path) -> None:
+    # US#131: raw_matches.league is real in production and prepare_training_data
+    # now filters on it (against the real config/competitions.yaml, since this
+    # test doesn't pass its own registry_path) -- must be present and match the
+    # ModelManager's competition_id ("SWE") below, or the league filter alone
+    # would produce zero rows and mask the dropna behavior this test targets.
     config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
     db_path = config["paths"]["database_path"]
     with duckdb.connect(db_path) as conn:
@@ -78,7 +83,7 @@ def _seed_raw_matches_with_null_corners(config_path: Path) -> None:
             """
             CREATE TABLE raw_matches (
                 match_id TEXT PRIMARY KEY, date TIMESTAMP, odds_h FLOAT,
-                fthg INTEGER, ftag INTEGER, hc FLOAT, ac FLOAT
+                fthg INTEGER, ftag INTEGER, hc FLOAT, ac FLOAT, league TEXT
             )
             """
         )
@@ -86,8 +91,8 @@ def _seed_raw_matches_with_null_corners(config_path: Path) -> None:
         for i in range(5):
             match_id = f"m{i}"
             conn.execute(
-                "INSERT INTO raw_matches VALUES (?, ?, ?, ?, ?, NULL, NULL)",
-                [match_id, f"2025-08-{10 + i:02d} 15:00:00", 1.9, 1, 1],
+                "INSERT INTO raw_matches VALUES (?, ?, ?, ?, ?, NULL, NULL, ?)",
+                [match_id, f"2025-08-{10 + i:02d} 15:00:00", 1.9, 1, 1, "SWE"],
             )
             conn.execute("INSERT INTO feature_store VALUES (?, ?)", [match_id, 0.5])
 
