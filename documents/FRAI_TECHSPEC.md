@@ -1615,3 +1615,49 @@ Per the acceptance criterion's own instruction to verify the test would actually
 Full suite: 579 passed, 23 skipped, zero regressions (up from 578 passed at Section 33, exactly the one new test here).
 
 Sweden (`SWE`) itself is **not** registered by this story — deliberately out of scope, matching Section 32/33's precedent.
+
+## 35. Sweden CSV Fetch Path (Completed — US#124)
+
+### 35.1 Motivation
+
+Phase 20a's Sweden expansion needs a raw data source before any of the downstream work (US#125's `raw_matches` mapping, US#126's team-name mapping, US#132's refresh scheduling) can proceed. `football-data.co.uk` publishes Sweden's Allsvenskan differently from the main leagues `FootballDataScraper` (`src/ingestion/football_data/scraper.py`) already handles: instead of a per-season page (`englandm.php`) with one CSV link per season/league code (discovered via `SEASON_LINK_PATTERN`, e.g. `/2324/E0.csv`), Sweden's full 2012-present history ships as one static file at a fixed URL, `https://www.football-data.co.uk/new/SWE.csv`. Forcing this through the season-link-discovery machinery would mean inventing a fake "season link" to match a pattern that doesn't apply here, so this story adds a separate, simpler fetch function instead.
+
+### 35.2 Mechanism
+
+New `src/ingestion/football_data/sweden_fetcher.py::fetch_sweden_csv(timeout_seconds=30)`:
+
+- One `requests.get(SWEDEN_CSV_URL, headers=_HEADERS, timeout=timeout_seconds)` — no HTML parsing, no `BeautifulSoup`, no link discovery.
+- `_HEADERS` sets a browser-like `User-Agent`, matching the existing convention in `understat/fetcher.py` and `fotmob/fetcher.py` (both of which set the same style of header for the same reason — these endpoints have been observed to reject non-browser-like clients).
+- `response.raise_for_status()` propagates a bad response (429, 5xx) as `requests.HTTPError` to the caller uncaught — the same convention the other two fetchers use, rather than swallowing it locally.
+- The response body is parsed with `pandas.read_csv(io.StringIO(response.text))`. `Date` is then reparsed with `pd.to_datetime(..., dayfirst=True, errors="coerce")`, matching the DD/MM/YYYY convention `loader.py::process_v1_csv` already applies to the main-league CSVs.
+- `EXPECTED_COLUMNS` (the 25-column header confirmed live) is checked against the parsed DataFrame's actual columns; a mismatch logs a warning (source format drift) rather than raising, so a partial/changed file is visible without being fatal to the caller.
+
+The function returns the CSV's own columns unrenamed (`Country, League, Season, Date, Time, Home, Away, HG, AG, Res, PSCH, PSCD, PSCA, MaxCH, MaxCD, MaxCA, AvgCH, AvgCD, AvgCA, BFECH, BFECD, BFECA, B365CH, B365CD, B365CA`) — deliberately **fetch-and-parse only**. Mapping those columns into the `raw_matches` schema (`HG`→`fthg`, `AG`→`ftag`, `AvgCH/AvgCD/AvgCA`→`avgh/avgd/avga`-equivalent, `league='SWE'` tagging, `NULL` for columns this source doesn't provide such as shots/corners/cards) is explicitly out of scope here — that's US#125.
+
+`Season` here is a plain single year (e.g. `2012`, `2026`), not forced into the two-year `year1year2` code (`2526`) the main leagues use — intentionally left as-is for US#125 to handle on its own terms rather than pre-normalizing it here.
+
+### 35.3 Live Verification (2026-07-21)
+
+Re-fetched `https://www.football-data.co.uk/new/SWE.csv` directly (both via `curl` and via `requests`) to confirm the format documented when this story was scoped still held a day later:
+
+- **Row count:** 3,489 data rows (3,490 lines including header) — up from the 3,482-line count recorded at scoping time, consistent with ~7 additional match rows landing in the intervening day.
+- **Most recent match:** Orgryte 0-0 Djurgarden, 20/07/2026.
+- **Update cadence:** the response's `Last-Modified` header read `Mon, 20 Jul 2026 20:48:18 GMT` — the file was refreshed the same day its most recent matches were played. This is well inside the weekly `refresh-data` cadence assumption from Phase 17 (Section 30); no lag risk identified for this source at this time. (US#132 should still re-verify this against Allsvenskan's actual fixture calendar, since a single check can't rule out slower updates during other parts of the season.)
+- **Header/schema:** exact match to the documented 25-column header. `PSCH`/`PSCD`/`PSCA` (Pinnacle closing odds) were blank on 123 of 3,489 rows (concentrated in recent matches, as expected); `MaxC*`/`AvgC*`/`BFEC*`/`B365C*` were populated throughout.
+- **One new finding:** the live file's header line carries a UTF-8 BOM (`﻿Country,League,...`), not mentioned in the original scoping investigation. Confirmed this is a non-issue: pandas' default C parser auto-detects and strips a UTF-8 BOM, so `df.columns` comes back as plain `"Country"` with no artifact — no explicit `encoding="utf-8-sig"` was needed, but this is noted in the module docstring in case a future maintainer swaps the parsing approach (e.g. to the Python engine, which does not auto-strip BOMs the same way).
+- Both a plain `requests.get` (no headers) and one with the browser `User-Agent` returned HTTP 200 on this occasion — the 429-on-plain-request behavior noted at scoping time did not reproduce today. The `User-Agent` header is kept anyway, defensively, since a transient/intermittent rate-limit policy on the server side is exactly the kind of thing that shouldn't be re-litigated by removing the header and hoping.
+
+### 35.4 Tests
+
+New `tests/test_sweden_fetcher.py` (6 tests), all HTTP-mocked against a 3-row local fixture (`tests/fixtures/football_data_sweden_sample.csv`) — no live network access in the automated suite:
+
+- Successful fetch returns a DataFrame with the expected 25-column shape and correct values on a spot-checked row.
+- A browser-like `User-Agent` header is actually sent on the request.
+- `Date` is parsed day-first (`12/07/2026` → July 12, not December 7).
+- Rows with blank `PSCH`/`PSCD`/`PSCA` parse as `NaN` without being dropped or raising; rows with those columns populated parse as floats.
+- A 429 (or other non-2xx) response propagates as `requests.HTTPError`, matching the `understat`/`fotmob` fetcher convention.
+- A truncated/reshaped CSV (simulating source format drift) still returns a DataFrame and logs a warning rather than raising.
+
+Full suite: 589 passed / 23 skipped, zero regressions (up from 583 passed on this branch immediately prior — net new here is exactly this story's 6 tests).
+
+Sweden (`SWE`) itself is **not** registered as a competition by this story — deliberately out of scope, matching Section 32/33/34's precedent. This story only makes the raw data fetchable; US#125 is what actually gets it into `raw_matches`.
