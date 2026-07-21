@@ -204,8 +204,17 @@ class TestFetchSandboxFixtures:
         fixtures_client.get_fixtures.assert_not_called()
 
     def test_passes_through_custom_competition_code(self):
+        # Exact date returns a (non-empty) result here so the W51 90-day
+        # fallback never fires -- this test is purely about competition_code
+        # pass-through on the exact-date query, not the fallback path
+        # (covered separately below).
         fixtures_client = MagicMock()
-        fixtures_client.get_results.return_value = []
+        fixtures_client.get_results.return_value = [
+            NormalizedMatch(
+                match_id="1", utc_date="2025-03-08T15:00:00Z", status="FINISHED",
+                home_team="Real Sociedad", away_team="Sevilla", home_goals=1, away_goals=1,
+            ),
+        ]
 
         fetch_sandbox_fixtures(fixtures_client, "2025-03-08", competition_code="SP1")
 
@@ -218,6 +227,57 @@ class TestFetchSandboxFixtures:
         fixtures_client.get_results.return_value = []
 
         assert fetch_sandbox_fixtures(fixtures_client, "2025-03-08") == []
+
+    def test_exact_date_empty_falls_back_to_90_day_window_sorted_and_capped(self):
+        # W51: DashboardPage (MatchUI.tsx, W46) falls back to a 90-day
+        # forward window, sorted kickoff-ascending and capped at 10, when
+        # the exact sandbox date has zero real fixtures. Before this fix,
+        # fetch_sandbox_fixtures() only ever queried the exact date, so
+        # --precompute silently generated nothing for exactly the dates
+        # where the Dashboard's own fallback actually shows the user real
+        # matches. 12 out-of-order fixtures (more than the cap of 10) are
+        # used so a broken/no-op sort or a missing cap would both be caught
+        # -- a list that happens to already be sorted, or exactly 10 long,
+        # wouldn't prove either property.
+        fixtures_client = MagicMock()
+
+        def _make(n: int, day: int) -> NormalizedMatch:
+            return NormalizedMatch(
+                match_id=str(n), utc_date=f"2025-03-{day:02d}T15:00:00Z", status="FINISHED",
+                home_team=f"Home{n}", away_team=f"Away{n}", home_goals=1, away_goals=0,
+            )
+
+        # Deliberately out of kickoff order.
+        unordered_days = [20, 10, 30, 9, 25, 11, 22, 12, 28, 15, 13, 18]
+        upcoming = [_make(i, day) for i, day in enumerate(unordered_days)]
+
+        def _get_results(**kwargs):
+            if kwargs["date_from"] == kwargs["date_to"] == "2025-03-08":
+                return []
+            assert kwargs == {"competition_code": "PL", "date_from": "2025-03-08", "date_to": "2025-06-06"}
+            return upcoming
+
+        fixtures_client.get_results.side_effect = _get_results
+
+        result = fetch_sandbox_fixtures(fixtures_client, "2025-03-08")
+
+        assert fixtures_client.get_results.call_count == 2
+        assert len(result) == 10
+        assert [f.utc_date for f in result] == sorted(f.utc_date for f in result)
+        # The two latest (by kickoff) fixtures -- days 28 and 30 -- must have
+        # been dropped by the cap, not two arbitrary ones.
+        assert {f.match_id for f in result} == {
+            str(i) for i, day in enumerate(unordered_days) if day not in (28, 30)
+        }
+
+    def test_exact_date_empty_and_fallback_window_also_empty_returns_empty_list(self):
+        fixtures_client = MagicMock()
+        fixtures_client.get_results.return_value = []
+
+        result = fetch_sandbox_fixtures(fixtures_client, "2025-03-08")
+
+        assert result == []
+        assert fixtures_client.get_results.call_count == 2
 
 
 class TestPrecomputeRecommendationsOrdering:
