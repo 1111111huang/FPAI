@@ -101,6 +101,62 @@ def test_upsert_player_match_stats_counts_unmatched_rows(tmp_path: Path) -> None
     assert count == 0
 
 
+def _seed_raw_matches_multi_league(db_manager: DuckDBManager) -> None:
+    """Two competitions' rows in one table, one holding a real exact-name trap.
+
+    "Everton" (E0) is the correct target. "Everston" (a fictional SWE club)
+    exists as an *exact* string in the SWE row -- if the candidate pool isn't
+    scoped by league, a misspelled FotMob away_team of "Everston" would find
+    an exact (score 1.0) match against the wrong league's team before fuzzy
+    matching ever gets a chance to prefer the correct "Everton".
+    """
+    with db_manager.connection() as conn:
+        conn.execute(
+            """
+            CREATE TABLE raw_matches (
+                match_id TEXT PRIMARY KEY, date TIMESTAMP, home_team TEXT, away_team TEXT, league TEXT
+            )
+            """
+        )
+        conn.execute(
+            "INSERT INTO raw_matches VALUES "
+            "('match-e0', '2024-05-19', 'Arsenal', 'Everton', 'E0'), "
+            "('match-swe', '2024-05-19', 'AIK', 'Everston', 'SWE')"
+        )
+
+
+def test_resolve_match_ids_unscoped_can_lose_a_real_match_to_the_wrong_league(tmp_path: Path) -> None:
+    """Pre-US#141 behavior (league=None): proves the bug is real, not just theoretical."""
+    db_manager = _make_db_manager(tmp_path)
+    _seed_raw_matches_multi_league(db_manager)
+
+    fotmob_df = _fotmob_rows()
+    fotmob_df["away_team"] = "Everston"  # misspelling of E0's "Everton" that happens to exactly match SWE's own club name
+
+    result = upsert_player_match_stats(fotmob_df, db_manager, league=None)
+    # The away name resolves to SWE's "Everston" (exact match beats fuzzy),
+    # so the join against (Arsenal, Everston) finds no row at all -- the
+    # real Arsenal-Everton match is silently lost, not wrongly merged.
+    assert result["matched"] == 0
+    assert result["unmatched"] == 2
+
+
+def test_resolve_match_ids_scoped_by_league_resolves_the_same_row_correctly(tmp_path: Path) -> None:
+    """US#141 fix: scoping the candidate pool by league finds the correct match."""
+    db_manager = _make_db_manager(tmp_path)
+    _seed_raw_matches_multi_league(db_manager)
+
+    fotmob_df = _fotmob_rows()
+    fotmob_df["away_team"] = "Everston"  # same misspelling as the unscoped test above
+
+    result = upsert_player_match_stats(fotmob_df, db_manager, league="E0")
+    assert result["matched"] == 2
+
+    with db_manager.connection() as conn:
+        matched_ids = conn.execute("SELECT DISTINCT match_id FROM raw_player_match_stats").fetchall()
+    assert matched_ids == [("match-e0",)]
+
+
 def test_upsert_player_match_stats_is_idempotent_on_rerun(tmp_path: Path) -> None:
     db_manager = _make_db_manager(tmp_path)
     _seed_raw_matches(db_manager)

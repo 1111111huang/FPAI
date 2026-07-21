@@ -72,6 +72,7 @@ def resolve_match_ids(
     fotmob_df: pd.DataFrame,
     db_manager: "DuckDBManager",
     mapping_path: str = "config/team_mapping.json",
+    league: str | None = None,
 ) -> pd.DataFrame:
     """Join FotMob rows to raw_matches by date+team to recover match_id.
 
@@ -80,12 +81,25 @@ def resolve_match_ids(
             (plus arbitrary per-player stat columns to carry through).
         db_manager: DuckDBManager instance for database access.
         mapping_path: Path to team_mapping.json for name normalisation.
+        league: If provided, scope both the raw_matches candidate rows and
+            the fuzzy team-name match pool to this league only (US#141).
+            Without this, once more than one competition's rows exist in
+            raw_matches, the fuzzy-match candidate pool would silently mix
+            every competition's team names together -- a same/similar-sounding
+            club name from an unrelated competition could out-score the
+            correct match. Omitted (None) preserves the pre-US#141 behavior
+            for any caller not yet passing a league (matches every row).
 
     Returns:
         Copy of fotmob_df with a match_id column added (NaN where unmatched).
     """
+    query = "SELECT match_id, date, home_team, away_team FROM raw_matches"
+    params: list[str] = []
+    if league is not None:
+        query += " WHERE league = ?"
+        params.append(league)
     with db_manager.connection() as conn:
-        raw = conn.execute("SELECT match_id, date, home_team, away_team FROM raw_matches").fetchdf()
+        raw = conn.execute(query, params).fetchdf()
 
     if raw.empty:
         return fotmob_df.assign(match_id=None)
@@ -114,6 +128,7 @@ def upsert_player_match_stats(
     fotmob_df: pd.DataFrame,
     db_manager: "DuckDBManager",
     mapping_path: str = "config/team_mapping.json",
+    league: str | None = None,
 ) -> dict[str, int]:
     """Resolve match_id and upsert player_dim + raw_player_match_stats rows.
 
@@ -122,6 +137,9 @@ def upsert_player_match_stats(
             src.ingestion.fotmob.fetcher.PLAYER_MATCH_COLUMNS for schema).
         db_manager: DuckDBManager instance for database access.
         mapping_path: Path to team_mapping.json for name normalisation.
+        league: If provided, scope match resolution to this league only
+            (US#141) -- see resolve_match_ids for why this matters once more
+            than one competition's rows exist in raw_matches.
 
     Returns:
         Dict with keys 'matched', 'unmatched', 'players_upserted', 'rows_upserted'.
@@ -129,7 +147,7 @@ def upsert_player_match_stats(
     if fotmob_df.empty:
         return dict(_EMPTY_RESULT)
 
-    resolved = resolve_match_ids(fotmob_df, db_manager, mapping_path=mapping_path)
+    resolved = resolve_match_ids(fotmob_df, db_manager, mapping_path=mapping_path, league=league)
     has_match = resolved["match_id"].notna()
     unmatched = int((~has_match).sum())
     if unmatched:

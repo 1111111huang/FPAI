@@ -366,7 +366,7 @@ def run_fetch_understat(
         LOGGER.error("No Understat data returned — check league/season args and network.")
         return
     LOGGER.info("Fetched %d Understat match records total.", len(understat_df))
-    result = update_raw_matches_xg(understat_df, db_manager)
+    result = update_raw_matches_xg(understat_df, db_manager, league=league)
     LOGGER.info("xG update | matched=%d | updated=%d | unmatched=%d", result["matched"], result["updated"], result["unmatched"])
     if rebuild_features:
         LOGGER.info("Rebuilding feature store with xG data...")
@@ -410,7 +410,7 @@ def run_fetch_fotmob(
         LOGGER.error("No FotMob data returned — check league/season args and network.")
         return
     LOGGER.info("Fetched %d FotMob player-match rows total.", len(fotmob_df))
-    result = upsert_player_match_stats(fotmob_df, db_manager)
+    result = upsert_player_match_stats(fotmob_df, db_manager, league=league)
     LOGGER.info(
         "FotMob upsert | matched=%d | unmatched=%d | players=%d | rows=%d",
         result["matched"], result["unmatched"], result["players_upserted"], result["rows_upserted"],
