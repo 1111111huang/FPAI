@@ -195,9 +195,10 @@ class TestFetchSandboxFixtures:
         ]
         fixtures_client.get_results.return_value = expected
 
-        result = fetch_sandbox_fixtures(fixtures_client, "2025-03-08")
+        result, used_fallback = fetch_sandbox_fixtures(fixtures_client, "2025-03-08")
 
         assert result == expected
+        assert used_fallback is False
         fixtures_client.get_results.assert_called_once_with(
             competition_code="PL", date_from="2025-03-08", date_to="2025-03-08",
         )
@@ -226,7 +227,10 @@ class TestFetchSandboxFixtures:
         fixtures_client = MagicMock()
         fixtures_client.get_results.return_value = []
 
-        assert fetch_sandbox_fixtures(fixtures_client, "2025-03-08") == []
+        result, used_fallback = fetch_sandbox_fixtures(fixtures_client, "2025-03-08")
+
+        assert result == []
+        assert used_fallback is True
 
     def test_exact_date_empty_falls_back_to_90_day_window_sorted_and_capped(self):
         # W51: DashboardPage (MatchUI.tsx, W46) falls back to a 90-day
@@ -259,8 +263,9 @@ class TestFetchSandboxFixtures:
 
         fixtures_client.get_results.side_effect = _get_results
 
-        result = fetch_sandbox_fixtures(fixtures_client, "2025-03-08")
+        result, used_fallback = fetch_sandbox_fixtures(fixtures_client, "2025-03-08")
 
+        assert used_fallback is True
         assert fixtures_client.get_results.call_count == 2
         assert len(result) == 10
         assert [f.utc_date for f in result] == sorted(f.utc_date for f in result)
@@ -274,9 +279,10 @@ class TestFetchSandboxFixtures:
         fixtures_client = MagicMock()
         fixtures_client.get_results.return_value = []
 
-        result = fetch_sandbox_fixtures(fixtures_client, "2025-03-08")
+        result, used_fallback = fetch_sandbox_fixtures(fixtures_client, "2025-03-08")
 
         assert result == []
+        assert used_fallback is True
         assert fixtures_client.get_results.call_count == 2
 
 
@@ -331,3 +337,48 @@ class TestPrecomputeRecommendationsOrdering:
                 f"(observed {env_snapshots[name]!r})"
             )
         mock_run_batch.assert_awaited_once()
+
+
+class TestPrecomputeRecommendationsFallbackReporting:
+    """W51 code-quality review finding: precompute_recommendations()'s
+    consumption of fetch_sandbox_fixtures()'s `used_fallback` flag -- the
+    honest status line distinguishing "N fixtures found for {date}" from
+    "no fixtures on {date}, falling back to the next N in the following
+    90 days" -- had no test exercising the fallback branch specifically,
+    only the exact-date-has-fixtures case (via the ordering test above)."""
+
+    def test_prints_the_fallback_message_and_precomputes_the_fallback_fixtures(self, capsys):
+        date_str = "2025-03-08"
+        fallback_fixture = NormalizedMatch(
+            match_id="99", utc_date="2025-03-14T15:00:00Z", status="FINISHED",
+            home_team="Sunderland", away_team="Brighton Hove", home_goals=0, away_goals=1,
+        )
+
+        with patch("scripts.launch_sandbox.FootballDataClient") as mock_client_cls, \
+             patch("app.backend.scheduler_wiring.build_odds_client", return_value=None), \
+             patch("app.backend.recommendations.get_cache", return_value=object()), \
+             patch("app.backend.eod_batch.run_eod_batch", new_callable=AsyncMock) as mock_run_batch:
+
+            def _get_results(**kwargs):
+                if kwargs["date_from"] == kwargs["date_to"] == date_str:
+                    return []
+                return [fallback_fixture]
+
+            mock_client_cls.return_value.get_results.side_effect = _get_results
+            mock_run_batch.return_value = EodBatchResult(fixtures=[fallback_fixture], generated=1, skipped=0)
+
+            try:
+                precompute_recommendations(date_str)
+            finally:
+                os.environ.pop("SANDBOX_MODE", None)
+                os.environ.pop("SANDBOX_DATE", None)
+
+        mock_run_batch.assert_awaited_once()
+        assert mock_run_batch.await_args.kwargs["fixtures"] == [fallback_fixture]
+
+        output = capsys.readouterr().out
+        assert f"no real fixtures on {date_str}" in output
+        assert "falling back to the next 1 match(es) in the following 90 days" in output
+        # The exact-date-has-fixtures wording must NOT also appear -- these
+        # are mutually exclusive status lines, not both printed.
+        assert "real fixture(s) found for" not in output

@@ -290,7 +290,7 @@ def launch_frontend(backend_port: int, frontend_port: int) -> subprocess.Popen:
 
 def fetch_sandbox_fixtures(
     fixtures_client: FootballDataClient, date_str: str, competition_code: str = "PL",
-) -> list[NormalizedMatch]:
+) -> tuple[list[NormalizedMatch], bool]:
     """A sandbox date is always in the past relative to real wall-clock time
     (SANDBOX_DATE names a historical scenario by construction), so unlike
     main.py's _split_fixture_date_range (W45 -- a general-purpose endpoint
@@ -304,28 +304,17 @@ def fetch_sandbox_fixtures(
 
     W51: if the exact date genuinely has zero real fixtures, falls back to
     the same 90-day-forward window DashboardPage itself falls back to
-    (MatchUI.tsx, W46) -- sorted kickoff-ascending, capped at 10 -- so
-    --precompute's scope matches what a user opening the browser will
-    actually see, not a strictly-smaller set. See
-    _fetch_sandbox_fixtures_with_fallback() below, which this wraps."""
-    fixtures, _used_fallback = _fetch_sandbox_fixtures_with_fallback(fixtures_client, date_str, competition_code)
-    return fixtures
+    (MatchUI.tsx, W46) -- query the exact date first; if that's empty,
+    query date_str..date_str+90d, sort by kickoff ascending (utc_date is
+    already ISO 8601, so a plain string sort is correct -- same as the
+    frontend's `.sort((a, b) => a.kickoffIso.localeCompare(b.kickoffIso))`),
+    and cap at the same 10 matches the Dashboard renders. Keep this in sync
+    with DashboardPage's own fallback in MatchUI.tsx if either changes --
+    a matching comment lives there pointing back here.
 
-
-def _fetch_sandbox_fixtures_with_fallback(
-    fixtures_client: FootballDataClient, date_str: str, competition_code: str = "PL",
-) -> tuple[list[NormalizedMatch], bool]:
-    """Does the actual exact-date-then-90-day-fallback fetch fetch_sandbox_fixtures()
-    wraps, additionally reporting whether the fallback window was used so
-    precompute_recommendations() can print an accurate status line without
-    issuing a second, duplicate network call of its own.
-
-    Mirrors DashboardPage's own fallback exactly (MatchUI.tsx, W46): query
-    the exact date first; if that's empty, query date_str..date_str+90d,
-    sort by kickoff ascending (utc_date is already ISO 8601, so a plain
-    string sort is correct -- same as the frontend's
-    `.sort((a, b) => a.kickoffIso.localeCompare(b.kickoffIso))`), and cap at
-    the same 10 matches the Dashboard renders."""
+    Returns `(fixtures, used_fallback)`: `used_fallback` lets
+    precompute_recommendations() print an accurate status line for either
+    case without issuing a second, duplicate network call of its own."""
     exact = fixtures_client.get_results(competition_code=competition_code, date_from=date_str, date_to=date_str)
     if exact:
         return exact, False
@@ -339,7 +328,7 @@ def precompute_recommendations(date_str: str) -> None:
     """Pre-populates the sandbox-scoped RecommendationCache (W29) for every
     real fixture on `date_str` (or, per W51, the nearest real fixtures in
     the following 90 days if `date_str` itself has none -- see
-    _fetch_sandbox_fixtures_with_fallback() above), using run_eod_batch()'s
+    fetch_sandbox_fixtures() above), using run_eod_batch()'s
     exact generation/odds-matching/fault-tolerance logic (W09, benefiting
     from W49's odds-attachment fix) -- the same code path the live EOD
     batch uses, just fed this date's already-played fixtures instead of
@@ -369,7 +358,7 @@ def precompute_recommendations(date_str: str) -> None:
     from src.agent.agent_config import AgentConfig
 
     fixtures_client = FootballDataClient(api_key=os.environ.get("FOOTBALL_DATA_API_KEY", ""))
-    fixtures, used_fallback = _fetch_sandbox_fixtures_with_fallback(fixtures_client, date_str)
+    fixtures, used_fallback = fetch_sandbox_fixtures(fixtures_client, date_str)
     if used_fallback:
         print(
             f"Precompute: no real fixtures on {date_str} -- falling back to the next {len(fixtures)} "

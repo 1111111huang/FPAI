@@ -652,6 +652,13 @@ export function DashboardPage() {
           // fixtures today" state with a misleading top-level error --
           // degrade to the plain empty message instead (code review
           // finding on the first version of this fix).
+          //
+          // W51: scripts/launch_sandbox.py's fetch_sandbox_fixtures()
+          // mirrors this exact window/sort/cap (90 days forward, sorted
+          // kickoff-ascending, capped at 10) so --precompute actually
+          // covers what a sandbox session's Dashboard falls back to
+          // showing. If this window, sort, or cap ever changes, update
+          // that Python copy too -- there is no shared implementation.
           try {
             const to = new Date(asOf);
             to.setUTCDate(to.getUTCDate() + 90);
