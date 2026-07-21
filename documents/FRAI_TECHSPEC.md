@@ -1978,3 +1978,42 @@ The 5 invalid LR/RF artifacts and their MLflow runs were deleted, not left along
 New `tests/test_per_competition_context.py::test_forecast_upcoming_real_sweden_registration` uses SWE's real `competition_id` (not the earlier fictional `T2` stand-in) to prove `forecast_upcoming(league="SWE", ...)` resolves to Sweden's own model via the real registry chain (US#107).
 
 Full suite: 654 passed / 1 skipped, zero regressions.
+
+## 43. Phase 20c: Sweden Wired Into `refresh-data`/`schedule-refresh`; Weekly Cadence Found Too Loose For Allsvenskan (Completed — US#132)
+
+### 43.1 Part 1 — Live Cadence Investigation (2026-07-21)
+
+Re-fetched `https://www.football-data.co.uk/new/SWE.csv` live (not reused from US#124's day-earlier check): `Last-Modified: Mon, 20 Jul 2026 20:48:18 GMT`, fetched `Tue, 21 Jul 2026 19:54:43 GMT` — the source is still updating same-day as matches are played, confirming US#124's finding holds. That answers "does the source lag" (no); it does not answer "is our own weekly *pull* cadence tight enough," which is what this story actually needed to verify.
+
+Downloaded the file and tabulated every 2026-season match date by weekday (`Season` column filtered to `2026`, 105 rows). Two findings settled the question:
+
+1. **Weekend rounds routinely spill into Monday.** Most rounds cluster Fri/Sat/Sun/Mon (e.g. 17–20 Jul 2026: Fri/Sat/Sun/Mon, 2/1/3/2 matches). A Sunday-only refresh systematically misses each round's Monday fixtures until the *following* Sunday.
+2. **Genuine midweek rounds occur, not just stray rescheduled fixtures.** 2026-04-22 (Wed) and 2026-04-23 (Thu) each carried 4 matches — a full round, not a one-off postponement — landing only 3 days after the prior Sunday round (2026-04-19) and 3 days before the next (2026-04-26). Full round-cluster gap survey across the 2026 season: minimum gap between consecutive round clusters was **3–4 days**, well under EPL's reliable ~7-day weekend-only cadence.
+
+**Conclusion:** a Sunday 03:00-only weekly refresh is *not* tight enough for Allsvenskan specifically. Concretely: a refresh run the Sunday before the Wed/Thu 2026-04-22/23 round would not pick those results up until the *following* Sunday (2026-04-26) — by which point that Sunday's own round is already about to kick off, meaning forecasts for it would be generated on feature data missing the entire prior round. This is exactly the "gap spans an entire round" failure mode the story asked to check for, and it is real, not hypothetical — evidenced directly in the live 2026 fixture data, not assumed. EPL does not have this problem (its rounds are reliably weekend-clustered), so this justifies tightening Sweden's cadence specifically rather than changing EPL's.
+
+### 43.2 Part 2 — Implementation
+
+**Sweden gets its own refresh path, not a shared job with EPL.** `run_refresh_data`'s existing `league` parameter (already threaded through to `fetch-understat`/`fetch-fotmob`) does not touch `run_scrape`/`run_ingest` at all — those are hardcoded to EPL's season-link-discovery directory-scrape convention and are structurally inapplicable to Sweden's single static full-history CSV (US#124). Rather than force Sweden through that shape, `main.py::run_refresh_data` now branches on `league == "SWE"` up front to a new `run_refresh_sweden_data(app_settings, db_manager)`:
+
+```python
+if league == "SWE":
+    run_refresh_sweden_data(app_settings, db_manager)
+    return
+```
+
+`run_refresh_sweden_data` calls `fetch_sweden_csv()` → `upsert_sweden_matches()` (US#124/125) → a `FeatureFactory` rebuild (`compute_rolling_stats()` + `save_features()`, the same rebuild step `run_ingest` performs for EPL after ingesting new rows) — and deliberately **does not** call `run_fetch_understat`, `run_fetch_fotmob`, or `backfill_lineups_from_player_stats`: Sweden has no Understat/FotMob integration (declined scope, Phase 20c).
+
+**Scheduling: a separate scheduler/job with a tighter default cadence**, justified directly by 43.1's findings — `src/scheduling/data_refresh_scheduler.py` gained `build_sweden_refresh_scheduler(refresh_fn=None, day_of_week="tue,fri", hour=3, minute=0)` (job id `sweden_data_refresh`, distinct from Section 30's `weekly_data_refresh`), registered via a single `CronTrigger(day_of_week="tue,fri", ...)` — APScheduler natively accepts comma-separated cron day-of-week lists, so this is one job, not two. Rationale for `tue,fri` specifically: Tuesday's run catches any Fri–Mon weekend round before the next one starts; Friday's run catches any Tue–Thu midweek round (like the confirmed Wed/Thu 2026-04-22/23 example) before the next weekend round starts. Worst-case staleness under this cadence is ~3 days, comfortably inside the 3–4 day minimum gap observed between real round clusters — i.e. it is not just "more frequent," it was sized against the actual observed round-spacing floor.
+
+`main.py::run_schedule_refresh(league, day_of_week=None, hour=3, minute=0)` now dispatches to `build_sweden_refresh_scheduler` when `league == "SWE"` and to Section 30's `build_weekly_refresh_scheduler` otherwise; `day_of_week=None` (the new CLI default, `--day-of-week` no longer defaults to `"sun"` unconditionally) lets each league pick its own justified default (`"tue,fri"` for SWE, `"sun"` for everything else) while still allowing an explicit override either way.
+
+### 43.3 Tests
+
+New `tests/test_refresh_data_sweden.py` (8 tests, TDD — written and confirmed red against the pre-implementation code before the above was added):
+- `run_refresh_data(league="SWE")` calls only the Sweden fetch/upsert/feature-rebuild path — `run_scrape`/`run_ingest`/`run_fetch_understat`/`run_fetch_fotmob` are monkeypatched to raise `AssertionError` if invoked, proving they're genuinely skipped, not just untested.
+- `run_refresh_data(league="E0")` is unaffected — still runs the full `scrape → ingest → understat → fotmob → lineups` chain in order.
+- `build_sweden_refresh_scheduler` registers exactly one job under `SWEDEN_JOB_ID`, defaults to the twice-weekly `"tue,fri"` cadence (explicitly asserts more than one day is present, i.e. actually tighter than a single weekly slot), accepts overrides, and its registered job genuinely invokes the injected `refresh_fn` when fired.
+- `run_schedule_refresh(league="SWE", day_of_week=None)` dispatches to `build_sweden_refresh_scheduler` (not the EPL one) and resolves the `None` default to `DEFAULT_SWEDEN_DAY_OF_WEEK`.
+
+Full suite: 661 passed / 1 skipped, zero regressions (up from 654 passed / 1 skipped at Section 42).

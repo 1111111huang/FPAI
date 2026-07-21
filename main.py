@@ -87,7 +87,11 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Run refresh-data on a standing weekly schedule (blocks until interrupted).",
     )
     schedule_refresh_parser.add_argument("--league", type=str, default="E0", help="League code for understat fetch (default: E0).")
-    schedule_refresh_parser.add_argument("--day-of-week", type=str, default="sun", help="Cron day-of-week (default: sun).")
+    schedule_refresh_parser.add_argument(
+        "--day-of-week", type=str, default=None,
+        help="Cron day-of-week. Defaults per league if omitted: 'sun' for E0, 'tue,fri' for SWE (US#132 -- "
+        "Allsvenskan rounds can fall midweek, so a single weekly slot isn't tight enough).",
+    )
     schedule_refresh_parser.add_argument("--hour", type=int, default=3, help="Cron hour, 0-23 (default: 3).")
     schedule_refresh_parser.add_argument("--minute", type=int, default=0, help="Cron minute, 0-59 (default: 0).")
 
@@ -494,8 +498,45 @@ def run_fetch_lineups(
     print(f"fetch-lineups complete | matches_scanned={len(fotmob_ids)} | rows_upserted={total}")
 
 
+def run_refresh_sweden_data(app_settings: AppSettings, db_manager: DuckDBManager) -> None:
+    """Fetch + upsert Sweden's Allsvenskan CSV and rebuild the feature store (US#132).
+
+    Sweden's source (football-data.co.uk's new/SWE.csv, US#124) is a single
+    static full-history file, not per-season pages -- it doesn't go through
+    run_scrape/run_ingest, which are built around EPL's season-link-discovery
+    directory-scrape convention. Sweden also has no Understat/FotMob
+    integration (declined scope, Phase 20c), so unlike EPL's run_refresh_data
+    path this deliberately does NOT chain fetch-understat, fetch-fotmob, or
+    lineup backfill -- just fetch, upsert, and a feature-store rebuild (the
+    same rebuild step run_ingest performs for EPL after ingesting new rows).
+    """
+    from src.ingestion.football_data.sweden_fetcher import fetch_sweden_csv
+    from src.ingestion.football_data.sweden_loader import upsert_sweden_matches
+
+    LOGGER.info("Executing command: refresh-data | league=SWE")
+    sweden_df = fetch_sweden_csv()
+    result = upsert_sweden_matches(sweden_df, db_manager)
+    LOGGER.info(
+        "Sweden CSV upsert | rows_in=%d | skipped=%d | upserted=%d",
+        result["rows_in"], result["skipped"], result["upserted"],
+    )
+    factory = FeatureFactory()
+    features_df = factory.compute_rolling_stats(window=app_settings.settings.rolling_window)
+    factory.save_features(features_df)
+    LOGGER.info("refresh-data (SWE): feature store rebuilt.")
+    LOGGER.info("refresh-data complete.")
+
+
 def run_refresh_data(app_settings: AppSettings, db_manager: DuckDBManager, league: str = "E0", force: bool = False) -> None:
-    """Run scrape → ingest → fetch-understat → fetch-fotmob → fetch-lineups in sequence (US#81, US#95, US#101)."""
+    """Run scrape → ingest → fetch-understat → fetch-fotmob → fetch-lineups in sequence (US#81, US#95, US#101).
+
+    US#132: league="SWE" takes a different, shorter path (run_refresh_sweden_data)
+    -- Sweden's single-CSV source and lack of Understat/FotMob integration make
+    the EPL scrape/ingest/understat/fotmob/lineup chain below inapplicable.
+    """
+    if league == "SWE":
+        run_refresh_sweden_data(app_settings, db_manager)
+        return
     LOGGER.info("Executing command: refresh-data | league=%s | force=%s", league, force)
     run_scrape(app_settings, force=force)
     run_ingest(app_settings, db_manager, force=force)
@@ -507,17 +548,33 @@ def run_refresh_data(app_settings: AppSettings, db_manager: DuckDBManager, leagu
     LOGGER.info("refresh-data complete.")
 
 
-def run_schedule_refresh(league: str = "E0", day_of_week: str = "sun", hour: int = 3, minute: int = 0) -> None:
-    """Run refresh-data on a standing weekly schedule (US#109). Blocks until interrupted."""
+def run_schedule_refresh(league: str = "E0", day_of_week: str | None = None, hour: int = 3, minute: int = 0) -> None:
+    """Run refresh-data on a standing schedule (US#109). Blocks until interrupted.
+
+    US#132: league="SWE" builds a separate scheduler (build_sweden_refresh_scheduler)
+    with its own, tighter default cadence (twice weekly) rather than EPL's weekly
+    Sunday one -- see data_refresh_scheduler.py's SWEDEN_JOB_ID comment for the
+    live-data evidence justifying this. day_of_week=None (the default) picks the
+    right per-league default cadence; pass an explicit value to override either.
+    """
     import time
 
-    from src.scheduling.data_refresh_scheduler import build_weekly_refresh_scheduler
+    from src.scheduling.data_refresh_scheduler import (
+        DEFAULT_SWEDEN_DAY_OF_WEEK,
+        build_sweden_refresh_scheduler,
+        build_weekly_refresh_scheduler,
+    )
 
-    scheduler = build_weekly_refresh_scheduler(day_of_week=day_of_week, hour=hour, minute=minute, league=league)
+    if league == "SWE":
+        effective_day_of_week = day_of_week or DEFAULT_SWEDEN_DAY_OF_WEEK
+        scheduler = build_sweden_refresh_scheduler(day_of_week=effective_day_of_week, hour=hour, minute=minute)
+    else:
+        effective_day_of_week = day_of_week or "sun"
+        scheduler = build_weekly_refresh_scheduler(day_of_week=effective_day_of_week, hour=hour, minute=minute, league=league)
     scheduler.start()
     LOGGER.info(
-        "schedule-refresh: weekly refresh-data scheduler started | day_of_week=%s hour=%d minute=%d league=%s",
-        day_of_week, hour, minute, league,
+        "schedule-refresh: refresh-data scheduler started | day_of_week=%s hour=%d minute=%d league=%s",
+        effective_day_of_week, hour, minute, league,
     )
     try:
         while True:
@@ -1243,7 +1300,7 @@ def main() -> None:
     elif args.command == "schedule-refresh":
         run_schedule_refresh(
             league=str(args.league),
-            day_of_week=str(args.day_of_week),
+            day_of_week=args.day_of_week,
             hour=int(args.hour),
             minute=int(args.minute),
         )
