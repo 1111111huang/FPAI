@@ -9,8 +9,38 @@ import pandas as pd
 from src.utils.db_manager import DuckDBManager
 
 
+def _freshness_from_row(match_count: int, max_date: Any, now_fn: Callable[[], pd.Timestamp]) -> dict[str, Any]:
+    if max_date is not None:
+        latest_ts = pd.Timestamp(max_date).tz_localize(None)
+        days_since = (now_fn().normalize() - latest_ts.normalize()).days
+        latest_str = latest_ts.date().isoformat()
+    else:
+        days_since = None
+        latest_str = None
+    return {
+        "latest_match_date": latest_str,
+        "days_since_update": days_since,
+        "match_count": int(match_count),
+        "is_stale": (days_since is None or days_since > 7),
+    }
+
+
 def get_data_freshness(now_fn: Callable[[], pd.Timestamp] = pd.Timestamp.now) -> dict[str, Any]:
     """Return data freshness metadata from the raw_matches table.
+
+    US#136: the top-level keys are a single number blended across every
+    competition in raw_matches. That was accurate when only E0 existed, but
+    once a second competition with a different season calendar and refresh
+    cadence exists (e.g. Sweden's Allsvenskan, Mar-Nov + twice-weekly vs.
+    EPL's Aug-May + weekly), a blended MAX(date) can mask one competition
+    going stale behind the other staying fresh -- e.g. if EPL is deep in its
+    off-season with no new matches for months but Sweden's weekly refresh
+    keeps running, the blended `is_stale` reads "fresh" even though EPL's own
+    data hasn't moved. The top-level keys are kept exactly as they were
+    (byte-identical for a single-competition table, so no existing caller's
+    behavior changes) and a new `by_league` breakdown is added alongside so a
+    caller that cares about a specific competition's own freshness doesn't
+    have to guess from the blended number.
 
     Args:
         now_fn: Returns the current time; injectable for testing the
@@ -19,34 +49,36 @@ def get_data_freshness(now_fn: Callable[[], pd.Timestamp] = pd.Timestamp.now) ->
 
     Returns:
         Dict with keys:
-            latest_match_date: ISO date string of the most recent match (or None).
-            days_since_update: Number of days since the latest match.
-            match_count: Total number of rows in raw_matches.
+            latest_match_date: ISO date string of the most recent match across
+                every competition (or None).
+            days_since_update: Number of days since that latest match.
+            match_count: Total number of rows in raw_matches, every competition.
             is_stale: True if latest_match_date is more than 7 days ago.
+            by_league: Dict keyed by league code, each value the same shape
+                as the top level but scoped to just that competition's rows.
     """
     db = DuckDBManager()
     try:
         with db.connection(read_only=True) as conn:
-            row = conn.execute("SELECT COUNT(*), MAX(date) FROM raw_matches").fetchone()
+            rows = conn.execute("SELECT league, COUNT(*), MAX(date) FROM raw_matches GROUP BY league").fetchall()
     except Exception:
-        return {"latest_match_date": None, "days_since_update": None, "match_count": 0, "is_stale": True}
+        return {
+            "latest_match_date": None, "days_since_update": None, "match_count": 0,
+            "is_stale": True, "by_league": {},
+        }
 
-    match_count = int(row[0]) if row else 0
-    max_date = row[1] if row else None
-    if max_date is not None:
-        latest_ts = pd.Timestamp(max_date).tz_localize(None)
-        days_since = (now_fn().normalize() - latest_ts.normalize()).days
-        latest_str = latest_ts.date().isoformat()
-    else:
-        days_since = None
-        latest_str = None
+    if not rows:
+        result = _freshness_from_row(0, None, now_fn)
+        result["by_league"] = {}
+        return result
 
-    return {
-        "latest_match_date": latest_str,
-        "days_since_update": days_since,
-        "match_count": match_count,
-        "is_stale": (days_since is None or days_since > 7),
-    }
+    by_league = {league: _freshness_from_row(count, max_date, now_fn) for league, count, max_date in rows}
+    total_count = sum(count for _, count, _ in rows)
+    overall_max_date = max((max_date for _, _, max_date in rows if max_date is not None), default=None)
+
+    result = _freshness_from_row(total_count, overall_max_date, now_fn)
+    result["by_league"] = by_league
+    return result
 
 
 def list_matches(

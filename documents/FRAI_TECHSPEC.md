@@ -2060,3 +2060,13 @@ While executing Section 45's retraining, `ModelManager.run_pipeline()`'s artifac
 **Recovery:** retrained Sweden's 5 affected targets again (now saved as `*_swe_*` files) and manually re-pointed `config/model_selection.yaml`'s `contexts.SWE` entries to the recovered files — `select-best-models` alone couldn't auto-detect this, since the corrupted and recovered candidates had numerically identical metrics (an exact tie the selector correctly-but-insufficiently treats as "no change needed"). Verified live: Sweden's forecast payload is byte-identical to its pre-corruption state; E0 unaffected.
 
 New `tests/test_artifact_filename_collision.py` (4 tests). Full test suite: 666 passed / 1 skipped, zero regressions. Full writeup: `documents/bugs.md` BUG-017.
+
+## 47. Phase 20 (cont.): Agent Tool Layer Audit — Found a Freshness-Masking Gap (Completed — US#136)
+
+`model_tools.get_model_status()` was already fixed as an unlisted side effect of US#110 (verified live during US#131). `forecast_tools.py` and `data_tools.py::list_matches()` audited clean — both already take free-form `league` parameters with no hardcoded enum.
+
+**Found a different-shaped gap**: `data_tools.py::get_data_freshness()` computed a single blended `is_stale`/`latest_match_date` across all of `raw_matches`, with no per-competition breakdown. Demonstrated live, not hypothetically — the real DB's blended output read `is_stale: false` while **E0's own data was 58 days stale** (deep off-season), completely masked by Sweden's fresh (1-day-old) refresh.
+
+**Fix**: the query now `GROUP BY league`. All pre-existing top-level keys stay byte-identical for a single-competition table (zero behavior change for any existing caller); a new `by_league` dict adds the same per-target shape scoped to each competition. Verified live post-fix: `by_league.E0.is_stale == true`, `by_league.SWE.is_stale == false`.
+
+4 new tests in `tests/test_data_tools.py`; 4 pre-existing tests updated to the new `GROUP BY`-shaped mock fixture. Full suite: 670 passed / 1 skipped, zero regressions.
