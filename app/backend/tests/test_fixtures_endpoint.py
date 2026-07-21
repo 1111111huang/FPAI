@@ -8,14 +8,27 @@ from __future__ import annotations
 from datetime import date
 from pathlib import Path
 import sys
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 sys.path.append(str(Path(__file__).resolve().parents[3]))
 
+import pytest
+import requests
 from fastapi.testclient import TestClient
 
 from app.backend.football_data_client import NormalizedMatch
-from app.backend.main import _split_fixture_date_range, app
+from app.backend.main import _fixture_cache, _split_fixture_date_range, app
+
+
+@pytest.fixture(autouse=True)
+def _clear_fixture_cache():
+    """W52: the TTL cache is module-level state (mirroring the existing
+    `_fixtures_client` singleton pattern) -- clear it before every test so
+    identical date ranges reused across unrelated test cases in this file
+    don't leak cached results between them."""
+    _fixture_cache.clear()
+    yield
+    _fixture_cache.clear()
 
 
 def test_fixtures_endpoint_returns_normalized_matches():
@@ -167,6 +180,55 @@ def test_fixtures_endpoint_today_only_query_checks_both_finished_and_scheduled()
     assert [m["home_team"] for m in body] == ["Liverpool", "Chelsea"]
     mock_client.get_results.assert_called_once_with(date_from="2025-03-10", date_to="2025-03-10")
     mock_client.get_fixtures.assert_called_once_with(date_from="2025-03-10", date_to="2025-03-10")
+
+
+# ---------------------------------------------------------------------------
+# W52: football-data.org's free tier (~10 req/min) was getting exhausted by
+# repeated frontend navigation (Dashboard -> Match Explorer -> Bet form, each
+# independently calling getFixtures() fresh on every mount against the same
+# module-level `_fixtures_client` singleton), and the resulting 429 ->
+# requests.exceptions.HTTPError was propagating uncaught to an unhandled 500
+# instead of a clean degraded response. These tests cover both fixes: a
+# short TTL cache to de-duplicate identical repeated calls, and a clean
+# HTTPException instead of a raw 500 when the upstream call fails.
+# ---------------------------------------------------------------------------
+
+
+def test_fixtures_endpoint_deduplicates_identical_calls_within_ttl():
+    """Two requests for the identical date range within the TTL window must
+    only hit the underlying client once -- this is exactly the repeated-
+    navigation pattern that was exhausting the shared rate-limit budget."""
+    with patch("app.backend.main.get_fixtures_client") as mock_get_client:
+        mock_client = mock_get_client.return_value
+        mock_client.get_fixtures.return_value = []
+        with TestClient(app) as client:
+            first = client.get("/api/fixtures", params={"date_from": "2026-08-21", "date_to": "2026-08-28"})
+            second = client.get("/api/fixtures", params={"date_from": "2026-08-21", "date_to": "2026-08-28"})
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    mock_client.get_fixtures.assert_called_once_with(date_from="2026-08-21", date_to="2026-08-28")
+
+
+def test_fixtures_endpoint_upstream_http_error_returns_clean_degraded_response():
+    """A requests.exceptions.HTTPError from the underlying client (e.g. the
+    real 429 rate-limit error seen in the sandbox log) must not propagate as
+    an unhandled 500 -- it must produce a clean, non-500 JSON error response
+    the frontend can distinguish from a genuine empty-fixtures result."""
+    fake_response = MagicMock()
+    fake_response.status_code = 429
+    with patch("app.backend.main.get_fixtures_client") as mock_get_client:
+        mock_client = mock_get_client.return_value
+        mock_client.get_fixtures.side_effect = requests.exceptions.HTTPError(
+            "429 Client Error: for url: https://api.football-data.org/v4/competitions/PL/matches",
+            response=fake_response,
+        )
+        with TestClient(app, raise_server_exceptions=False) as client:
+            response = client.get("/api/fixtures", params={"date_from": "2099-01-01", "date_to": "2099-01-02"})
+
+    assert response.status_code == 503
+    body = response.json()
+    assert "detail" in body
 
 
 class TestSplitFixtureDateRange:

@@ -9,10 +9,13 @@ from __future__ import annotations
 from contextlib import asynccontextmanager
 from datetime import date, datetime, timezone
 import os
+import time
+from typing import Callable
 
 from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+import requests
 from starlette.concurrency import run_in_threadpool
 
 load_dotenv()
@@ -47,6 +50,53 @@ def get_fixtures_client() -> FootballDataClient:
     if _fixtures_client is None:
         _fixtures_client = FootballDataClient(api_key=os.environ.get("FOOTBALL_DATA_API_KEY", ""))
     return _fixtures_client
+
+
+# W52: football-data.org's free tier (~10 req/min) is shared across every
+# request through the single `_fixtures_client` singleton above. Three
+# independent frontend call sites (Dashboard, Match Explorer, manual bet
+# form) each fetch fixtures fresh on every mount with no de-duplication, so
+# normal navigation within a session can burst well past the budget and trip
+# a 429. This is a short-lived request-dedup cache (not a data-freshness
+# cache) -- 60s is short enough that staleness is a non-issue, long enough to
+# absorb that exact repeated-navigation pattern. Module-level state, matching
+# the existing `_fixtures_client` singleton pattern already in this file.
+_FIXTURE_CACHE_TTL_SECONDS = 60.0
+_fixture_cache: dict[tuple[str, str | None, str | None], tuple[float, list[NormalizedMatch]]] = {}
+
+
+async def _cached_fixture_call(
+    cache_key: tuple[str, str | None, str | None],
+    fetch: Callable[..., list[NormalizedMatch]],
+    **fetch_kwargs: str | None,
+) -> list[NormalizedMatch]:
+    """Look up `cache_key` in the module-level TTL cache; on a miss, run
+    `fetch` in the threadpool and cache the result. A requests.HTTPError
+    raised by `fetch` (e.g. football-data.org's 429 rate-limit response)
+    is turned into a clean 503 HTTPException rather than left to propagate
+    as an unhandled 500 -- and is NOT cached, so it doesn't wrongly suppress
+    the next genuine request."""
+    now = time.monotonic()
+    cached = _fixture_cache.get(cache_key)
+    if cached is not None:
+        expires_at, matches = cached
+        if expires_at > now:
+            return matches
+
+    try:
+        matches = await run_in_threadpool(fetch, **fetch_kwargs)
+    except requests.exceptions.HTTPError as exc:
+        LOGGER.warning("Upstream fixture provider call failed for %s: %s", cache_key, exc)
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Fixture data is temporarily unavailable (the upstream provider is rate-limited "
+                "or unreachable). Please try again in a minute."
+            ),
+        ) from exc
+
+    _fixture_cache[cache_key] = (now + _FIXTURE_CACHE_TTL_SECONDS, matches)
+    return matches
 
 
 @asynccontextmanager
@@ -195,10 +245,14 @@ async def get_fixtures(date_from: str | None = None, date_to: str | None = None)
     matches: list[NormalizedMatch] = []
     if results_range is not None:
         past_from, past_to = results_range
-        matches += await run_in_threadpool(client.get_results, date_from=past_from, date_to=past_to)
+        matches += await _cached_fixture_call(
+            ("results", past_from, past_to), client.get_results, date_from=past_from, date_to=past_to
+        )
     if fixtures_range is not None:
         future_from, future_to = fixtures_range
-        matches += await run_in_threadpool(client.get_fixtures, date_from=future_from, date_to=future_to)
+        matches += await _cached_fixture_call(
+            ("fixtures", future_from, future_to), client.get_fixtures, date_from=future_from, date_to=future_to
+        )
     return matches
 
 

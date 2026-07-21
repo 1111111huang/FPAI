@@ -28,6 +28,14 @@ function ManualBetForm({ onLogged }: { onLogged: () => void }) {
   const [stake, setStake] = useState("");
   const [status, setStatus] = useState<"idle" | "saving" | "error">("idle");
   const [errorMsg, setErrorMsg] = useState("");
+  // W52: distinct from `errorMsg` (submit-path errors) -- this tracks the
+  // fixture *search* fetch itself failing (e.g. the football-data.org
+  // rate-limit degrading to a backend 503). Previously
+  // `.catch(() => setFixtures([]))` silently swallowed this into a plain
+  // empty fixture list, indistinguishable from a genuine "no matches"
+  // result -- same ApiError-vs-generic-fallback pattern MatchExplorerPage
+  // already uses (MatchUI.tsx).
+  const [fixturesError, setFixturesError] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -38,12 +46,15 @@ function ManualBetForm({ onLogged }: { onLogged: () => void }) {
     // mixing local date arithmetic with a UTC value shifts the window by a
     // day in negative-UTC-offset timezones.
     to.setUTCDate(to.getUTCDate() + 90);
+    setFixturesError(null);
     getFixtures(from.toISOString().slice(0, 10), to.toISOString().slice(0, 10))
       .then((result) => {
         if (!cancelled) setFixtures(result);
       })
-      .catch(() => {
-        if (!cancelled) setFixtures([]);
+      .catch((err) => {
+        if (cancelled) return;
+        setFixtures([]);
+        setFixturesError(err instanceof ApiError ? err.message : "Could not load fixtures.");
       });
     return () => {
       cancelled = true;
@@ -103,6 +114,12 @@ function ManualBetForm({ onLogged }: { onLogged: () => void }) {
               className="w-full rounded-lg border border-border bg-surface py-2 pl-9 pr-3 text-sm text-ink outline-none placeholder:text-muted focus:border-accent"
             />
           </div>
+          {fixturesError && (
+            <p className="mt-2 flex items-center gap-1.5 text-xs text-serious">
+              <WarningCircle weight="fill" size={13} />
+              {fixturesError}
+            </p>
+          )}
           {results.length > 0 && (
             <div className="mt-2 flex flex-col gap-1.5">
               {results.map((f) => (
