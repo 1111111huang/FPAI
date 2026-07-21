@@ -59,6 +59,32 @@ competitions:
       - SQUAD
     player_data_sources:
       - fotmob
+  SWE:
+    competition_id: SWE
+    tier: competition_specific
+    league_code: SWE
+    enabled_feature_groups:
+      - OFF_GOALS
+      - DEF_GOALS
+      - OPP_ADJ_GOALS
+      - STRENGTH_GOALS
+      - INTERACTION_GOALS
+      - CTX
+      - MKT
+      - EFFICIENCY
+    player_data_sources: []
+    # US#129: Sweden's football-data.co.uk "New Leagues" source has no
+    # hc/ac (corners) columns at all, so the 3 corners targets are excluded
+    # here. home_win (legacy) is also excluded, matching E0's convention of
+    # not listing it (E0 leaves available_targets unset entirely, but its
+    # default training suite -- run_train_forecast_suite -- likewise skips
+    # home_win; see tests/test_target_availability.py).
+    available_targets:
+      - result_3way
+      - btts
+      - home_goals
+      - away_goals
+      - total_goals
   international:
     competition_id: international
     tier: general_purpose

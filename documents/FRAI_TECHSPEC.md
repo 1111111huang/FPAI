@@ -1858,3 +1858,48 @@ The story offered two options: (a) an explicit `available_targets` list in `conf
 Full suite: 619 passed / 23 skipped, zero regressions (up from 609 passed at Section 38 — all 10 new tests are additive).
 
 Sweden (`SWE`) is still not registered as a competition — that remains US#128's job, using §38.6's list verbatim.
+
+## 40. Phase 20 (cont.): Sweden Registered in the Competition Registry (Completed — US#128)
+
+### 40.1 Registration
+
+**Verified against `config/competitions.yaml`:** a `SWE` entry now exists alongside `E0`/`international`, matching their existing structural style exactly:
+
+```yaml
+SWE:
+  competition_id: SWE
+  tier: competition_specific
+  league_code: SWE
+  enabled_feature_groups:
+    - OFF_GOALS
+    - DEF_GOALS
+    - OPP_ADJ_GOALS
+    - STRENGTH_GOALS
+    - INTERACTION_GOALS
+    - CTX
+    - MKT
+    - EFFICIENCY
+  player_data_sources: []
+  available_targets:
+    - result_3way
+    - btts
+    - home_goals
+    - away_goals
+    - total_goals
+```
+
+Both fields' values are copied verbatim from Section 38.6 (US#127's finalized `enabled_feature_groups` list) and Section 39 (US#129's `available_targets` mechanism) — no new decisions were made in this story, it's pure registration.
+
+### 40.2 Re-Verifying the US#89 Feature-Superset Invariant
+
+Rather than assuming the invariant holds because it held before, traced `ModelManager._load_selected_features`'s `_passes_group_gate(feature)` directly: it returns `resolve_feature_group_tag(feature) is None or tag in enabled_groups`. Every one of the 13 `GENERAL_PURPOSE_FEATURES` (`config/competition_registry.py`) is `MKT_*`-prefixed, and `resolve_feature_group_tag()` (Section 33/38) never classifies `MKT_*` under any split-family tag — it returns `None` for all of them. `None` means "ungated," so every `MKT_*` feature passes `_passes_group_gate` unconditionally, regardless of what's in `enabled_feature_groups`. Confirmed empirically against the real registered entry (not just reasoned about): Sweden resolves to exactly 74 features via `ModelManager._load_selected_features()`, all 13 `GENERAL_PURPOSE_FEATURES` present among them, E0 unchanged at 167.
+
+### 40.3 Tests
+
+`tests/test_competition_registry.py` gained 7 new tests exercising the **real** `config/competitions.yaml` (not a synthetic fixture — US#127/US#129's own tests necessarily used fictional registries since Sweden wasn't registered yet when those stories ran): registration shape (`tier`/`league_code`/`player_data_sources`), the exact `enabled_feature_groups` set including an explicit check that every excluded tag (`OFF_SHOTS`, `DIS`, `CTX_CORNERS`, `SQUAD`, etc.) is genuinely absent, the 74-feature resolved count, the superset invariant, an E0-unaffected regression (still 167), and both directions of `available_targets` (Sweden's 5-available/3-excluded split, E0's unrestricted `None`).
+
+Two pre-existing tests broke as an expected consequence of a third competition now existing in the registry, and were fixed in place rather than weakened: `test_list_competition_definitions_is_stable` (hardcoded `{"E0", "international"}` → `{"E0", "SWE", "international"}`) and `tests/test_per_competition_context.py::test_list_context_keys_matches_real_registry_today` (hardcoded `["E0", "international"]` → `["E0", "SWE", "international"]` — US#110's `list_context_keys()`, Section 31, now genuinely reflects two registered `competition_specific` competitions, which is exactly the behavior that story was built to support).
+
+Full suite: 626 passed / 23 skipped, zero regressions (up from 619 passed at Section 39).
+
+Sweden is now a fully registered `competition_specific` competition, but **no models have been trained for it yet** — that's US#130, the next story.
