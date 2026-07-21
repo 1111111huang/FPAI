@@ -20,7 +20,12 @@ from src.evaluation.mlflow_cleanup import MLflowStoreCleanup, save_cleanup_repor
 from src.forecast import ForecastService
 from src.ingestion import CSVLoader, FootballDataScraper
 from src.logic.target_registry import get_target_definition, list_target_definitions
-from src.logic.competition_registry import get_competition_definition, list_context_keys, resolve_feature_subset_for_tier
+from src.logic.competition_registry import (
+    get_competition_definition,
+    is_target_available,
+    list_context_keys,
+    resolve_feature_subset_for_tier,
+)
 from src.models import (
     LRModel,
     ModelFactory,
@@ -553,6 +558,17 @@ def run_train_target(target_name: str, model_name: str | None = None, context: s
     # keeps working rather than silently doing the wrong thing.
     competition_id = "E0" if context == "league" else context
     competition_def = get_competition_definition(competition_id)
+    if not is_target_available(competition_def, definition.name):
+        # US#129: fail fast and explicitly rather than let prepare_training_data's
+        # dropna(subset=["target"]) silently drop every row (BUG-001's failure
+        # shape, on labels instead of features) when this competition's data
+        # source doesn't populate the raw column(s) this target's labels need.
+        raise ValueError(
+            f"Target '{definition.name}' is not available for competition '{competition_id}': "
+            f"its data source does not populate the raw column(s) label_columns={definition.label_columns} "
+            "require. See config/competitions.yaml's available_targets for this competition, or use "
+            "train-forecast-suite, which skips unavailable targets automatically."
+        )
     feature_subset = resolve_feature_subset_for_tier(competition_def.tier)
     model_manager = ModelManager(
         model=model,
@@ -567,10 +583,51 @@ def run_train_target(target_name: str, model_name: str | None = None, context: s
 
 
 def run_train_forecast_suite(targets: list[str] | None = None, context: str = "E0") -> None:
-    """Train the full forecast model suite or a selected target subset."""
-    selected_targets = targets or [
+    """Train the full forecast model suite or a selected target subset.
+
+    US#129: some competitions' data sources don't populate every raw column
+    a target's labels depend on (e.g. Sweden's football-data.co.uk "New
+    Leagues" CSV has no hc/ac corners columns at all -- see US#125's
+    _NULL_COLUMNS). Rather than let those targets reach
+    ModelManager.prepare_training_data(), where dropna(subset=["target"])
+    would silently drop every training row (BUG-001's failure shape, on
+    labels instead of features) and raise a confusing "No rows left" error,
+    resolve this competition's `available_targets` (config/competitions.yaml,
+    via src/logic/competition_registry.py) up front and skip anything not on
+    it, with an explicit, readable reason logged per skipped target.
+    """
+    requested_targets = targets or [
         definition.name for definition in list_target_definitions() if definition.name != "home_win"
     ]
+
+    # --context "league" is a deprecated alias for "E0" -- resolve the same
+    # way run_train_target does, so the availability check looks at the
+    # right competition's registry entry.
+    competition_id = "E0" if context == "league" else context
+    competition_def = get_competition_definition(competition_id)
+
+    selected_targets: list[str] = []
+    for target_name in requested_targets:
+        if is_target_available(competition_def, target_name):
+            selected_targets.append(target_name)
+            continue
+        label_columns = get_target_definition(target_name).label_columns
+        LOGGER.info(
+            "train-forecast-suite: SKIPPING target=%s for context=%s | reason: this target's labels "
+            "require raw_matches column(s) %s, which are not in competition '%s's available_targets "
+            "(config/competitions.yaml) -- its data source does not populate them for every row. "
+            "Add '%s' to that competition's available_targets once its source provides this data.",
+            target_name, context, label_columns, competition_id, target_name,
+        )
+
+    if not selected_targets:
+        LOGGER.warning(
+            "train-forecast-suite: no available targets to train for context=%s -- every requested "
+            "target was skipped (see SKIPPING log lines above for reasons).",
+            context,
+        )
+        return
+
     LOGGER.info("Training forecast suite targets: %s | context=%s", ", ".join(selected_targets), context)
     for target_name in selected_targets:
         run_train_target(target_name, context=context)

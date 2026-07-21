@@ -19,6 +19,18 @@
 # new corner-dependent sub-tags, CTX_CORNERS and H2H_CORNERS, close the
 # residual gap US#133 flagged (CTX_HOME/AWAY_CORNERS_STD_R5, H2H_CORNERS_R5
 # previously passed through ungated regardless of enabled_feature_groups).
+#
+# US#129: optional `available_targets` list, keyed off src/logic/
+# target_registry.py's TARGET_REGISTRY names. Omit the key entirely (as E0
+# and international do below) to mean "no restriction -- every registered
+# target is trainable," which is unchanged pre-US#129 behavior. Set it when
+# a competition's data source doesn't populate the raw column(s) a target's
+# labels need (e.g. a future Sweden entry would omit home_corners/
+# away_corners/total_corners, since football-data.co.uk's "New Leagues" CSV
+# has no hc/ac columns at all -- US#125's _NULL_COLUMNS). `train-forecast-
+# suite --context <id>` uses this to skip unavailable targets with a logged
+# reason instead of letting prepare_training_data's dropna(subset=["target"])
+# silently drop every row (BUG-001's failure shape, on labels this time).
 competitions:
   E0:
     competition_id: E0

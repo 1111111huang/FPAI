@@ -1820,4 +1820,41 @@ Deliberately excluded: `OFF_SHOTS`, `OFF_CORNERS`, `DEF_SHOTS`, `DEF_CORNERS`, `
 
 Full suite: 609 passed / 23 skipped, zero regressions (up from 604 passed at Section 37 — net new here is exactly 4 new `resolve_feature_group_tag()` parametrize cases (`CTX_AWAY_CORNERS_STD_R5`, `CTX_HOME_GOALS_STD_R5`, `CTX_HOME_SCORE_STREAK`, `H2H_HOME_WIN_RATE_R5`) plus 1 new test function (`test_sweden_enabled_feature_groups_excludes_all_uncomputable_features`) = 5 new tests; several existing `DIS_*`/`CTX_HOME_CORNERS_STD_R5`/`H2H_CORNERS_R5` cases had their expected value updated in place, not added).
 
+## 39. Per-Competition Target Availability (Completed — US#129)
+
+### 39.1 Motivation
+
+Sections 33/38 closed the *feature*-side half of "a second competition with a structurally different data profile": a competition can now exclude shot/corner/card-dependent sub-features from `enabled_feature_groups` instead of getting them cold-start-imputed from another competition's column mean. But `src/logic/target_registry.py` had no equivalent concept on the *label* side — every one of the 9 registered targets (`home_win`, `result_3way`, `btts`, `home_goals`, `away_goals`, `total_goals`, `home_corners`, `away_corners`, `total_corners`) was assumed trainable for every competition. Sweden's Allsvenskan source (football-data.co.uk's "New Leagues" CSV, US#124/US#125) has no `hc`/`ac` columns at all — `raw_matches.hc`/`.ac` are NULL for every Sweden row, by design (Section 36's `_NULL_COLUMNS`). Training `home_corners`/`away_corners`/`total_corners` would reach `ModelManager.prepare_training_data()` (`src/models/model_manager.py`), where `df["target"] = TargetResolver.get_label(df, self.target_config)` resolves to `pd.to_numeric(df["hc"], errors="coerce")` — 100% NaN — and `df.dropna(subset=["target"])` (features aren't even in `required_non_null` for XGBoost models) then drops every training row, raising `"No rows left after dropping records with missing labels or features."` This is BUG-001's exact failure shape (`documents/bugs.md`), reproduced here on labels instead of features. Reproduced directly (not assumed) in `tests/test_target_availability.py::test_prepare_training_data_raises_when_corners_labels_are_all_null` before any fix landed.
+
+### 39.2 Design Choice: Explicit Allow-List, Not Automatic Column Inference
+
+The story offered two options: (a) an explicit `available_targets` list in `config/competitions.yaml`, or (b) a registry-level check keyed off which raw columns a competition's source actually populates. Chose (a), for the same reason `enabled_feature_groups` (human-set) was already preferred over a fully-automatic mechanism for the analogous feature-side problem: `TargetDefinition.label_columns` (`src/logic/target_registry.py`) already captures exactly which raw columns each target's labels need (e.g. `home_corners` → `("hc",)`, `total_corners` → `("hc", "ac")`) — no new target→column mapping had to be invented — but nothing today captures which raw columns a given competition's *source* actually populates in a machine-readable way (`_NULL_COLUMNS` is loader-internal, not exposed as registry metadata). Building that automatic inference would have meant introducing a new piece of infrastructure this story didn't otherwise need; an explicit, human-readable list matches how `enabled_feature_groups` already solves the structurally identical feature-side problem and keeps `config/competitions.yaml` the one place a human can read to see what a competition trains.
+
+### 39.3 Mechanism
+
+`src/logic/competition_registry.py`:
+- `CompetitionDefinition` gained `available_targets: tuple[str, ...] | None = None`. `None` (the YAML key omitted entirely) means "no restriction — every `TARGET_REGISTRY` target is available," which is exactly today's behavior for every competition that doesn't set it (E0, `international`, both unchanged by this story).
+- `_load_registry` parses `available_targets` from YAML when present, normalizing each entry through `target_registry.normalize_target_name()` (so aliases like `"3way"`/`"both_teams_to_score"` resolve the same way `get_target_definition()` already does) and rejecting unknown target names with a `ValueError` naming the offending value(s) and the full valid set — the same "raise a helpful error" pattern `get_competition_definition`/`get_target_definition` already use elsewhere in this codebase.
+- New `is_target_available(competition_def, target_name) -> bool` helper: `True` when `available_targets is None`, else membership-tests the normalized target name against the tuple.
+
+`main.py`:
+- `run_train_forecast_suite(targets, context)` now resolves `competition_id` (same `"league"` → `"E0"` deprecated-alias handling `run_train_target` already does) and the competition's `CompetitionDefinition` up front, then partitions the requested target list into trainable vs. skipped via `is_target_available()`. Each skipped target logs one `LOGGER.info` line naming the target, the context, the specific missing `label_columns` (e.g. `('hc',)`), and pointing at `available_targets` in `config/competitions.yaml` as where to fix it — not a bare exception message. If every requested target ends up skipped, it logs a `LOGGER.warning` and returns cleanly rather than calling `run_train_target` with an empty list (which would otherwise just silently do nothing with no trace).
+- `run_train_target(target_name, ..., context)` (the single-target path) also gained a guard: it now raises a `ValueError` naming the target, the competition, and the missing `label_columns` immediately after resolving `competition_def`, rather than letting a direct `train-target --target home_corners --context SWE` call fall all the way through to `ModelManager.prepare_training_data()`'s confusing "No rows left" crash. This wasn't strictly required by the story's acceptance criterion (which is about `train-forecast-suite` specifically) but closes the same footgun for the single-target CLI path at negligible cost.
+
+`config/competitions.yaml`: header comment extended to document the new key; no functional change to the `E0`/`international` entries (neither sets `available_targets`, so both keep training every target, unchanged). Sweden itself is still not registered here — that's US#128's job, deliberately out of scope for this story per its own framing.
+
+### 39.4 Tests
+
+`tests/test_target_availability.py` (new, 10 tests), using a fictional `"SWE"`-named competition registered only in a `tmp_path` registry (same pattern as Section 32/US#110's `tests/test_per_competition_context.py`) — never touching the real `config/competitions.yaml`:
+- `test_prepare_training_data_raises_when_corners_labels_are_all_null`: proves the underlying BUG-001-shaped crash is real, independent of this story's fix (exercises `ModelManager.prepare_training_data()` directly, unmodified by this story).
+- `test_is_target_available_default_none_allows_every_target` / `test_is_target_available_restricts_to_listed_targets`: unit coverage for the new helper.
+- `test_e0_has_no_available_targets_restriction_in_real_registry`: regression guard against the real `config/competitions.yaml`.
+- `test_available_targets_parses_from_yaml_and_normalizes_aliases` / `test_available_targets_rejects_unknown_target_name`: YAML parsing/validation.
+- `test_train_forecast_suite_skips_corners_targets_for_sweden_like_competition`: the story's core acceptance criterion — exactly 5 targets trained (mocked `run_train_target`), exactly 3 `SKIPPING` log lines, each naming its specific missing `label_columns` and the context.
+- `test_train_forecast_suite_default_context_e0_trains_full_target_set_unaffected`: E0's default suite is still all 8 non-`home_win` targets, including all 3 corners ones.
+- `test_train_forecast_suite_all_requested_targets_unavailable_trains_nothing`: explicit-subset request where every target is unavailable logs a warning and trains nothing, rather than crashing or silently no-op-ing untraced.
+- `test_run_train_target_raises_clear_error_for_unavailable_target`: the single-target guard.
+
+Full suite: 619 passed / 23 skipped, zero regressions (up from 609 passed at Section 38 — all 10 new tests are additive).
+
 Sweden (`SWE`) is still not registered as a competition — that remains US#128's job, using §38.6's list verbatim.
