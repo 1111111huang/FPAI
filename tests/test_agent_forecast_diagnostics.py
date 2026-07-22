@@ -1,18 +1,13 @@
-"""Regression tests for W15's data-source prerequisite: cold_start_risk,
-feature_completeness, and unknown_team must be structured fields on the
-final MatchRecommendation, populated deterministically from the forecast
-tool's own diagnostics -- not left to the LLM's own prose in `limitations`,
-which agent_v1.txt never asks for and cannot be relied on to include
-correctly. Extracted from tool call results directly, so the value is
-correct "regardless of what prediction_basis says" (or what the model
-chooses to write), matching the same code-over-prompt philosophy as
-A28/A29."""
+"""Regression tests for A31's forecast_payload-based diagnostics (cold_start_risk,
+feature_completeness, unknown_team), A30's backstop (a recommendation can never
+claim more evidence than actually exists), and A32's research-coverage confidence
+downgrade. All three are applied in graph.py's _build_recommendation,
+deterministically from pipeline state -- never from the LLM's own prose, matching
+the code-over-prompt philosophy already established by A28/A29."""
 
 from __future__ import annotations
 
 import json
-
-from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 
 from src.agent.agent_config import AgentConfig
 from src.agent.graph import _build_recommendation, _extract_forecast_diagnostics
@@ -28,61 +23,16 @@ def _make_config(**overrides) -> AgentConfig:
     return AgentConfig(**defaults)
 
 
-def _forecast_tool_message(name: str, cold_start_risk: bool, feature_completeness: float, unknown_team: bool) -> ToolMessage:
-    payload = {
+def _forecast_payload(cold_start_risk: bool, feature_completeness: float, unknown_team: bool) -> dict:
+    return {
         "forecast": {},
         "diagnostics": {"cold_start_risk": cold_start_risk, "feature_completeness": feature_completeness},
         "data_quality": {"prediction_basis": "team_history_and_market", "unknown_team": unknown_team},
     }
-    return ToolMessage(content=json.dumps(payload), name=name, tool_call_id="1")
 
 
-def test_extracts_diagnostics_from_forecast_league_tool_message():
-    messages = [
-        HumanMessage(content="analyse this match"),
-        _forecast_tool_message("forecast_league", cold_start_risk=True, feature_completeness=0.62, unknown_team=True),
-    ]
-    result = _extract_forecast_diagnostics(messages)
-    assert result == {"cold_start_risk": True, "feature_completeness": 0.62, "unknown_team": True}
-
-
-def test_extracts_diagnostics_from_forecast_international_tool_message():
-    messages = [
-        _forecast_tool_message("forecast_international", cold_start_risk=False, feature_completeness=1.0, unknown_team=False),
-    ]
-    result = _extract_forecast_diagnostics(messages)
-    assert result == {"cold_start_risk": False, "feature_completeness": 1.0, "unknown_team": False}
-
-
-def test_defaults_when_no_forecast_tool_was_ever_called():
-    messages = [HumanMessage(content="hello"), AIMessage(content="some text, no tools")]
-    result = _extract_forecast_diagnostics(messages)
-    assert result == {"cold_start_risk": False, "feature_completeness": None, "unknown_team": False}
-
-
-def test_uses_the_most_recent_forecast_call_not_the_first():
-    messages = [
-        _forecast_tool_message("forecast_league", cold_start_risk=True, feature_completeness=0.5, unknown_team=True),
-        AIMessage(content="", tool_calls=[{"name": "forecast_league", "args": {}, "id": "2"}]),
-        _forecast_tool_message("forecast_league", cold_start_risk=False, feature_completeness=0.95, unknown_team=False),
-    ]
-    result = _extract_forecast_diagnostics(messages)
-    assert result == {"cold_start_risk": False, "feature_completeness": 0.95, "unknown_team": False}
-
-
-def test_ignores_non_forecast_tool_messages():
-    messages = [
-        ToolMessage(content="some web search result text", name="web_search", tool_call_id="1"),
-    ]
-    result = _extract_forecast_diagnostics(messages)
-    assert result == {"cold_start_risk": False, "feature_completeness": None, "unknown_team": False}
-
-
-def test_build_recommendation_enriches_even_when_llm_json_omits_the_fields():
-    """Core acceptance: cold_start_risk must be True on the final
-    recommendation even though the LLM's own JSON output never mentions it --
-    the value comes from the tool call, not from what the model wrote."""
-    llm_json = json.dumps({
+def _valid_llm_json(**overrides) -> str:
+    data = {
         "match": {"home": "A", "away": "B", "date": "2026-08-22", "league": "E0"},
         "overall": "direct_bet",
         "markets": [],
@@ -90,36 +40,152 @@ def test_build_recommendation_enriches_even_when_llm_json_omits_the_fields():
         "confidence": "high",
         "limitations": [],
         "prediction_basis": "team_history_and_market",
-    })
+    }
+    data.update(overrides)
+    return json.dumps(data)
+
+
+# --- _extract_forecast_diagnostics ---
+
+def test_extracts_diagnostics_from_a_successful_forecast_payload():
+    payload = _forecast_payload(cold_start_risk=True, feature_completeness=0.62, unknown_team=True)
+    assert _extract_forecast_diagnostics(payload) == {"cold_start_risk": True, "feature_completeness": 0.62, "unknown_team": True}
+
+
+def test_defaults_when_forecast_payload_is_none():
+    assert _extract_forecast_diagnostics(None) == {"cold_start_risk": False, "feature_completeness": None, "unknown_team": False}
+
+
+def test_defaults_when_forecast_payload_has_an_error():
+    payload = {"error": "boom", "status": "tool_error"}
+    assert _extract_forecast_diagnostics(payload) == {"cold_start_risk": False, "feature_completeness": None, "unknown_team": False}
+
+
+# --- _build_recommendation: diagnostics enrichment ---
+
+def test_build_recommendation_enriches_even_when_llm_json_omits_the_fields():
     cfg = _make_config()
-    messages = [
-        SystemMessage(content="sys"),
-        _forecast_tool_message("forecast_league", cold_start_risk=True, feature_completeness=0.4, unknown_team=False),
-        AIMessage(content=llm_json),
-    ]
+    payload = _forecast_payload(cold_start_risk=True, feature_completeness=0.4, unknown_team=False)
 
     recommendation = _build_recommendation(
-        text=llm_json, match_info={"home_team": "A", "away_team": "B", "date": "2026-08-22"},
-        messages=messages, config=cfg,
+        text=_valid_llm_json(), match_info={"home_team": "A", "away_team": "B", "date": "2026-08-22"},
+        forecast_payload=payload, research_evidence={"availability": "x", "form_context": "y"}, config=cfg,
     )
 
     assert recommendation["cold_start_risk"] is True
     assert recommendation["feature_completeness"] == 0.4
-    assert recommendation["overall"] == "direct_bet"  # rest of the LLM's answer preserved
+    assert recommendation["overall"] == "direct_bet"
 
 
 def test_build_recommendation_enriches_the_parse_failure_fallback_too():
     cfg = _make_config()
-    messages = [
-        _forecast_tool_message("forecast_league", cold_start_risk=True, feature_completeness=0.3, unknown_team=True),
-        AIMessage(content="not valid json at all"),
-    ]
+    payload = _forecast_payload(cold_start_risk=True, feature_completeness=0.3, unknown_team=True)
 
     recommendation = _build_recommendation(
         text="not valid json at all", match_info={"home_team": "A", "away_team": "B", "date": "2026-08-22"},
-        messages=messages, config=cfg,
+        forecast_payload=payload, research_evidence=None, config=cfg,
     )
 
     assert recommendation["overall"] == "insufficient_data"
     assert recommendation["cold_start_risk"] is True
     assert recommendation["unknown_team"] is True
+
+
+# --- A30 backstop ---
+
+def test_backstop_forces_insufficient_data_when_forecast_payload_is_none():
+    """The Burnley/Bournemouth shape that motivated A30: LLM claims a
+    confident no_bet with a populated prediction_basis, but no forecast ever
+    actually ran."""
+    cfg = _make_config()
+
+    recommendation = _build_recommendation(
+        text=_valid_llm_json(overall="no_bet", prediction_basis="team_history_and_market"),
+        match_info={"home_team": "A", "away_team": "B", "date": "2026-08-22"},
+        forecast_payload=None, research_evidence=None, config=cfg,
+    )
+
+    assert recommendation["overall"] == "insufficient_data"
+    assert recommendation["markets"] == []
+    assert recommendation["prediction_basis"] == "unknown"
+    assert any("Forced insufficient_data" in note for note in recommendation["limitations"])
+
+
+def test_backstop_forces_insufficient_data_when_forecast_payload_has_an_error():
+    cfg = _make_config()
+
+    recommendation = _build_recommendation(
+        text=_valid_llm_json(overall="direct_bet"),
+        match_info={"home_team": "A", "away_team": "B", "date": "2026-08-22"},
+        forecast_payload={"error": "no models found", "status": "tool_error"},
+        research_evidence=None, config=cfg,
+    )
+
+    assert recommendation["overall"] == "insufficient_data"
+
+
+def test_backstop_leaves_a_genuine_forecast_backed_no_bet_untouched():
+    cfg = _make_config()
+    payload = _forecast_payload(cold_start_risk=False, feature_completeness=1.0, unknown_team=False)
+    llm_json = _valid_llm_json(overall="no_bet", markets=[{
+        "market": "btts", "selection": "yes", "recommendation_type": "no_bet",
+        "current_odds": None, "min_odds": 1.5, "ml_probability": 0.5,
+        "implied_probability": 0.5, "value_edge": 0.0,
+    }])
+
+    recommendation = _build_recommendation(
+        text=llm_json, match_info={"home_team": "A", "away_team": "B", "date": "2026-08-22"},
+        forecast_payload=payload, research_evidence={"availability": "x", "form_context": "y"}, config=cfg,
+    )
+
+    assert recommendation["overall"] == "no_bet"
+    assert len(recommendation["markets"]) == 1
+
+
+# --- A32 research coverage downgrade ---
+
+def test_research_coverage_downgrade_lowers_confidence_when_availability_missing():
+    cfg = _make_config()
+    payload = _forecast_payload(cold_start_risk=False, feature_completeness=1.0, unknown_team=False)
+
+    recommendation = _build_recommendation(
+        text=_valid_llm_json(confidence="high"),
+        match_info={"home_team": "A", "away_team": "B", "date": "2026-08-22"},
+        forecast_payload=payload,
+        research_evidence={"availability": "No results found.", "form_context": "won last 3"},
+        config=cfg,
+    )
+
+    assert recommendation["confidence"] == "medium"
+    assert any("Research coverage gap" in note for note in recommendation["limitations"])
+
+
+def test_research_coverage_downgrade_caps_at_low_with_two_gaps():
+    cfg = _make_config()
+    payload = _forecast_payload(cold_start_risk=False, feature_completeness=1.0, unknown_team=False)
+
+    recommendation = _build_recommendation(
+        text=_valid_llm_json(confidence="high"),
+        match_info={"home_team": "A", "away_team": "B", "date": "2026-08-22"},
+        forecast_payload=payload,
+        research_evidence={"availability": "No results found.", "form_context": "TOOL_PERMANENTLY_UNAVAILABLE: no key"},
+        config=cfg,
+    )
+
+    assert recommendation["confidence"] == "low"
+
+
+def test_research_coverage_downgrade_leaves_full_coverage_untouched():
+    cfg = _make_config()
+    payload = _forecast_payload(cold_start_risk=False, feature_completeness=1.0, unknown_team=False)
+
+    recommendation = _build_recommendation(
+        text=_valid_llm_json(confidence="high"),
+        match_info={"home_team": "A", "away_team": "B", "date": "2026-08-22"},
+        forecast_payload=payload,
+        research_evidence={"availability": "no injuries", "form_context": "won last 3"},
+        config=cfg,
+    )
+
+    assert recommendation["confidence"] == "high"
+    assert not any("Research coverage gap" in note for note in recommendation["limitations"])
