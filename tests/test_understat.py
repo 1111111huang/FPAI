@@ -240,3 +240,87 @@ def test_update_raw_matches_xg_empty_understat(tmp_path):
     result = update_raw_matches_xg(pd.DataFrame(), mock_db, mapping_path=str(mapping))
 
     assert result["updated"] == 0
+
+
+def _make_db_manager_with_league(raw_rows: list[tuple]) -> MagicMock:
+    """Like _make_db_manager, but rows carry a league column and execute()
+    respects a `WHERE league = ?` parameter, so it can actually distinguish
+    a scoped query from an unscoped one (unlike the plain mock above, which
+    always returns the same fetchdf() regardless of the SQL/params passed)."""
+    raw_df = pd.DataFrame(raw_rows, columns=["match_id", "date", "home_team", "away_team", "league"])
+    raw_df["date"] = pd.to_datetime(raw_df["date"])
+
+    def _execute(query, params=None):
+        result = MagicMock()
+        if params:
+            result.fetchdf.return_value = raw_df[raw_df["league"] == params[0]].drop(columns=["league"])
+        else:
+            result.fetchdf.return_value = raw_df.drop(columns=["league"])
+        return result
+
+    mock_conn = MagicMock()
+    mock_conn.execute.side_effect = _execute
+    mock_conn.__enter__ = MagicMock(return_value=mock_conn)
+    mock_conn.__exit__ = MagicMock(return_value=False)
+
+    mock_db = MagicMock()
+    mock_db.connection.return_value = mock_conn
+    return mock_db
+
+
+def test_update_raw_matches_xg_unscoped_can_lose_a_real_match_to_the_wrong_league():
+    """US#141: without league scoping, an unrelated competition's identically
+    (or exactly, as here) named team can win the fuzzy/exact match ahead of
+    the correct one, causing a real match to be silently reported unmatched.
+    """
+    raw_rows = [
+        ("match-e0", "2024-05-19", "Arsenal", "Everton", "E0"),
+        ("match-swe", "2024-05-19", "AIK", "Everston", "SWE"),
+    ]
+    mock_db = _make_db_manager_with_league(raw_rows)
+
+    understat_df = pd.DataFrame([{
+        "date": pd.Timestamp("2024-05-19"),
+        "home_team": "Arsenal",
+        "away_team": "Everston",  # misspelling of E0's "Everton" that exactly matches SWE's own club name
+        "xg_h": 1.23,
+        "xg_a": 0.87,
+    }])
+
+    import tempfile
+    with tempfile.TemporaryDirectory() as tmp:
+        mapping = f"{tmp}/mapping.json"
+        with open(mapping, "w") as fh:
+            fh.write("{}")
+        result = update_raw_matches_xg(understat_df, mock_db, mapping_path=mapping, league=None)
+
+    # "unmatched" here counts raw_matches rows left without an xG update (both
+    # the E0 and SWE rows), not input understat_df rows -- see update_raw_matches_xg.
+    assert result["matched"] == 0
+    assert result["unmatched"] == 2
+
+
+def test_update_raw_matches_xg_scoped_by_league_resolves_correctly():
+    raw_rows = [
+        ("match-e0", "2024-05-19", "Arsenal", "Everton", "E0"),
+        ("match-swe", "2024-05-19", "AIK", "Everston", "SWE"),
+    ]
+    mock_db = _make_db_manager_with_league(raw_rows)
+
+    understat_df = pd.DataFrame([{
+        "date": pd.Timestamp("2024-05-19"),
+        "home_team": "Arsenal",
+        "away_team": "Everston",
+        "xg_h": 1.23,
+        "xg_a": 0.87,
+    }])
+
+    import tempfile
+    with tempfile.TemporaryDirectory() as tmp:
+        mapping = f"{tmp}/mapping.json"
+        with open(mapping, "w") as fh:
+            fh.write("{}")
+        result = update_raw_matches_xg(understat_df, mock_db, mapping_path=mapping, league="E0")
+
+    assert result["matched"] == 1
+    assert result["unmatched"] == 0

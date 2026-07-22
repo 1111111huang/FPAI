@@ -149,6 +149,7 @@ def update_raw_matches_xg(
     understat_df: pd.DataFrame,
     db_manager: "DuckDBManager",
     mapping_path: str = "config/team_mapping.json",
+    league: str | None = None,
 ) -> dict[str, int]:
     """Match Understat xG rows to raw_matches by date+team and UPDATE the database.
 
@@ -156,6 +157,15 @@ def update_raw_matches_xg(
         understat_df: DataFrame with columns date, home_team, away_team, xg_h, xg_a.
         db_manager: DuckDBManager instance for database access.
         mapping_path: Path to team_mapping.json for name normalisation.
+        league: If provided, scope both the raw_matches candidate rows and the
+            fuzzy team-name match pool to this league only (US#141). Without
+            this, once more than one competition's rows exist in raw_matches,
+            the fuzzy-match candidate pool would silently mix every
+            competition's team names together. Understat only covers EPL
+            today (see LEAGUE_MAP in fetcher.py), so this has no practical
+            effect yet, but closes the same structural gap resolve_match_ids
+            (fotmob/merge.py) has, for whenever that changes. Omitted (None)
+            preserves the pre-US#141 behavior (matches every row).
 
     Returns:
         Dict with keys 'matched', 'updated', 'unmatched'.
@@ -163,10 +173,13 @@ def update_raw_matches_xg(
     if understat_df.empty:
         return {"matched": 0, "updated": 0, "unmatched": 0}
 
+    query = "SELECT match_id, date, home_team, away_team FROM raw_matches"
+    params: list[str] = []
+    if league is not None:
+        query += " WHERE league = ?"
+        params.append(league)
     with db_manager.connection() as conn:
-        raw = conn.execute(
-            "SELECT match_id, date, home_team, away_team FROM raw_matches"
-        ).fetchdf()
+        raw = conn.execute(query, params).fetchdf()
 
     if raw.empty:
         return {"matched": 0, "updated": 0, "unmatched": len(understat_df)}

@@ -10,6 +10,7 @@ from typing import Any
 import mlflow
 import yaml
 
+from src.logic.competition_registry import DEFAULT_REGISTRY_PATH, list_context_keys
 from src.logic.target_registry import list_target_definitions, get_target_definition
 from src.utils.logger import get_logger
 
@@ -17,6 +18,38 @@ LOGGER = get_logger(__name__)
 
 SELECTION_CONFIG_PATH = Path("config/model_selection.yaml")
 DEFAULT_MODEL_DIR = Path("models")
+
+# US#110: "league" used to be the one and only competition_specific bucket
+# name in config/model_selection.yaml, back when every competition_specific
+# competition shared it. It's kept as a deprecated alias for "E0" (the
+# competition that bucket actually held) rather than removed outright, so an
+# old script/habit calling `--context league` doesn't silently do nothing —
+# it must NOT be reinterpreted as "all competition_specific competitions".
+_DEPRECATED_CONTEXT_ALIASES = {"league": "E0"}
+
+
+def _resolve_context_alias(context: str | None) -> str | None:
+    if context in _DEPRECATED_CONTEXT_ALIASES:
+        resolved = _DEPRECATED_CONTEXT_ALIASES[context]
+        LOGGER.warning("context='%s' is a deprecated alias for '%s' -- update callers.", context, resolved)
+        return resolved
+    return context
+
+
+def _default_contexts(registry_path: str | Path = DEFAULT_REGISTRY_PATH) -> list[str]:
+    """Return the full set of context buckets to process when --context is omitted.
+
+    US#110: this used to be the hardcoded literal ["league", "international"],
+    which meant a second competition_specific competition's runs were silently
+    never selected at all (or worse, wrongly grouped with E0's) by a bare
+    `select-best-models` call. Now derived from the competition registry so a
+    newly-registered competition is picked up automatically.
+    """
+    try:
+        return list_context_keys(registry_path)
+    except (FileNotFoundError, ValueError) as exc:
+        LOGGER.warning("Falling back to default contexts -- could not read competition registry: %s", exc)
+        return ["E0", "international"]
 
 # Metrics where lower = better
 _LOWER_IS_BETTER = {"log_loss", "mae", "rmse", "test_log_loss", "test_mae", "test_rmse"}
@@ -60,6 +93,7 @@ class ModelSelector:
         config_path: str | Path = SELECTION_CONFIG_PATH,
         model_dir: str | Path = DEFAULT_MODEL_DIR,
         computable_features: set[str] | None = None,
+        registry_path: str | Path = DEFAULT_REGISTRY_PATH,
     ) -> None:
         self.config_path = Path(config_path)
         self.model_dir = Path(model_dir)
@@ -70,13 +104,19 @@ class ModelSelector:
         # predate this guard) — see run_select_best_models in main.py for how
         # this is populated in the real CLI path.
         self.computable_features = computable_features
+        # US#110: which config/competitions.yaml to consult for the default
+        # (--context omitted) set of contexts to process. Overridable so tests
+        # can register a fictional second competition_specific competition
+        # without touching the real registry.
+        self.registry_path = Path(registry_path)
         self.client = mlflow.tracking.MlflowClient()
 
     def load_config(self) -> dict[str, Any]:
+        empty = {"contexts": {ctx: {} for ctx in _default_contexts(self.registry_path)}}
         if not self.config_path.exists():
-            return {"contexts": {"league": {}, "international": {}}}
+            return empty
         with self.config_path.open("r", encoding="utf-8") as fh:
-            return yaml.safe_load(fh) or {"contexts": {"league": {}, "international": {}}}
+            return yaml.safe_load(fh) or empty
 
     def _save_config(self, config: dict[str, Any]) -> None:
         self.config_path.parent.mkdir(parents=True, exist_ok=True)
@@ -280,11 +320,18 @@ class ModelSelector:
             if target
             else [d.name for d in list_target_definitions() if d.name != "home_win"]
         )
-        contexts = [context] if context else ["league", "international"]
+        # US#110: "league" is a deprecated alias for "E0", resolved here so a
+        # `--context league` caller lands in the right bucket instead of
+        # silently meaning "all competition_specific competitions" (that flat
+        # binary was the bug this story fixes). Omitting --context entirely
+        # still means "every registered context", derived from the registry.
+        context = _resolve_context_alias(context)
+        default_contexts = _default_contexts(self.registry_path)
+        contexts = [context] if context else default_contexts
 
         config = self.load_config()
         config.setdefault("contexts", {})
-        for ctx in ["league", "international"]:
+        for ctx in default_contexts:
             config["contexts"].setdefault(ctx, {})
 
         changed = False

@@ -346,12 +346,20 @@ class ForecastService:
             # or one explicitly tiered 'general_purpose', must fall back to the
             # market-odds-only path automatically rather than silently
             # cold-starting a mislabeled 'team_history_and_market' result.
+            #
+            # US#110: the model-context bucket is now keyed off the competition's
+            # own competition_id (e.g. "E0", "SWE"), not a flat tier-derived
+            # "league" string — so two competition_specific competitions never
+            # collide over the same config/model_selection.yaml entry.
             registry_path = self.config_path.parent / "config" / "competitions.yaml"
             try:
-                tier = get_competition_definition(league, registry_path=registry_path).tier
+                competition_def = get_competition_definition(league, registry_path=registry_path)
+                tier = competition_def.tier
+                resolved_competition_id = competition_def.competition_id
             except ValueError:
                 tier = "general_purpose"
-            effective_context = "international" if tier == "general_purpose" else "league"
+                resolved_competition_id = None
+            effective_context = "international" if tier == "general_purpose" else resolved_competition_id
 
         if effective_context == "international":
             # US#86: compute MKT features from odds only, no team history needed
@@ -369,7 +377,11 @@ class ForecastService:
                 league=league, odds_h=odds_h, odds_d=odds_d, odds_a=odds_a,
                 over25_odds=over25_odds, ah_line=ah_line, ah_home_odds=ah_home_odds, ah_away_odds=ah_away_odds,
             )
-            context = "league"
+            # US#110: effective_context is already the resolved competition_id
+            # (e.g. "E0") in this branch — never None here, since a None
+            # resolved_competition_id only happens together with tier ==
+            # "general_purpose", which takes the "international" branch above.
+            context = effective_context
             # US#108: build_for_match's own zero-history detection, distinct from
             # the feature_completeness-based cold_start_risk computed below.
             unknown_team = bool(feature_row["_unknown_team"].iloc[0])

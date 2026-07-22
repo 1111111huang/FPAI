@@ -3,23 +3,88 @@
 # tier: "general_purpose" (market-odds-only, works for any competition)
 #       or "competition_specific" (full team-form feature set; player
 #       features are added here in Phase 14c, gated by enabled_feature_groups).
+#
+# US#133: OFF/DEF/OPP_ADJ/STRENGTH/INTERACTION are split into per-dependency
+# sub-tags (_GOALS/_SHOTS/_CORNERS) instead of one bare family tag, so a
+# competition whose data source is missing shots/SOT/corners entirely (e.g.
+# Sweden's Allsvenskan, football-data.co.uk "New Leagues" format -- goals and
+# 1X2 odds only) can enable "goals" sub-features while omitting "shots"/
+# "corners" ones, rather than falling back to cold-start imputation of a
+# wholesale-missing column with another competition's mean. See
+# src/logic/feature_groups.py for the classification and
+# ModelManager._load_selected_features for where this is enforced.
+#
+# US#127: DIS (cards) is now a real, enforced tag (previously listed here but
+# not actually gated by any code -- a docstring-only claim in US#133). Two
+# new corner-dependent sub-tags, CTX_CORNERS and H2H_CORNERS, close the
+# residual gap US#133 flagged (CTX_HOME/AWAY_CORNERS_STD_R5, H2H_CORNERS_R5
+# previously passed through ungated regardless of enabled_feature_groups).
+#
+# US#129: optional `available_targets` list, keyed off src/logic/
+# target_registry.py's TARGET_REGISTRY names. Omit the key entirely (as E0
+# and international do below) to mean "no restriction -- every registered
+# target is trainable," which is unchanged pre-US#129 behavior. Set it when
+# a competition's data source doesn't populate the raw column(s) a target's
+# labels need (e.g. a future Sweden entry would omit home_corners/
+# away_corners/total_corners, since football-data.co.uk's "New Leagues" CSV
+# has no hc/ac columns at all -- US#125's _NULL_COLUMNS). `train-forecast-
+# suite --context <id>` uses this to skip unavailable targets with a logged
+# reason instead of letting prepare_training_data's dropna(subset=["target"])
+# silently drop every row (BUG-001's failure shape, on labels this time).
 competitions:
   E0:
     competition_id: E0
     tier: competition_specific
     league_code: E0
     enabled_feature_groups:
-      - "OFF"
-      - DEF
+      - OFF_GOALS
+      - OFF_SHOTS
+      - OFF_CORNERS
+      - DEF_GOALS
+      - DEF_SHOTS
+      - DEF_CORNERS
+      - OPP_ADJ_GOALS
+      - OPP_ADJ_SHOTS
+      - OPP_ADJ_CORNERS
+      - STRENGTH_GOALS
+      - STRENGTH_SHOTS
+      - INTERACTION_GOALS
+      - INTERACTION_SHOTS
       - DIS
       - CTX
+      - CTX_CORNERS
+      - H2H_CORNERS
       - MKT
-      - STRENGTH
-      - INTERACTION
       - EFFICIENCY
       - SQUAD
     player_data_sources:
       - fotmob
+  SWE:
+    competition_id: SWE
+    tier: competition_specific
+    league_code: SWE
+    enabled_feature_groups:
+      - OFF_GOALS
+      - DEF_GOALS
+      - OPP_ADJ_GOALS
+      - STRENGTH_GOALS
+      - INTERACTION_GOALS
+      - CTX
+      - MKT
+      - EFFICIENCY
+    player_data_sources: []
+    # US#129: Sweden's football-data.co.uk "New Leagues" source has no
+    # hc/ac (corners) columns at all, so the 3 corners targets are excluded
+    # here. home_win (legacy) is also excluded, matching E0's convention of
+    # not listing it (E0 leaves available_targets unset entirely, but its
+    # default training suite -- run_train_forecast_suite -- likewise skips
+    # home_win; see tests/test_target_availability.py).
+    available_targets:
+      - result_3way
+      - btts
+      - home_goals
+      - away_goals
+      - total_goals
   international:
     competition_id: international
     tier: general_purpose

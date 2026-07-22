@@ -3,6 +3,34 @@
 Maps a source's team-name spelling (Understat, FotMob, etc.) onto the
 canonical names already used in raw_matches, via an explicit JSON mapping
 file with a Levenshtein-distance fallback for names not yet mapped.
+
+League-scoping (US#141): `TeamNameMapper`/`map_team` deliberately has no
+`league` parameter and `config/team_mapping.json` remains one flat
+`{name: short_name}` namespace shared by every competition -- this was
+reviewed, not overlooked. The mapper's exact-lookup path (no `candidates`
+passed) has negligible cross-league collision risk in practice (it would
+require two competitions using the literal same full club name string,
+which we checked and found no instance of between EPL and Sweden's
+Allsvenskan). The real risk was in the *fuzzy-match candidate pool* two call
+sites built from an unscoped `SELECT ... FROM raw_matches` (no `league`
+filter): `resolve_match_ids` (`src/ingestion/fotmob/merge.py`) and
+`update_raw_matches_xg` (`src/ingestion/understat/merge.py`). Both are fixed
+to accept an optional `league` parameter that scopes the raw_matches query
+(and therefore the fuzzy candidate pool) to one competition -- see the
+regression tests in `tests/test_fotmob_merge.py` /
+`tests/test_understat.py` proving a same-date, similarly-named team from an
+unrelated competition can otherwise steal a real match away from its correct
+resolution (not just theoretically collide -- a legitimate row silently
+turns up unmatched).
+
+A `(league, name)` composite key inside `TeamNameMapper`/`team_mapping.json`
+itself was considered and deferred (mirroring the "reserve the seam, don't
+build it yet" precedent from US#90, `documents/FRAI_TECHSPEC.md` Section
+27.2): every real call site now scopes its own candidate pool by league
+before calling `map_team`, which closes the practical risk without needing
+the mapping file itself to become league-aware. Revisit this if a 3rd/4th
+competition's club names turn up an actual exact-lookup collision the
+scoped-candidate-pool fix above doesn't cover.
 """
 
 from __future__ import annotations

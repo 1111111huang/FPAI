@@ -20,7 +20,12 @@ from src.evaluation.mlflow_cleanup import MLflowStoreCleanup, save_cleanup_repor
 from src.forecast import ForecastService
 from src.ingestion import CSVLoader, FootballDataScraper
 from src.logic.target_registry import get_target_definition, list_target_definitions
-from src.logic.competition_registry import get_competition_definition, resolve_feature_subset_for_tier
+from src.logic.competition_registry import (
+    get_competition_definition,
+    is_target_available,
+    list_context_keys,
+    resolve_feature_subset_for_tier,
+)
 from src.models import (
     LRModel,
     ModelFactory,
@@ -82,7 +87,11 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Run refresh-data on a standing weekly schedule (blocks until interrupted).",
     )
     schedule_refresh_parser.add_argument("--league", type=str, default="E0", help="League code for understat fetch (default: E0).")
-    schedule_refresh_parser.add_argument("--day-of-week", type=str, default="sun", help="Cron day-of-week (default: sun).")
+    schedule_refresh_parser.add_argument(
+        "--day-of-week", type=str, default=None,
+        help="Cron day-of-week. Defaults per league if omitted: 'sun' for E0, 'tue,fri' for SWE (US#132 -- "
+        "Allsvenskan rounds can fall midweek, so a single weekly slot isn't tight enough).",
+    )
     schedule_refresh_parser.add_argument("--hour", type=int, default=3, help="Cron hour, 0-23 (default: 3).")
     schedule_refresh_parser.add_argument("--minute", type=int, default=0, help="Cron minute, 0-59 (default: 0).")
 
@@ -99,8 +108,9 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Optional model override. Defaults to lr for classification and rf_regressor for regression.",
     )
     train_target_parser.add_argument(
-        "--context", type=str, default="league", choices=["league", "international"],
-        help="Training context: league (all features) or international (MKT_* only).",
+        "--context", type=str, default="E0",
+        help="Training context: a registered competition_id (e.g. E0, international). "
+             "'league' is accepted as a deprecated alias for E0.",
     )
 
     # train-forecast-suite
@@ -111,8 +121,9 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Optional subset of forecast targets to train.",
     )
     train_suite_parser.add_argument(
-        "--context", type=str, default="league", choices=["league", "international"],
-        help="Training context: league (all features) or international (MKT_* only).",
+        "--context", type=str, default="E0",
+        help="Training context: a registered competition_id (e.g. E0, international). "
+             "'league' is accepted as a deprecated alias for E0.",
     )
 
     # forecast
@@ -148,8 +159,8 @@ def _build_parser() -> argparse.ArgumentParser:
     compare_parser.add_argument("--output_path", type=str, default=None, help="Optional output report path.")
     compare_parser.add_argument("--format", type=str, default="csv", choices=["csv", "json", "html"], help="Report format.")
     compare_parser.add_argument(
-        "--context", type=str, default=None, choices=["league", "international"],
-        help="Filter MLflow runs by context tag (league or international).",
+        "--context", type=str, default=None,
+        help="Filter MLflow runs by context tag (a competition_id, e.g. E0, international).",
     )
 
     # sweep-target
@@ -173,6 +184,13 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     diagnose_parser.add_argument("--model_path", type=str, required=True, help="Path to local model artifact.")
     diagnose_parser.add_argument("--output_path", type=str, default="reports/diagnostics.json", help="Path for diagnostics JSON output.")
+    diagnose_parser.add_argument(
+        "--context", type=str, default="E0",
+        help="Competition context the artifact was trained for (e.g. E0, SWE, international). "
+        "US#131: previously hardcoded to E0's feature set/training data regardless of which "
+        "artifact was passed -- diagnosing a non-E0 model silently used the wrong feature list "
+        "and training rows.",
+    )
 
     # permutation-importance
     importance_parser = subparsers.add_parser("permutation-importance", help="Run permutation importance analysis on a trained model")
@@ -253,8 +271,9 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Restrict selection to one target.",
     )
     select_parser.add_argument(
-        "--context", type=str, default=None, choices=["league", "international"],
-        help="Restrict selection to one context.",
+        "--context", type=str, default=None,
+        help="Restrict selection to one context (a competition_id, e.g. E0, international, "
+             "or the deprecated alias 'league' for E0). Omit to process every registered context.",
     )
     select_parser.add_argument("--dry-run", action="store_true", help="Print proposed changes without writing.")
     select_parser.add_argument("--min_improvement", type=float, default=0.005, help="Minimum metric improvement required to replace current selection.")
@@ -363,7 +382,7 @@ def run_fetch_understat(
         LOGGER.error("No Understat data returned — check league/season args and network.")
         return
     LOGGER.info("Fetched %d Understat match records total.", len(understat_df))
-    result = update_raw_matches_xg(understat_df, db_manager)
+    result = update_raw_matches_xg(understat_df, db_manager, league=league)
     LOGGER.info("xG update | matched=%d | updated=%d | unmatched=%d", result["matched"], result["updated"], result["unmatched"])
     if rebuild_features:
         LOGGER.info("Rebuilding feature store with xG data...")
@@ -407,7 +426,7 @@ def run_fetch_fotmob(
         LOGGER.error("No FotMob data returned — check league/season args and network.")
         return
     LOGGER.info("Fetched %d FotMob player-match rows total.", len(fotmob_df))
-    result = upsert_player_match_stats(fotmob_df, db_manager)
+    result = upsert_player_match_stats(fotmob_df, db_manager, league=league)
     LOGGER.info(
         "FotMob upsert | matched=%d | unmatched=%d | players=%d | rows=%d",
         result["matched"], result["unmatched"], result["players_upserted"], result["rows_upserted"],
@@ -479,8 +498,45 @@ def run_fetch_lineups(
     print(f"fetch-lineups complete | matches_scanned={len(fotmob_ids)} | rows_upserted={total}")
 
 
+def run_refresh_sweden_data(app_settings: AppSettings, db_manager: DuckDBManager) -> None:
+    """Fetch + upsert Sweden's Allsvenskan CSV and rebuild the feature store (US#132).
+
+    Sweden's source (football-data.co.uk's new/SWE.csv, US#124) is a single
+    static full-history file, not per-season pages -- it doesn't go through
+    run_scrape/run_ingest, which are built around EPL's season-link-discovery
+    directory-scrape convention. Sweden also has no Understat/FotMob
+    integration (declined scope, Phase 20c), so unlike EPL's run_refresh_data
+    path this deliberately does NOT chain fetch-understat, fetch-fotmob, or
+    lineup backfill -- just fetch, upsert, and a feature-store rebuild (the
+    same rebuild step run_ingest performs for EPL after ingesting new rows).
+    """
+    from src.ingestion.football_data.sweden_fetcher import fetch_sweden_csv
+    from src.ingestion.football_data.sweden_loader import upsert_sweden_matches
+
+    LOGGER.info("Executing command: refresh-data | league=SWE")
+    sweden_df = fetch_sweden_csv()
+    result = upsert_sweden_matches(sweden_df, db_manager)
+    LOGGER.info(
+        "Sweden CSV upsert | rows_in=%d | skipped=%d | upserted=%d",
+        result["rows_in"], result["skipped"], result["upserted"],
+    )
+    factory = FeatureFactory()
+    features_df = factory.compute_rolling_stats(window=app_settings.settings.rolling_window)
+    factory.save_features(features_df)
+    LOGGER.info("refresh-data (SWE): feature store rebuilt.")
+    LOGGER.info("refresh-data complete.")
+
+
 def run_refresh_data(app_settings: AppSettings, db_manager: DuckDBManager, league: str = "E0", force: bool = False) -> None:
-    """Run scrape → ingest → fetch-understat → fetch-fotmob → fetch-lineups in sequence (US#81, US#95, US#101)."""
+    """Run scrape → ingest → fetch-understat → fetch-fotmob → fetch-lineups in sequence (US#81, US#95, US#101).
+
+    US#132: league="SWE" takes a different, shorter path (run_refresh_sweden_data)
+    -- Sweden's single-CSV source and lack of Understat/FotMob integration make
+    the EPL scrape/ingest/understat/fotmob/lineup chain below inapplicable.
+    """
+    if league == "SWE":
+        run_refresh_sweden_data(app_settings, db_manager)
+        return
     LOGGER.info("Executing command: refresh-data | league=%s | force=%s", league, force)
     run_scrape(app_settings, force=force)
     run_ingest(app_settings, db_manager, force=force)
@@ -492,17 +548,33 @@ def run_refresh_data(app_settings: AppSettings, db_manager: DuckDBManager, leagu
     LOGGER.info("refresh-data complete.")
 
 
-def run_schedule_refresh(league: str = "E0", day_of_week: str = "sun", hour: int = 3, minute: int = 0) -> None:
-    """Run refresh-data on a standing weekly schedule (US#109). Blocks until interrupted."""
+def run_schedule_refresh(league: str = "E0", day_of_week: str | None = None, hour: int = 3, minute: int = 0) -> None:
+    """Run refresh-data on a standing schedule (US#109). Blocks until interrupted.
+
+    US#132: league="SWE" builds a separate scheduler (build_sweden_refresh_scheduler)
+    with its own, tighter default cadence (twice weekly) rather than EPL's weekly
+    Sunday one -- see data_refresh_scheduler.py's SWEDEN_JOB_ID comment for the
+    live-data evidence justifying this. day_of_week=None (the default) picks the
+    right per-league default cadence; pass an explicit value to override either.
+    """
     import time
 
-    from src.scheduling.data_refresh_scheduler import build_weekly_refresh_scheduler
+    from src.scheduling.data_refresh_scheduler import (
+        DEFAULT_SWEDEN_DAY_OF_WEEK,
+        build_sweden_refresh_scheduler,
+        build_weekly_refresh_scheduler,
+    )
 
-    scheduler = build_weekly_refresh_scheduler(day_of_week=day_of_week, hour=hour, minute=minute, league=league)
+    if league == "SWE":
+        effective_day_of_week = day_of_week or DEFAULT_SWEDEN_DAY_OF_WEEK
+        scheduler = build_sweden_refresh_scheduler(day_of_week=effective_day_of_week, hour=hour, minute=minute)
+    else:
+        effective_day_of_week = day_of_week or "sun"
+        scheduler = build_weekly_refresh_scheduler(day_of_week=effective_day_of_week, hour=hour, minute=minute, league=league)
     scheduler.start()
     LOGGER.info(
-        "schedule-refresh: weekly refresh-data scheduler started | day_of_week=%s hour=%d minute=%d league=%s",
-        day_of_week, hour, minute, league,
+        "schedule-refresh: refresh-data scheduler started | day_of_week=%s hour=%d minute=%d league=%s",
+        effective_day_of_week, hour, minute, league,
     )
     try:
         while True:
@@ -528,7 +600,7 @@ def _xgb_params_for_target(target_name: str, model_key: str) -> dict:
     return {"objective": "binary:logistic", "eval_metric": "logloss"}
 
 
-def run_train_target(target_name: str, model_name: str | None = None, context: str = "league") -> Path:
+def run_train_target(target_name: str, model_name: str | None = None, context: str = "E0") -> Path:
     """Train one registry-backed forecast target model."""
     definition = get_target_definition(target_name)
     selected_model = (model_name or _default_model_for_target(definition.name)).strip().lower()
@@ -543,17 +615,30 @@ def run_train_target(target_name: str, model_name: str | None = None, context: s
         xgb_params = _xgb_params_for_target(target_name, selected_model)
         model = model_cls(**xgb_params)
 
-    # US#88: resolve tier/feature-subset through the competition registry
-    # instead of a hardcoded context check. "league" has no fixed competition_id
-    # input yet, so it maps to the one currently-registered league competition (E0).
-    competition_id = "international" if context == "international" else "E0"
+    # US#110: --context IS the competition_id to train for (e.g. "E0", "SWE",
+    # "international"), resolved through the registry rather than a hardcoded
+    # binary. "league" is kept as a deprecated alias for "E0" -- the one
+    # competition_specific competition it used to unambiguously mean -- so it
+    # keeps working rather than silently doing the wrong thing.
+    competition_id = "E0" if context == "league" else context
     competition_def = get_competition_definition(competition_id)
+    if not is_target_available(competition_def, definition.name):
+        # US#129: fail fast and explicitly rather than let prepare_training_data's
+        # dropna(subset=["target"]) silently drop every row (BUG-001's failure
+        # shape, on labels instead of features) when this competition's data
+        # source doesn't populate the raw column(s) this target's labels need.
+        raise ValueError(
+            f"Target '{definition.name}' is not available for competition '{competition_id}': "
+            f"its data source does not populate the raw column(s) label_columns={definition.label_columns} "
+            "require. See config/competitions.yaml's available_targets for this competition, or use "
+            "train-forecast-suite, which skips unavailable targets automatically."
+        )
     feature_subset = resolve_feature_subset_for_tier(competition_def.tier)
     model_manager = ModelManager(
         model=model,
         target_config={"target": definition.name},
         feature_subset=feature_subset,
-        context=context,
+        context=competition_id,
         competition_id=competition_id,
     )
     model_path = model_manager.run_pipeline()
@@ -561,11 +646,52 @@ def run_train_target(target_name: str, model_name: str | None = None, context: s
     return model_path
 
 
-def run_train_forecast_suite(targets: list[str] | None = None, context: str = "league") -> None:
-    """Train the full forecast model suite or a selected target subset."""
-    selected_targets = targets or [
+def run_train_forecast_suite(targets: list[str] | None = None, context: str = "E0") -> None:
+    """Train the full forecast model suite or a selected target subset.
+
+    US#129: some competitions' data sources don't populate every raw column
+    a target's labels depend on (e.g. Sweden's football-data.co.uk "New
+    Leagues" CSV has no hc/ac corners columns at all -- see US#125's
+    _NULL_COLUMNS). Rather than let those targets reach
+    ModelManager.prepare_training_data(), where dropna(subset=["target"])
+    would silently drop every training row (BUG-001's failure shape, on
+    labels instead of features) and raise a confusing "No rows left" error,
+    resolve this competition's `available_targets` (config/competitions.yaml,
+    via src/logic/competition_registry.py) up front and skip anything not on
+    it, with an explicit, readable reason logged per skipped target.
+    """
+    requested_targets = targets or [
         definition.name for definition in list_target_definitions() if definition.name != "home_win"
     ]
+
+    # --context "league" is a deprecated alias for "E0" -- resolve the same
+    # way run_train_target does, so the availability check looks at the
+    # right competition's registry entry.
+    competition_id = "E0" if context == "league" else context
+    competition_def = get_competition_definition(competition_id)
+
+    selected_targets: list[str] = []
+    for target_name in requested_targets:
+        if is_target_available(competition_def, target_name):
+            selected_targets.append(target_name)
+            continue
+        label_columns = get_target_definition(target_name).label_columns
+        LOGGER.info(
+            "train-forecast-suite: SKIPPING target=%s for context=%s | reason: this target's labels "
+            "require raw_matches column(s) %s, which are not in competition '%s's available_targets "
+            "(config/competitions.yaml) -- its data source does not populate them for every row. "
+            "Add '%s' to that competition's available_targets once its source provides this data.",
+            target_name, context, label_columns, competition_id, target_name,
+        )
+
+    if not selected_targets:
+        LOGGER.warning(
+            "train-forecast-suite: no available targets to train for context=%s -- every requested "
+            "target was skipped (see SKIPPING log lines above for reasons).",
+            context,
+        )
+        return
+
     LOGGER.info("Training forecast suite targets: %s | context=%s", ", ".join(selected_targets), context)
     for target_name in selected_targets:
         run_train_target(target_name, context=context)
@@ -1138,7 +1264,13 @@ def run_status(db_manager: DuckDBManager) -> None:
         selector = ModelSelector()
         config = selector.load_config()
         contexts_data = config.get("contexts", {})
-        for ctx in ["league", "international"]:
+        # US#110: show every registered context (e.g. E0, a future SWE,
+        # international), plus any legacy bucket still on disk that the
+        # current registry no longer accounts for -- rather than the old
+        # hardcoded ["league", "international"], which silently hid any
+        # second competition_specific competition's selections.
+        known_contexts = sorted(set(list_context_keys()) | set(contexts_data.keys()))
+        for ctx in known_contexts:
             ctx_data = contexts_data.get(ctx, {})
             if not ctx_data:
                 print(f"  [{ctx}] no selections")
@@ -1168,7 +1300,7 @@ def main() -> None:
     elif args.command == "schedule-refresh":
         run_schedule_refresh(
             league=str(args.league),
-            day_of_week=str(args.day_of_week),
+            day_of_week=args.day_of_week,
             hour=int(args.hour),
             minute=int(args.minute),
         )
@@ -1213,6 +1345,7 @@ def main() -> None:
             target_name=str(args.target),
             model_path=str(args.model_path),
             output_path=str(args.output_path),
+            competition_id=str(args.context),
         )
         print(f"Diagnostics report written to {report_path}")
     elif args.command == "permutation-importance":

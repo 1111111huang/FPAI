@@ -1437,3 +1437,646 @@ Off-season no-op behavior (no new matches available) and measurable `MAX(date)` 
 ### 30.3 Relationship to the Web App's Own Scheduler
 
 This scheduler is deliberately **independent** of `documents/app_user_stories.md`'s W08 (the web app's own scheduler infrastructure), which was not yet built at the time US#109 shipped. Ownership of "which process actually runs the weekly refresh in production" was an explicitly open question this story did not resolve — `schedule-refresh` exists as a standalone CLI entry point today so it can be run under any supervisor immediately, with the option to fold it into W08 later if that turns out to be the better long-term home. Do not assume the two schedulers have been unified; as of this writing they remain two separate, independently-invokable mechanisms.
+
+## 31. Phase 18: Per-Competition Model Context (Completed — US#110)
+
+### 31.1 Motivation
+
+Section 27.2 established two model tiers — `general_purpose` (market-odds-only, usable for any competition) and `competition_specific` (full team-form feature set) — via the `config/competitions.yaml` registry. Only one `competition_specific` competition (`E0`) exists today, but a second (Sweden's Allsvenskan, `league_code: SWE`) is planned in a later, separate story. Before that registration can happen safely, a latent bug had to be fixed: `ForecastService.forecast_upcoming()` resolved model context as a flat binary —
+
+```python
+effective_context = "international" if tier == "general_purpose" else "league"
+```
+
+— meaning **every** `competition_specific` competition, present or future, shared the single `contexts.league` bucket in `config/model_selection.yaml`. Had a second competition_specific competition been trained under this code, its models would have silently collided with (overwritten, or been overwritten by) E0's entries in that file — the collision would surface as a runtime feature-shape mismatch or a mislabeled prediction, not a loud error at training time.
+
+### 31.2 Per-Competition Context Resolution
+
+**Verified against `src/forecast/forecast_service.py`:** `forecast_upcoming()`'s registry lookup (added by US#107, Section 29.2) now also captures `competition_def.competition_id`, not just `.tier`. `effective_context` is `"international"` for any `general_purpose`-tier (or unregistered) competition — unchanged from US#107 — but for a `competition_specific` competition it is now the competition's own `competition_id` (e.g. `"E0"`), not the literal string `"league"`. `_load_context_models(context)` is unchanged (already generic on the context string); it now simply gets called with `"E0"` instead of `"league"`.
+
+**Verified against `src/logic/competition_registry.py`:** a new `list_context_keys(registry_path=DEFAULT_REGISTRY_PATH) -> list[str]` derives the full set of `model_selection.yaml` context-bucket keys from the registry: every `competition_specific` `competition_id`, sorted, plus a single trailing `"international"` bucket shared by *all* `general_purpose` competitions (that collapsing is intentional and predates this story — `general_purpose` models are market-odds-only and usable for any competition, so they don't need per-competition buckets). Today this returns `["E0", "international"]`; once `SWE` is registered `competition_specific`, it will return `["E0", "SWE", "international"]` with no further code change.
+
+**Verified against `src/models/model_manager.py`:** `ModelManager.__init__`'s `context` parameter default changed from `"league"` to `"E0"`, matching its existing `competition_id: str = "E0"` default (both already existed pre-US#110; this story just made their defaults consistent). The `context` value is used verbatim as the `tags.context` MLflow tag `ModelSelector._fetch_eligible_runs()` filters on.
+
+### 31.3 ModelSelector: Dynamic Context Enumeration & Deprecated Alias
+
+**Verified against `src/utils/model_selection.py`:** `ModelSelector.run()`'s default behavior (when `--context` is omitted) changed from the hardcoded `contexts = ["league", "international"]` to `contexts = _default_contexts(self.registry_path)`, which calls `list_context_keys()` (Section 31.2) — so a newly-registered `competition_specific` competition is automatically promoted into its own bucket by a bare `select-best-models` invocation, rather than silently never being selected (the old hardcoded pair had no way to "see" a third competition). `ModelSelector.__init__` gained an optional `registry_path` constructor argument (defaults to `config/competitions.yaml`) so this is testable without touching the real registry.
+
+`"league"` is retained as a **deprecated alias for `"E0"`**, not removed and not reinterpreted as "all competition_specific competitions" — `_resolve_context_alias()` maps it before use (in `ModelSelector.run()`) and logs a warning, so `select-best-models --context league` (or a caller still passing that string) keeps promoting into `contexts.E0` exactly as before, rather than silently changing behavior underneath an unmigrated caller. `main.py`'s `run_train_target`/`run_train_forecast_suite` apply the same one-line alias check before resolving `competition_id` via the registry.
+
+`_fetch_eligible_runs`, `_best_run`, and `_select_for_target_context` were **not** changed — they already treated `context` as an opaque string, with no embedded assumption about its value being `"league"` or `"international"`.
+
+### 31.4 CLI & Status Surfaces
+
+**Verified against `main.py`:** `train-target`/`train-forecast-suite --context` now accepts any competition_id string (default `"E0"`; the `choices=["league", "international"]` restriction was removed, since valid values are registry-dependent, not a fixed compile-time set) and is passed straight through to `ModelManager` as both `context=competition_id` and `competition_id=competition_id` — previously these were two separately-resolved values (`context` was the raw CLI string, `competition_id` was hardcoded `"E0"`/`"international"`) that could in principle drift apart; they're now derived from the same resolved value. The `status` command's per-context listing and `src/tools/model_tools.get_model_status()` (MCP-facing) both switched from the hardcoded `["league", "international"]` pair to `list_context_keys()` (unioned with whatever keys are actually present on disk, so a stale/legacy bucket still displays rather than being silently hidden).
+
+### 31.5 Migration
+
+`config/model_selection.yaml`'s `contexts.league` block was renamed to `contexts.E0` — verified programmatically to be byte-for-byte equivalent aside from the key rename (no model paths, metrics, or MLflow run IDs were touched). `experiments/optuna_xgb_classifier.yaml` and `experiments/optuna_xgb_regressor.yaml` (the actual Optuna sweep configs that produce E0's champion runs) had their `context: league` field updated to `context: E0` to match, and `src/utils/sweep_runner.py`'s `OptunaRunner` fallback default (used when a sweep config omits `context` entirely) was updated from `"league"` to `"E0"` for the same reason — without this, a future optuna sweep run omitting `context` would have tagged itself `"league"`, which `ModelSelector` would no longer look for under the new `"E0"` bucket.
+
+### 31.6 Tests
+
+New `tests/test_per_competition_context.py` (6 tests): `list_context_keys()` unit tests (real registry regression; a fictional second `competition_specific` competition getting its own bucket; the `general_purpose`-collapse-to-one-bucket regression); an end-to-end `ForecastService` test registering a fictional second competition_specific competition (`"T2"`) alongside E0 with distinct dummy models and confirming each forecast call returns the correct model's output with no cross-contamination in either direction; two `ModelSelector` tests (default-context enumeration writing two independent buckets from mocked MLflow runs; the `--context league` alias resolving to `contexts.E0`). Sweden (`SWE`) itself is **not** registered anywhere by this story — deliberately out of scope, planned as a separate follow-up.
+
+## 32. `match_id` League Collision Fix (Completed — US#140)
+
+### 32.1 Motivation
+
+Section 31 noted Sweden's Allsvenskan (`league_code: SWE`) is planned as a second `competition_specific` competition in a later story. Before any second league's matches can be safely ingested, a latent collision bug in `src/utils/helpers.py`'s `generate_match_id(date, home_team, away_team)` had to be fixed: it hashed only those three normalized fields, with **no league/competition component**. Since `match_id` is the dedup/join key throughout `raw_matches`, `feature_store`, and downstream forecast payloads, two different competitions with a match on the same date between similarly-named teams would have produced an identical `match_id` — a real collision would have silently merged two unrelated matches (one competition's row overwriting or joining against the other's).
+
+### 32.2 `generate_match_id` Signature Change
+
+`generate_match_id(date, home_team, away_team, league)` — `league` is now a required fourth positional/keyword argument, hashed alongside the other three via the same `_normalize()` (trim + lowercase + whitespace-collapse) before SHA-256. This is a breaking change: every previously-computed `match_id` value differs from what the new signature produces for the same date/teams, since the hash payload itself changed shape (`date|home|away` → `date|home|away|league`).
+
+The sole call site, `src/ingestion/football_data/loader.py`'s `process_v1_csv()`, now passes `league=league_code` (the same value it already writes into `raw_matches.league`) — no new normalization scheme was introduced; the function uses whichever canonical league value the caller already has.
+
+### 32.3 League-Code Canonicalization
+
+Investigated whether `raw_matches.league`, `competitions.yaml`'s `league_code`, `model_selection.yaml` context keys, and the CLI `--league` flag were already inconsistent: they were not — only `E0` exists today and every touchpoint already uses that exact uppercase casing. Since hashing lowercases before comparing, mismatched casing alone can't actually create a `match_id` collision; the risk is purely about *stored* casing drifting (e.g. a future ingestion run writing `raw_matches.league = "swe"` while `competitions.yaml` registers `SWE`, breaking lookups that join on exact string equality elsewhere).
+
+Rather than building a new league-registry validation subsystem, a small check was added to the one place all of those touchpoints already trace back to: `src/logic/competition_registry.py`'s `_load_registry()` now rejects any `competitions.yaml` entry whose `league_code` is not already uppercase (`league_code != league_code.upper()`), raising `ValueError` at load time. `league_code: null` (the `international` entry) is unaffected. This catches a future casing typo (e.g. registering Sweden as `swe` instead of `SWE`) at config-load time rather than letting it reach `match_id` hashing or a `model_selection.yaml` context lookup.
+
+### 32.4 Migration of Existing Data
+
+The existing `data/fpai_core.db` (122MB, 3,800 E0 matches spanning 2016–2026) had every `raw_matches.match_id` computed under the old scheme, and both `feature_store` (3,800 rows) and `raw_player_match_stats` (145,445 FotMob per-player rows, Section 27.3) are keyed by that same `match_id` value with no `league` column of their own.
+
+**A full re-ingest (`python main.py ingest --force`) was considered and rejected.** There is direct precedent for "just re-ingest" as a migration strategy (Section 27.3's migration note: CSV re-ingestion is idempotent because `raw_matches` inserts are keyed by `match_id`) — but that precedent assumed `match_id`'s *computation* was stable across re-ingests, which this story breaks by construction. Tracing `run_ingest(force=True)` in `main.py` shows it only clears and rebuilds `raw_matches` and `feature_store` from the CSVs on disk; it does not touch `raw_player_match_stats` or `match_lineups`. A full re-ingest under the new `match_id` scheme would have silently orphaned all 145,445 FotMob player-stat rows (a separate, slow, rate-limited pipeline — not something to casually re-run to recover from a migration).
+
+Instead, `scripts/migrate_match_id_add_league.py` performs an **in-place remap**: for every `raw_matches` row it recomputes `match_id` via the new `generate_match_id(date, home_team, away_team, league)` using that row's own stored `league` value, then updates `match_id` in `raw_matches`, `feature_store`, and `raw_player_match_stats` (via `UPDATE ... FROM` against a temporary old→new mapping table) inside a single transaction. `match_lineups` is untouched — it keys off FotMob's own `fotmob_match_id`, not `generate_match_id`'s output, so it was never affected. Before writing anything, the script asserts the newly-computed ids contain no duplicates (would abort rather than risk a merge); it is idempotent (a second run reports zero rows changed) and supports `--dry-run` for a report-only pass.
+
+**Verified against the real database** (`data/fpai_core.db.pre_us140_backup` kept as a pre-migration backup): all 3,800 `raw_matches` rows' new `match_id` values match `generate_match_id()`'s output exactly; row counts are identical before/after in all three tables (`raw_matches`: 3,800, `feature_store`: 3,800, `raw_player_match_stats`: 145,445); zero orphaned rows in either dependent table after migration; a join of `raw_matches ⋈ feature_store` and `raw_matches ⋈ raw_player_match_stats` produces byte-identical result sets (by `(date, home_team, away_team, ...)` content) before and after — proving the remap preserved not just row counts but the correct match-to-feature/match-to-player association, not just avoided a count mismatch that could still hide a shuffled join. `match_lineups` (83,622 rows) and `processed_files` (20 tracked CSVs) were confirmed unchanged.
+
+### 32.5 Tests
+
+`tests/test_helpers.py`: existing determinism/normalization tests updated to the 4-argument signature; new tests assert two different leagues with the same date/teams produce different `match_id` values, and that omitting `league` raises `TypeError`.
+
+`tests/test_competition_registry.py`: new tests for the casing check (Section 32.3) — a lowercase `league_code` in a temp registry raises `ValueError`, `league_code: null` is unaffected.
+
+`scripts/test_migrate_match_id_add_league.py` (8 tests, new): built against a synthetic DuckDB mirroring production shape (old-scheme `match_id` in `raw_matches`/`feature_store`/`raw_player_match_stats`) — dry-run makes no changes; migration recomputes ids matching `generate_match_id()`; row counts preserved in dependent tables; no orphaned dependent rows; each `feature_store`/`raw_player_match_stats` row still joins to the *same logical match* it belonged to before (not just "no orphans," which alone wouldn't catch a shuffled remap); idempotent on a second run; a missing `raw_matches` table is a no-op; `build_id_mapping()` matches `generate_match_id()` directly.
+
+Full suite: 530 passed, 23 skipped, zero regressions.
+
+Existing tests that constructed a `config/model_selection.yaml` fixture under the old `contexts.league` key (`tests/test_forecast_league_feature_alignment.py`, `tests/test_forecast_registry_fallback.py`, `tests/test_unknown_team_flag.py`) were updated to `contexts.E0` — each failed correctly (`FileNotFoundError: No target model artifacts found for context 'E0'`) against the pre-fix bucket lookup before being updated, confirming the fixtures were actually exercising the changed code path rather than passing vacuously. Full suite: 518 passed / 23 skipped, zero regressions.
+
+---
+
+## 33. Granular Competition-Registry Feature Gating (Completed — US#133)
+
+### 33.1 Motivation
+
+Section 32 fixed `match_id` collisions in preparation for registering Sweden's Allsvenskan (`league_code: SWE`) as a second `competition_specific` competition — still a separate, later story. Sweden's data source (football-data.co.uk's "New Leagues" CSV format) has **no shots, shots-on-target, corners, or cards columns at all** — only goals and 1X2 market odds.
+
+`config/competitions.yaml`'s `enabled_feature_groups` gates which of `config/schema.yaml`'s 167 `selected_features` a competition's models train on, via family tags (`OFF`, `DEF`, `DIS`, `CTX`, `MKT`, `STRENGTH`, `INTERACTION`, `EFFICIENCY`, `SQUAD`). The problem: `OFF`, `DEF`, and `OPP_ADJ` each mix goals-based features (computable for Sweden) with shots/SOT/corners-based features (not computable). A bare family tag can't express "goals yes, shots no" — if Sweden's future registry entry naively enabled `OFF`/`DEF` wholesale, the shot/corner sub-features would be 100%-NaN-from-source and cold-start-imputed (US#59, a separate mechanism) with a column mean computed across the *whole* `feature_store` table — i.e. Sweden's shot features would silently be filled with EPL's typical shot volume, actively misleading rather than merely lower-signal.
+
+This story's scope is purely the *gating* mechanism: making it expressive enough for a competition to exclude shot/corner-dependent features from its enabled set in the first place. Making the cold-start imputation itself competition-aware (rather than pooling across all competitions) is separate follow-on work, not addressed here.
+
+### 33.2 Feature Classification
+
+Every one of the 167 `selected_features` was classified against `src/features/feature_factory.py`'s actual computation (not name-pattern guessing) into which raw columns it depends on. Five families mix dependencies and needed splitting:
+
+| Family | Sub-tags | Split by |
+|---|---|---|
+| `OFF` | `OFF_GOALS` / `OFF_SHOTS` / `OFF_CORNERS` | `fthg`/`ftag`/xG/luck vs. `hs`/`as`/`hst`/`ast`/shot_accuracy vs. `hc`/`ac` |
+| `DEF` | `DEF_GOALS` / `DEF_SHOTS` / `DEF_CORNERS` | same, defensive side (incl. `save_rate`, itself `ast`-derived → SHOTS) |
+| `OPP_ADJ` | `OPP_ADJ_GOALS` / `OPP_ADJ_SHOTS` / `OPP_ADJ_CORNERS` | goals-scored/conceded + GOAL_MATCHUP vs. SOT-scored vs. corners-scored/conceded + CORNER_MATCHUP |
+| `STRENGTH` | `STRENGTH_GOALS` / `STRENGTH_SHOTS` | `STRENGTH_Goal_Diff` (goals) vs. `STRENGTH_SoT_Diff` (SOT) — the family is not uniformly one or the other |
+| `INTERACTION` | `INTERACTION_GOALS` / `INTERACTION_SHOTS` | two goals-diff features vs. one SOT-diff feature — same mixed-family issue |
+
+`EFFICIENCY_*` (`documents/FRAI_TECHSPEC.md`'s own Section 27 language called it "shifted attack-versus-defense matchup ratios," ambiguous by name alone) was verified directly: all three features are `OFF_HOME_FTHG_R5 / (DEF_AWAY_FTHG_R5 + 0.1)` and its mirror/diff — entirely goals-ratio-based, no shots/corners term anywhere. Left as a single unsplit `EFFICIENCY` tag.
+
+`DIS` (cards: `hy`/`ay`/`hr`/`ar`) already has its own group tag and was not touched.
+
+Two families were found to have gone completely ungated before this story — `OPP_ADJ_*` and `H2H_*` were never listed in E0's `enabled_feature_groups` at all, yet flowed through unfiltered, because (pre-US#133) `ModelManager._load_selected_features` only ever checked for the `"SQUAD"` tag; every other family tag was effectively decorative. Splitting `OPP_ADJ` into real sub-tags therefore introduces first-time enforcement for that family (E0's registry entry now must list all three `OPP_ADJ_*` sub-tags to keep resolving the same features it did before). `H2H` was left as-is (not named in this story's scope, and has no natural single family tag to split from) — see the residual gap noted in 33.4.
+
+**Residual gap, explicitly out of scope for this story:** `CTX_HOME_CORNERS_STD_R5`/`CTX_AWAY_CORNERS_STD_R5` and `H2H_CORNERS_R5` are also corners-dependent (verified in `_compute_temporal_features`/`_compute_h2h_rolling`) but were not split out of `CTX`/`H2H`, since those families weren't named in the story's explicit "OFF/DEF/OPP_ADJ" scope and had no pre-existing gating tag to extend. A competition that opts out of corners today (by omitting the `*_CORNERS` sub-tags) still receives these three features. A follow-up could extend the same `resolve_feature_group_tag()` mechanism to `CTX`/`H2H` if/when that becomes a real problem (e.g. once Sweden is actually registered).
+
+Also worth flagging: `OFF_HOME_XG_R3`/`DEF_HOME_XGA_R3`/`OFF_HOME_LUCK_R3` and their away/EMA equivalents are Understat-sourced (a third raw-data dependency, distinct from football-data.co.uk's shots/corners columns) and were classified under `_GOALS` by elimination, since this story's scope was bounded to goals-vs-shots-vs-corners. Whether Understat covers Sweden's Allsvenskan is unverified; if it doesn't, these features would face the same wholesale-missing-column problem this story was built to solve, just via a different tag. Not addressed here.
+
+### 33.3 Mechanism
+
+New `src/logic/feature_groups.py::resolve_feature_group_tag(feature_name) -> str | None`: a pure, deterministic classifier (not a config file) implementing the table above, returning `None` for anything not in a split family (pass-through, unchanged behavior). One collision required special-casing: `DEF_ANCHOR_HOME`/`DEF_ANCHOR_AWAY` (Phase 15's SQUAD-gated defensive-anchor feature, Section 28) also starts with `DEF_`, which would otherwise be misclassified as `DEF_GOALS`; explicitly excluded before the generic `DEF_` branch.
+
+`ModelManager._load_selected_features` (`src/models/model_manager.py`) applies this after the existing US#97 SQUAD-prefix strip, inside the same try/except (registry-unavailable-or-unknown-competition still degrades to a logged warning + unfiltered features, as before): a feature whose `resolve_feature_group_tag()` is `None` passes through unconditionally; a feature with a resolved tag is kept only if that exact tag is present in the competition's `enabled_feature_groups`.
+
+`config/competitions.yaml`'s `E0` entry lists all 17 resulting tags (the 9 old bare tags minus `OFF`/`DEF`/`STRENGTH`/`INTERACTION`, plus the 12 new sub-tags: 3 each for `OFF`/`DEF`/`OPP_ADJ`, 2 each for `STRENGTH`/`INTERACTION`) so it keeps resolving the identical 167-feature set. `international` (`general_purpose` tier) is unaffected — its fixed 13-feature `MKT_*` list is resolved via `feature_subset` before `_load_selected_features` ever reaches this gating code.
+
+### 33.4 Tests
+
+`tests/test_feature_group_gating.py` (new, 48 tests):
+- Parametrized `resolve_feature_group_tag()` classification covering every split-family sub-tag plus the "not gated here" families (`DIS`, `CTX` — including the corners-std residual-gap case, `MKT`, `EFFICIENCY`, `H2H`, `SQUAD`-managed prefixes) and the `DEF_ANCHOR_*` collision case.
+- Regression: `get_competition_definition("E0")`'s new `enabled_feature_groups` resolves to exactly `config/schema.yaml`'s 167-feature list, both directly and end-to-end through a real `ModelManager("E0")._load_selected_features()` call.
+- New capability: a synthetic goals-only competition (`enabled_feature_groups` = `*_GOALS` sub-tags + `DIS`/`CTX`/`MKT`/`EFFICIENCY`, no `*_SHOTS`/`*_CORNERS`/`SQUAD`) correctly excludes every shots- and corners-dependent feature named in the story's own acceptance criteria while keeping goals-only features, `DIS`, and the pre-existing `SQUAD` exclusion behavior intact.
+
+Full suite: 578 passed, 23 skipped, zero regressions (up from 530 passed at Section 32, exactly the +48 new tests here, net of no removals).
+
+Sweden (`SWE`) itself is **not** registered by this story — deliberately out of scope, matching Section 32's precedent.
+
+---
+
+## 34. Competition-Aware Cold-Start Imputation (Completed — US#134)
+
+### 34.1 Motivation
+
+Section 33 (US#133) closed the *selection*-layer half of the "second competition with a structurally different data profile" problem: a competition can now exclude shot/corner-dependent sub-features from its `enabled_feature_groups` instead of receiving them cold-start-imputed from another competition's column mean. Section 33.1 explicitly flagged the other half as out of scope: "making the cold-start imputation itself competition-aware... is separate follow-on work." This story is that follow-on work.
+
+Even for a feature family a competition *does* legitimately keep enabled, `_apply_cold_start_imputation()` (`src/features/feature_factory.py`, US#59) fills NaN rolling-feature values with a column-wise mean as the last step of feature computation. The concern was two-fold: (1) a genuinely-cold-start gap in one competition (e.g. a team's first two matches, R5 window not yet full) would get diluted by unrelated rows from another competition if the mean were computed globally, and (2) more acutely, a feature family a competition structurally can't populate at all would have its entire column silently backfilled with another competition's typical values — actively misleading, not merely noisy.
+
+### 34.2 Verifying the Bug Was Real
+
+Before changing anything, the actual call structure was traced rather than assumed:
+
+- `FeatureFactory.compute_rolling_stats()` — the offline pipeline that builds `feature_store` — selects `SELECT * ... FROM raw_matches` with **no league filter**, builds one `features` DataFrame spanning every competition present in the table, and calls `_apply_cold_start_imputation(features)` as the final step. With only `E0` in the table today, a flat `.mean()` over "the whole table" and "this competition's rows" are mathematically identical, which is exactly why this never surfaced. Once a second competition's rows share the table, they stop being identical — confirmed by a regression test that reproduces the exact contaminated value (see 34.4).
+- `FeatureFactory.build_for_match()` — the live spot-forecast path — was checked too, since the story explicitly warned not to assume every call site behaves the same way. Its `raw_df` query filters by team name (`WHERE home_team = ? OR away_team = ? ...`), not by league, and its `combined` history is only ever one specific team pair's matches plus a single synthetic row for one target match. In practice this is already effectively single-competition per call. It was fixed identically anyway (34.3) for defense-in-depth: nothing today prevents a future competition's team name from colliding with an existing one, and the fix is free once the shared helper supports it.
+
+### 34.3 Mechanism
+
+`_apply_cold_start_imputation(features, league=None)` gained an optional `league` parameter: a `pandas.Series` positionally aligned to `features` (not index-joined — passed through `.to_numpy()` before use as a `groupby` key, so it's immune to any index-alignment surprises from upstream merges). When supplied and not entirely null, fill values are computed as:
+
+```python
+group_means = features[imputable].groupby(league.to_numpy()).transform("mean")
+features[imputable] = features[imputable].fillna(group_means)
+```
+
+`groupby(...).transform("mean")` was chosen over manually computing `groupby(...).mean()` and joining it back, because `transform` broadcasts each group's mean back to every row of that group in one step, and — critically — a group whose entire column is `NaN` produces `NaN` via `transform`, with no cross-group fallback. That is exactly the desired behavior for case (2) in 34.1: a competition that structurally can't populate a feature family keeps `NaN` for that family rather than inheriting another competition's typical values. When `league` is omitted (or entirely null), the function falls back to the original flat `.mean()` — byte-identical to pre-story behavior, so any caller that doesn't pass `league` is unaffected.
+
+Both real call sites were updated to supply it:
+
+- `compute_rolling_stats()`: the `raw_matches` SQL query now selects `league` alongside the existing columns; `league_by_match_id = raw_df.set_index("match_id")["league"]` is built once, and `features["match_id"].map(league_by_match_id)` is passed to the imputation call.
+- `build_for_match()`: its own `raw_df` query and its empty-history fallback `pd.DataFrame(columns=[...])` both gained a `league` column; the **synthetic row** (the one match actually being forecast) sets `"league": league` directly from the function's own `league` parameter rather than looking it up, since it *is* the target competition by definition. `combined` (history + synthetic row concatenated) therefore carries `league` for every row, and `combined.set_index("match_id")["league"]` feeds the same `features["match_id"].map(...)` pattern.
+
+**Deliberately not persisted onto `feature_store`.** `league` is threaded through only as a local, in-memory `Series` for the `groupby` call — it is never added as a column to the `features` DataFrame that `compute_rolling_stats()`/`build_for_match()` return. Two reasons: `FeatureFactory.save_features()` emits a `FLOAT` column definition for every non-`match_id` column in the DataFrame it's given, so a string `league` column would either break the schema or need special-casing; and every downstream consumer of `feature_store` (`ModelManager`, `ForecastService`, `src/tools/data_tools.py`) already builds an explicit `SELECT f.{feature_name}, ...` list sourced from the feature registry rather than `SELECT *`, so a persisted `league` column would just be dead weight, not something those call sites would ever pick up. Keeping it purely local avoids both problems and keeps this story's blast radius to the two functions that actually needed it.
+
+### 34.4 Tests
+
+New `tests/test_feature_factory.py::test_cold_start_imputation_is_scoped_per_competition`: builds a synthetic two-competition fixture — `E0` (`Alpha FC`, six home matches giving a real, non-NaN `OFF_HOME_FTHG_R5` of `3.0` on the sixth, plus `Gamma FC`'s first-ever home match as the genuine cold-start row under test) and a structurally unrelated `L2` competition (`Beta United`, much larger goal totals) — and runs `compute_rolling_stats()` twice, changing only one of `L2`'s raw goal values between runs. Asserts `Gamma FC`'s imputed `OFF_HOME_FTHG_R5` equals `E0`'s own mean (`3.0`) and is identical in both runs, while independently confirming `L2`'s own valid rolling value did change between runs (so the test is actually exercising cross-competition variation, not vacuously passing because nothing changed).
+
+Per the acceptance criterion's own instruction to verify the test would actually fail pre-fix: the fix was temporarily reverted (`git stash` on `feature_factory.py` alone) and the new test was re-run — it failed with `12.5`, exactly the predicted contaminated value (`mean(3.0, 22.0)`, the flat mean of `E0`'s and `L2`'s two valid column entries under the old global-mean code). The fix was then re-applied and the test re-run to confirm it passes.
+
+Full suite: 579 passed, 23 skipped, zero regressions (up from 578 passed at Section 33, exactly the one new test here).
+
+Sweden (`SWE`) itself is **not** registered by this story — deliberately out of scope, matching Section 32/33's precedent.
+
+## 35. Sweden CSV Fetch Path (Completed — US#124)
+
+### 35.1 Motivation
+
+Phase 20a's Sweden expansion needs a raw data source before any of the downstream work (US#125's `raw_matches` mapping, US#126's team-name mapping, US#132's refresh scheduling) can proceed. `football-data.co.uk` publishes Sweden's Allsvenskan differently from the main leagues `FootballDataScraper` (`src/ingestion/football_data/scraper.py`) already handles: instead of a per-season page (`englandm.php`) with one CSV link per season/league code (discovered via `SEASON_LINK_PATTERN`, e.g. `/2324/E0.csv`), Sweden's full 2012-present history ships as one static file at a fixed URL, `https://www.football-data.co.uk/new/SWE.csv`. Forcing this through the season-link-discovery machinery would mean inventing a fake "season link" to match a pattern that doesn't apply here, so this story adds a separate, simpler fetch function instead.
+
+### 35.2 Mechanism
+
+New `src/ingestion/football_data/sweden_fetcher.py::fetch_sweden_csv(timeout_seconds=30)`:
+
+- One `requests.get(SWEDEN_CSV_URL, headers=_HEADERS, timeout=timeout_seconds)` — no HTML parsing, no `BeautifulSoup`, no link discovery.
+- `_HEADERS` sets a browser-like `User-Agent`, matching the existing convention in `understat/fetcher.py` and `fotmob/fetcher.py` (both of which set the same style of header for the same reason — these endpoints have been observed to reject non-browser-like clients).
+- `response.raise_for_status()` propagates a bad response (429, 5xx) as `requests.HTTPError` to the caller uncaught — the same convention the other two fetchers use, rather than swallowing it locally.
+- The response body is parsed with `pandas.read_csv(io.StringIO(response.text))`. `Date` is then reparsed with `pd.to_datetime(..., dayfirst=True, errors="coerce")`, matching the DD/MM/YYYY convention `loader.py::process_v1_csv` already applies to the main-league CSVs.
+- `EXPECTED_COLUMNS` (the 25-column header confirmed live) is checked against the parsed DataFrame's actual columns; a mismatch logs a warning (source format drift) rather than raising, so a partial/changed file is visible without being fatal to the caller.
+
+The function returns the CSV's own columns unrenamed (`Country, League, Season, Date, Time, Home, Away, HG, AG, Res, PSCH, PSCD, PSCA, MaxCH, MaxCD, MaxCA, AvgCH, AvgCD, AvgCA, BFECH, BFECD, BFECA, B365CH, B365CD, B365CA`) — deliberately **fetch-and-parse only**. Mapping those columns into the `raw_matches` schema (`HG`→`fthg`, `AG`→`ftag`, `AvgCH/AvgCD/AvgCA`→`avgh/avgd/avga`-equivalent, `league='SWE'` tagging, `NULL` for columns this source doesn't provide such as shots/corners/cards) is explicitly out of scope here — that's US#125.
+
+`Season` here is a plain single year (e.g. `2012`, `2026`), not forced into the two-year `year1year2` code (`2526`) the main leagues use — intentionally left as-is for US#125 to handle on its own terms rather than pre-normalizing it here.
+
+### 35.3 Live Verification (2026-07-21)
+
+Re-fetched `https://www.football-data.co.uk/new/SWE.csv` directly (both via `curl` and via `requests`) to confirm the format documented when this story was scoped still held a day later:
+
+- **Row count:** 3,489 data rows (3,490 lines including header) — up from the 3,482-line count recorded at scoping time, consistent with ~7 additional match rows landing in the intervening day.
+- **Most recent match:** Orgryte 0-0 Djurgarden, 20/07/2026.
+- **Update cadence:** the response's `Last-Modified` header read `Mon, 20 Jul 2026 20:48:18 GMT` — the file was refreshed the same day its most recent matches were played. This is well inside the weekly `refresh-data` cadence assumption from Phase 17 (Section 30); no lag risk identified for this source at this time. (US#132 should still re-verify this against Allsvenskan's actual fixture calendar, since a single check can't rule out slower updates during other parts of the season.)
+- **Header/schema:** exact match to the documented 25-column header. `PSCH`/`PSCD`/`PSCA` (Pinnacle closing odds) were blank on 123 of 3,489 rows (concentrated in recent matches, as expected); `MaxC*`/`AvgC*`/`BFEC*`/`B365C*` were populated throughout.
+- **One new finding:** the live file's header line carries a UTF-8 BOM (`﻿Country,League,...`), not mentioned in the original scoping investigation. Confirmed this is a non-issue: pandas' default C parser auto-detects and strips a UTF-8 BOM, so `df.columns` comes back as plain `"Country"` with no artifact — no explicit `encoding="utf-8-sig"` was needed, but this is noted in the module docstring in case a future maintainer swaps the parsing approach (e.g. to the Python engine, which does not auto-strip BOMs the same way).
+- Both a plain `requests.get` (no headers) and one with the browser `User-Agent` returned HTTP 200 on this occasion — the 429-on-plain-request behavior noted at scoping time did not reproduce today. The `User-Agent` header is kept anyway, defensively, since a transient/intermittent rate-limit policy on the server side is exactly the kind of thing that shouldn't be re-litigated by removing the header and hoping.
+
+### 35.4 Tests
+
+New `tests/test_sweden_fetcher.py` (6 tests), all HTTP-mocked against a 3-row local fixture (`tests/fixtures/football_data_sweden_sample.csv`) — no live network access in the automated suite:
+
+- Successful fetch returns a DataFrame with the expected 25-column shape and correct values on a spot-checked row.
+- A browser-like `User-Agent` header is actually sent on the request.
+- `Date` is parsed day-first (`12/07/2026` → July 12, not December 7).
+- Rows with blank `PSCH`/`PSCD`/`PSCA` parse as `NaN` without being dropped or raising; rows with those columns populated parse as floats.
+- A 429 (or other non-2xx) response propagates as `requests.HTTPError`, matching the `understat`/`fotmob` fetcher convention.
+- A truncated/reshaped CSV (simulating source format drift) still returns a DataFrame and logs a warning rather than raising.
+
+Full suite: 589 passed / 23 skipped, zero regressions (up from 583 passed on this branch immediately prior — net new here is exactly this story's 6 tests).
+
+Sweden (`SWE`) itself is **not** registered as a competition by this story — deliberately out of scope, matching Section 32/33/34's precedent. This story only makes the raw data fetchable; US#125 is what actually gets it into `raw_matches`.
+
+## 36. Sweden raw_matches Normalization + Upsert (Completed — US#125)
+
+### 36.1 Motivation
+
+Section 35's `fetch_sweden_csv()` returns the Sweden CSV's own 25 columns, unrenamed, deliberately fetch-and-parse only. This story is the mapping step that actually gets Sweden rows into `raw_matches`, the same table EPL data lives in (differentiated by `league`), so that US#126 (team-name mapping) and later feature/model work have something to build on.
+
+### 36.2 Mechanism
+
+New `src/ingestion/football_data/sweden_loader.py::upsert_sweden_matches(df, db_manager, overwrite=False)`, following `loader.py::process_v1_csv` as the primary pattern reference:
+
+- **Direct mapping:** `Home`/`Away`/`Date` → `home_team`/`away_team`/`date`; `HG`/`AG` → `fthg`/`ftag`.
+- **`Time` deliberately dropped, not combined into `date`.** `loader.py`'s EPL path ignores `Time` entirely even though modern E0 CSVs carry one (never in its rename map, required-columns set, or final column selection) — matching that precedent avoids giving Sweden rows sub-day timestamp precision EPL rows don't have in the same shared `TIMESTAMP` column.
+- **Odds fallback (BUG-009/US#56 pattern):** `AvgCH/AvgCD/AvgCA` (closing average across bookmakers) map to `avgh/avgd/avga`, falling back **per field** to `B365CH/B365CD/B365CA` when the corresponding `AvgC*` value is blank. Verified per-field (not all-or-nothing row) behavior with a test where only `AvgCD` is blank.
+- **Judgment call — `odds_h/odds_d/odds_a` also populated.** The story's text only specifies the `avgh/avgd/avga` mapping. Sweden has no separate "always-present base" odds column distinct from the closing average the way EPL has `B365H/D/A` (the required field `avgh` falls back to at feature-computation time). Rather than leaving `odds_h/odds_d/odds_a` NULL, the same AvgC*-with-B365C*-fallback value is written to both `avgh/avgd/avga` and `odds_h/odds_d/odds_a`, so Sweden rows are usable by the odds-keyed strategy/backtest modules (`strategy_engine.py`, `backtester.py`) the same way EPL rows are. Flagged here for review since it goes beyond the story's literal text.
+- **`tier` left NULL, not defaulted through `map_league_code_to_tier`.** That function's fallback for an unrecognized code is `4`, a real English "League Two" tier value with no meaning for Sweden; storing it would be actively misleading. Confirmed `raw_matches.tier` is not read anywhere downstream of ingestion (`feature_factory.py` never selects it), so NULL has no functional impact.
+- **`hs/as/hst/ast/hc/ac/hy/ay/hr/ar/xg_h/xg_a/xga_h/xga_a/over25_odds/under25_odds/ah_line/ah_home_odds/ah_away_odds`** are always NULL for Sweden rows — this source has no data for any of them.
+- **Team names inserted as-is** (e.g. `"Malmo FF"`), passed only through `standardize_team_name` (whitespace normalization + a small EPL-specific alias map that's a no-op for Swedish names) — the exact, and only, normalization `loader.py`'s EPL path applies. `TeamNameMapper`/`config/team_mapping.json` fuzzy matching is deliberately not invoked — that's US#126.
+- **`match_id` via `generate_match_id(date, home_team, away_team, league="SWE")`** — the US#140 league-aware version. Verified in a test that the resulting hash differs from what the same date/teams would hash to under `league="E0"`.
+- **Row validity:** a row is skipped (not erroring the whole batch) if `Date` doesn't parse, `Home`/`Away` is blank, or `HG`/`AG` is missing (e.g. an unplayed fixture row) — mirrors `process_v1_csv`'s "skip rather than crash" posture for rows with missing critical odds.
+- **Idempotency:** `INSERT OR IGNORE` into `raw_matches` keyed on `match_id` (the primary key) by default — re-running against the same data (e.g. `refresh-data` re-fetching Sweden's whole single-file history weekly) adds no duplicate rows and raises no error. `overwrite=True` switches to `INSERT OR REPLACE`, the same escape hatch `process_v1_csv` offers.
+- **Table creation reused, not re-declared:** calls `CSVLoader._create_raw_matches_table(conn)` (the same static method the EPL path uses) rather than duplicating the DDL, so the two ingestion paths can never drift out of sync on schema.
+
+### 36.3 NULL-Tolerance Confirmation
+
+Read `loader.py`'s `_create_raw_matches_table` DDL directly: none of `hs/as/hst/ast/hc/ac/hy/ay/hr/ar/avgh/avgd/avga/xg_h/xg_a/xga_h/xga_a/over25_odds/under25_odds/ah_line/ah_home_odds/ah_away_odds/tier` carry a `NOT NULL` constraint (only `match_id` does, implicitly, as the `PRIMARY KEY`). This was also verified empirically, not just by reading the DDL: the new tests insert real rows with all of those columns `None` into a real (temp-file) DuckDB database via `db_manager.connection()` and assert the values read back as `NULL` — no constraint violation. **No `raw_matches` migration was needed for Sweden**, confirming the story's expectation.
+
+### 36.4 Season Convention
+
+Confirmed `raw_matches` has no `season` column at all — Sweden's single-calendar-year `Season` value was never going to collide with or need conversion to EPL's `year1year2` (`2526`) convention, since nothing downstream reads a season value off `raw_matches` in the first place.
+
+### 36.5 Tests
+
+New `tests/test_sweden_loader.py` (10 tests), building `fetch_sweden_csv`-shaped DataFrames in-memory rather than depending on live network:
+
+- Column mapping + `league='SWE'` tagging on a straightforward row, with all documented-NULL columns asserted `None`.
+- `AvgC*` fully blank → full fallback to `B365C*`.
+- Only `AvgCD` blank → per-field fallback (confirms the fallback isn't all-or-nothing across the row).
+- `match_id` matches `generate_match_id(..., league="SWE")` exactly, and differs from the `league="E0"` hash of the same date/teams (sanity check that league genuinely changes the hash, not just theoretically).
+- Calling the upsert twice with identical input data is a no-op the second time (`upserted: 0`) and leaves the row count unchanged — idempotency.
+- A row with blank `HG`/`AG` (unplayed fixture) is skipped, not errored; skip count reported correctly alongside a valid row in the same batch.
+- Blank/empty `Time` values don't block ingestion (the column is read but never used for `date`).
+- Team names are inserted with their raw CSV spelling, unchanged by any fuzzy-matching layer.
+- An empty input DataFrame is a no-op.
+- An end-to-end test: the real `tests/fixtures/football_data_sweden_sample.csv` fixture through `fetch_sweden_csv` (HTTP mocked) then `upsert_sweden_matches`, asserting the final `raw_matches` rows' `league`/`home_team`/`away_team`/`fthg`/`ftag` shape.
+
+Full suite: 599 passed / 23 skipped, zero regressions (up from 589 passed at Section 35 — net new here is exactly this story's 10 tests).
+
+Sweden (`SWE`) itself is still **not** registered as a competition by this story — that remains out of scope, matching Section 32/33/34/35's precedent. `raw_matches` now has real Sweden rows; US#126 (team-name mapping) is next.
+
+## 37. Allsvenskan Club Names in `config/team_mapping.json` (Completed — US#126)
+
+### 37.1 Motivation
+
+Section 36 (US#125) inserts Sweden rows into `raw_matches` using the CSV's own raw team-name spelling (e.g. `Malmo FF`, `Goteborg`, `Djurgarden`), passed only through `standardize_team_name`'s whitespace normalization — deliberately with no `TeamNameMapper`/`config/team_mapping.json` fuzzy-matching applied. This story closes that gap: it extends the flat `{full/variant name: canonical short name}` mapping file with an Allsvenskan section, following the exact structure/pattern already used for EPL clubs, and re-runs the Section 34 (US#141)-established Sweden/EPL collision check against the real names added.
+
+### 37.2 Sourcing the Real Team-Name List
+
+`data/fpai_core.db` (the `config.yaml`-configured DB path) did not exist in this worktree — US#125 only landed the ingestion code path, not a populated database. Per the story's fallback instruction, the real team-name list was sourced from a **live** `fetch_sweden_csv()` pull instead (3489 rows spanning 2012–2026). `df["Home"]`/`df["Away"]` yielded 36 distinct raw strings. Cross-checked against `sweden_loader.py`: `standardize_team_name`'s alias map is EPL-specific (`man utd`, `spurs`, etc.) and is a pure whitespace-normalization no-op for every one of these 36 Swedish names — so the 36 raw strings pulled live are exactly what ends up in `raw_matches.home_team`/`away_team` once US#125 actually runs against this data.
+
+Two of the 36 strings turned out to be the **same club under two different source-era spellings**, not two different clubs: `Oster` (32 rows, dated 2022-11-10 through 2025-11-09) and `Osters` (30 rows, dated 2013-04-01 through 2013-11-03) — non-overlapping date ranges, both referring to Östers IF (Växjö). Consolidated onto one canonical short name, `Oster` (the more recent, currently-relevant spelling). The remaining 34 raw strings are 34 distinct clubs — no other same-club spelling split was found among them (checked pairwise similarity across all 36 raw names with the mapper's own `_similarity_score`; only `Oster`/`Osters` scored at/above the 0.82 threshold, at 0.83).
+
+### 37.3 Mapping Entries Added
+
+81 new keys across 35 canonical clubs, in the same "full name / suffix-or-diacritic variant / short name" grouping the EPL section already uses (e.g. `Wolverhampton Wanderers` / `Wolverhampton Wanderers FC` / `Wolves`). For each club: the raw CSV spelling is its own canonical self-map (the value every variant resolves to, matching what's actually stored in `raw_matches`), plus a diacritic-restored form and the club's full official name, e.g.:
+
+- `IFK Göteborg`, `Göteborg` → `Goteborg`
+- `Djurgårdens IF`, `Djurgården` → `Djurgarden`
+- `Malmö FF` → `Malmo FF`
+- `Östers IF`, `Öster`, `Östers` → `Oster`
+- `Örebro SK`, `Örebro` → `Orebro`
+- `BK Häcken`, `Häcken` → `Hacken`
+
+The diacritic-restored and full-name variants exist so Understat/FotMob (both of which reference this same mapping file per `team_mapping.py`'s module docstring) resolve their own likely spelling of these clubs onto the same canonical value the raw CSV already uses — the same reason the EPL section carries `Brighton & Hove Albion FC` even though no raw football-data.co.uk CSV spells it that way.
+
+### 37.4 Collision Re-Check (Section 34/US#141 Pattern)
+
+Ran the mapper's own `_similarity_score` (Levenshtein-based, `min_similarity=0.82`) between every one of the 35 new canonical Sweden values plus every added full/diacritic-name variant, against every existing EPL key/value in the file — computed, not eyeballed. Result: **zero pairs at or above 0.82.** Highest scores found, recorded for posterity same as Section 34's review:
+
+| Score | Sweden name | EPL name |
+|---|---|---|
+| 0.56 | `Syrianska` | `Swansea` |
+| 0.50 | `Sundsvall` | `Sunderland` |
+| 0.50 | `Dalkurd FF` | `Cardiff` |
+
+All well clear of the threshold; no ambiguous cases requiring a judgment call. This confirms Section 34's finding still holds after the real Allsvenskan roster (not just a hypothetical one) was added.
+
+### 37.5 Tests
+
+New `tests/test_sweden_team_mapping.py` (5 tests):
+
+- All 36 raw Sweden team-name strings (the live-fetched list from §37.2) round-trip through `TeamNameMapper.map_team()` to their canonical short name.
+- `Oster`/`Osters` specifically resolve to the same canonical value (`Oster`).
+- A representative set of diacritic-restored and full official club names resolve to the correct canonical short form.
+- The §37.4 collision re-check itself runs as a regression test — reads the live `config/team_mapping.json`, partitions it into Sweden vs. EPL name sets, and asserts no pair scores `>= min_similarity`. Fails loudly if a future edit to either roster introduces a real collision.
+- A lightweight structural sanity check on `config/team_mapping.json` (valid JSON object, every key/value a non-empty string) — no dedicated schema test existed for this file before this story.
+
+Full suite: 604 passed / 23 skipped, zero regressions (up from 599 passed at Section 36 — net new here is exactly this story's 5 tests).
+
+Sweden (`SWE`) is still not registered as a competition (Section 32/33/34/35/36's precedent continues) — this story is scoped purely to the mapping file, per US#126's text.
+
+---
+
+## 38. Sweden Feature-Family Computability Audit + Residual Gating Gaps (Completed — US#127)
+
+### 38.1 Motivation
+
+Section 33 (US#133) built the goals/shots/corners sub-tag mechanism (`resolve_feature_group_tag()`) and flagged two things it deliberately left out of scope: (1) whether its own `STRENGTH`/`INTERACTION`/`EFFICIENCY` classification was actually correct, and (2) a residual gap — `CTX_HOME/AWAY_CORNERS_STD_R5` and `H2H_CORNERS_R5` are corners-dependent but were never gated by any tag, since neither `CTX` nor `H2H` had a pre-existing bare tag to split. This story (a) re-verified Section 33's classification against `feature_factory.py` directly rather than trusting its own completion notes, (b) audited every untagged family (`CTX_*`, `H2H_*`, `MKT_*`, plus `DIS_*`) by hand against the real Sweden ingestion path (`src/ingestion/football_data/sweden_loader.py`, US#125), and (c) closed two gating gaps found in the process, one of which is the residual gap Section 33 already named and one of which is new.
+
+### 38.2 Re-Verifying Section 33's STRENGTH/INTERACTION/EFFICIENCY Split
+
+Read `feature_factory.py` lines 1045–1059 directly (the second, `_compute_form_deltas`-equivalent code path that actually runs at feature-build time, not just the earlier `build_for_match` copy at lines 253–286 — both were checked and are consistent). Confirmed exactly as Section 33 claimed: `STRENGTH_Goal_Diff` and both `INTERACTION_*_GOALS_DIFF_R5` features are pure `OFF_*_FTHG/FTAG_R5` arithmetic (goals-only); `STRENGTH_SoT_Diff` and `INTERACTION_ATTACK_SOT_DIFF_R5` are the sole SOT-based feature in each family; all three `EFFICIENCY_*` features are `OFF_HOME_FTHG_R5 / (DEF_AWAY_FTHG_R5 + 0.1)` and its mirror/diff — entirely goals-ratio-based, no shots/corners term anywhere. `resolve_feature_group_tag()`'s existing `"SOT" in upper` branch logic for `STRENGTH_`/`INTERACTION_` was confirmed to implement this correctly (verified against `config/schema.yaml`'s actual 4 feature names, not just read). No changes needed to this part of Section 33's work.
+
+### 38.3 New Finding: `DIS` Was Never Actually Gated
+
+Section 33's own docstring (`src/logic/feature_groups.py`, pre-story) asserted `"DIS (cards) already has its own group tag"`. This turned out to be false: `resolve_feature_group_tag()` had no branch for `DIS_*` (fell through to `return None`), and a repo-wide search found no other code checking for a bare `"DIS"` string anywhere — unlike `SQUAD`, which has an explicit `if "SQUAD" not in enabled_groups: ...` strip in `ModelManager._load_selected_features`. `DIS` being listed in E0's `enabled_feature_groups` was therefore purely decorative, same as `CTX`/`MKT`/`EFFICIENCY` (which is correct for those three — no useful gate exists to attach for CTX/MKT/EFFICIENCY as a *whole* family, since most of their sub-features are always computable — but incorrect for `DIS`, which is 100% cards-dependent and 100% unavailable for Sweden). Left unfixed, a Sweden registry entry that "correctly" omitted `DIS` would have gotten all 10 `DIS_*` (cards) features anyway. Fixed: `resolve_feature_group_tag()` now returns `"DIS"` for any `DIS_`-prefixed feature, making it a real, enforceable gate for the first time.
+
+### 38.4 Residual Gap Closed: `CTX_CORNERS` / `H2H_CORNERS`
+
+Per Section 33.4's own framing, three options were available: (a) extend `resolve_feature_group_tag()` with new sub-tags, (b) leave it as a documented, accepted gap, (c) something narrower. Chose (a), consistent with the mechanism Section 33 already established and proportionate to the fix size (two new `if` branches, substring-matched on `"CORNER" in upper` the same way `OPP_ADJ`'s corner check already works): `CTX_HOME_CORNERS_STD_R5`/`CTX_AWAY_CORNERS_STD_R5` → `"CTX_CORNERS"`; `H2H_CORNERS_R5` → `"H2H_CORNERS"`. The rest of `CTX_*` (rest days, cumulative points, PPG, goals/conceded std, streaks — all goals/date-only, verified against `_compute_standings_context`/`_compute_temporal_features`) and the rest of `H2H_*` (`H2H_TOTAL_GOALS_R5`/`H2H_HOME_WIN_RATE_R5`, verified against `_compute_h2h_rolling` — both purely `fthg`/`ftag`-derived) remain ungated (`None`, always pass), matching their actual computability.
+
+Chose (a) over (b) specifically because this gap is a *misleading-value* problem, not just a *reduced-signal* one: `_apply_cold_start_imputation()` fills NaN rolling features (everything except `MKT_*`) with a per-competition column mean (Section 34/US#134). A Sweden competition enabling `CTX`/`H2H` without this fix would get its permanently-`NaN` corners columns filled with Sweden's own per-competition mean — but since the column is NaN for *every* Sweden row, that mean is itself NaN, so `fillna` is a no-op and the columns stay NaN. (Confirmed via `groupby(...).transform("mean")` semantics: a group whose entire column is NaN produces NaN, not a fallback to another competition.) So in practice, post-US#134, this was already not the *cross-competition-contamination* risk Section 33.1 originally worried about for `OFF`/`DEF` — but it was still worth closing because (1) it's exactly the gap Section 33 explicitly flagged as a follow-up, (2) it makes `enabled_feature_groups` an honest description of what a competition actually receives (omitting `CTX_CORNERS` from Sweden's list now actually removes those columns from `selected_features`, rather than training on 3 permanently-empty columns), and (3) it is a small, well-tested, symmetric extension of a mechanism that already exists for this exact purpose.
+
+**E0 regression requirement:** since these two features were previously ungated (always passed regardless of tag content), E0's `enabled_feature_groups` list in `config/competitions.yaml` needed `CTX_CORNERS` and `H2H_CORNERS` added explicitly to keep resolving its full 167-feature set — done, alongside the pre-existing (now functional) `DIS` entry which required no change since it was already listed.
+
+### 38.5 Audited and Left As-Is: `MKT_*`'s AH/Over-Under Sub-Family
+
+Sweden's real ingestion path (`sweden_loader.py`'s `_NULL_COLUMNS`) confirmed: Sweden has `avgh`/`avgd`/`avga` (closing 1X2 odds, with a `B365C*`-fallback the same pattern BUG-009 established for pre-2020 EPL rows) but **no** `over25_odds`, `under25_odds`, `ah_line`, `ah_home_odds`, or `ah_away_odds` — all explicitly `NULL` for every Sweden row. Cross-referencing `_compute_odds_features()`: `MKT_IMPLIED_HOME/DRAW/AWAY` and `MKT_OVERROUND` depend only on `avgh`/`avgd`/`avga` (computable for Sweden); `MKT_IMPLIED_OVER25`, `MKT_AH_LINE`, `MKT_AH_HOME_ODDS`, `MKT_AH_AWAY_ODDS`, `MKT_LAMBDA_TOTAL`, `MKT_LAMBDA_HOME`, `MKT_LAMBDA_AWAY`, `MKT_POISSON_BTTS_PROB`, and `MKT_LAMBDA_AH_DIFF` all depend on the missing AH/O-U columns and will be permanently `NaN` for Sweden — 9 of `MKT`'s ~17 sub-features.
+
+Deliberately **not** split into a new sub-tag, unlike the `CTX_CORNERS`/`H2H_CORNERS` case: `_apply_cold_start_imputation()` already excludes the entire `MKT_` prefix from mean-imputation by design ("their NaN encodes genuine missing odds data" — the same accepted behavior pre-2020 EPL rows already rely on for these exact columns). So Sweden's permanently-missing AH/O-U columns stay honestly `NaN`, not silently backfilled — there is no misleading-value bug here to fix, just a real, permanent, already-correctly-signaled gap. XGBoost (the model family used for `competition_specific` tiers) handles this NaN-natively; a non-XGBoost model would currently `dropna` every Sweden row on these always-missing columns if ever pointed at the `MKT` tag; flagged here for whoever picks that up, not acted on. This finding traces back to US#117's superseded note ("Sweden's gap is broader than just xG — also corners, discipline, and several MKT_ sub-families"), which this section resolves for the MKT part.
+
+### 38.6 The Final Sweden `enabled_feature_groups` List
+
+```
+- OFF_GOALS
+- DEF_GOALS
+- OPP_ADJ_GOALS
+- STRENGTH_GOALS
+- INTERACTION_GOALS
+- CTX
+- MKT
+- EFFICIENCY
+```
+
+Deliberately excluded: `OFF_SHOTS`, `OFF_CORNERS`, `DEF_SHOTS`, `DEF_CORNERS`, `OPP_ADJ_SHOTS`, `OPP_ADJ_CORNERS`, `STRENGTH_SHOTS`, `INTERACTION_SHOTS` (no shots/SOT/corners columns at all), `DIS` (no cards columns — now an enforced exclusion per §38.3), `CTX_CORNERS`, `H2H_CORNERS` (no corners columns — now an enforced exclusion per §38.4), `SQUAD` (no FotMob player-data source registered for Sweden). Resolved end-to-end through `ModelManager._load_selected_features()`'s actual two-step gate (US#97 SQUAD-prefix strip, then `resolve_feature_group_tag()`), this list keeps **74 of the 167** schema features (all `_GOALS` sub-features across `OFF`/`DEF`/`OPP_ADJ`/`STRENGTH`/`INTERACTION`, plus every ungated `CTX`/`MKT`/`EFFICIENCY`/`H2H` feature minus the 3 now-gated corners ones) — the remaining 93 are shots/SOT (30), corners (23, including the 3 from §38.4), cards (20), and squad-managed (20) features Sweden's source can't populate. Handed to US#128 to register verbatim; this story does not touch `config/competitions.yaml`'s `competitions:` block beyond E0's regression fix (§38.4).
+
+### 38.7 Mechanism and Test Changes
+
+`src/logic/feature_groups.py::resolve_feature_group_tag()`: two new unconditional-prefix branches (`DIS_` → `"DIS"`) and two new substring-matched branches (`CTX_`/`H2H_` + `"CORNER" in upper` → `"CTX_CORNERS"`/`"H2H_CORNERS"`), placed after the existing `OFF_`/`DEF_` branch and before the final `return None`. Module docstring rewritten to describe the new tags and to correct the false `DIS` claim.
+
+`config/competitions.yaml`: E0's `enabled_feature_groups` gained `CTX_CORNERS` and `H2H_CORNERS` (regression fix, §38.4); `DIS` was already present and needed no change.
+
+`tests/test_feature_group_gating.py`:
+- Updated the parametrized `resolve_feature_group_tag()` cases: `DIS_HOME_HY_R3`/`DIS_HOME_DISCIPLINE_SCORE_R3` now expect `"DIS"` (previously `None`); `CTX_HOME/AWAY_CORNERS_STD_R5` now expect `"CTX_CORNERS"`; `H2H_CORNERS_R5` now expects `"H2H_CORNERS"`. Added cases confirming the rest of `CTX`/`H2H` remain `None`.
+- Extended the existing goals-only stand-in test with assertions that `CTX_*_CORNERS_STD_R5`/`H2H_CORNERS_R5` are now excluded (previously always included) while the rest of `CTX`/`H2H` remain included.
+- New `test_sweden_enabled_feature_groups_excludes_all_uncomputable_features`: exercises §38.6's exact proposed list end-to-end through `ModelManager._load_selected_features()`, asserting every shots/corners/cards/squad feature is excluded and every goals/odds-based feature (including the 9 permanently-NaN-but-intentionally-included `MKT_*` AH/O-U features from §38.5) is included.
+
+Full suite: 609 passed / 23 skipped, zero regressions (up from 604 passed at Section 37 — net new here is exactly 4 new `resolve_feature_group_tag()` parametrize cases (`CTX_AWAY_CORNERS_STD_R5`, `CTX_HOME_GOALS_STD_R5`, `CTX_HOME_SCORE_STREAK`, `H2H_HOME_WIN_RATE_R5`) plus 1 new test function (`test_sweden_enabled_feature_groups_excludes_all_uncomputable_features`) = 5 new tests; several existing `DIS_*`/`CTX_HOME_CORNERS_STD_R5`/`H2H_CORNERS_R5` cases had their expected value updated in place, not added).
+
+## 39. Per-Competition Target Availability (Completed — US#129)
+
+### 39.1 Motivation
+
+Sections 33/38 closed the *feature*-side half of "a second competition with a structurally different data profile": a competition can now exclude shot/corner/card-dependent sub-features from `enabled_feature_groups` instead of getting them cold-start-imputed from another competition's column mean. But `src/logic/target_registry.py` had no equivalent concept on the *label* side — every one of the 9 registered targets (`home_win`, `result_3way`, `btts`, `home_goals`, `away_goals`, `total_goals`, `home_corners`, `away_corners`, `total_corners`) was assumed trainable for every competition. Sweden's Allsvenskan source (football-data.co.uk's "New Leagues" CSV, US#124/US#125) has no `hc`/`ac` columns at all — `raw_matches.hc`/`.ac` are NULL for every Sweden row, by design (Section 36's `_NULL_COLUMNS`). Training `home_corners`/`away_corners`/`total_corners` would reach `ModelManager.prepare_training_data()` (`src/models/model_manager.py`), where `df["target"] = TargetResolver.get_label(df, self.target_config)` resolves to `pd.to_numeric(df["hc"], errors="coerce")` — 100% NaN — and `df.dropna(subset=["target"])` (features aren't even in `required_non_null` for XGBoost models) then drops every training row, raising `"No rows left after dropping records with missing labels or features."` This is BUG-001's exact failure shape (`documents/bugs.md`), reproduced here on labels instead of features. Reproduced directly (not assumed) in `tests/test_target_availability.py::test_prepare_training_data_raises_when_corners_labels_are_all_null` before any fix landed.
+
+### 39.2 Design Choice: Explicit Allow-List, Not Automatic Column Inference
+
+The story offered two options: (a) an explicit `available_targets` list in `config/competitions.yaml`, or (b) a registry-level check keyed off which raw columns a competition's source actually populates. Chose (a), for the same reason `enabled_feature_groups` (human-set) was already preferred over a fully-automatic mechanism for the analogous feature-side problem: `TargetDefinition.label_columns` (`src/logic/target_registry.py`) already captures exactly which raw columns each target's labels need (e.g. `home_corners` → `("hc",)`, `total_corners` → `("hc", "ac")`) — no new target→column mapping had to be invented — but nothing today captures which raw columns a given competition's *source* actually populates in a machine-readable way (`_NULL_COLUMNS` is loader-internal, not exposed as registry metadata). Building that automatic inference would have meant introducing a new piece of infrastructure this story didn't otherwise need; an explicit, human-readable list matches how `enabled_feature_groups` already solves the structurally identical feature-side problem and keeps `config/competitions.yaml` the one place a human can read to see what a competition trains.
+
+### 39.3 Mechanism
+
+`src/logic/competition_registry.py`:
+- `CompetitionDefinition` gained `available_targets: tuple[str, ...] | None = None`. `None` (the YAML key omitted entirely) means "no restriction — every `TARGET_REGISTRY` target is available," which is exactly today's behavior for every competition that doesn't set it (E0, `international`, both unchanged by this story).
+- `_load_registry` parses `available_targets` from YAML when present, normalizing each entry through `target_registry.normalize_target_name()` (so aliases like `"3way"`/`"both_teams_to_score"` resolve the same way `get_target_definition()` already does) and rejecting unknown target names with a `ValueError` naming the offending value(s) and the full valid set — the same "raise a helpful error" pattern `get_competition_definition`/`get_target_definition` already use elsewhere in this codebase.
+- New `is_target_available(competition_def, target_name) -> bool` helper: `True` when `available_targets is None`, else membership-tests the normalized target name against the tuple.
+
+`main.py`:
+- `run_train_forecast_suite(targets, context)` now resolves `competition_id` (same `"league"` → `"E0"` deprecated-alias handling `run_train_target` already does) and the competition's `CompetitionDefinition` up front, then partitions the requested target list into trainable vs. skipped via `is_target_available()`. Each skipped target logs one `LOGGER.info` line naming the target, the context, the specific missing `label_columns` (e.g. `('hc',)`), and pointing at `available_targets` in `config/competitions.yaml` as where to fix it — not a bare exception message. If every requested target ends up skipped, it logs a `LOGGER.warning` and returns cleanly rather than calling `run_train_target` with an empty list (which would otherwise just silently do nothing with no trace).
+- `run_train_target(target_name, ..., context)` (the single-target path) also gained a guard: it now raises a `ValueError` naming the target, the competition, and the missing `label_columns` immediately after resolving `competition_def`, rather than letting a direct `train-target --target home_corners --context SWE` call fall all the way through to `ModelManager.prepare_training_data()`'s confusing "No rows left" crash. This wasn't strictly required by the story's acceptance criterion (which is about `train-forecast-suite` specifically) but closes the same footgun for the single-target CLI path at negligible cost.
+
+`config/competitions.yaml`: header comment extended to document the new key; no functional change to the `E0`/`international` entries (neither sets `available_targets`, so both keep training every target, unchanged). Sweden itself is still not registered here — that's US#128's job, deliberately out of scope for this story per its own framing.
+
+### 39.4 Tests
+
+`tests/test_target_availability.py` (new, 10 tests), using a fictional `"SWE"`-named competition registered only in a `tmp_path` registry (same pattern as Section 32/US#110's `tests/test_per_competition_context.py`) — never touching the real `config/competitions.yaml`:
+- `test_prepare_training_data_raises_when_corners_labels_are_all_null`: proves the underlying BUG-001-shaped crash is real, independent of this story's fix (exercises `ModelManager.prepare_training_data()` directly, unmodified by this story).
+- `test_is_target_available_default_none_allows_every_target` / `test_is_target_available_restricts_to_listed_targets`: unit coverage for the new helper.
+- `test_e0_has_no_available_targets_restriction_in_real_registry`: regression guard against the real `config/competitions.yaml`.
+- `test_available_targets_parses_from_yaml_and_normalizes_aliases` / `test_available_targets_rejects_unknown_target_name`: YAML parsing/validation.
+- `test_train_forecast_suite_skips_corners_targets_for_sweden_like_competition`: the story's core acceptance criterion — exactly 5 targets trained (mocked `run_train_target`), exactly 3 `SKIPPING` log lines, each naming its specific missing `label_columns` and the context.
+- `test_train_forecast_suite_default_context_e0_trains_full_target_set_unaffected`: E0's default suite is still all 8 non-`home_win` targets, including all 3 corners ones.
+- `test_train_forecast_suite_all_requested_targets_unavailable_trains_nothing`: explicit-subset request where every target is unavailable logs a warning and trains nothing, rather than crashing or silently no-op-ing untraced.
+- `test_run_train_target_raises_clear_error_for_unavailable_target`: the single-target guard.
+
+Full suite: 619 passed / 23 skipped, zero regressions (up from 609 passed at Section 38 — all 10 new tests are additive).
+
+Sweden (`SWE`) is still not registered as a competition — that remains US#128's job, using §38.6's list verbatim.
+
+## 40. Phase 20 (cont.): Sweden Registered in the Competition Registry (Completed — US#128)
+
+### 40.1 Registration
+
+**Verified against `config/competitions.yaml`:** a `SWE` entry now exists alongside `E0`/`international`, matching their existing structural style exactly:
+
+```yaml
+SWE:
+  competition_id: SWE
+  tier: competition_specific
+  league_code: SWE
+  enabled_feature_groups:
+    - OFF_GOALS
+    - DEF_GOALS
+    - OPP_ADJ_GOALS
+    - STRENGTH_GOALS
+    - INTERACTION_GOALS
+    - CTX
+    - MKT
+    - EFFICIENCY
+  player_data_sources: []
+  available_targets:
+    - result_3way
+    - btts
+    - home_goals
+    - away_goals
+    - total_goals
+```
+
+Both fields' values are copied verbatim from Section 38.6 (US#127's finalized `enabled_feature_groups` list) and Section 39 (US#129's `available_targets` mechanism) — no new decisions were made in this story, it's pure registration.
+
+### 40.2 Re-Verifying the US#89 Feature-Superset Invariant
+
+Rather than assuming the invariant holds because it held before, traced `ModelManager._load_selected_features`'s `_passes_group_gate(feature)` directly: it returns `resolve_feature_group_tag(feature) is None or tag in enabled_groups`. Every one of the 13 `GENERAL_PURPOSE_FEATURES` (`config/competition_registry.py`) is `MKT_*`-prefixed, and `resolve_feature_group_tag()` (Section 33/38) never classifies `MKT_*` under any split-family tag — it returns `None` for all of them. `None` means "ungated," so every `MKT_*` feature passes `_passes_group_gate` unconditionally, regardless of what's in `enabled_feature_groups`. Confirmed empirically against the real registered entry (not just reasoned about): Sweden resolves to exactly 74 features via `ModelManager._load_selected_features()`, all 13 `GENERAL_PURPOSE_FEATURES` present among them, E0 unchanged at 167.
+
+### 40.3 Tests
+
+`tests/test_competition_registry.py` gained 7 new tests exercising the **real** `config/competitions.yaml` (not a synthetic fixture — US#127/US#129's own tests necessarily used fictional registries since Sweden wasn't registered yet when those stories ran): registration shape (`tier`/`league_code`/`player_data_sources`), the exact `enabled_feature_groups` set including an explicit check that every excluded tag (`OFF_SHOTS`, `DIS`, `CTX_CORNERS`, `SQUAD`, etc.) is genuinely absent, the 74-feature resolved count, the superset invariant, an E0-unaffected regression (still 167), and both directions of `available_targets` (Sweden's 5-available/3-excluded split, E0's unrestricted `None`).
+
+Two pre-existing tests broke as an expected consequence of a third competition now existing in the registry, and were fixed in place rather than weakened: `test_list_competition_definitions_is_stable` (hardcoded `{"E0", "international"}` → `{"E0", "SWE", "international"}`) and `tests/test_per_competition_context.py::test_list_context_keys_matches_real_registry_today` (hardcoded `["E0", "international"]` → `["E0", "SWE", "international"]` — US#110's `list_context_keys()`, Section 31, now genuinely reflects two registered `competition_specific` competitions, which is exactly the behavior that story was built to support).
+
+Full suite: 626 passed / 23 skipped, zero regressions (up from 619 passed at Section 39).
+
+Sweden is now a fully registered `competition_specific` competition, but **no models have been trained for it yet** — that's US#130, the next story.
+
+## 41. Phase 20 (cont.): Sweden's First Trained Models (Completed — US#130)
+
+### 41.1 Getting Real Data Into the Worktree
+
+This worktree had no local database at all going into this story — `data/*.db` is gitignored, so `git worktree`/`EnterWorktree` never copies it. All prior Sweden stories (US#124–129) had correctly used synthetic fixtures or their own live-fetch verification rather than assuming a populated local DB existed. Before training could produce anything meaningful, a snapshot of the main checkout's real `data/fpai_core.db` (3,800 EPL matches) was copied into the worktree — a deliberate, user-approved choice to keep this worktree isolated after discovering US#140's migration had already touched the main checkout's file directly (`data/` falls outside git's branch isolation entirely). Sweden's real data was then ingested for real (not a fixture) via US#124/125's `fetch_sweden_csv()`/`upsert_sweden_matches()` — 3,489 rows — and `feature_store` was rebuilt end-to-end (7,289 total rows, both leagues).
+
+Verified live that the whole US#127/US#133/US#134 gating design holds against real data: a real Sweden row shows `OFF_HOME_FTHG_R5=2.0` (goals-based, populated) alongside `OFF_HOME_HS_R5=NaN` (shots-based, permanently absent by design — not a bug).
+
+### 41.2 Bug Found During Real Ingestion: BOM Not Actually Stripped
+
+US#124's `fetch_sweden_csv()` claimed pandas' C parser "auto-detects and strips a UTF-8 BOM ... no explicit encoding needed" and read from `response.text`. Running the real pipeline surfaced this as false: `requests`' own text-decoding happens before pandas ever sees the bytes, so the BOM became visible `"ï»¿"` mojibake prefixed onto the first column name (`"ï»¿Country"`). Harmless in practice (`Country` isn't consumed downstream) but produced a persistent false "Sweden CSV missing expected columns" warning on every fetch. Fixed by reading `response.content` (raw bytes) with `encoding="utf-8-sig"` instead — verified against the live site: columns now parse cleanly as `['Country', 'League', ...]`.
+
+### 41.3 Training Results (2026-07-21, single-shot defaults, no sweep)
+
+`train-forecast-suite --context SWE` correctly skipped the 3 corners targets with US#129's exact designed log format, then trained the 5 available targets with `train-forecast-suite`'s existing plain defaults (LR for classifiers, RF regressor for regression — the same starting point EPL itself used before its own later sweep phases, not a claim these are Sweden's best achievable numbers):
+
+| Target | Model | Metric | Value |
+| :--- | :--- | :--- | :--- |
+| `result_3way` | LogisticRegression | log_loss / accuracy | 1.0218 / 0.5193 |
+| `btts` | LogisticRegression | log_loss / accuracy | 0.6919 / 0.5526 (calibrated: 0.6563) |
+| `home_goals` | RandomForestRegressor | MAE / RMSE | 1.1021 / 1.3345 |
+| `away_goals` | RandomForestRegressor | MAE / RMSE | 0.8526 / 1.0631 |
+| `total_goals` | RandomForestRegressor | MAE / RMSE | 1.2635 / 1.5935 |
+
+`select-best-models --context SWE` populated `config/model_selection.yaml`'s new `contexts.SWE` bucket (the per-competition bucketing US#110 built for exactly this). Spot-checked `away_goals`'s written `feature_subset`: exactly the 74 goals-only features from US#127/US#128 — no shots/corners/cards features present, confirming the registry gating reaches all the way through to the artifact actually selected for serving.
+
+No Dixon-Coles sanity baseline (Section 22's model, already competition-agnostic) or Optuna/hyperparameter sweep was run for Sweden in this story — both are reasonable, explicitly out-of-scope follow-ups once this baseline is validated in practice.
+
+### 41.4 Fixed: EPL-Only Assumption in `test_feature_quality.py`
+
+Running the full suite against real multi-competition data surfaced one more EPL-only assumption: `tests/test_feature_quality.py`'s NaN-rate-ceiling checks (`test_nan_rate`) query `feature_store` with no league filter, and their thresholds were calibrated purely against EPL's data profile (the file's own docstring cites Understat-coverage domain knowledge). Once Sweden's by-design-permanently-NaN shots/corners/cards columns entered the shared table, 7 of these checks broke — not a real regression, but the same class of single-competition assumption already fixed elsewhere in this phase (match_id, team-mapping, cold-start imputation). Scoped the `feature_df`/`labelled_df` fixtures to `WHERE r.league = 'E0'`, restoring the file's actual intent (EPL pipeline regression detection) without weakening any threshold. A Sweden-specific quality suite with its own recalibrated thresholds is a legitimate future story, not attempted here.
+
+Full suite: 648 passed / 1 skipped, zero regressions. The skip count dropping from 23 to 1 is a side effect of real data now existing in the worktree — 22 previously-skipped integration tests that need a real DB now run and pass.
+
+## 42. Phase 20 (cont.): Sweden Verified End-to-End; Critical Training Bug Found & Fixed (Completed — US#131)
+
+### 42.1 The Bug: `prepare_training_data()` Had No League Filter
+
+While verifying Sweden's forecasts end-to-end, a real CLI forecast's `feature_completeness` (71.6%) looked implausibly low for a match between two of Allsvenskan's most established clubs. Tracing it back: `build_for_match()`'s 111/167 null columns were expected (Sweden's structural gaps, Section 38), but the trail led one layer deeper, into training itself. `ModelManager.prepare_training_data()`'s SQL query joined `raw_matches`/`feature_store` with **no league/competition filter at all** — invisible while only E0 existed, since there was nothing else in the shared tables to accidentally include.
+
+Reproduced directly against the real DB: training with `context=SWE` had pulled all 7,289 rows (both leagues). Sweden's registry-gated 74-feature list still includes 9 `MKT_AH_*`/`MKT_LAMBDA_*`/`MKT_IMPLIED_OVER25` features (ungated — `MKT_*` is never split by `resolve_feature_group_tag()`, Section 33/38) that are permanently NaN for Sweden but populated for E0. The mandatory non-null-features `dropna()` for non-XGBoost models then silently kept only E0's 3,799 rows — meaning **US#130's "Sweden models" were secretly EPL models mislabeled `context=SWE`**, with no error and plausible-looking metrics.
+
+### 42.2 The Fix
+
+`prepare_training_data()` now resolves the requesting competition's `league_code` from the registry and filters `WHERE r.league = ?`. A competition with no single `league_code` (`general_purpose`, e.g. `"international"`) intentionally stays unfiltered — pooling across every competition is that tier's actual design (US#138, not yet built), not something this fix restricts. Falls back to unfiltered with a logged warning if the competition isn't registered at all, matching `_load_selected_features`'s existing defensive posture.
+
+5 new tests in `tests/test_prepare_training_data_league_scoping.py` prove both the bug (against a synthetic two-competition fixture reproducing the exact failure shape) and the fix.
+
+### 42.3 Sweden Retrained For Real
+
+Once the league filter correctly isolated Sweden's own rows, training with the default LR/RF models genuinely failed (`"No rows left after dropping records with missing labels or features"`) — Sweden's own rows are *also* 100%-NaN on those same 9 MKT columns, and non-XGBoost models can't tolerate that. Retrained all 5 targets with XGBoost instead (`train-target --context SWE --model xgb`/`xgb_regressor`), which handles NaN features natively — the same established pattern this project already relies on elsewhere (e.g. pre-Understat xG columns for EPL itself).
+
+**Real, corrected Sweden results (2026-07-21):**
+
+| Target | Model | Metric | Value |
+| :--- | :--- | :--- | :--- |
+| `result_3way` | XGBoost | log_loss / accuracy | 1.0114 / 0.4981 |
+| `btts` | XGBoost | log_loss / accuracy | 0.6873 / 0.5477 |
+| `home_goals` | XGBoost regressor | MAE / RMSE | 1.0153 / 1.2866 |
+| `away_goals` | XGBoost regressor | MAE / RMSE | 0.8779 / 1.1288 |
+| `total_goals` | XGBoost regressor | MAE / RMSE | 1.3401 / 1.7405 |
+
+The 5 invalid LR/RF artifacts and their MLflow runs were deleted, not left alongside the real ones. `select-best-models --context SWE` re-run and correctly promoted all 5 real models — BUG-014's stale-artifact-path guard (Phase 16) caught and force-refreshed 3 of them live, since their raw metrics alone would have lost to the (invalid but numerically competitive) deleted runs.
+
+### 42.4 CLI Smoke Test (Real, Not Mocked)
+
+- `forecast --home "Malmo FF" --away "Djurgarden" --league SWE ...` → full 5-target payload, `prediction_basis: "team_history_and_market"`, corners targets simply absent (not an error).
+- `status` → lists `[SWE]` as a third bucket alongside `[E0]`/`[international]`. Confirmed `src/tools/model_tools.py`'s `get_model_status()` was **already fixed as an unlisted side effect of US#110** (`_known_contexts()` already derives from `list_context_keys()`) — the phase-level scoping note's concern about this file was stale; US#136's real remaining scope is `forecast_tools.py`/`data_tools.py` only.
+- `compare-models --target result_3way --context SWE` → correctly filtered to real Sweden runs.
+- `diagnose-model --target result_3way --model_path <SWE artifact> --context SWE` → found and fixed a real gap: `diagnose-model` had **no `--context` argument at all**, always defaulting to E0. Fixed (`main.py`, `src/evaluation/diagnostics.py`). That fix then surfaced **BUG-016** (`documents/bugs.md`), a separate, pre-existing label-encoding bug when reloading a saved multiclass XGBoost model for diagnostics — confirmed not Sweden-specific (also breaks on E0's own older artifacts), left open as orthogonal to this phase.
+
+New `tests/test_per_competition_context.py::test_forecast_upcoming_real_sweden_registration` uses SWE's real `competition_id` (not the earlier fictional `T2` stand-in) to prove `forecast_upcoming(league="SWE", ...)` resolves to Sweden's own model via the real registry chain (US#107).
+
+Full suite: 654 passed / 1 skipped, zero regressions.
+
+## 43. Phase 20c: Sweden Wired Into `refresh-data`/`schedule-refresh`; Weekly Cadence Found Too Loose For Allsvenskan (Completed — US#132)
+
+### 43.1 Part 1 — Live Cadence Investigation (2026-07-21)
+
+Re-fetched `https://www.football-data.co.uk/new/SWE.csv` live (not reused from US#124's day-earlier check): `Last-Modified: Mon, 20 Jul 2026 20:48:18 GMT`, fetched `Tue, 21 Jul 2026 19:54:43 GMT` — the source is still updating same-day as matches are played, confirming US#124's finding holds. That answers "does the source lag" (no); it does not answer "is our own weekly *pull* cadence tight enough," which is what this story actually needed to verify.
+
+Downloaded the file and tabulated every 2026-season match date by weekday (`Season` column filtered to `2026`, 105 rows). Two findings settled the question:
+
+1. **Weekend rounds routinely spill into Monday.** Most rounds cluster Fri/Sat/Sun/Mon (e.g. 17–20 Jul 2026: Fri/Sat/Sun/Mon, 2/1/3/2 matches). A Sunday-only refresh systematically misses each round's Monday fixtures until the *following* Sunday.
+2. **Genuine midweek rounds occur, not just stray rescheduled fixtures.** 2026-04-22 (Wed) and 2026-04-23 (Thu) each carried 4 matches — a full round, not a one-off postponement — landing only 3 days after the prior Sunday round (2026-04-19) and 3 days before the next (2026-04-26). Full round-cluster gap survey across the 2026 season: minimum gap between consecutive round clusters was **3–4 days**, well under EPL's reliable ~7-day weekend-only cadence.
+
+**Conclusion:** a Sunday 03:00-only weekly refresh is *not* tight enough for Allsvenskan specifically. Concretely: a refresh run the Sunday before the Wed/Thu 2026-04-22/23 round would not pick those results up until the *following* Sunday (2026-04-26) — by which point that Sunday's own round is already about to kick off, meaning forecasts for it would be generated on feature data missing the entire prior round. This is exactly the "gap spans an entire round" failure mode the story asked to check for, and it is real, not hypothetical — evidenced directly in the live 2026 fixture data, not assumed. EPL does not have this problem (its rounds are reliably weekend-clustered), so this justifies tightening Sweden's cadence specifically rather than changing EPL's.
+
+### 43.2 Part 2 — Implementation
+
+**Sweden gets its own refresh path, not a shared job with EPL.** `run_refresh_data`'s existing `league` parameter (already threaded through to `fetch-understat`/`fetch-fotmob`) does not touch `run_scrape`/`run_ingest` at all — those are hardcoded to EPL's season-link-discovery directory-scrape convention and are structurally inapplicable to Sweden's single static full-history CSV (US#124). Rather than force Sweden through that shape, `main.py::run_refresh_data` now branches on `league == "SWE"` up front to a new `run_refresh_sweden_data(app_settings, db_manager)`:
+
+```python
+if league == "SWE":
+    run_refresh_sweden_data(app_settings, db_manager)
+    return
+```
+
+`run_refresh_sweden_data` calls `fetch_sweden_csv()` → `upsert_sweden_matches()` (US#124/125) → a `FeatureFactory` rebuild (`compute_rolling_stats()` + `save_features()`, the same rebuild step `run_ingest` performs for EPL after ingesting new rows) — and deliberately **does not** call `run_fetch_understat`, `run_fetch_fotmob`, or `backfill_lineups_from_player_stats`: Sweden has no Understat/FotMob integration (declined scope, Phase 20c).
+
+**Scheduling: a separate scheduler/job with a tighter default cadence**, justified directly by 43.1's findings — `src/scheduling/data_refresh_scheduler.py` gained `build_sweden_refresh_scheduler(refresh_fn=None, day_of_week="tue,fri", hour=3, minute=0)` (job id `sweden_data_refresh`, distinct from Section 30's `weekly_data_refresh`), registered via a single `CronTrigger(day_of_week="tue,fri", ...)` — APScheduler natively accepts comma-separated cron day-of-week lists, so this is one job, not two. Rationale for `tue,fri` specifically: Tuesday's run catches any Fri–Mon weekend round before the next one starts; Friday's run catches any Tue–Thu midweek round (like the confirmed Wed/Thu 2026-04-22/23 example) before the next weekend round starts. Worst-case staleness under this cadence is ~3 days, comfortably inside the 3–4 day minimum gap observed between real round clusters — i.e. it is not just "more frequent," it was sized against the actual observed round-spacing floor.
+
+`main.py::run_schedule_refresh(league, day_of_week=None, hour=3, minute=0)` now dispatches to `build_sweden_refresh_scheduler` when `league == "SWE"` and to Section 30's `build_weekly_refresh_scheduler` otherwise; `day_of_week=None` (the new CLI default, `--day-of-week` no longer defaults to `"sun"` unconditionally) lets each league pick its own justified default (`"tue,fri"` for SWE, `"sun"` for everything else) while still allowing an explicit override either way.
+
+### 43.3 Tests
+
+New `tests/test_refresh_data_sweden.py` (8 tests, TDD — written and confirmed red against the pre-implementation code before the above was added):
+- `run_refresh_data(league="SWE")` calls only the Sweden fetch/upsert/feature-rebuild path — `run_scrape`/`run_ingest`/`run_fetch_understat`/`run_fetch_fotmob` are monkeypatched to raise `AssertionError` if invoked, proving they're genuinely skipped, not just untested.
+- `run_refresh_data(league="E0")` is unaffected — still runs the full `scrape → ingest → understat → fotmob → lineups` chain in order.
+- `build_sweden_refresh_scheduler` registers exactly one job under `SWEDEN_JOB_ID`, defaults to the twice-weekly `"tue,fri"` cadence (explicitly asserts more than one day is present, i.e. actually tighter than a single weekly slot), accepts overrides, and its registered job genuinely invokes the injected `refresh_fn` when fired.
+- `run_schedule_refresh(league="SWE", day_of_week=None)` dispatches to `build_sweden_refresh_scheduler` (not the EPL one) and resolves the `None` default to `DEFAULT_SWEDEN_DAY_OF_WEEK`.
+
+Full suite: 661 passed / 1 skipped, zero regressions (up from 654 passed / 1 skipped at Section 42).
+
+## 44. Phase 20 (cont.): General-Purpose Pooling Was Already Solved (Completed — US#138)
+
+US#131's `prepare_training_data()` league fix (Section 42) filters `raw_matches.league` by the requesting competition's own `league_code`, except when `league_code is None` — exactly `international`'s registry entry (`tier: general_purpose`, `league_code: null`). That competition therefore already stays unfiltered by design, pooling every registered competition's rows automatically. No new pooling mechanism needed to be built for this story.
+
+Verified directly against the real repo (not assumed): `ModelManager(competition_id="international").prepare_training_data()` against the real `config/competitions.yaml` and this worktree's real, populated `data/fpai_core.db` returns all 7,289 rows (3,800 E0 + 3,489 SWE), with both leagues genuinely present in the resulting chronological test split. New test: `tests/test_prepare_training_data_league_scoping.py::test_international_context_pools_e0_and_swe_against_real_registry`.
+
+Full suite: 662 passed / 1 skipped, zero regressions.
+
+## 45. Phase 20 (cont.): General-Purpose Models Retrained on Pooled Data — Mixed, Honestly-Measured Result (Completed — US#139)
+
+All 8 `international`-context targets retrained with XGBoost on the now-pooled E0+SWE dataset (US#138's confirmed pooling), since the fixed 13-feature `GENERAL_PURPOSE_FEATURES` set includes 9 `MKT_AH_*`/`MKT_LAMBDA_*`/`MKT_IMPLIED_OVER25` features permanently NaN for Sweden — the same reason Section 42 had to use XGBoost for Sweden's own models rather than the LR/RF defaults.
+
+**Result: genuinely mixed, measured rather than assumed.** `select-best-models --context international` promoted only 2 of 8 targets:
+
+| Target | Old (E0-only) | New (pooled) | Outcome |
+| :--- | :--- | :--- | :--- |
+| `result_3way` | log_loss 1.023317 | **1.0145** | Promoted — improved |
+| `home_corners` | MAE 2.189879 | **2.1745** | Promoted — improved |
+| `btts` | log_loss 0.68626 | 0.6861 | Not promoted — below improvement threshold |
+| `home_goals` | MAE 0.949844 | 0.9757 | Not promoted — worse |
+| `away_goals` | MAE 0.830741 | 0.8722 | Not promoted — worse |
+| `total_goals` | MAE 1.247302 | 1.2875 | Not promoted — worse |
+| `away_corners` | MAE 2.112464 | 2.1187 | Not promoted — below improvement threshold |
+| `total_corners` | MAE 2.688234 | 2.6964 | Not promoted — worse |
+
+Goals targets got measurably worse when pooled (2.7–5.0%) — a real signal Sweden's goal-scoring/market-calibration patterns differ enough from EPL's to dilute the shared model's goals accuracy specifically, while `result_3way` and `home_corners` benefited from the larger pool.
+
+**Caveat, flagged rather than glossed over:** the pooled models' test-split metrics were measured against a *mixed* E0+SWE chronological test set, not an E0-only one — a "worse" pooled MAE doesn't strictly prove the pooled model is worse *for EPL callers specifically*, it may partly reflect a harder, more heterogeneous evaluation set. `select-best-models`'s promotion decision is still the right practical outcome (only takes the pooled model where unambiguously not worse on its own merits), but a same-test-set (E0-only holdout) re-evaluation of both champions would be needed to answer the narrower "does this hurt existing EPL callers" question precisely — not done here.
+
+Net effect: `config/model_selection.yaml`'s `contexts.international` bucket is now a genuine mix of pooled-trained (`result_3way`, `home_corners`) and E0-only-trained (the other 6) models, not uniformly pooled — the honest, disciplined outcome of measuring rather than blindly promoting.
+
+Full suite: 662 passed / 1 skipped, zero regressions (no code changes required for this story — a live retraining/selection action).
+
+## 46. Critical Live Finding: Artifact Filename Collision Across Competitions (BUG-017, Fixed)
+
+While executing Section 45's retraining, `ModelManager.run_pipeline()`'s artifact filenames were discovered to have no competition_id component at all (`f"{target_name}_{model_prefix}_v1_{date_tag}.joblib"`). Training all 8 `international`-context targets with XGBoost reused the exact same filename pattern as Sweden's 5 targets trained earlier the same day — the `international` write silently **overwrote all 5 of Sweden's already-committed model files** with `international`'s 13-feature MKT-only content. `config/model_selection.yaml`'s `contexts.SWE` entries kept pointing at the now-corrupted files; BUG-014's existence-only guard didn't catch it, since the corrupted path still resolved to a real (just wrong) file.
+
+**Fix:** new `build_artifact_filename(target_name, competition_id, model_prefix, date_tag)` (`src/models/model_manager.py`) includes a lowercase competition_id suffix for any competition other than `E0`/`None`, which keep the pre-existing unsuffixed shape so no already-recorded E0 entries needed to move. `run_pipeline()` now calls this helper.
+
+**Recovery:** retrained Sweden's 5 affected targets again (now saved as `*_swe_*` files) and manually re-pointed `config/model_selection.yaml`'s `contexts.SWE` entries to the recovered files — `select-best-models` alone couldn't auto-detect this, since the corrupted and recovered candidates had numerically identical metrics (an exact tie the selector correctly-but-insufficiently treats as "no change needed"). Verified live: Sweden's forecast payload is byte-identical to its pre-corruption state; E0 unaffected.
+
+New `tests/test_artifact_filename_collision.py` (4 tests). Full test suite: 666 passed / 1 skipped, zero regressions. Full writeup: `documents/bugs.md` BUG-017.
+
+## 47. Phase 20 (cont.): Agent Tool Layer Audit — Found a Freshness-Masking Gap (Completed — US#136)
+
+`model_tools.get_model_status()` was already fixed as an unlisted side effect of US#110 (verified live during US#131). `forecast_tools.py` and `data_tools.py::list_matches()` audited clean — both already take free-form `league` parameters with no hardcoded enum.
+
+**Found a different-shaped gap**: `data_tools.py::get_data_freshness()` computed a single blended `is_stale`/`latest_match_date` across all of `raw_matches`, with no per-competition breakdown. Demonstrated live, not hypothetically — the real DB's blended output read `is_stale: false` while **E0's own data was 58 days stale** (deep off-season), completely masked by Sweden's fresh (1-day-old) refresh.
+
+**Fix**: the query now `GROUP BY league`. All pre-existing top-level keys stay byte-identical for a single-competition table (zero behavior change for any existing caller); a new `by_league` dict adds the same per-target shape scoped to each competition. Verified live post-fix: `by_league.E0.is_stale == true`, `by_league.SWE.is_stale == false`.
+
+4 new tests in `tests/test_data_tools.py`; 4 pre-existing tests updated to the new `GROUP BY`-shaped mock fixture. Full suite: 670 passed / 1 skipped, zero regressions.
+
+## 48. Phase 20 (cont.): MLflow Multi-Competition Reporting Warning (Completed — US#142)
+
+`model_comparison.py`'s `get_runs_by_target(..., context=...)` already filtered correctly by the `tags.context` run tag — not a structural bug. The residual gap: `context` is optional and defaults to unfiltered, so `compare-models --target <name>` with no `--context` silently blends runs from every competition into one report, since MLflow experiment *names* (`FPAI_<target>_<model_family>_<sweep_stage>_<version>`) don't include league — only run tags do.
+
+**Fix**: `get_runs_by_target()` now checks, only when `context` wasn't passed, whether the returned runs' `tags.context` values span more than one distinct competition; if so, logs a warning naming the target and every distinct context found. An explicit `--context` call is unaffected; a call returning only one competition's runs also stays silent.
+
+Verified live against the real MLflow store: `compare-models --target result_3way` (no `--context`) now prints `"...spans multiple competition contexts (SWE, international) with no --context filter applied..."`.
+
+4 new tests in `tests/test_model_comparison_context_warning.py` (this module had zero prior test coverage). Full suite: 674 passed / 1 skipped, zero regressions.

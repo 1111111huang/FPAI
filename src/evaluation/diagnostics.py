@@ -184,11 +184,18 @@ def run_diagnostics(
     target_name: str,
     model_path: str | Path,
     output_path: str | Path = "reports/diagnostics.json",
+    competition_id: str = "E0",
 ) -> Path:
-    """Load a model artifact, evaluate the test split, and write diagnostics JSON."""
+    """Load a model artifact, evaluate the test split, and write diagnostics JSON.
+
+    US#131: `competition_id` was previously not accepted at all -- ModelManager
+    silently defaulted to "E0", so diagnosing any non-E0 artifact (e.g. a
+    Sweden model) used E0's feature list and E0's training rows instead of the
+    artifact's own. Pass the artifact's actual training context explicitly.
+    """
     model_file = Path(model_path)
     model = load_model_for_diagnostics(model_file, target_name)
-    manager = ModelManager(model=model, target_config={"target": target_name})
+    manager = ModelManager(model=model, target_config={"target": target_name}, competition_id=competition_id)
     X_train, X_val, X_test, y_train, y_val, y_test, test_meta = manager.prepare_training_data()
     metrics, prediction_output = manager._evaluate_target(X_test, y_test, X_train, y_train, X_val, y_val)
 
