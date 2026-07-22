@@ -178,3 +178,89 @@ def _route_for_state(cfg: AgentConfig, state: AgentState) -> str:
     has_calls = bool(getattr(last, "tool_calls", None))
     under_budget = state["tool_call_count"] < cfg.max_tool_calls
     return "tools" if has_calls and under_budget else "output"
+
+
+def _route_after_forecast_for_state(forecast_payload):
+    """Helper: extract forecast-routing logic without building the full graph."""
+    succeeded = bool(forecast_payload) and "error" not in forecast_payload
+    return "agent" if succeeded else "output"
+
+
+def test_route_after_forecast_routes_to_agent_on_success():
+    assert _route_after_forecast_for_state({"result_3way": {}}) == "agent"
+
+
+def test_route_after_forecast_routes_to_output_on_error():
+    assert _route_after_forecast_for_state({"error": "no odds", "status": "no_odds"}) == "output"
+
+
+def test_route_after_forecast_routes_to_output_when_payload_missing():
+    assert _route_after_forecast_for_state(None) == "output"
+
+
+def test_run_agent_short_circuits_to_insufficient_data_when_no_odds_available():
+    """A31's core acceptance: a failing/impossible forecast never invokes the LLM."""
+    from unittest.mock import MagicMock, patch
+    from src.agent.graph import run_agent
+    from src.agent import tools as agent_tools
+
+    agent_tools._snapshot_store.set_mode("live")
+    llm_invoked = MagicMock(name="llm_should_not_be_called")
+
+    with patch("src.agent.graph._build_llm") as mock_build_llm, \
+         patch("src.agent.graph._load_system_prompt", return_value="stub prompt"), \
+         patch("src.agent.tools._dated_web_search", return_value="No results found."):
+        mock_llm = MagicMock()
+        mock_llm.bind_tools.return_value.invoke = llm_invoked
+        mock_build_llm.return_value = mock_llm
+
+        cfg = _make_config()
+        recommendation = run_agent(
+            match_info={"home_team": "Man City", "away_team": "Arsenal", "date": "2026-06-21", "league": "E0"},
+            config=cfg,
+            tools=[],
+        )
+
+    assert recommendation["overall"] == "insufficient_data"
+    assert "no odds" in str(recommendation["limitations"]).lower()
+    llm_invoked.assert_not_called()
+
+
+def test_run_agent_produces_recommendation_when_forecast_succeeds():
+    from unittest.mock import MagicMock, patch
+    from langchain_core.messages import AIMessage
+    from src.agent.graph import run_agent
+    from src.agent import tools as agent_tools
+
+    agent_tools._snapshot_store.set_mode("live")
+    llm_json = json.dumps({
+        "match": {"home": "Man City", "away": "Arsenal", "date": "2026-06-21", "league": "E0"},
+        "overall": "no_bet", "markets": [], "explanation": "Balanced match.",
+        "confidence": "medium", "limitations": [], "prediction_basis": "team_history_and_market",
+    })
+    fake_forecast_result = {"result_3way": {"probabilities": {"home": 0.4}}, "data_quality": {"prediction_basis": "team_history_and_market"}}
+
+    with patch("src.agent.graph._build_llm") as mock_build_llm, \
+         patch("src.agent.graph._load_system_prompt", return_value="stub prompt"), \
+         patch("src.agent.tools._dated_web_search", return_value="No results found."), \
+         patch("src.forecast.forecast_service.ForecastService") as MockSvc:
+        instance = MagicMock()
+        MockSvc.return_value = instance
+        instance.forecast_upcoming.return_value = fake_forecast_result
+
+        mock_llm = MagicMock()
+        mock_llm.bind_tools.return_value.invoke.return_value = AIMessage(content=llm_json)
+        mock_build_llm.return_value = mock_llm
+
+        cfg = _make_config()
+        recommendation = run_agent(
+            match_info={
+                "home_team": "Man City", "away_team": "Arsenal", "date": "2026-06-21", "league": "E0",
+                "odds": {"home": 2.0, "draw": 3.4, "away": 3.6},
+            },
+            config=cfg,
+            tools=[],
+        )
+
+    assert recommendation["overall"] == "no_bet"
+    mock_llm.bind_tools.return_value.invoke.assert_called_once()

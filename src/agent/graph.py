@@ -4,16 +4,15 @@ import json
 from pathlib import Path
 from typing import Annotated, Any, Literal, TypedDict
 
-from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage, ToolMessage
+from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
 from langgraph.graph import StateGraph, END
 from langgraph.graph.message import add_messages
 from langgraph.prebuilt import ToolNode
 
 from src.agent.agent_config import AgentConfig
+from src.agent.pipeline import forecast_node, research_node, resolve_competition_node
 from src.agent.schema import MatchRecommendation, RecommendationParseError, extract_recommendation
 from src.utils.logger import get_logger
-
-_FORECAST_TOOL_NAMES = ("forecast_league", "forecast_international")
 
 _PROMPTS_DIR = Path(__file__).parent.parent.parent / "config" / "prompts"
 _LOG = get_logger(__name__)
@@ -24,6 +23,9 @@ class AgentState(TypedDict):
     match_info: dict
     recommendation: dict | None
     tool_call_count: int
+    competition_resolution: dict | None
+    research_evidence: dict | None
+    forecast_payload: dict | None
 
 
 def _build_llm(config: AgentConfig) -> Any:
@@ -152,7 +154,12 @@ def _build_recommendation(
 
 
 def build_graph(config: AgentConfig, tools: list):
-    """Compile and return the LangGraph StateGraph for the betting agent."""
+    """Compile and return the LangGraph StateGraph for the betting agent.
+
+    A31/A32: resolve_competition -> research -> forecast run first and always,
+    deterministically, before the LLM ever sees the match. A failed/impossible
+    forecast (no odds available from any source, or a tool error) routes
+    straight to output -- the LLM node is never invoked in that case."""
     llm = _build_llm(config)
     llm_with_tools = llm.bind_tools(tools)
 
@@ -176,7 +183,33 @@ def build_graph(config: AgentConfig, tools: list):
         _LOG.info("should_continue | has_tool_calls=%s | tool_call_count=%d | route=%s", has_calls, state["tool_call_count"], route)
         return route
 
+    def route_after_forecast(state: AgentState) -> Literal["agent", "output"]:
+        payload = state.get("forecast_payload")
+        succeeded = bool(payload) and "error" not in payload
+        route = "agent" if succeeded else "output"
+        _LOG.info("route_after_forecast | succeeded=%s | route=%s", succeeded, route)
+        return route
+
     def output_node(state: AgentState) -> dict:
+        forecast_payload = state.get("forecast_payload")
+        match_info = state["match_info"]
+
+        if not forecast_payload or "error" in forecast_payload:
+            reason = (forecast_payload or {}).get("error", "forecast step did not run")
+            _LOG.warning("output_node | no_forecast | reason=%s", reason)
+            return {"recommendation": {
+                "match": match_info,
+                "overall": "insufficient_data",
+                "markets": [],
+                "explanation": f"No ML forecast is available for this match: {reason}",
+                "confidence": "low",
+                "limitations": [f"Forecast step failed or was skipped: {reason}"],
+                "prediction_basis": "unknown",
+                "cold_start_risk": False,
+                "feature_completeness": None,
+                "unknown_team": False,
+            }}
+
         last = state["messages"][-1]
         text = last.content if isinstance(last.content, str) else str(last.content)
 
@@ -195,14 +228,23 @@ def build_graph(config: AgentConfig, tools: list):
 
         _LOG.info("output_node | raw_output_length=%d", len(text))
         _LOG.info("output_node | raw_output=%s", text)
-        recommendation = _build_recommendation(text, state["match_info"], state["messages"], config)
+        recommendation = _build_recommendation(
+            text, match_info, forecast_payload, state.get("research_evidence"), config,
+        )
         return {"recommendation": recommendation}
 
     graph = StateGraph(AgentState)
+    graph.add_node("resolve_competition", resolve_competition_node)
+    graph.add_node("research", research_node)
+    graph.add_node("forecast", forecast_node)
     graph.add_node("agent", agent_node)
     graph.add_node("tools", ToolNode(tools))
     graph.add_node("output", output_node)
-    graph.set_entry_point("agent")
+
+    graph.set_entry_point("resolve_competition")
+    graph.add_edge("resolve_competition", "research")
+    graph.add_edge("research", "forecast")
+    graph.add_conditional_edges("forecast", route_after_forecast, {"agent": "agent", "output": "output"})
     graph.add_conditional_edges("agent", should_continue, {"tools": "tools", "output": "output"})
     graph.add_edge("tools", "agent")
     graph.add_edge("output", END)
@@ -219,9 +261,11 @@ def run_agent(
     """Run the betting agent for a single match and return a structured recommendation.
 
     Args:
-        match_info: Dict with keys: home_team, away_team, date, and optionally league.
+        match_info: Dict with keys: home_team, away_team, date, and optionally league, odds.
         config: AgentConfig instance. Loads from config/agent_config.yaml if None.
-        tools: List of LangChain tools. Loads default tools if None.
+        tools: List of LangChain tools available to the LLM synthesis step (web_search
+            by default). Loads default tools if None. Competition resolution and the
+            ML forecast are no longer LLM-callable tools -- see src/agent/pipeline.py.
         extra_system_instructions: Appended to the loaded system prompt. Used by
             agent-snapshot (A11) to inject snapshot-collection-only rules (e.g.
             "ignore any result mentioning a final score") without forking the
@@ -245,10 +289,7 @@ def run_agent(
         prompt += f" in league {match_info['league']}"
     odds = match_info.get("odds")
     if odds:
-        prompt += (
-            f". Bookmaker odds: home={odds['home']}, draw={odds['draw']}, away={odds['away']}. "
-            "Use these exact odds_h/odds_d/odds_a values when calling the forecast tool."
-        )
+        prompt += f". Bookmaker odds: home={odds['home']}, draw={odds['draw']}, away={odds['away']}."
 
     initial_state: AgentState = {
         "messages": [
@@ -258,6 +299,9 @@ def run_agent(
         "match_info": match_info,
         "recommendation": None,
         "tool_call_count": 0,
+        "competition_resolution": None,
+        "research_evidence": None,
+        "forecast_payload": None,
     }
 
     compiled = build_graph(config, tools)
