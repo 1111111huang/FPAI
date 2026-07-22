@@ -101,3 +101,110 @@ def test_research_node_also_runs_odds_search_when_caller_supplied_no_odds():
     assert mock_search.call_count == 3
     odds_verification = result["research_evidence"]["odds_verification"]
     assert odds_verification["parsed_odds"] == {"home": 1.45, "draw": 4.50, "away": 7.00}
+
+
+from src.agent.pipeline import _format_evidence_message, forecast_node
+
+
+def test_forecast_node_prefers_caller_supplied_odds_over_research_odds():
+    fake_result = {"result_3way": {"probabilities": {"home": 0.5}}, "data_quality": {"prediction_basis": "team_history_and_market"}}
+    with patch("src.forecast.forecast_service.ForecastService") as MockSvc:
+        instance = MagicMock()
+        MockSvc.return_value = instance
+        instance.forecast_upcoming.return_value = fake_result
+
+        state = _base_state(
+            match_info={
+                "home_team": "A", "away_team": "B", "date": "2026-06-21", "league": "E0",
+                "odds": {"home": 2.0, "draw": 3.0, "away": 3.5},
+            },
+            competition_resolution={"competition": "E0", "tier": "competition_specific", "recommended_tool": "forecast_league"},
+            research_evidence={"availability": "x", "form_context": "y", "odds_verification": None},
+        )
+        result = forecast_node(state)
+
+    assert "error" not in result["forecast_payload"]
+    call_kwargs = instance.forecast_upcoming.call_args.kwargs
+    assert (call_kwargs["odds_h"], call_kwargs["odds_d"], call_kwargs["odds_a"]) == (2.0, 3.0, 3.5)
+    assert any("ML Forecast" in m.content for m in result["messages"])
+
+
+def test_forecast_node_falls_back_to_research_odds_when_caller_supplied_none():
+    fake_result = {"result_3way": {"probabilities": {"home": 0.5}}, "data_quality": {}}
+    with patch("src.forecast.forecast_service.ForecastService") as MockSvc:
+        instance = MagicMock()
+        MockSvc.return_value = instance
+        instance.forecast_upcoming.return_value = fake_result
+
+        state = _base_state(
+            match_info={"home_team": "A", "away_team": "B", "date": "2026-06-21", "league": "E0"},
+            competition_resolution={"competition": "E0", "tier": "competition_specific", "recommended_tool": "forecast_league"},
+            research_evidence={
+                "availability": "x", "form_context": "y",
+                "odds_verification": {"results": "...", "parsed_odds": {"home": 1.9, "draw": 3.4, "away": 4.0}},
+            },
+        )
+        result = forecast_node(state)
+
+    call_kwargs = instance.forecast_upcoming.call_args.kwargs
+    assert (call_kwargs["odds_h"], call_kwargs["odds_d"], call_kwargs["odds_a"]) == (1.9, 3.4, 4.0)
+
+
+def test_forecast_node_returns_no_odds_error_when_neither_source_has_odds():
+    state = _base_state(
+        match_info={"home_team": "A", "away_team": "B", "date": "2026-06-21", "league": "E0"},
+        competition_resolution={"competition": "E0", "tier": "competition_specific", "recommended_tool": "forecast_league"},
+        research_evidence={"availability": "x", "form_context": "y", "odds_verification": {"results": "no odds mentioned", "parsed_odds": None}},
+    )
+    result = forecast_node(state)
+    assert result["forecast_payload"]["status"] == "no_odds"
+    assert "error" in result["forecast_payload"]
+    assert "messages" not in result
+
+
+def test_forecast_node_calls_forecast_international_when_recommended():
+    fake_result = {"result_3way": {"probabilities": {"home": 0.4}}, "data_quality": {"prediction_basis": "market_odds_only"}}
+    with patch("src.forecast.forecast_service.ForecastService") as MockSvc:
+        instance = MagicMock()
+        MockSvc.return_value = instance
+        instance.forecast_upcoming.return_value = fake_result
+
+        state = _base_state(
+            match_info={
+                "home_team": "Real Madrid", "away_team": "Barcelona", "date": "2026-06-21",
+                "league": "La Liga", "odds": {"home": 2.1, "draw": 3.4, "away": 3.3},
+            },
+            competition_resolution={"competition": "La Liga", "tier": "general_purpose", "recommended_tool": "forecast_international"},
+        )
+        result = forecast_node(state)
+
+    assert instance.forecast_upcoming.call_args.kwargs["match_type"] == "international"
+    assert "error" not in result["forecast_payload"]
+
+
+def test_forecast_node_propagates_tool_error_payload():
+    with patch("src.forecast.forecast_service.ForecastService") as MockSvc:
+        MockSvc.side_effect = RuntimeError("boom")
+        state = _base_state(
+            match_info={
+                "home_team": "A", "away_team": "B", "date": "2026-06-21", "league": "E0",
+                "odds": {"home": 2.0, "draw": 3.0, "away": 3.5},
+            },
+            competition_resolution={"competition": "E0", "tier": "competition_specific", "recommended_tool": "forecast_league"},
+        )
+        result = forecast_node(state)
+
+    assert result["forecast_payload"]["status"] == "tool_error"
+    assert "messages" not in result
+
+
+def test_format_evidence_message_includes_forecast_and_research_evidence():
+    payload = {"result_3way": {"probabilities": {"home": 0.5}}}
+    evidence = {"availability": "no injuries", "form_context": "won last 3", "odds_verification": {"results": "odds text", "parsed_odds": None}}
+    message = _format_evidence_message(payload, evidence)
+
+    assert "no injuries" in message
+    assert "won last 3" in message
+    assert "odds text" in message
+    assert "result_3way" in message
+    assert "resolve_competition" in message  # tells the LLM not to call it

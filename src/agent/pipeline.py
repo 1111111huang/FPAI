@@ -9,6 +9,8 @@ from __future__ import annotations
 import json
 import re
 
+from langchain_core.messages import HumanMessage
+
 _ODDS_NUMBER_PATTERN = re.compile(r"\b\d{1,2}\.\d{1,2}\b")
 
 
@@ -79,3 +81,77 @@ def research_node(state: dict) -> dict:
         }
 
     return {"research_evidence": evidence}
+
+
+def _format_evidence_message(forecast_payload: dict, research_evidence: dict | None) -> str:
+    """The message injected into the LLM's context once the deterministic
+    pipeline finishes, replacing the old tool-call results the LLM used to
+    see. Explicitly tells the LLM the forecast/competition tools are gone."""
+    evidence = research_evidence or {}
+    lines = [
+        "The following evidence has already been gathered for this match by the "
+        "system. forecast_league, forecast_international, and resolve_competition "
+        "are NOT available as tools -- do not attempt to call them. Use web_search "
+        "only for additional follow-up context beyond what's already below.",
+        "",
+        "## ML Forecast",
+        json.dumps(forecast_payload, indent=2, default=str),
+        "",
+        "## Availability / Injury News",
+        evidence.get("availability") or "No results.",
+        "",
+        "## Recent Form Context",
+        evidence.get("form_context") or "No results.",
+    ]
+    odds_verification = evidence.get("odds_verification")
+    if odds_verification:
+        lines += ["", "## Odds Verification Search", odds_verification.get("results") or "No results."]
+    return "\n".join(lines)
+
+
+def forecast_node(state: dict) -> dict:
+    """A31: the ML forecast is now a required deterministic step, not
+    something the LLM chooses (or fails) to call. Odds are sourced in
+    priority order: caller-supplied -> research_node's odds-verification
+    parse -> none. There is no third "fallback odds" tier -- ForecastService
+    cannot run without real odds (see the plan's technical-correction note),
+    so "none" short-circuits to an error payload that routes straight to
+    insufficient_data, skipping the LLM entirely."""
+    match_info = state["match_info"]
+    odds = match_info.get("odds")
+    if not odds:
+        research_evidence = state.get("research_evidence") or {}
+        odds_verification = research_evidence.get("odds_verification") or {}
+        odds = odds_verification.get("parsed_odds")
+
+    if not odds:
+        return {"forecast_payload": {
+            "error": "No odds available: not supplied by caller and odds-verification search found none",
+            "status": "no_odds",
+        }}
+
+    resolution = state.get("competition_resolution") or {}
+    recommended_tool = resolution.get("recommended_tool", "forecast_international")
+
+    from src.agent.tools import _forecast_international_impl, _forecast_league_impl, get_snapshot_store
+
+    store = get_snapshot_store()
+    if recommended_tool == "forecast_league":
+        raw = store.wrap("forecast_league", _forecast_league_impl)(
+            home_team=match_info["home_team"], away_team=match_info["away_team"],
+            date=match_info["date"], league=match_info.get("league", ""),
+            odds_h=odds["home"], odds_d=odds["draw"], odds_a=odds["away"],
+        )
+    else:
+        raw = store.wrap("forecast_international", _forecast_international_impl)(
+            home_team=match_info["home_team"], away_team=match_info["away_team"],
+            date=match_info["date"],
+            odds_h=odds["home"], odds_d=odds["draw"], odds_a=odds["away"],
+        )
+
+    payload = json.loads(raw)
+    if "error" in payload:
+        return {"forecast_payload": payload}
+
+    evidence_message = _format_evidence_message(payload, state.get("research_evidence"))
+    return {"forecast_payload": payload, "messages": [HumanMessage(content=evidence_message)]}
