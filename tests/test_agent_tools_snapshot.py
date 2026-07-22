@@ -132,3 +132,8 @@ def test_live_mode_is_default_and_unaffected_by_snapshot_machinery():
             "odds_h": 2.0, "odds_d": 3.0, "odds_a": 3.5,
         })
     assert json.loads(result)["result_3way"]["probabilities"]["home"] == 0.5
+
+
+def test_get_default_tools_only_exposes_web_search():
+    from src.agent.tools import get_default_tools
+    assert [t.name for t in get_default_tools()] == ["web_search"]

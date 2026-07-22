@@ -82,6 +82,17 @@ def _web_search_impl(query: str) -> str:
     return "\n\n---\n\n".join(snippets) if snippets else "No results found."
 
 
+def _dated_web_search(query: str) -> str:
+    """A32: shared by both the LLM-facing web_search tool and the deterministic
+    research_node baseline searches. Appends a before:<match_date> filter during
+    record/replay (A10) to reduce post-match result leakage, then runs the
+    (possibly snapshot-wrapped) search."""
+    effective_query = query
+    if _snapshot_store.mode in ("record", "replay") and _snapshot_store.match_date:
+        effective_query = f"{query} before:{_snapshot_store.match_date}"
+    return _snapshot_store.wrap("web_search", _web_search_impl)(query=effective_query)
+
+
 @tool
 def web_search(query: str) -> str:
     """Search the web for football match information: odds, team news, injuries, and lineups.
@@ -89,10 +100,7 @@ def web_search(query: str) -> str:
     Use for: finding current bookmaker odds, alternative team name spellings,
     injury/suspension reports, team selection hints, and recent form context.
     Always ignore any result that mentions a final score or match result."""
-    effective_query = query
-    if _snapshot_store.mode in ("record", "replay") and _snapshot_store.match_date:
-        effective_query = f"{query} before:{_snapshot_store.match_date}"
-    return _snapshot_store.wrap("web_search", _web_search_impl)(query=effective_query)
+    return _dated_web_search(query)
 
 
 def _resolve_competition_impl(competition_or_league: str) -> str:
@@ -266,4 +274,8 @@ def forecast_international(
 
 
 def get_default_tools() -> list:
-    return [resolve_competition, web_search, forecast_league, forecast_international]
+    """A31: forecast_league, forecast_international, and resolve_competition are
+    no longer LLM-callable -- they're invoked directly by the deterministic
+    pipeline nodes in src/agent/pipeline.py before the LLM ever runs. Only
+    web_search remains available for the LLM's own optional follow-up digging."""
+    return [web_search]
