@@ -163,7 +163,12 @@ def extract_recommendation(
             last_error = f"missing fields: {sorted(missing)}"
             continue
 
-        if data["overall"] not in _VALID_OVERALL:
+        # BUG-020: `not in` on a set requires hashing the LHS -- a malformed
+        # response with a dict/list `overall` (observed live from
+        # qwen2.5-coder:7b) raised an unhandled TypeError here instead of
+        # being treated as an invalid value. isinstance-check first so any
+        # non-string overall falls through to the same graceful path.
+        if not isinstance(data["overall"], str) or data["overall"] not in _VALID_OVERALL:
             last_error = f"invalid overall value: {data['overall']!r}"
             continue
 

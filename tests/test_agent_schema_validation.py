@@ -95,3 +95,22 @@ def test_conditional_market_with_null_odds_is_not_touched():
 
     assert rec["markets"][0]["recommendation_type"] == "conditional"
     assert rec["limitations"] == []
+
+
+def test_overall_as_unhashable_dict_raises_parse_error_not_type_error():
+    """BUG-020: a real qwen2.5-coder:7b response returned `overall` as a dict
+    (e.g. {"liverpool_form": ..., "bournemouth_form": ...}) instead of a
+    string. `data["overall"] not in _VALID_OVERALL` requires hashing the LHS
+    for the set membership test -- a dict/list there raised an unhandled
+    `TypeError: unhashable type: 'dict'` that crashed the whole agent-recommend
+    call instead of being treated as an invalid `overall` value and falling
+    through to RecommendationParseError like any other malformed candidate."""
+    bad = {**_VALID, "overall": {"liverpool_form": "mixed", "bournemouth_form": "worse"}}
+    with pytest.raises(RecommendationParseError):
+        extract_recommendation(_wrap_json(bad))
+
+
+def test_overall_as_unhashable_list_raises_parse_error_not_type_error():
+    bad = {**_VALID, "overall": ["direct_bet", "no_bet"]}
+    with pytest.raises(RecommendationParseError):
+        extract_recommendation(_wrap_json(bad))

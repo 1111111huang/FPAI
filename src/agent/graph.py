@@ -220,7 +220,8 @@ def build_graph(config: AgentConfig, tools: list):
             synthesis_prompt = (
                 "You have reached the tool call limit. "
                 "Based on all the information gathered above, output your final JSON recommendation now. "
-                "Include all required fields: match, overall, markets, explanation, confidence, limitations, prediction_basis."
+                "Include all required fields: match, overall, markets, explanation, confidence, limitations, prediction_basis. "
+                "Output ONLY the JSON block -- no narrative report, no headers, no text before or after it."
             )
             synthesis_response = llm.invoke(state["messages"] + [HumanMessage(content=synthesis_prompt)])
             text = synthesis_response.content if isinstance(synthesis_response.content, str) else str(synthesis_response.content)

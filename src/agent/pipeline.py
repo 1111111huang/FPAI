@@ -86,26 +86,45 @@ def research_node(state: dict) -> dict:
 def _format_evidence_message(forecast_payload: dict, research_evidence: dict | None) -> str:
     """The message injected into the LLM's context once the deterministic
     pipeline finishes, replacing the old tool-call results the LLM used to
-    see. Explicitly tells the LLM the forecast/competition tools are gone."""
+    see. Explicitly tells the LLM the forecast/competition tools are gone.
+
+    BUG-019: deliberately avoids two things that caused local models (observed
+    on both llama3.1:8b and qwen2.5-coder:7b) to not emit the required JSON:
+    (1) markdown headers (`##`/`###`) around the evidence, which the model
+    pattern-completed with its own document subsections instead of writing
+    JSON at all; (2) a fenced ```-code-block JSON-shaped example, which -- once
+    (1) was fixed -- the model instead imitated the *shape* of (a single
+    wrapper key like `{"recommendation": "..."}`) rather than recalling the
+    real schema defined earlier in the system prompt. Evidence is now plain
+    UPPERCASE_LABEL: text with no code fence, and the exact required top-level
+    JSON keys are restated immediately after the evidence -- closest to the
+    model's own next turn, where a schema reminder has the most influence."""
     evidence = research_evidence or {}
     lines = [
-        "The following evidence has already been gathered for this match by the "
-        "system. forecast_league, forecast_international, and resolve_competition "
-        "are NOT available as tools -- do not attempt to call them. Use web_search "
-        "only for additional follow-up context beyond what's already below.",
+        "Reference data for this match below (not a document to write about, and "
+        "not an example of your output format -- use it only to inform the JSON "
+        "recommendation described further below).",
         "",
-        "## ML Forecast",
-        json.dumps(forecast_payload, indent=2, default=str),
-        "",
-        "## Availability / Injury News",
-        evidence.get("availability") or "No results.",
-        "",
-        "## Recent Form Context",
-        evidence.get("form_context") or "No results.",
+        "FORECAST_PAYLOAD: " + json.dumps(forecast_payload, default=str),
+        "AVAILABILITY_SEARCH_RESULT: " + (evidence.get("availability") or "No results."),
+        "FORM_SEARCH_RESULT: " + (evidence.get("form_context") or "No results."),
     ]
     odds_verification = evidence.get("odds_verification")
     if odds_verification:
-        lines += ["", "## Odds Verification Search", odds_verification.get("results") or "No results."]
+        lines.append("ODDS_VERIFICATION_SEARCH_RESULT: " + (odds_verification.get("results") or "No results."))
+    lines += [
+        "",
+        "forecast_league, forecast_international, and resolve_competition are NOT "
+        "available as tools -- do not attempt to call them. Use web_search only for "
+        "additional follow-up context beyond what's above. Do not summarize or write "
+        "prose about the data above.",
+        "",
+        "Your final answer must be a single JSON object with EXACTLY these top-level "
+        "keys, no others: match, overall, markets, explanation, confidence, "
+        "limitations, prediction_basis. Do not wrap your answer in any other key "
+        "(e.g. not {\"recommendation\": ...} or {\"response\": ...}) -- use these exact "
+        "field names at the top level.",
+    ]
     return "\n".join(lines)
 
 

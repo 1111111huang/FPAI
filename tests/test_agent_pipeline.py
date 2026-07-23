@@ -40,6 +40,17 @@ def test_resolve_competition_node_uses_real_registry_for_known_league():
     assert result["competition_resolution"]["recommended_tool"] == "forecast_league"
 
 
+def test_resolve_competition_node_uses_real_registry_for_second_competition_specific_league():
+    """A35: SWE (Allsvenskan) is a second real competition_specific registration
+    (config/competitions.yaml) alongside E0 -- this must resolve the same way
+    E0 does, not fall through to general_purpose just because it isn't the
+    only registered competition_specific league."""
+    state = _base_state(match_info={"home_team": "Malmo FF", "away_team": "AIK", "date": "2026-07-25", "league": "SWE"})
+    result = resolve_competition_node(state)
+    assert result["competition_resolution"]["tier"] == "competition_specific"
+    assert result["competition_resolution"]["recommended_tool"] == "forecast_league"
+
+
 def test_resolve_competition_node_defaults_general_purpose_when_no_league_supplied():
     state = _base_state(match_info={"home_team": "A", "away_team": "B", "date": "2026-06-21"})
     result = resolve_competition_node(state)
@@ -126,7 +137,7 @@ def test_forecast_node_prefers_caller_supplied_odds_over_research_odds():
     assert "error" not in result["forecast_payload"]
     call_kwargs = instance.forecast_upcoming.call_args.kwargs
     assert (call_kwargs["odds_h"], call_kwargs["odds_d"], call_kwargs["odds_a"]) == (2.0, 3.0, 3.5)
-    assert any("ML Forecast" in m.content for m in result["messages"])
+    assert any("FORECAST_PAYLOAD" in m.content for m in result["messages"])
 
 
 def test_forecast_node_falls_back_to_research_odds_when_caller_supplied_none():
@@ -208,3 +219,14 @@ def test_format_evidence_message_includes_forecast_and_research_evidence():
     assert "odds text" in message
     assert "result_3way" in message
     assert "resolve_competition" in message  # tells the LLM not to call it
+
+
+def test_format_evidence_message_has_no_markdown_headers():
+    """BUG-019: markdown headers (##/###) caused local models to pattern-complete
+    a narrative report instead of emitting the required JSON."""
+    payload = {"result_3way": {"probabilities": {"home": 0.5}}}
+    evidence = {"availability": "no injuries", "form_context": "won last 3", "odds_verification": None}
+    message = _format_evidence_message(payload, evidence)
+
+    assert "##" not in message
+    assert "###" not in message
