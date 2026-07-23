@@ -35,6 +35,12 @@ def _build_llm(config: AgentConfig) -> Any:
     if config.provider == "anthropic":
         from langchain_anthropic import ChatAnthropic
         return ChatAnthropic(model=config.model, temperature=config.temperature)
+    if config.provider == "groq":
+        from langchain_groq import ChatGroq
+        return ChatGroq(model=config.model, temperature=config.temperature)
+    if config.provider == "gemini":
+        from langchain_google_genai import ChatGoogleGenerativeAI
+        return ChatGoogleGenerativeAI(model=config.model, temperature=config.temperature)
     raise ValueError(f"Unknown provider: {config.provider!r}")
 
 
@@ -43,6 +49,28 @@ def _load_system_prompt(config: AgentConfig) -> str:
     if not path.exists():
         raise FileNotFoundError(f"System prompt not found: {path}")
     return path.read_text()
+
+
+def _extract_text(content: str | list) -> str:
+    """BUG-021: some provider integrations (e.g. langchain-google-genai)
+    return AIMessage.content as a list of content-block dicts carrying
+    per-block metadata (Gemini's 'extras.signature' thought-signature blob)
+    rather than a plain string. str()-ing that list renders the metadata
+    too, corrupting downstream JSON extraction. Extract only each block's
+    'text' field -- never fall back to stringifying the whole structure
+    unless it's a genuinely unrecognized shape."""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts = []
+        for block in content:
+            if isinstance(block, dict):
+                if block.get("type") == "text":
+                    parts.append(block.get("text", ""))
+            elif isinstance(block, str):
+                parts.append(block)
+        return "".join(parts)
+    return str(content)
 
 
 _CONFIDENCE_STEPS = ["high", "medium", "low"]
@@ -170,7 +198,7 @@ def build_graph(config: AgentConfig, tools: list):
         if tool_calls:
             _LOG.info("agent_node | tool_calls=%s | count_after=%d", [tc["name"] for tc in tool_calls], new_count)
         else:
-            content = response.content if isinstance(response.content, str) else str(response.content)
+            content = _extract_text(response.content)
             _LOG.info("agent_node | no tool_calls | raw_output_length=%d", len(content))
             _LOG.debug("agent_node | raw_output=%s", content)
         return {"messages": [response], "tool_call_count": new_count}
@@ -211,7 +239,7 @@ def build_graph(config: AgentConfig, tools: list):
             }}
 
         last = state["messages"][-1]
-        text = last.content if isinstance(last.content, str) else str(last.content)
+        text = _extract_text(last.content)
 
         if not text.strip():
             # Budget was exhausted — last message is a tool call with no text content.
@@ -224,7 +252,7 @@ def build_graph(config: AgentConfig, tools: list):
                 "Output ONLY the JSON block -- no narrative report, no headers, no text before or after it."
             )
             synthesis_response = llm.invoke(state["messages"] + [HumanMessage(content=synthesis_prompt)])
-            text = synthesis_response.content if isinstance(synthesis_response.content, str) else str(synthesis_response.content)
+            text = _extract_text(synthesis_response.content)
             _LOG.info("output_node | synthesis_length=%d | synthesis_output=%s", len(text), text)
 
         _LOG.info("output_node | raw_output_length=%d", len(text))

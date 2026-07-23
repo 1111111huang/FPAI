@@ -16,6 +16,8 @@ langgraph
 langchain
 langchain-anthropic
 langchain-ollama
+langchain-groq
+langchain-google-genai
 tavily-python
 json-repair
 tqdm

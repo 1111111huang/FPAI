@@ -6,7 +6,7 @@ from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from langchain_core.tools import tool
 
 from src.agent.agent_config import AgentConfig
-from src.agent.graph import AgentState, build_graph
+from src.agent.graph import AgentState, _extract_text, build_graph
 
 
 @tool
@@ -178,6 +178,39 @@ def _route_for_state(cfg: AgentConfig, state: AgentState) -> str:
     has_calls = bool(getattr(last, "tool_calls", None))
     under_budget = state["tool_call_count"] < cfg.max_tool_calls
     return "tools" if has_calls and under_budget else "output"
+
+
+def test_extract_text_passes_through_plain_string():
+    assert _extract_text("hello") == "hello"
+
+
+def test_extract_text_extracts_from_gemini_shaped_block_list():
+    """BUG-021: langchain-google-genai returns content as a list of blocks
+    with a 'text' field plus unrelated 'extras' metadata (e.g. a multi-KB
+    thought-signature blob) -- only the text should be extracted, never the
+    metadata."""
+    content = [{
+        "type": "text",
+        "text": '```json\n{"overall": "no_bet"}\n```',
+        "extras": {"signature": "A" * 5000},
+    }]
+    result = _extract_text(content)
+    assert result == '```json\n{"overall": "no_bet"}\n```'
+    assert "AAAA" not in result
+
+
+def test_extract_text_concatenates_multiple_text_blocks():
+    content = [{"type": "text", "text": "part one "}, {"type": "text", "text": "part two"}]
+    assert _extract_text(content) == "part one part two"
+
+
+def test_extract_text_ignores_non_text_blocks():
+    content = [{"type": "text", "text": "kept"}, {"type": "thinking", "thinking": "dropped"}]
+    assert _extract_text(content) == "kept"
+
+
+def test_extract_text_handles_bare_string_list_entries():
+    assert _extract_text(["a", "b"]) == "ab"
 
 
 def _route_after_forecast_for_state(forecast_payload):

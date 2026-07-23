@@ -10,7 +10,7 @@ _DEFAULT_CONFIG = Path(__file__).parent.parent / "config" / "agent_config.yaml"
 
 def test_default_config_loads():
     cfg = AgentConfig.default()
-    assert cfg.provider in ("ollama", "anthropic")
+    assert cfg.provider in ("ollama", "anthropic", "groq", "gemini")
     assert cfg.temperature >= 0.0
     assert cfg.max_tool_calls > 0
     assert cfg.min_odds_threshold >= 1.0

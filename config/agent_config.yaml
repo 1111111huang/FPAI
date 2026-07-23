@@ -1,8 +1,8 @@
 # Betting agent configuration — all tunable knobs.
 # Swap model/provider to change the LLM tier without touching code.
 
-model: "qwen2.5-coder:7b"       # local Ollama model, coder-tuned for reliable structured/JSON output (switched 2026-07-23: llama3.1:8b had a 52% JSON parse-failure rate during A34 recording)
-provider: "ollama"              # "ollama" | "anthropic"
+model: "gemini-flash-latest"    # Gemini free-tier hosted model (2026-07-23: testing free-tier daily-quota headroom vs Groq's llama-3.3-70b-versatile, which proved reliable but capped at 100K tokens/day)
+provider: "gemini"              # "ollama" | "anthropic" | "groq" | "gemini"
 temperature: 0.1                # lower = more deterministic; use 0.0 for backtesting
 max_tool_calls: 10              # per-match tool budget
 
