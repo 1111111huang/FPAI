@@ -108,6 +108,39 @@ def test_process_match_row_propagates_snapshot_missing_error():
             process_match_row(_row(), _make_config())
 
 
+def test_process_match_row_captures_full_state_when_requested():
+    full_state = {
+        "recommendation": {
+            "match": {}, "overall": "no_bet", "markets": [],
+            "explanation": "x", "confidence": "high", "limitations": [], "prediction_basis": "team_history_and_market",
+        },
+        "competition_resolution": {"competition": "E0", "tier": "competition_specific"},
+        "research_evidence": {"availability": "ok"},
+        "forecast_payload": {"result_3way": {}},
+    }
+    with patch("src.agent.graph.run_agent", return_value=full_state) as mock_run, \
+         patch("src.agent.tools.configure_snapshot_store"):
+        record = process_match_row(_row(fthg=1, ftag=1), _make_config(), capture_state=True)
+
+    assert record.full_state == full_state
+    assert record.recommendation == full_state["recommendation"]
+    mock_run.assert_called_once()
+    assert mock_run.call_args.kwargs["return_full_state"] is True
+
+
+def test_process_match_row_full_state_none_by_default():
+    recommendation = {
+        "match": {}, "overall": "no_bet", "markets": [],
+        "explanation": "x", "confidence": "high", "limitations": [], "prediction_basis": "team_history_and_market",
+    }
+    with patch("src.agent.graph.run_agent", return_value=recommendation) as mock_run, \
+         patch("src.agent.tools.configure_snapshot_store"):
+        record = process_match_row(_row(fthg=1, ftag=1), _make_config())
+
+    assert record.full_state is None
+    assert "return_full_state" not in mock_run.call_args.kwargs
+
+
 def test_backtest_harness_load_matches_filters_by_date_and_league():
     harness = BacktestHarness(config=_make_config())
     fake_df = pd.DataFrame([

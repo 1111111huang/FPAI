@@ -28,6 +28,7 @@ class BacktestRecord:
     recommendation: dict[str, Any]
     actual: dict[str, Any]
     market_results: list[dict[str, Any]] = field(default_factory=list)
+    full_state: dict[str, Any] | None = None
 
 
 def load_outcome(row: pd.Series) -> dict[str, Any]:
@@ -52,13 +53,17 @@ def _build_match_info(row: pd.Series) -> dict[str, Any]:
     return match_info
 
 
-def process_match_row(row: pd.Series, config: AgentConfig) -> BacktestRecord:
+def process_match_row(row: pd.Series, config: AgentConfig, capture_state: bool = False) -> BacktestRecord:
     """Replay one historical match through the agent and score its recommendation.
 
     Sets the module-level SnapshotStore to replay mode for this match_id before
     calling run_agent, and always resets it to live mode afterward (even on
     error) so a failed match doesn't leave a later, unrelated call in replay
     mode by accident.
+
+    capture_state (A33): when True, also captures the full graph state
+    (competition_resolution/research_evidence/forecast_payload) on the
+    returned record's full_state, for agent-train's telemetry persistence.
     """
     # Local imports: keep these inside the function — tests patch
     # src.agent.graph.run_agent and src.agent.tools.configure_snapshot_store,
@@ -74,7 +79,12 @@ def process_match_row(row: pd.Series, config: AgentConfig) -> BacktestRecord:
         "replay", match_id=match_id, base_dir=league_base_dir(row["league"]),
     )
     try:
-        recommendation = run_agent(match_info=match_info, config=config)
+        if capture_state:
+            full_state = run_agent(match_info=match_info, config=config, return_full_state=True)
+            recommendation = full_state["recommendation"]
+        else:
+            recommendation = run_agent(match_info=match_info, config=config)
+            full_state = None
     finally:
         agent_tools.configure_snapshot_store("live")
 
@@ -92,6 +102,7 @@ def process_match_row(row: pd.Series, config: AgentConfig) -> BacktestRecord:
         recommendation=recommendation,
         actual=actual,
         market_results=market_results,
+        full_state=full_state,
     )
 
 
