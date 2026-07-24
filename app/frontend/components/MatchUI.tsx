@@ -285,7 +285,7 @@ function formatEdge(v: number) {
   const pct = (v * 100).toFixed(1);
   return v >= 0 ? `+${pct}%` : `${pct}%`;
 }
-function bestMarket(match: Match): MarketRec | undefined {
+export function bestMarket(match: Match): MarketRec | undefined {
   return [...match.markets].sort((a, b) => b.valueEdge - a.valueEdge)[0];
 }
 
