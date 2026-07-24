@@ -127,6 +127,44 @@ def test_odds_are_fetched_and_attached_when_not_supplied_and_a_match_is_found():
     assert match_info["odds"] == {"home": 1.5, "draw": 4.0, "away": 6.0}
 
 
+def test_odds_fetch_uses_the_epl_sport_key_for_an_e0_request():
+    """W58: must not rely on get_odds()'s own "soccer_epl" default parameter."""
+    fetched_event = NormalizedOdds(
+        home_team="Arsenal", away_team="Everton", commence_time="2026-08-22T15:00:00Z",
+        home_odds=1.5, draw_odds=4.0, away_odds=6.0,
+    )
+    odds_client = _odds_client_returning(fetched_event)
+    with patch("app.backend.recommendations.run_agent", return_value=_VALID_RECOMMENDATION):
+        with patch("app.backend.main.build_odds_client", return_value=odds_client):
+            with TestClient(app) as client:
+                client.post(
+                    "/api/recommendations",
+                    json={"home_team": "Arsenal", "away_team": "Everton", "date": "2026-08-22", "league": "E0"},
+                )
+
+    odds_client.get_odds.assert_called_once_with(sport_key="soccer_epl")
+
+
+def test_odds_fetch_uses_the_swedish_sport_key_for_a_swe_request():
+    """W58: a Swedish fixture's odds fetch must use its own confirmed
+    sport_key (soccer_sweden_allsvenskan, W55), not silently fall back to
+    EPL's odds feed just because that used to be the only option."""
+    fetched_event = NormalizedOdds(
+        home_team="Malmo FF", away_team="AIK", commence_time="2026-07-25T17:00:00Z",
+        home_odds=1.8, draw_odds=3.6, away_odds=4.5,
+    )
+    odds_client = _odds_client_returning(fetched_event)
+    with patch("app.backend.recommendations.run_agent", return_value=_VALID_RECOMMENDATION):
+        with patch("app.backend.main.build_odds_client", return_value=odds_client):
+            with TestClient(app) as client:
+                client.post(
+                    "/api/recommendations",
+                    json={"home_team": "Malmo FF", "away_team": "AIK", "date": "2026-07-25", "league": "SWE"},
+                )
+
+    odds_client.get_odds.assert_called_once_with(sport_key="soccer_sweden_allsvenskan")
+
+
 def test_explicit_odds_take_precedence_over_fetched_odds():
     fetched_event = NormalizedOdds(
         home_team="Arsenal", away_team="Everton", commence_time="2026-08-22T15:00:00Z",

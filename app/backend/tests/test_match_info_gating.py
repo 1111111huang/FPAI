@@ -18,6 +18,23 @@ def test_e0_is_in_the_allowlist():
     assert "E0" in COMPETITION_ALLOWLIST
 
 
+def test_swe_is_in_the_allowlist():
+    """W56: Sweden's Allsvenskan is fully built engine-side (data, trained
+    models, config/competitions.yaml registration) -- the allowlist is the
+    only remaining reason it doesn't route through run_agent() correctly."""
+    assert "SWE" in COMPETITION_ALLOWLIST
+
+
+def test_gate_league_keeps_swe():
+    assert gate_league("SWE") == "SWE"
+
+
+def test_request_to_match_info_includes_league_for_swe():
+    request = RecommendationRequest(home_team="Malmo FF", away_team="AIK", date="2026-07-25", league="SWE")
+    match_info = request.to_match_info()
+    assert match_info["league"] == "SWE"
+
+
 def test_gate_league_keeps_allowlisted_competition():
     assert gate_league("E0") == "E0"
 

@@ -303,6 +303,16 @@ const TEAM_COLORS: Record<string, { primary: string; secondary?: string }> = {
   "Aston Villa": { primary: "#670E36", secondary: "#95BFE5" },
   "Man United": { primary: "#DA291C" },
   "Manchester United": { primary: "#DA291C" },
+  // W61: Allsvenskan (Swedish top flight). Keys are the exact spelling The
+  // Odds API returns for these fixtures (confirmed live, W55/W59) -- not
+  // the ML engine's internal canonical short name (config/team_mapping.json),
+  // which is only used for odds-matching and never rendered directly.
+  "Malmo FF": { primary: "#6CACE4", secondary: "#FFFFFF" },
+  AIK: { primary: "#000000", secondary: "#FFD700" },
+  "Djurgardens IF": { primary: "#003D7A", secondary: "#6CACE4" },
+  "Hammarby IF": { primary: "#046A38", secondary: "#FFFFFF" },
+  "BK Hacken": { primary: "#FFD700", secondary: "#000000" },
+  "IFK Goteborg": { primary: "#0057A0", secondary: "#FFFFFF" },
 };
 
 const BADGE_FALLBACK_COLORS = ["#199e70", "#c98500", "#008300", "#9085e9", "#e66767", "#d55181", "#d95926"];

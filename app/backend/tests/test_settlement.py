@@ -134,6 +134,76 @@ def test_ignores_already_settled_bets(tmp_path: Path) -> None:
     client.get_results.assert_not_called()
 
 
+def _sweden_match(match_id: str, home_goals: int | None, away_goals: int | None) -> NormalizedMatch:
+    return NormalizedMatch(
+        match_id=match_id, utc_date="2026-08-22T15:00:00Z", status="FINISHED",
+        home_team="Malmo FF", away_team="AIK", home_goals=home_goals, away_goals=away_goals,
+    )
+
+
+def test_settles_a_swedish_bet_using_the_sweden_client(tmp_path: Path) -> None:
+    """W57: a bet whose match_id isn't in football-data.org's EPL results
+    (because it's a Swedish fixture, sourced from a different provider
+    entirely -- W55) must still settle, via the optional sweden_client."""
+    tracker = BetTracker(db_path=tmp_path / "bets.db")
+    bet = tracker.create_bet(
+        match_id="sw1", date="2026-08-22", home_team="Malmo FF", away_team="AIK",
+        market="result_3way", selection="home", odds=2.0, stake=10.0,
+        source="manual", recommendation_snapshot=None,
+    )
+    client = MagicMock()
+    client.get_results.return_value = []  # EPL source has no idea about this match_id
+    sweden_client = MagicMock()
+    sweden_client.get_results.return_value = [_sweden_match("sw1", 2, 1)]
+
+    settled = settle_open_bets(tracker, client, sweden_client=sweden_client)
+
+    assert len(settled) == 1
+    assert settled[0].outcome == "won"
+    assert tracker.get_bet(bet.id).outcome == "won"
+
+
+def test_sweden_client_is_optional_and_epl_bets_are_unaffected_by_its_absence(tmp_path: Path) -> None:
+    """Backward compatibility: every pre-existing call site (and test) omits
+    sweden_client entirely -- must behave exactly as before."""
+    tracker = BetTracker(db_path=tmp_path / "bets.db")
+    tracker.create_bet(
+        match_id="m1", date="2026-08-22", home_team="Arsenal", away_team="Everton",
+        market="result_3way", selection="home", odds=2.0, stake=10.0,
+        source="manual", recommendation_snapshot=None,
+    )
+    client = MagicMock()
+    client.get_results.return_value = [_match("m1", 2, 1)]
+
+    settled = settle_open_bets(tracker, client)
+
+    assert len(settled) == 1
+    assert settled[0].outcome == "won"
+
+
+def test_groups_sweden_api_calls_by_date_not_per_bet(tmp_path: Path) -> None:
+    tracker = BetTracker(db_path=tmp_path / "bets.db")
+    tracker.create_bet(
+        match_id="sw1", date="2026-08-22", home_team="Malmo FF", away_team="AIK",
+        market="result_3way", selection="home", odds=2.0, stake=10.0,
+        source="manual", recommendation_snapshot=None,
+    )
+    tracker.create_bet(
+        match_id="sw2", date="2026-08-22", home_team="Hammarby IF", away_team="Kalmar FF",
+        market="btts", selection="no", odds=1.8, stake=5.0,
+        source="manual", recommendation_snapshot=None,
+    )
+    client = MagicMock()
+    client.get_results.return_value = []
+    sweden_client = MagicMock()
+    sweden_client.get_results.return_value = [_sweden_match("sw1", 2, 1), _sweden_match("sw2", 1, 0)]
+
+    settled = settle_open_bets(tracker, client, sweden_client=sweden_client)
+
+    assert sweden_client.get_results.call_count == 1
+    assert len(settled) == 2
+
+
 def test_groups_api_calls_by_date_not_per_bet(tmp_path: Path) -> None:
     tracker = BetTracker(db_path=tmp_path / "bets.db")
     tracker.create_bet(

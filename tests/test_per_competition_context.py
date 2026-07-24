@@ -282,6 +282,33 @@ def test_forecast_upcoming_real_sweden_registration(tmp_path: Path) -> None:
     assert result["league"] == "SWE"
 
 
+def test_forecast_upcoming_swe_omits_a_target_it_has_no_registered_model_for(tmp_path: Path) -> None:
+    """A35 (agent_user_stories.md Phase 12): config/competitions.yaml's real SWE
+    entry excludes corners from available_targets (the source data has no
+    hc/ac columns), and in practice that means SWE's config/model_selection.yaml
+    context simply never gets a home_corners entry. forecast_upcoming must
+    silently omit a target it has no model for rather than erroring, so the
+    agent's forecast_payload naturally has no corners keys for a SWE fixture
+    with no special-casing needed anywhere in the agent pipeline itself."""
+    config_path = _write_config(tmp_path, schema_features=["MKT_IMPLIED_HOME"])
+    (config_path.parent / "config" / "competitions.yaml").write_text(
+        yaml.safe_dump({"competitions": {"SWE": {"competition_id": "SWE", "tier": "competition_specific", "league_code": "SWE"}}}),
+        encoding="utf-8",
+    )
+    _write_raw_matches(config_path)
+    _write_model(config_path, context="SWE", target="home_goals", feature_names=["MKT_IMPLIED_HOME"], constant=2.4)
+    # Deliberately no home_corners model registered under the SWE context.
+
+    service = ForecastService(config_path=str(config_path), targets=["home_goals", "home_corners"])
+    result = service.forecast_upcoming(
+        home_team="Malmo FF", away_team="AIK", date="2025-08-24", league="SWE",
+        odds_h=2.0, odds_d=3.3, odds_a=3.8, match_type="league",
+    )
+
+    assert "home_goals" in result["forecast"]
+    assert "home_corners" not in result["forecast"]
+
+
 # ---------------------------------------------------------------------------
 # ModelSelector: default enumeration + deprecated 'league' alias
 # ---------------------------------------------------------------------------

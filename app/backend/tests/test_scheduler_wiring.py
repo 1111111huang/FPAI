@@ -113,6 +113,110 @@ def test_register_eod_job_generates_recommendations_and_schedules_t30(tmp_path: 
     assert run_log.has_run("t30_m1", t30_run_at(fixture).isoformat())
 
 
+def test_register_eod_job_processes_both_e0_and_swe_when_sweden_client_configured(tmp_path: Path) -> None:
+    """W62: register_eod_job is no longer structurally single-league -- when
+    a sweden_fixtures_client is supplied, both E0 (football-data.org) and
+    SWE (The Odds API, W57) fixtures are discovered and generate correctly
+    league-tagged recommendations in the same nightly run."""
+    e0_fixture = NormalizedMatch(
+        match_id="m1", utc_date="2026-08-22T15:00:00Z", status="SCHEDULED",
+        home_team="Arsenal", away_team="Everton", home_goals=None, away_goals=None,
+    )
+    swe_fixture = NormalizedMatch(
+        match_id="sw1", utc_date="2026-08-22T17:00:00Z", status="SCHEDULED",
+        home_team="Malmo FF", away_team="AIK", home_goals=None, away_goals=None,
+    )
+    fixtures_client = MagicMock()
+    fixtures_client.get_fixtures.return_value = [e0_fixture]
+    sweden_fixtures_client = MagicMock()
+    sweden_fixtures_client.get_fixtures.return_value = [swe_fixture]
+    cache = RecommendationCache(db_path=tmp_path / "cache.db")
+    config = AgentConfig.default()
+    run_log = JobRunLog(db_path=tmp_path / "job_runs.db")
+    now = datetime(2026, 8, 22, 23, 30, tzinfo=NY_TZ)
+    scheduler = RecoverableScheduler(run_log=run_log, now_fn=lambda: now)
+
+    recommendation = {
+        "match": {"home": "A", "away": "B", "date": "2026-08-22", "league": "E0"},
+        "overall": "no_bet", "markets": [], "explanation": "test", "confidence": "low",
+        "limitations": [], "prediction_basis": "market_odds_only",
+    }
+    with patch("app.backend.recommendations.run_agent", return_value=recommendation) as mock_run_agent:
+        register_eod_job(
+            scheduler, fixtures_client=fixtures_client, odds_client=None,
+            cache=cache, config=config, now_fn=lambda: now,
+            sweden_fixtures_client=sweden_fixtures_client,
+        )
+
+    leagues_seen = {call.kwargs["match_info"]["league"] for call in mock_run_agent.call_args_list}
+    assert leagues_seen == {"E0", "SWE"}
+    assert run_log.has_run("t30_m1", t30_run_at(e0_fixture).isoformat())
+    assert run_log.has_run("t30_sw1", t30_run_at(swe_fixture).isoformat())
+
+
+def test_register_eod_job_skips_sweden_gracefully_when_no_sweden_client_configured(tmp_path: Path) -> None:
+    """Backward compatibility: omitting sweden_fixtures_client (its default)
+    must behave exactly like before W62 -- only E0 is processed, no crash."""
+    e0_fixture = NormalizedMatch(
+        match_id="m1", utc_date="2026-08-22T15:00:00Z", status="SCHEDULED",
+        home_team="Arsenal", away_team="Everton", home_goals=None, away_goals=None,
+    )
+    fixtures_client = MagicMock()
+    fixtures_client.get_fixtures.return_value = [e0_fixture]
+    cache = RecommendationCache(db_path=tmp_path / "cache.db")
+    config = AgentConfig.default()
+    run_log = JobRunLog(db_path=tmp_path / "job_runs.db")
+    now = datetime(2026, 8, 22, 23, 30, tzinfo=NY_TZ)
+    scheduler = RecoverableScheduler(run_log=run_log, now_fn=lambda: now)
+
+    recommendation = {
+        "match": {"home": "A", "away": "B", "date": "2026-08-22", "league": "E0"},
+        "overall": "no_bet", "markets": [], "explanation": "test", "confidence": "low",
+        "limitations": [], "prediction_basis": "market_odds_only",
+    }
+    with patch("app.backend.recommendations.run_agent", return_value=recommendation) as mock_run_agent:
+        register_eod_job(
+            scheduler, fixtures_client=fixtures_client, odds_client=None,
+            cache=cache, config=config, now_fn=lambda: now,
+        )
+
+    assert mock_run_agent.call_count == 1
+    assert mock_run_agent.call_args.kwargs["match_info"]["league"] == "E0"
+
+
+def test_register_eod_job_one_competitions_fixture_fetch_failure_does_not_block_the_other(tmp_path: Path) -> None:
+    """W62 acceptance: one competition's fixture-fetch failure must not
+    block the other's batch."""
+    e0_fixture = NormalizedMatch(
+        match_id="m1", utc_date="2026-08-22T15:00:00Z", status="SCHEDULED",
+        home_team="Arsenal", away_team="Everton", home_goals=None, away_goals=None,
+    )
+    fixtures_client = MagicMock()
+    fixtures_client.get_fixtures.return_value = [e0_fixture]
+    sweden_fixtures_client = MagicMock()
+    sweden_fixtures_client.get_fixtures.side_effect = RuntimeError("The Odds API is unreachable")
+    cache = RecommendationCache(db_path=tmp_path / "cache.db")
+    config = AgentConfig.default()
+    run_log = JobRunLog(db_path=tmp_path / "job_runs.db")
+    now = datetime(2026, 8, 22, 23, 30, tzinfo=NY_TZ)
+    scheduler = RecoverableScheduler(run_log=run_log, now_fn=lambda: now)
+
+    recommendation = {
+        "match": {"home": "A", "away": "B", "date": "2026-08-22", "league": "E0"},
+        "overall": "no_bet", "markets": [], "explanation": "test", "confidence": "low",
+        "limitations": [], "prediction_basis": "market_odds_only",
+    }
+    with patch("app.backend.recommendations.run_agent", return_value=recommendation) as mock_run_agent:
+        register_eod_job(
+            scheduler, fixtures_client=fixtures_client, odds_client=None,
+            cache=cache, config=config, now_fn=lambda: now,
+            sweden_fixtures_client=sweden_fixtures_client,
+        )
+
+    assert mock_run_agent.call_count == 1
+    assert mock_run_agent.call_args.kwargs["match_info"]["league"] == "E0"
+
+
 def test_next_day_date_str_respects_sandbox_override(monkeypatch) -> None:
     monkeypatch.setenv("SANDBOX_MODE", "1")
     monkeypatch.setenv("SANDBOX_DATE", "2026-03-01")

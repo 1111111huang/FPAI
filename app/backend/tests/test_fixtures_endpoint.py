@@ -36,6 +36,21 @@ def _clear_fixture_cache():
     _fixture_cache_pending.clear()
 
 
+@pytest.fixture(autouse=True)
+def sweden_client_mock():
+    """W57: /api/fixtures now also merges in Sweden (Allsvenskan) fixtures
+    from the new Odds-API-backed SwedenFixturesClient, alongside
+    football-data.org's EPL fixtures. Autouse + defaulted to empty so every
+    pre-existing EPL-only test in this file keeps working completely
+    unchanged (SWE contributes nothing unless a test explicitly configures
+    this mock) -- mirrors the existing _clear_fixture_cache autouse pattern."""
+    with patch("app.backend.main.get_sweden_fixtures_client") as mock_get_client:
+        client_mock = mock_get_client.return_value
+        client_mock.get_fixtures.return_value = []
+        client_mock.get_results.return_value = []
+        yield client_mock
+
+
 def test_fixtures_endpoint_returns_normalized_matches():
     fake_fixtures = [
         NormalizedMatch(
@@ -342,6 +357,78 @@ def test_fixtures_endpoint_cache_expires_after_ttl_and_refetches():
     assert third.status_code == 200
     assert mock_client.get_fixtures.call_count == 2
     mock_client.get_fixtures.assert_called_with(date_from="2027-06-01", date_to="2027-06-05")
+
+
+# ---------------------------------------------------------------------------
+# W57: /api/fixtures merges in Sweden (Allsvenskan) alongside EPL, sourced
+# from the new SwedenFixturesClient (The Odds API) rather than
+# football-data.org (which W55 confirmed doesn't cover Allsvenskan at all).
+# ---------------------------------------------------------------------------
+
+_SWEDISH_FIXTURE = NormalizedMatch(
+    match_id="80dbae8461497b97aa471f4d7a4c17a2", utc_date="2026-08-25T17:00:00Z", status="SCHEDULED",
+    home_team="Malmo FF", away_team="AIK", home_goals=None, away_goals=None,
+)
+_SWEDISH_RESULT = NormalizedMatch(
+    match_id="9a15519b05f7ec514d35ca4677815355", utc_date="2025-03-08T12:00:00Z", status="FINISHED",
+    home_team="Kalmar FF", away_team="Hammarby IF", home_goals=2, away_goals=1,
+)
+
+
+def test_fixtures_endpoint_merges_sweden_fixtures_alongside_epl(sweden_client_mock):
+    sweden_client_mock.get_fixtures.return_value = [_SWEDISH_FIXTURE]
+    with patch("app.backend.main._current_real_date", return_value=date(2026, 7, 19)):
+        with patch("app.backend.main.get_fixtures_client") as mock_get_client:
+            mock_get_client.return_value.get_fixtures.return_value = [_REAL_FIXTURE]
+            with TestClient(app) as client:
+                response = client.get(
+                    "/api/fixtures", params={"date_from": "2026-08-21", "date_to": "2026-08-28"}
+                )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert {m["home_team"] for m in body} == {"Chelsea", "Malmo FF"}
+    sweden_client_mock.get_fixtures.assert_called_once_with(date_from="2026-08-21", date_to="2026-08-28")
+
+
+def test_fixtures_endpoint_wholly_past_range_sources_swedish_results_not_football_data(sweden_client_mock):
+    """The past portion of the range must go through SwedenFixturesClient's
+    get_results (The Odds API), never football-data.org -- W55 confirmed
+    football-data.org has no Allsvenskan coverage on this account's plan at
+    all, so routing Sweden's results through FootballDataClient would
+    silently return nothing rather than erroring."""
+    sweden_client_mock.get_results.return_value = [_SWEDISH_RESULT]
+    with patch("app.backend.main._current_real_date", return_value=date(2025, 3, 10)):
+        with patch("app.backend.main.get_fixtures_client") as mock_get_client:
+            mock_get_client.return_value.get_results.return_value = [_REAL_RESULT]
+            with TestClient(app) as client:
+                response = client.get(
+                    "/api/fixtures", params={"date_from": "2025-03-08", "date_to": "2025-03-08"}
+                )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert {m["home_team"] for m in body} == {"Liverpool", "Kalmar FF"}
+    sweden_client_mock.get_results.assert_called_once_with(date_from="2025-03-08", date_to="2025-03-08")
+    sweden_client_mock.get_fixtures.assert_not_called()
+
+
+def test_fixtures_endpoint_sweden_fixture_cache_key_is_independent_of_epls(sweden_client_mock):
+    """A cached EPL call for a date range must not accidentally serve (or be
+    served by) Sweden's cache entry for the identical range -- they must be
+    keyed separately even though the date range string is the same."""
+    sweden_client_mock.get_fixtures.return_value = [_SWEDISH_FIXTURE]
+    with patch("app.backend.main.get_fixtures_client") as mock_get_client:
+        mock_get_client.return_value.get_fixtures.return_value = [_REAL_FIXTURE]
+        with TestClient(app) as client:
+            response = client.get(
+                "/api/fixtures", params={"date_from": "2027-05-01", "date_to": "2027-05-05"}
+            )
+
+    body = response.json()
+    assert {m["home_team"] for m in body} == {"Chelsea", "Malmo FF"}
+    mock_get_client.return_value.get_fixtures.assert_called_once_with(date_from="2027-05-01", date_to="2027-05-05")
+    sweden_client_mock.get_fixtures.assert_called_once_with(date_from="2027-05-01", date_to="2027-05-05")
 
 
 class TestSplitFixtureDateRange:

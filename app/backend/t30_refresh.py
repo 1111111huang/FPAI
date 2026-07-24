@@ -25,6 +25,7 @@ from app.backend.agent_config_hash import compute_agent_config_hash
 from app.backend.eod_batch import LEAGUE_CODE, match_odds, odds_lookup
 from app.backend.football_data_client import NormalizedMatch
 from app.backend.odds_api_client import OddsAPIClient
+from app.backend.odds_sport_keys import ODDS_SPORT_KEY_BY_COMPETITION
 from app.backend.recommendation_cache import RecommendationCache
 from app.backend.recommendations import validate_and_degrade
 from src.agent.agent_config import AgentConfig
@@ -53,8 +54,15 @@ def refresh_match_at_t30(
     cache: RecommendationCache,
     config: AgentConfig,
     date_str: str,
+    league: str = LEAGUE_CODE,
 ) -> T30RefreshResult:
-    odds_events = odds_client.get_odds() if odds_client is not None else None
+    # W62: `league` defaults to LEAGUE_CODE/"E0", preserving every existing
+    # caller's exact behavior -- lets the multi-competition scheduler
+    # orchestration call this once per competition instead of it being
+    # structurally single-league.
+    # W58: explicit sport_key from the competition-id mapping, rather than
+    # relying on get_odds()'s own "soccer_epl" default parameter.
+    odds_events = odds_client.get_odds(sport_key=ODDS_SPORT_KEY_BY_COMPETITION[league]) if odds_client is not None else None
     if odds_events is None:
         LOGGER.info(
             "T-30 refresh: skipping match_id=%s -- no odds available (credit budget "
@@ -78,7 +86,7 @@ def refresh_match_at_t30(
 
     match_info = {
         "home_team": fixture.home_team, "away_team": fixture.away_team,
-        "date": date_str, "league": LEAGUE_CODE, "odds": fresh_odds,
+        "date": date_str, "league": league, "odds": fresh_odds,
     }
     try:
         raw = recommendations.run_agent(match_info=match_info, config=config)

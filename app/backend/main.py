@@ -26,6 +26,8 @@ from app.backend.agent_config_hash import compute_agent_config_hash
 from app.backend.bet_tracker import BetTracker
 from app.backend.bets import BetFromRecommendationRequest, BetManualRequest, BetOut
 from app.backend.football_data_client import FootballDataClient, NormalizedMatch
+from app.backend.odds_sport_keys import DEFAULT_SPORT_KEY, ODDS_SPORT_KEY_BY_COMPETITION
+from app.backend.sweden_fixtures_client import SwedenFixturesClient
 from app.backend.llm_check import check_llm_reachable
 from app.backend.recommendation_cache import RecommendationCache
 from app.backend.bet_stats import compute_bet_stats
@@ -51,6 +53,20 @@ def get_fixtures_client() -> FootballDataClient:
     if _fixtures_client is None:
         _fixtures_client = FootballDataClient(api_key=os.environ.get("FOOTBALL_DATA_API_KEY", ""))
     return _fixtures_client
+
+
+_sweden_fixtures_client: SwedenFixturesClient | None = None
+
+
+def get_sweden_fixtures_client() -> SwedenFixturesClient:
+    """W57: Sweden (Allsvenskan) fixtures/results, sourced from The Odds API
+    rather than football-data.org -- W55 confirmed football-data.org's free
+    tier has no Allsvenskan coverage at all. FastAPI dependency -- overridden
+    in tests via patching this function, same pattern as get_fixtures_client."""
+    global _sweden_fixtures_client
+    if _sweden_fixtures_client is None:
+        _sweden_fixtures_client = SwedenFixturesClient(api_key=os.environ.get("ODDS_API_KEY", ""))
+    return _sweden_fixtures_client
 
 
 # W52: football-data.org's free tier (~10 req/min) is shared across every
@@ -171,6 +187,10 @@ async def lifespan(app: FastAPI):
             odds_client=build_odds_client(),
             cache=recommendations.get_cache(),
             config=config,
+            # W62: Sweden (Allsvenskan) processed alongside EPL in the same
+            # nightly EOD batch / T-30 refresh, sourced from The Odds API
+            # (W55/W57) rather than football-data.org.
+            sweden_fixtures_client=get_sweden_fixtures_client(),
         )
         scheduler.start()
         LOGGER.info("W08/W09/W10 scheduler started (ENABLE_SCHEDULER=1).")
@@ -282,6 +302,7 @@ async def get_fixtures(date_from: str | None = None, date_to: str | None = None)
     split is on whole days and each side is independently date-ordered by
     the API)."""
     client = get_fixtures_client()
+    sweden_client = get_sweden_fixtures_client()
     results_range, fixtures_range = _split_fixture_date_range(date_from, date_to, _current_real_date())
 
     matches: list[NormalizedMatch] = []
@@ -290,15 +311,26 @@ async def get_fixtures(date_from: str | None = None, date_to: str | None = None)
         matches += await _cached_fixture_call(
             ("results", past_from, past_to), client.get_results, date_from=past_from, date_to=past_to
         )
+        # W57: Sweden (Allsvenskan) merged in alongside EPL, sourced from The
+        # Odds API instead of football-data.org (W55 -- football-data.org's
+        # free tier has no Allsvenskan coverage at all). Cache-keyed
+        # separately ("results_swe" vs "results") so it can never collide
+        # with football-data.org's entry for the identical date range.
+        matches += await _cached_fixture_call(
+            ("results_swe", past_from, past_to), sweden_client.get_results, date_from=past_from, date_to=past_to
+        )
     if fixtures_range is not None:
         future_from, future_to = fixtures_range
         matches += await _cached_fixture_call(
             ("fixtures", future_from, future_to), client.get_fixtures, date_from=future_from, date_to=future_to
         )
+        matches += await _cached_fixture_call(
+            ("fixtures_swe", future_from, future_to), sweden_client.get_fixtures, date_from=future_from, date_to=future_to
+        )
     return matches
 
 
-def _fetch_odds_for_manual_request(request: RecommendationRequest) -> dict[str, float] | None:
+def _fetch_odds_for_manual_request(request: RecommendationRequest, league: str | None) -> dict[str, float] | None:
     """W49: best-effort odds lookup for the manual 'regenerate now' path,
     reusing eod_batch.py's exact odds_client + match_odds team-matching
     logic (BUG-015's canonical-name matching included) rather than
@@ -306,6 +338,12 @@ def _fetch_odds_for_manual_request(request: RecommendationRequest) -> dict[str, 
     (fetched once for a whole batch of same-day fixtures), this fetches
     fresh odds per manual request -- acceptable here since it's a single
     user-triggered click, not a batch loop.
+
+    `league` is the already-gated competition id (match_info.get("league"),
+    W03's gate_league output) -- W58: picks the matching Odds-API sport_key
+    instead of relying on get_odds()'s own "soccer_epl" default, so a
+    Swedish fixture's fetch actually queries Sweden's odds feed rather than
+    silently querying EPL's.
 
     Every failure mode degrades to None (no odds attached) rather than
     raising: no odds client configured (build_odds_client() returns None
@@ -327,7 +365,8 @@ def _fetch_odds_for_manual_request(request: RecommendationRequest) -> dict[str, 
         odds_client = build_odds_client()
         if odds_client is None:
             return None
-        odds_events = odds_client.get_odds()
+        sport_key = ODDS_SPORT_KEY_BY_COMPETITION.get(league, DEFAULT_SPORT_KEY)
+        odds_events = odds_client.get_odds(sport_key=sport_key)
         odds_by_teams = eod_batch.odds_lookup(odds_events or [])
         fixture = NormalizedMatch(
             match_id=request.effective_match_id(), utc_date="", status="",
@@ -365,7 +404,7 @@ async def create_recommendation(
         # build_odds_client()/get_odds() make a real synchronous HTTP or DB
         # call (HistoricalOddsClient/OddsAPIClient) -- off the event loop,
         # same convention as the run_agent call directly below.
-        fetched_odds = await run_in_threadpool(_fetch_odds_for_manual_request, request)
+        fetched_odds = await run_in_threadpool(_fetch_odds_for_manual_request, request, match_info.get("league"))
         if fetched_odds is not None:
             match_info["odds"] = fetched_odds
 
@@ -464,7 +503,9 @@ async def settle_open(tracker: BetTracker = Depends(bets.get_bet_tracker)) -> li
     W08's scheduler; bet settlement isn't tied to recommendation-generation
     timing the way W09/W10 are. Reuses get_fixtures_client (W05's
     FootballDataClient) since results/fixtures share the same API and rate
-    limit budget."""
+    limit budget. W57: also consults get_sweden_fixtures_client so a
+    Swedish bet's match_id (unknown to football-data.org) can settle too."""
     client = get_fixtures_client()
-    settled = await run_in_threadpool(settle_open_bets, tracker, client)
+    sweden_client = get_sweden_fixtures_client()
+    settled = await run_in_threadpool(settle_open_bets, tracker, client, sweden_client)
     return [BetOut.from_bet(bet) for bet in settled]

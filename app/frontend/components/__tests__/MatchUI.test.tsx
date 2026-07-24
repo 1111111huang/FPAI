@@ -60,6 +60,32 @@ describe("TeamBadge", () => {
   });
 });
 
+describe("TeamBadge -- Allsvenskan club colors (W61)", () => {
+  // Keys are the exact spelling The Odds API returns for these fixtures
+  // (confirmed live, W55/W59) -- not the ML engine's internal canonical
+  // short name, since that's only used for odds-matching, never rendered.
+  it.each([
+    ["Malmo FF", "#6CACE4"],
+    ["AIK", "#000000"],
+    ["Djurgardens IF", "#003D7A"],
+    ["Hammarby IF", "#046A38"],
+  ])("renders %s with its real club color, not the generic hash-based fallback", (name, primary) => {
+    const { container } = render(<TeamBadge name={name} />);
+    const badge = container.querySelector("span");
+    expect(badge).toHaveStyle({ background: primary });
+  });
+
+  it("still falls back to the generic hash-based badge for an unmapped Allsvenskan club", () => {
+    // No regression: a club not explicitly added (e.g. a smaller/promoted
+    // side) must keep rendering via the existing fallback, not crash or
+    // render blank.
+    const { container } = render(<TeamBadge name="Sirius" />);
+    const badge = container.querySelector("span");
+    expect(badge).toHaveAttribute("style");
+    expect(badge?.getAttribute("style")).not.toBe("");
+  });
+});
+
 describe("StatusBadge", () => {
   it.each(ALL_OVERALL_STATES)("renders the correct label for overall=$overall", ({ overall, label }) => {
     render(<StatusBadge status={overall} />);

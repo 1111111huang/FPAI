@@ -193,6 +193,75 @@ def test_unmatched_odds_proceeds_with_no_odds_rather_than_skipping(tmp_path: Pat
     assert result.generated == 1
 
 
+def test_league_parameter_tags_match_info_and_selects_the_matching_sport_key(tmp_path: Path) -> None:
+    """W62: run_eod_batch is no longer hardcoded to E0 -- a caller-supplied
+    `league` both tags every generated match_info and selects the matching
+    Odds-API sport_key, so a single function serves any competition_specific
+    league the multi-competition scheduler orchestration loops over."""
+    fixtures_client = MagicMock()
+    odds_client = MagicMock()
+    odds_client.get_odds.return_value = []
+    cache = RecommendationCache(db_path=tmp_path / "cache.db")
+    config = AgentConfig.default()
+    swedish_fixture = _fixture("sw1", "Malmo FF", "AIK")
+
+    with patch("app.backend.recommendations.run_agent", return_value=_RECOMMENDATION) as mock_run:
+        asyncio.run(
+            run_eod_batch(
+                fixtures_client=fixtures_client, odds_client=odds_client, cache=cache, config=config,
+                schedule_t30=lambda f: None, date_str="2026-08-22",
+                fixtures=[swedish_fixture], league="SWE",
+            )
+        )
+
+    odds_client.get_odds.assert_called_once_with(sport_key="soccer_sweden_allsvenskan")
+    match_info = mock_run.call_args.kwargs["match_info"]
+    assert match_info["league"] == "SWE"
+
+
+def test_league_parameter_defaults_to_e0_preserving_existing_behavior(tmp_path: Path) -> None:
+    fixtures_client = MagicMock()
+    odds_client = MagicMock()
+    odds_client.get_odds.return_value = []
+    cache = RecommendationCache(db_path=tmp_path / "cache.db")
+    config = AgentConfig.default()
+
+    with patch("app.backend.recommendations.run_agent", return_value=_RECOMMENDATION) as mock_run:
+        asyncio.run(
+            run_eod_batch(
+                fixtures_client=fixtures_client, odds_client=odds_client, cache=cache, config=config,
+                schedule_t30=lambda f: None, date_str="2026-08-22",
+                fixtures=[_fixture("m1", "Arsenal", "Everton")],
+            )
+        )
+
+    odds_client.get_odds.assert_called_once_with(sport_key="soccer_epl")
+    assert mock_run.call_args.kwargs["match_info"]["league"] == "E0"
+
+
+def test_get_odds_is_called_with_an_explicit_epl_sport_key(tmp_path: Path) -> None:
+    """W58: must not rely on get_odds()'s own "soccer_epl" default parameter
+    -- an explicit sport_key from the competition-id mapping, so the same
+    call shape is ready for a future per-competition loop (W62) without a
+    silent EPL-only assumption baked into an omitted argument."""
+    fixtures_client = MagicMock()
+    fixtures_client.get_fixtures.return_value = [_fixture("m1", "Arsenal", "Everton")]
+    odds_client = MagicMock()
+    odds_client.get_odds.return_value = []
+    cache = RecommendationCache(db_path=tmp_path / "cache.db")
+    config = AgentConfig.default()
+
+    with patch("app.backend.recommendations.run_agent", return_value=_RECOMMENDATION):
+        asyncio.run(
+            run_eod_batch(
+                fixtures_client=fixtures_client, odds_client=odds_client, cache=cache, config=config,
+                schedule_t30=lambda f: None, date_str="2026-08-22",
+            )
+        )
+
+    odds_client.get_odds.assert_called_once_with(sport_key="soccer_epl")
+
+
 def test_odds_client_returning_none_gracefully_proceeds_without_odds(tmp_path: Path) -> None:
     """Odds API credit budget exhausted (W07's own None-return convention)
     -- the whole batch must still proceed, just without odds."""

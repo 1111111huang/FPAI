@@ -39,6 +39,7 @@ from app.backend import recommendations
 from app.backend.agent_config_hash import compute_agent_config_hash
 from app.backend.football_data_client import FootballDataClient, NormalizedMatch
 from app.backend.odds_api_client import NormalizedOdds, OddsAPIClient
+from app.backend.odds_sport_keys import ODDS_SPORT_KEY_BY_COMPETITION
 from app.backend.recommendation_cache import RecommendationCache
 from app.backend.recommendations import validate_and_degrade
 from src.agent.agent_config import AgentConfig
@@ -86,8 +87,16 @@ async def run_eod_batch(
     concurrency: int = 5,
     fixtures: list[NormalizedMatch] | None = None,
     on_progress: Callable[[NormalizedMatch, str], None] | None = None,
+    league: str = LEAGUE_CODE,
 ) -> EodBatchResult:
-    """W50: `fixtures`, when supplied, is used as-is and
+    """W62: `league` (defaults to `LEAGUE_CODE`/"E0", preserving every
+    existing caller's exact behavior unchanged) tags every generated
+    match_info and selects the matching Odds-API sport_key
+    (ODDS_SPORT_KEY_BY_COMPETITION) -- lets the multi-competition scheduler
+    orchestration (scheduler_wiring.py) call this once per competition
+    instead of it being structurally single-league.
+
+    W50: `fixtures`, when supplied, is used as-is and
     fixtures_client.get_fixtures() is never called. This matters because
     get_fixtures() only ever queries status=SCHEDULED -- fine for the real
     live scheduler path (this always runs for *tomorrow*, still-scheduled
@@ -112,7 +121,9 @@ async def run_eod_batch(
     if fixtures is None:
         fixtures = fixtures_client.get_fixtures(competition_code=COMPETITION_CODE, date_from=date_str, date_to=date_str)
 
-    odds_events = odds_client.get_odds() if odds_client is not None else None
+    # W58: explicit sport_key from the competition-id mapping, rather than
+    # relying on get_odds()'s own "soccer_epl" default parameter.
+    odds_events = odds_client.get_odds(sport_key=ODDS_SPORT_KEY_BY_COMPETITION[league]) if odds_client is not None else None
     odds_by_teams = odds_lookup(odds_events or [])
 
     agent_config_hash = compute_agent_config_hash(config)
@@ -122,7 +133,7 @@ async def run_eod_batch(
     async def _generate_one(fixture: NormalizedMatch) -> None:
         match_info = {
             "home_team": fixture.home_team, "away_team": fixture.away_team,
-            "date": date_str, "league": LEAGUE_CODE,
+            "date": date_str, "league": league,
         }
         odds = match_odds(fixture, odds_by_teams)
         if odds is not None:

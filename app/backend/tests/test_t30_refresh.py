@@ -64,6 +64,58 @@ def test_skips_refresh_when_odds_unchanged(tmp_path: Path) -> None:
     assert len(cache.get_history("m1", "2026-08-22", agent_config_hash)) == 1  # no new row written
 
 
+def test_get_odds_is_called_with_an_explicit_epl_sport_key(tmp_path: Path) -> None:
+    """W58: must not rely on get_odds()'s own "soccer_epl" default parameter."""
+    config = AgentConfig.default()
+    cache = RecommendationCache(db_path=tmp_path / "cache.db")
+    odds_client = MagicMock()
+    odds_client.get_odds.return_value = []
+
+    refresh_match_at_t30(_fixture(), odds_client=odds_client, cache=cache, config=config, date_str="2026-08-22")
+
+    odds_client.get_odds.assert_called_once_with(sport_key="soccer_epl")
+
+
+def test_league_parameter_tags_match_info_and_selects_the_matching_sport_key(tmp_path: Path) -> None:
+    """W62: refresh_match_at_t30 is no longer hardcoded to E0 -- a
+    caller-supplied `league` both tags match_info and selects the matching
+    Odds-API sport_key, so one function serves any competition_specific
+    league the multi-competition scheduler orchestration loops over."""
+    config = AgentConfig.default()
+    cache = RecommendationCache(db_path=tmp_path / "cache.db")
+    odds_client = MagicMock()
+    odds_client.get_odds.return_value = [
+        NormalizedOdds(home_team="Malmo FF", away_team="AIK", commence_time="2026-08-22T15:00:00Z",
+                        home_odds=1.8, draw_odds=3.6, away_odds=4.5),
+    ]
+    swedish_fixture = _fixture(match_id="sw1", home="Malmo FF", away="AIK")
+
+    with patch("app.backend.recommendations.run_agent", return_value=_RECOMMENDATION) as mock_run:
+        refresh_match_at_t30(
+            swedish_fixture, odds_client=odds_client, cache=cache, config=config,
+            date_str="2026-08-22", league="SWE",
+        )
+
+    odds_client.get_odds.assert_called_once_with(sport_key="soccer_sweden_allsvenskan")
+    assert mock_run.call_args.kwargs["match_info"]["league"] == "SWE"
+
+
+def test_league_parameter_defaults_to_e0_preserving_existing_behavior(tmp_path: Path) -> None:
+    config = AgentConfig.default()
+    cache = RecommendationCache(db_path=tmp_path / "cache.db")
+    odds_client = MagicMock()
+    odds_client.get_odds.return_value = [
+        NormalizedOdds(home_team="Arsenal", away_team="Everton", commence_time="2026-08-22T15:00:00Z",
+                        home_odds=1.8, draw_odds=3.6, away_odds=4.5),
+    ]
+
+    with patch("app.backend.recommendations.run_agent", return_value=_RECOMMENDATION) as mock_run:
+        refresh_match_at_t30(_fixture(), odds_client=odds_client, cache=cache, config=config, date_str="2026-08-22")
+
+    odds_client.get_odds.assert_called_once_with(sport_key="soccer_epl")
+    assert mock_run.call_args.kwargs["match_info"]["league"] == "E0"
+
+
 def test_refreshes_when_odds_changed(tmp_path: Path) -> None:
     config = AgentConfig.default()
     cache = RecommendationCache(db_path=tmp_path / "cache.db")
