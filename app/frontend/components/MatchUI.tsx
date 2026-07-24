@@ -873,8 +873,15 @@ export function MatchExplorerPage() {
     return matches.filter((m) => m.home.toLowerCase().includes(q) || m.away.toLowerCase().includes(q));
   }, [matches, query]);
 
+  // Counted over the full loaded window (matches), not the search-filtered
+  // `rows` -- mirrors DashboardPage's semantics ("edges among what's
+  // loaded", not "edges among what's currently visible after filtering").
+  const activeEdgesCount = (matches ?? []).filter(
+    (m) => m.hasRecommendation && (m.overall === "direct_bet" || m.overall === "conditional")
+  ).length;
+
   return (
-    <AppShell active="matches">
+    <AppShell active="matches" activeEdgesCount={matches !== null ? activeEdgesCount : undefined}>
       <h1 className="text-xl font-semibold tracking-tight text-ink">Match Explorer</h1>
       <p className="mt-1 text-sm text-ink-secondary">Search real upcoming fixtures (next 90 days).</p>
 

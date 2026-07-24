@@ -131,6 +131,13 @@ describe("MatchCard", () => {
     render(<MatchCard match={match} onUpdate={vi.fn()} />);
     expect(screen.getByText("Not yet generated")).toBeInTheDocument();
   });
+
+  it("W64: shows 'Modeled' (not the old league-specific 'EPL') for a competition_specific match, since this tag now renders on both E0 and SWE cards", () => {
+    const match = baseMatch({ tier: "competition_specific" });
+    render(<MatchCard match={match} onUpdate={vi.fn()} />);
+    expect(screen.getByText("Modeled")).toBeInTheDocument();
+    expect(screen.queryByText("EPL")).not.toBeInTheDocument();
+  });
 });
 
 // ---------------------------------------------------------------------------
