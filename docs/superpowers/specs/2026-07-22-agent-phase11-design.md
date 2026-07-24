@@ -1,6 +1,6 @@
 # Phase 11 Design: Deterministic Evidence Pipeline & Critic Mode
 
-**Date:** 2026-07-22
+**Date:** 2026-07-22 (A33 revised 2026-07-24: competition-scoped lessons)
 **Status:** Approved, pre-implementation
 **Covers:** A30, A31, A32, A33 (revised), A34 (new) in `documents/agent_user_stories.md`
 
@@ -99,11 +99,22 @@ Covered above (`research_node`). Additional details:
 ## A33 — Critic / train mode
 
 - New CLI entry point, e.g. `python main.py agent-train --from-date ... --to-date ... --league ...`, structurally parallel to `agent-backtest` (`src/agent/backtest.py`): loads completed matches, replays via `SnapshotStore` (or runs live), gets a `MatchRecommendation` per match, and runs the *same* `src/agent/evaluation.py` scoring (ROI, hit rate, drawdown) — no new metric.
-- For each evaluated match, additionally generates one lesson candidate: `WHEN evaluating [League/Context]...`, written to a new DuckDB table (columns: `lesson_text`, `status` (`pending`/`approved`/`rejected`), `source_match_id`, `created_at`, `reviewed_at`, `reviewer`) with `status="pending"`.
+- For each evaluated match, additionally generates one lesson candidate: `WHEN evaluating [League/Context]...`, written to a new DuckDB table with columns:
+  - `lesson_text`, `status` (`pending`/`approved`/`rejected`), `source_match_id`, `created_at`, `reviewed_at`, `reviewer` (as originally specced)
+  - `competition_id` (text, always set) — the source match's `match_info["league"]` value (same canonical id used throughout, e.g. `E0`, `SP1`, `SWE_ALLS`), recorded automatically from `AgentState["competition_resolution"]["competition"]`.
+  - `tier` (text, always set) — the source match's resolved tier (`general_purpose` / `competition_specific`), recorded automatically from `AgentState["competition_resolution"]["tier"]`.
+  - `scope` (text, nullable: `'competition'` | `'tier'`) — unset while `status='pending'`; set only at approval time (see below). `pending`/`rejected` rows keep `scope=NULL`, which is harmless since they're never loaded live.
+  - Every candidate is written with `status="pending"` and `scope=NULL` — `agent-train` itself makes no generalization judgment, only records the two raw facts (`competition_id`, `tier`) about its source match.
 - New DuckDB `agent_telemetry` table stores per-run evidence: `match_id`, `run_id`, `competition_resolution`, `research_evidence`, `forecast_payload`, final `recommendation` JSON, timestamps. This is where A32's raw research output actually gets persisted — `research_node` itself just returns data into `AgentState`; the persistence responsibility belongs to the train-mode run loop (or, if useful for future debugging, to every mode — but live mode never *reads* outcome data, only ever writes telemetry forward).
-- New minimal CLI: `python main.py agent-lessons approve <id>` / `agent-lessons reject <id>` — updates `status`, `reviewed_at`. No UI.
-- Live mode (`llm_synthesis_node`'s prompt construction) loads only `status="approved"` lessons from DuckDB and appends them to the system prompt loaded from `config/prompts/`. Live mode must never query match outcomes or pending/rejected lessons — enforced by simply not giving the live code path a function that can do so.
-- **Open risk, not blocking:** approved lessons accumulate indefinitely with no cap or conflict resolution. Acceptable for initial land (lesson volume will be low early on); flagged here so it isn't forgotten if this becomes a real prompt-bloat problem later.
+- New minimal CLI: `python main.py agent-lessons approve <id> --scope {competition,tier}` / `agent-lessons reject <id>` — `approve` updates `status="approved"`, `reviewed_at`, and requires the reviewer to pick `scope` explicitly (no default): `competition` pins the lesson to its recorded `competition_id`; `tier` widens it to apply across every match in its recorded `tier`. This is the one place a human judges whether a lesson generalizes — generation stays dumb, review carries the generalization call. `reject` just updates `status`/`reviewed_at`, no scope needed. No UI.
+- Live mode (`llm_synthesis_node`'s prompt construction) loads only lessons matching the *current* match's competition or tier, appended to the system prompt loaded from `config/prompts/`:
+  ```sql
+  WHERE status = 'approved'
+    AND ((scope = 'competition' AND competition_id = :current_competition_id)
+      OR (scope = 'tier' AND tier = :current_tier))
+  ```
+  A lesson approved with `scope='competition'` for one competition never loads for a different competition even if they share a tier. A lesson generated from an unregistered/unknown league still gets a `competition_id` (the raw league string) via `resolve_competition`'s existing `general_purpose` fallback, so it remains eligible for `scope='tier'` approval even though it can never be an exact `competition_id` match for a *different* unknown league. Live mode must never query match outcomes or pending/rejected lessons — enforced by simply not giving the live code path a function that can do so.
+- **Open risk, not blocking:** within each bucket (a given `competition_id`, or a given `tier`), approved lessons accumulate indefinitely with no cap or conflict resolution. Acceptable for initial land (lesson volume will be low early on); flagged here so it isn't forgotten if this becomes a real prompt-bloat problem later. Splitting lessons into competition/tier buckets does not itself require a cap — it only reduces how many lessons apply to any single match compared to one global pool.
 
 ## A34 — rebaseline (new story)
 
@@ -122,3 +133,4 @@ Depends on A31 + A32. The tool-call sequence changes (tools removed, new determi
 - A30 backstop test: forcibly construct a state with `forecast_payload=None` and an LLM output claiming `no_bet`/`team_history_and_market`, assert normalization to `insufficient_data`/`unknown`.
 - Snapshot key stability test: two `agent-snapshot` runs over the same match produce identical keys for the new node sequence (extends A23's existing determinism test).
 - `agent-train`/`agent-lessons` CLI tests: pending lesson not loaded live; approved lesson loaded; rejected lesson never loaded; live mode has no code path that can read match outcomes.
+- Lesson scoping tests: a `scope='competition'` lesson for competition A never loads for a match in competition B, even when both share a `tier`; a `scope='tier'` lesson loads for any match resolving to that `tier`, regardless of `competition_id`; `agent-lessons approve <id>` without `--scope` is rejected (no default); a lesson from an unregistered/unknown league still records a `competition_id` and a `general_purpose` `tier` and is approvable with `--scope tier`.
