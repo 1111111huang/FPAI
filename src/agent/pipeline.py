@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import re
 
+import duckdb
 from langchain_core.messages import HumanMessage
 
 _ODDS_NUMBER_PATTERN = re.compile(r"\b\d{1,2}\.\d{1,2}\b")
@@ -193,6 +194,15 @@ def lessons_node(state: dict) -> dict:
     Only imports load_approved_lessons from src.agent.lessons -- see that
     module's docstring and tests/test_agent_lessons.py for why that function
     alone can't read match outcomes or pending/rejected lessons.
+
+    load_approved_lessons already tolerates a missing agent_lessons *table*
+    (duckdb.CatalogException) inside an existing DB file. It can't tolerate a
+    missing DB *file* -- duckdb.connect(..., read_only=True) raises
+    duckdb.IOException before load_approved_lessons is ever called, e.g. on a
+    fresh deployment's first live run when agent-train has never run and
+    nothing yet calls create_lessons_tables. Same "missing persistence = no
+    lessons, don't crash" contract as the missing-table case, just extended
+    to cover the missing-file case too.
     """
     from src.agent.tools import get_snapshot_store
 
@@ -203,8 +213,11 @@ def lessons_node(state: dict) -> dict:
     from src.utils.db_manager import DuckDBManager
 
     competition_id, tier = extract_competition_scope(state)
-    with DuckDBManager().connection(read_only=True) as conn:
-        lessons = load_approved_lessons(conn, competition_id, tier)
+    try:
+        with DuckDBManager().connection(read_only=True) as conn:
+            lessons = load_approved_lessons(conn, competition_id, tier)
+    except duckdb.IOException:
+        return {}
     if not lessons:
         return {}
     lessons_text = "Lessons from past evaluated matches:\n" + "\n".join(f"- {lesson}" for lesson in lessons)

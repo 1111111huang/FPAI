@@ -295,6 +295,36 @@ def test_lessons_node_uses_competition_resolution_from_state():
     assert args[2] == "competition_specific"
 
 
+def test_lessons_node_returns_empty_dict_when_db_file_does_not_exist(tmp_path):
+    """Critical bug fix: duckdb.connect(..., read_only=True) raises
+    duckdb.IOException (not duckdb.CatalogException) when the DB *file*
+    itself doesn't exist yet -- distinct from the missing-table case
+    load_approved_lessons already handles. This is realistically reachable
+    on a fresh deployment's first live run (e.g. an international match,
+    where forecast_node never touches DuckDB) before agent-train has ever
+    run create_lessons_tables. Uses a real DuckDBManager pointed at a temp
+    config so the real read_only connection attempt hits a genuinely
+    nonexistent file, rather than mocking DuckDBManager away."""
+    import yaml
+    from src.agent.pipeline import lessons_node
+    from src.agent import tools as agent_tools
+    from src.utils.db_manager import DuckDBManager
+
+    db_path = tmp_path / "does_not_exist.db"
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(yaml.safe_dump({"paths": {"database_path": str(db_path)}}), encoding="utf-8")
+    assert not db_path.exists()
+
+    agent_tools._snapshot_store.set_mode("live")
+    try:
+        with patch("src.utils.db_manager.DuckDBManager", lambda: DuckDBManager(config_path=str(config_path))):
+            result = lessons_node({"competition_resolution": {"competition": "E0", "tier": "competition_specific"}})
+    finally:
+        agent_tools._snapshot_store.set_mode("live")
+
+    assert result == {}
+
+
 def test_pipeline_module_never_imports_lesson_write_or_review_functions():
     """A33 acceptance: the live code path (this module) must have no
     function available to it that can write, approve, or reject lessons --

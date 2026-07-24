@@ -366,41 +366,44 @@ def test_run_agent_injects_lessons_message_before_llm_call_in_live_mode():
     from src.agent import tools as agent_tools
 
     agent_tools._snapshot_store.set_mode("live")
-    llm_json = json.dumps({
-        "match": {"home": "Man City", "away": "Arsenal", "date": "2026-06-21", "league": "E0"},
-        "overall": "no_bet", "markets": [], "explanation": "Balanced match.",
-        "confidence": "medium", "limitations": [], "prediction_basis": "team_history_and_market",
-    })
-    fake_forecast_result = {"result_3way": {"probabilities": {"home": 0.4}}, "data_quality": {"prediction_basis": "team_history_and_market"}}
+    try:
+        llm_json = json.dumps({
+            "match": {"home": "Man City", "away": "Arsenal", "date": "2026-06-21", "league": "E0"},
+            "overall": "no_bet", "markets": [], "explanation": "Balanced match.",
+            "confidence": "medium", "limitations": [], "prediction_basis": "team_history_and_market",
+        })
+        fake_forecast_result = {"result_3way": {"probabilities": {"home": 0.4}}, "data_quality": {"prediction_basis": "team_history_and_market"}}
 
-    with patch("src.agent.graph._build_llm") as mock_build_llm, \
-         patch("src.agent.graph._load_system_prompt", return_value="stub prompt"), \
-         patch("src.agent.tools._dated_web_search", return_value="No results found."), \
-         patch("src.forecast.forecast_service.ForecastService") as MockSvc, \
-         patch("src.agent.lessons.load_approved_lessons", return_value=["Historical lesson text"]), \
-         patch("src.utils.db_manager.DuckDBManager") as MockDB:
-        MockDB.return_value.connection.return_value.__enter__.return_value = MagicMock()
-        instance = MagicMock()
-        MockSvc.return_value = instance
-        instance.forecast_upcoming.return_value = fake_forecast_result
+        with patch("src.agent.graph._build_llm") as mock_build_llm, \
+             patch("src.agent.graph._load_system_prompt", return_value="stub prompt"), \
+             patch("src.agent.tools._dated_web_search", return_value="No results found."), \
+             patch("src.forecast.forecast_service.ForecastService") as MockSvc, \
+             patch("src.agent.lessons.load_approved_lessons", return_value=["Historical lesson text"]), \
+             patch("src.utils.db_manager.DuckDBManager") as MockDB:
+            MockDB.return_value.connection.return_value.__enter__.return_value = MagicMock()
+            instance = MagicMock()
+            MockSvc.return_value = instance
+            instance.forecast_upcoming.return_value = fake_forecast_result
 
-        mock_llm = MagicMock()
-        mock_llm.bind_tools.return_value.invoke.return_value = AIMessage(content=llm_json)
-        mock_build_llm.return_value = mock_llm
+            mock_llm = MagicMock()
+            mock_llm.bind_tools.return_value.invoke.return_value = AIMessage(content=llm_json)
+            mock_build_llm.return_value = mock_llm
 
-        cfg = _make_config()
-        run_agent(
-            match_info={
-                "home_team": "Man City", "away_team": "Arsenal", "date": "2026-06-21", "league": "E0",
-                "odds": {"home": 2.0, "draw": 3.4, "away": 3.6},
-            },
-            config=cfg,
-            tools=[],
-        )
+            cfg = _make_config()
+            run_agent(
+                match_info={
+                    "home_team": "Man City", "away_team": "Arsenal", "date": "2026-06-21", "league": "E0",
+                    "odds": {"home": 2.0, "draw": 3.4, "away": 3.6},
+                },
+                config=cfg,
+                tools=[],
+            )
 
-    call_messages = mock_llm.bind_tools.return_value.invoke.call_args.args[0]
-    lesson_messages = [
-        m for m in call_messages
-        if isinstance(m, HumanMessage) and "Historical lesson text" in m.content
-    ]
-    assert len(lesson_messages) == 1
+        call_messages = mock_llm.bind_tools.return_value.invoke.call_args.args[0]
+        lesson_messages = [
+            m for m in call_messages
+            if isinstance(m, HumanMessage) and "Historical lesson text" in m.content
+        ]
+        assert len(lesson_messages) == 1
+    finally:
+        agent_tools._snapshot_store.set_mode("live")
