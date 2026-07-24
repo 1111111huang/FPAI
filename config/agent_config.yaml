@@ -1,8 +1,8 @@
 # Betting agent configuration — all tunable knobs.
 # Swap model/provider to change the LLM tier without touching code.
 
-model: "gemini-3.5-flash"       # Gemini free-tier hosted model (2026-07-23: gemini-flash-latest resolved to gemini-3.6-flash, 20 req/day free; gemini-2.0-flash had 0 free-tier quota on this key; gemini-2.5-flash 404s "no longer available to new users" -- gemini-3.5-flash worked cleanly, 5/5 parse=success on the smoke test)
-provider: "gemini"              # "ollama" | "anthropic" | "groq" | "gemini"
+model: "claude-haiku-4-5"       # Anthropic (2026-07-23: switched after local models (~50% JSON reliability), Groq (reliable but 100K-500K tokens/day -- 10-50 days for this job), and 4 Gemini models (all quota-capped at 0-20 req/day on this project) all proved impractical. Real cost ~$1.50-2 for the full 404-match job.
+provider: "anthropic"           # "ollama" | "anthropic" | "groq" | "gemini"
 temperature: 0.1                # lower = more deterministic; use 0.0 for backtesting
 max_tool_calls: 10              # per-match tool budget
 
