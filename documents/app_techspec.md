@@ -40,7 +40,7 @@ app/
 
   frontend/
     app/
-      layout.tsx                 # Root layout -- mounts <StatusFooter/> on every page
+      layout.tsx                 # Root layout -- no global chrome; each page mounts <AppShell/> itself
       page.tsx                   # "/" -> DashboardPage
       matches/page.tsx           # "/matches" -> MatchExplorerPage
       matches/[id]/page.tsx      # "/matches/[id]" -> MatchAnalysisPage
@@ -49,9 +49,12 @@ app/
     components/
       MatchUI.tsx                 # ported sandbox/ prototype (1020 lines): types, atoms (TeamBadge, StatusBadge,
                                   #   TierTag, TrustSignal), MatchCard, DashboardPage, MatchExplorerPage,
-                                  #   MatchAnalysisPage, LogBetButton, ProbabilityRow, DraftNav
+                                  #   MatchAnalysisPage, LogBetButton, ProbabilityRow
       BetTracker.tsx              # ManualBetForm, BetRow, StatsBar, BetTrackerPage
-      StatusFooter.tsx            # W17 data-staleness/model-status footer
+      AppShell.tsx                 # sidebar nav, fixture search, and data-freshness/model-status footer --
+                                  #   rendered by every page's own component, replacing the old per-page
+                                  #   DraftNav + globally-mounted StatusFooter
+      DashboardRail.tsx            # dashboard-only side rail: overall-status donut + top-ranked edges
       __tests__/                  # Vitest + RTL component/race/boundary tests -- see Section 12
     lib/
       api.ts                     # typed fetch wrappers for every backend endpoint
@@ -413,11 +416,11 @@ Next.js 14 App Router. Four routes, each a thin wrapper delegating to a componen
 | `/matches/[id]` | `MatchAnalysisPage` | Full recommendation detail for one fixture, auto-triggers generation on load. |
 | `/bets` | `BetTrackerPage` | Logged-bet list, `StatsBar`, manual-entry form, "Settle open bets" action. |
 
-`app/layout.tsx` (a server component) renders `<StatusFooter/>` (a client component) globally so data-staleness/model-status is visible on every page.
+`app/layout.tsx` (a server component) carries no app chrome of its own -- each page's top-level component renders `AppShell` (a client component) directly, which supplies the sidebar nav, fixture search, and a footer showing data-freshness/model-status, so that information is visible on every page without a separate global-layout component.
 
 ### 11.2 Component library — `MatchUI.tsx`, `BetTracker.tsx`
 
-Ported from the `sandbox/` prototype during W04, validated there first across all three original pages (Dashboard, Match Explorer, Match Analysis) before being wired to real data. Key exported pieces: `TeamBadge`, `StatusBadge`, `TierTag`, `TrustSignal` (Section 8.1), `MatchCard` (expand-to-lazily-generate interaction — triggers `POST /api/recommendations` if nothing's cached, shows a skeleton, then result or an inline retry-capable error), `LogBetButton` (locked-except-stake, Section 7.2), `ProbabilityRow`, `DraftNav`. `BetTracker.tsx` adds `ManualBetForm`, `BetRow`, `StatsBar`. Player/squad/top-features data from the original `DraftUI.tsx` prototype ("Agent Intelligence" section) is **not** returned by the real API — left as an honest empty/"not yet exposed" state rather than inventing new backend surface.
+Ported from the `sandbox/` prototype during W04, validated there first across all three original pages (Dashboard, Match Explorer, Match Analysis) before being wired to real data. Key exported pieces: `TeamBadge`, `StatusBadge`, `TierTag`, `TrustSignal` (Section 8.1), `MatchCard` (expand-to-lazily-generate interaction — triggers `POST /api/recommendations` if nothing's cached, shows a skeleton, then result or an inline retry-capable error), `LogBetButton` (locked-except-stake, Section 7.2), `ProbabilityRow`. `BetTracker.tsx` adds `ManualBetForm`, `BetRow`, `StatsBar`. `AppShell` (sidebar nav + search + data-freshness/model-status footer) and `DashboardRail` (dashboard status donut + top edges) are the app's page-chrome components, each in its own file, rendered directly by the page components above rather than composed inline. Player/squad/top-features data from the original `DraftUI.tsx` prototype ("Agent Intelligence" section) is **not** returned by the real API — left as an honest empty/"not yet exposed" state rather than inventing new backend surface.
 
 ### 11.3 API/type layer — `lib/api.ts`, `lib/types.ts`
 
@@ -425,7 +428,7 @@ Ported from the `sandbox/` prototype during W04, validated there first across al
 
 ### 11.4 Visual design system (D6)
 
-Locked decisions, validated in the `sandbox/` prototype before being ported: dark mode only (`tailwind.config.js`'s `darkMode: "media"`, no light-mode toggle), Tailwind with hand-rolled components (no shadcn/Radix), high visual density with card-based match displays, real club-color identity badges (`teamColor()`/`badgeColor()` helpers in `MatchUI.tsx`), system-ui sans, Phosphor icons, plain CSS transitions (150ms, no animation library). Color tokens (`--page-plane`, `--surface-1`, `--text-primary`, `--status-good`/`warning`/`serious`/`critical`, etc.) are defined as CSS custom properties in `app/globals.css` and consumed via Tailwind's `theme.extend.colors` — so status semantics (`good`/`warning`/`serious`/`critical`) are named consistently across `StatusBadge`, `TrustSignal`, and `StatusFooter`.
+Locked decisions, validated in the `sandbox/` prototype before being ported: dark mode only (`tailwind.config.js`'s `darkMode: "media"`, no light-mode toggle), Tailwind with hand-rolled components (no shadcn/Radix), high visual density with card-based match displays, real club-color identity badges (`teamColor()`/`badgeColor()` helpers in `MatchUI.tsx`), system-ui sans, Phosphor icons, plain CSS transitions (150ms, no animation library). Color tokens (`--page-plane`, `--surface-1`, `--text-primary`, `--status-good`/`warning`/`serious`/`critical`, etc.) are defined as CSS custom properties in `app/globals.css` and consumed via Tailwind's `theme.extend.colors` — so status semantics (`good`/`warning`/`serious`/`critical`) are named consistently across `StatusBadge`, `TrustSignal`, and `AppShell` (which uses the same `warning` token for its data-freshness indicator, paired with an explicit "-- stale" text suffix rather than color alone).
 
 ### 11.5 Frontend test infrastructure (W22)
 
@@ -445,7 +448,7 @@ See Section 6.4 — all four stories close gaps between "each piece unit-tested 
 
 ### 12.3 Frontend test infrastructure (W22)
 
-See Section 11.5. `app/frontend/components/__tests__/` also carries `MatchUI.dateboundary.test.tsx` (W38), `MatchUI.race.test.tsx`/`BetTracker.race.test.tsx` (W42), and `StatusFooter.test.tsx`; `lib/useSandboxAsOf.test.ts` covers the hook directly.
+See Section 11.5. `app/frontend/components/__tests__/` also carries `MatchUI.dateboundary.test.tsx` (W38), `MatchUI.race.test.tsx`/`BetTracker.race.test.tsx` (W42), and `AppShell.test.tsx`/`DashboardRail.test.tsx`; `lib/useSandboxAsOf.test.ts` and `lib/dashboardMetrics.test.ts` cover their respective modules directly.
 
 ### 12.4 Pre-launch smoke test (W23) and its follow-up (W26)
 

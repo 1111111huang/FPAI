@@ -66,6 +66,21 @@ describe("AppShell", () => {
     );
     expect(await screen.findByText(/league 1/)).toBeInTheDocument();
     expect(screen.getByText(/2026-07-20/)).toBeInTheDocument();
+    expect(screen.queryByText(/-- stale/)).not.toBeInTheDocument();
+  });
+
+  it("shows a textual '-- stale' suffix (not just a color change) when data_freshness.is_stale is true", async () => {
+    vi.mocked(getStatus).mockResolvedValue({
+      data_freshness: { latest_match_date: "2026-05-24", days_since_update: 49, match_count: 3800, is_stale: true },
+      model_status: { league: {}, international: {} },
+    });
+    render(
+      <AppShell active="dashboard">
+        <p>content</p>
+      </AppShell>
+    );
+    expect(await screen.findByText(/2026-05-24/)).toBeInTheDocument();
+    expect(screen.getByText(/-- stale/)).toBeInTheDocument();
   });
 
   it("shows Active Edges only when the prop is provided", () => {

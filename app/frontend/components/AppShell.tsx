@@ -139,7 +139,7 @@ export function AppShell({
               {dataFreshness
                 ? `${dataFreshness.latest_match_date ?? "unknown"}${
                     dataFreshness.days_since_update !== null ? ` (${dataFreshness.days_since_update}d ago)` : ""
-                  }`
+                  }${dataFreshness.is_stale ? " -- stale" : ""}`
                 : "—"}
             </div>
           </div>
