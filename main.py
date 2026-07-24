@@ -333,6 +333,25 @@ def _build_parser() -> argparse.ArgumentParser:
     agent_train_parser.add_argument("--concurrency", type=int, default=5, help="Max concurrent agent runs")
     agent_train_parser.add_argument("--config", default=None, help="Path to agent_config.yaml (default: config/agent_config.yaml)")
 
+    # agent-lessons (A33)
+    agent_lessons_parser = subparsers.add_parser(
+        "agent-lessons",
+        help="Review pending lesson candidates written by agent-train",
+    )
+    agent_lessons_subparsers = agent_lessons_parser.add_subparsers(dest="lessons_action", required=True)
+
+    agent_lessons_approve_parser = agent_lessons_subparsers.add_parser("approve", help="Approve a pending lesson")
+    agent_lessons_approve_parser.add_argument("id", type=int, help="Lesson id")
+    agent_lessons_approve_parser.add_argument(
+        "--scope", required=True, choices=["competition", "tier"],
+        help="competition: applies only to the lesson's source competition. tier: applies to every match in the lesson's tier.",
+    )
+    agent_lessons_approve_parser.add_argument("--reviewer", default=None, help="Reviewer name (default: current OS user)")
+
+    agent_lessons_reject_parser = agent_lessons_subparsers.add_parser("reject", help="Reject a pending lesson")
+    agent_lessons_reject_parser.add_argument("id", type=int, help="Lesson id")
+    agent_lessons_reject_parser.add_argument("--reviewer", default=None, help="Reviewer name (default: current OS user)")
+
     # agent-compare
     agent_compare_parser = subparsers.add_parser(
         "agent-compare",
@@ -1299,6 +1318,35 @@ def run_agent_train(
     print(f"Wrote {lessons_written} lesson candidates and telemetry rows (run_id={run_id})")
 
 
+def run_agent_lessons_approve(lesson_id: int, scope: str, reviewer: str | None) -> None:
+    """Approve a pending lesson candidate (A33). scope='competition' pins it
+    to its source competition; scope='tier' widens it to the whole tier."""
+    import getpass
+
+    from src.agent.lessons import approve_lesson, create_lessons_tables
+    from src.utils.db_manager import DuckDBManager
+
+    db = DuckDBManager()
+    with db.connection() as conn:
+        create_lessons_tables(conn)
+        approve_lesson(conn, lesson_id, scope, reviewer or getpass.getuser())
+    print(f"Approved lesson {lesson_id} (scope={scope})")
+
+
+def run_agent_lessons_reject(lesson_id: int, reviewer: str | None) -> None:
+    """Reject a pending lesson candidate (A33)."""
+    import getpass
+
+    from src.agent.lessons import create_lessons_tables, reject_lesson
+    from src.utils.db_manager import DuckDBManager
+
+    db = DuckDBManager()
+    with db.connection() as conn:
+        create_lessons_tables(conn)
+        reject_lesson(conn, lesson_id, reviewer or getpass.getuser())
+    print(f"Rejected lesson {lesson_id}")
+
+
 def run_agent_compare(
     config_paths: list[str],
     from_date: str,
@@ -1548,6 +1596,11 @@ def main() -> None:
             concurrency=args.concurrency,
             config_path=args.config,
         )
+    elif args.command == "agent-lessons":
+        if args.lessons_action == "approve":
+            run_agent_lessons_approve(lesson_id=args.id, scope=args.scope, reviewer=args.reviewer)
+        elif args.lessons_action == "reject":
+            run_agent_lessons_reject(lesson_id=args.id, reviewer=args.reviewer)
     elif args.command == "agent-compare":
         run_agent_compare(
             config_paths=args.configs,
