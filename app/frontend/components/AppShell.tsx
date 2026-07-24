@@ -116,16 +116,16 @@ export function AppShell({
               {status ? `league ${leagueModelCount} · international ${internationalModelCount}` : "—"}
             </div>
           </div>
-          {dataFreshness && (
-            <div>
-              <div className="text-muted uppercase tracking-wide">Last Updated</div>
-              <div className={`mt-0.5 ${dataFreshness.is_stale ? "text-warning" : "text-ink-secondary"}`}>
-                {`${dataFreshness.latest_match_date ?? "unknown"}${
-                  dataFreshness.days_since_update !== null ? ` (${dataFreshness.days_since_update}d ago)` : ""
-                }`}
-              </div>
+          <div>
+            <div className="text-muted uppercase tracking-wide">Last Updated</div>
+            <div className={`mt-0.5 ${dataFreshness?.is_stale ? "text-warning" : "text-ink-secondary"}`}>
+              {dataFreshness
+                ? `${dataFreshness.latest_match_date ?? "unknown"}${
+                    dataFreshness.days_since_update !== null ? ` (${dataFreshness.days_since_update}d ago)` : ""
+                  }`
+                : "—"}
             </div>
-          )}
+          </div>
         </div>
       </aside>
 

@@ -40,7 +40,7 @@ describe("AppShell", () => {
       </AppShell>
     );
     await waitFor(() => expect(getStatus).toHaveBeenCalled());
-    expect(screen.getByText("—")).toBeInTheDocument();
+    expect(screen.getAllByText("—")).toHaveLength(2);
   });
 
   it("renders real model status and last-updated once the status fetch resolves", async () => {
