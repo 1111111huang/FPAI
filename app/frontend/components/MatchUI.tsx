@@ -281,7 +281,7 @@ const STATUS_META: Record<
 function formatPct(v: number) {
   return `${(v * 100).toFixed(0)}%`;
 }
-function formatEdge(v: number) {
+export function formatEdge(v: number) {
   const pct = (v * 100).toFixed(1);
   return v >= 0 ? `+${pct}%` : `${pct}%`;
 }
