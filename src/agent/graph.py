@@ -286,6 +286,7 @@ def run_agent(
     config: AgentConfig | None = None,
     tools: list | None = None,
     extra_system_instructions: str | None = None,
+    return_full_state: bool = False,
 ) -> MatchRecommendation:
     """Run the betting agent for a single match and return a structured recommendation.
 
@@ -299,6 +300,10 @@ def run_agent(
             agent-snapshot (A11) to inject snapshot-collection-only rules (e.g.
             "ignore any result mentioning a final score") without forking the
             whole prompt file.
+        return_full_state: A33 -- when True, return the full graph state dict
+            (recommendation, competition_resolution, research_evidence,
+            forecast_payload) instead of just the recommendation. Used by
+            agent-train to persist raw evidence to DuckDB.
     """
     if config is None:
         config = AgentConfig.default()
@@ -335,4 +340,6 @@ def run_agent(
 
     compiled = build_graph(config, tools)
     result = compiled.invoke(initial_state)
+    if return_full_state:
+        return result
     return result["recommendation"]

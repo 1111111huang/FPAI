@@ -172,6 +172,63 @@ def test_run_agent_without_extra_instructions_unchanged():
     assert captured["system_content"] == "BASE PROMPT"
 
 
+def test_run_agent_returns_full_state_when_requested():
+    from unittest.mock import patch, MagicMock
+    from src.agent.graph import run_agent
+
+    full_state = {
+        "recommendation": {"overall": "no_bet"},
+        "competition_resolution": {"competition": "E0", "tier": "competition_specific"},
+        "research_evidence": {"availability": "ok"},
+        "forecast_payload": {"result_3way": {}},
+    }
+
+    def fake_build_graph(config, tools):
+        mock_compiled = MagicMock()
+        mock_compiled.invoke.return_value = full_state
+        return mock_compiled
+
+    cfg = _make_config()
+    with patch("src.agent.graph._build_llm"), \
+         patch("src.agent.graph._load_system_prompt", return_value="BASE PROMPT"), \
+         patch("src.agent.graph.build_graph", side_effect=fake_build_graph):
+        result = run_agent(
+            match_info={"home_team": "A", "away_team": "B", "date": "2025-01-01"},
+            config=cfg,
+            tools=[],
+            return_full_state=True,
+        )
+
+    assert result == full_state
+
+
+def test_run_agent_returns_recommendation_only_by_default():
+    from unittest.mock import patch, MagicMock
+    from src.agent.graph import run_agent
+
+    full_state = {
+        "recommendation": {"overall": "no_bet"},
+        "competition_resolution": {"competition": "E0", "tier": "competition_specific"},
+    }
+
+    def fake_build_graph(config, tools):
+        mock_compiled = MagicMock()
+        mock_compiled.invoke.return_value = full_state
+        return mock_compiled
+
+    cfg = _make_config()
+    with patch("src.agent.graph._build_llm"), \
+         patch("src.agent.graph._load_system_prompt", return_value="BASE PROMPT"), \
+         patch("src.agent.graph.build_graph", side_effect=fake_build_graph):
+        result = run_agent(
+            match_info={"home_team": "A", "away_team": "B", "date": "2025-01-01"},
+            config=cfg,
+            tools=[],
+        )
+
+    assert result == {"overall": "no_bet"}
+
+
 def _route_for_state(cfg: AgentConfig, state: AgentState) -> str:
     """Helper: extract the routing logic without building the full graph."""
     last = state["messages"][-1]
