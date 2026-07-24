@@ -320,6 +320,19 @@ def _build_parser() -> argparse.ArgumentParser:
     agent_backtest_parser.add_argument("--concurrency", type=int, default=5, help="Max concurrent agent runs")
     agent_backtest_parser.add_argument("--config", default=None, help="Path to agent_config.yaml (default: config/agent_config.yaml)")
 
+    # agent-train (A33)
+    agent_train_parser = subparsers.add_parser(
+        "agent-train",
+        help="Critic/train mode: score completed matches and record reviewed lesson candidates in DuckDB",
+    )
+    agent_train_parser.add_argument("--from-date", required=True, help="Start date YYYY-MM-DD (inclusive)")
+    agent_train_parser.add_argument("--to-date", required=True, help="End date YYYY-MM-DD (inclusive)")
+    agent_train_parser.add_argument("--league", default=None, help="League code (e.g. E0). Omit for all leagues.")
+    agent_train_parser.add_argument("--stake-mode", choices=["flat", "kelly"], default="flat")
+    agent_train_parser.add_argument("--sample", type=int, default=None, help="Stratified sample size before running the full set")
+    agent_train_parser.add_argument("--concurrency", type=int, default=5, help="Max concurrent agent runs")
+    agent_train_parser.add_argument("--config", default=None, help="Path to agent_config.yaml (default: config/agent_config.yaml)")
+
     # agent-compare
     agent_compare_parser = subparsers.add_parser(
         "agent-compare",
@@ -1129,14 +1142,17 @@ def run_agent_snapshot(
     print(f"\nDone. Processed: {len(to_process) - errors} | Errors: {errors} | Skipped: {skipped}")
 
 
-async def _run_backtest_concurrent(matches, config, concurrency: int) -> list:
+async def _run_backtest_concurrent(matches, config, concurrency: int, capture_state: bool = False) -> list:
     """Run process_match_row for every match concurrently, bounded by a semaphore.
     Each call runs in its own thread via asyncio.to_thread since the agent graph
     and tools are synchronous; SnapshotStore's thread-local state (A09) keeps
     concurrent replay contexts from clobbering each other. Per-match failures
     (e.g. SnapshotMissingError for an unrecorded match) are caught and skipped
     so one bad match doesn't abort the whole batch — mirrors run_agent_snapshot's
-    error-tolerance pattern."""
+    error-tolerance pattern.
+
+    capture_state (A33): threaded through to process_match_row so agent-train
+    can persist each match's raw evidence to DuckDB telemetry."""
     import asyncio
     import sys
 
@@ -1151,7 +1167,7 @@ async def _run_backtest_concurrent(matches, config, concurrency: int) -> list:
     async def _run_one(row):
         async with semaphore:
             try:
-                record = await asyncio.to_thread(process_match_row, row, config)
+                record = await asyncio.to_thread(process_match_row, row, config, capture_state=capture_state)
             except Exception as exc:
                 match_id = row.get("match_id", "?") if hasattr(row, "get") else "?"
                 print(f"  SKIP {match_id}: {exc}", file=sys.stderr)
@@ -1204,6 +1220,83 @@ def run_agent_backtest(
     print_report(report)
     path = save_report(report, cfg)
     print(f"\nReport saved to {path}")
+
+
+def _write_train_artifacts(conn, records: list, run_id: str) -> int:
+    """Write one telemetry row and one pending lesson candidate per scored
+    record that captured full graph state. Records without full_state (e.g.
+    a per-match failure that skipped capture) are silently skipped -- there's
+    nothing to persist. Returns the number of lessons written."""
+    from src.agent.lessons import (
+        create_lessons_tables,
+        extract_competition_scope,
+        generate_lesson_text,
+        insert_lesson_candidate,
+        insert_telemetry,
+    )
+
+    create_lessons_tables(conn)
+    written = 0
+    for record in records:
+        if not record.full_state:
+            continue
+        competition_id, tier = extract_competition_scope(record.full_state)
+        insert_telemetry(
+            conn,
+            match_id=record.match_id,
+            run_id=run_id,
+            competition_resolution=record.full_state.get("competition_resolution"),
+            research_evidence=record.full_state.get("research_evidence"),
+            forecast_payload=record.full_state.get("forecast_payload"),
+            recommendation=record.recommendation,
+        )
+        lesson_text = generate_lesson_text(record)
+        insert_lesson_candidate(conn, lesson_text, competition_id, tier, record.match_id)
+        written += 1
+    return written
+
+
+def run_agent_train(
+    from_date: str,
+    to_date: str,
+    league: str | None,
+    stake_mode: str,
+    sample: int | None,
+    concurrency: int,
+    config_path: str | None,
+) -> None:
+    """Critic/train mode (A33): replay completed matches, score them the same
+    way agent-backtest does, and additionally write one competition/tier-
+    tagged lesson candidate plus a raw-evidence telemetry row per match."""
+    import asyncio
+    import uuid
+
+    from src.agent.agent_config import AgentConfig
+    from src.agent.backtest import BacktestHarness
+    from src.agent.evaluation import build_evaluation_report, print_report, save_report
+    from src.agent.staking import simulate_flat_stake, simulate_kelly_stake
+
+    if concurrency < 1:
+        raise ValueError(f"--concurrency must be >= 1, got {concurrency}")
+
+    cfg = AgentConfig.from_yaml(config_path) if config_path else AgentConfig.default()
+    harness = BacktestHarness(config=cfg)
+    matches = harness.load_matches(from_date, to_date, league=league, sample=sample)
+    print(f"Running train mode over {len(matches)} matches (concurrency={concurrency})...")
+
+    records = asyncio.run(_run_backtest_concurrent(matches, cfg, concurrency, capture_state=True))
+
+    stake_fn = simulate_kelly_stake if stake_mode == "kelly" else simulate_flat_stake
+    bankroll_result = stake_fn(records)
+    report = build_evaluation_report(records, bankroll_result)
+    print_report(report)
+    path = save_report(report, cfg, base_dir="reports/agent_train")
+    print(f"\nReport saved to {path}")
+
+    run_id = uuid.uuid4().hex
+    with harness.db.connection() as conn:
+        lessons_written = _write_train_artifacts(conn, records, run_id)
+    print(f"Wrote {lessons_written} lesson candidates and telemetry rows (run_id={run_id})")
 
 
 def run_agent_compare(
@@ -1437,6 +1530,16 @@ def main() -> None:
         )
     elif args.command == "agent-backtest":
         run_agent_backtest(
+            from_date=args.from_date,
+            to_date=args.to_date,
+            league=args.league,
+            stake_mode=args.stake_mode,
+            sample=args.sample,
+            concurrency=args.concurrency,
+            config_path=args.config,
+        )
+    elif args.command == "agent-train":
+        run_agent_train(
             from_date=args.from_date,
             to_date=args.to_date,
             league=args.league,
