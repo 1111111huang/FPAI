@@ -7,7 +7,29 @@ import threading
 import pytest
 from langchain_core.runnables.config import ContextThreadPoolExecutor
 
-from src.agent.snapshot_store import SnapshotMissingError, SnapshotStore
+from src.agent.snapshot_store import SnapshotMissingError, SnapshotStore, league_base_dir
+
+
+def test_league_base_dir_appends_uppercased_league(tmp_path):
+    assert league_base_dir("E0", base_dir=tmp_path) == tmp_path / "E0"
+
+
+def test_league_base_dir_normalizes_case(tmp_path):
+    assert league_base_dir("swe", base_dir=tmp_path) == tmp_path / "SWE"
+
+
+def test_league_base_dir_falls_back_to_unknown_for_none(tmp_path):
+    assert league_base_dir(None, base_dir=tmp_path) == tmp_path / "unknown"
+
+
+def test_league_base_dir_falls_back_to_unknown_for_empty_string(tmp_path):
+    assert league_base_dir("", base_dir=tmp_path) == tmp_path / "unknown"
+    assert league_base_dir("   ", base_dir=tmp_path) == tmp_path / "unknown"
+
+
+def test_league_base_dir_different_leagues_are_isolated(tmp_path):
+    """BUG-022: E0 and SWE must never resolve to the same directory."""
+    assert league_base_dir("E0", base_dir=tmp_path) != league_base_dir("SWE", base_dir=tmp_path)
 
 
 def test_live_mode_passes_through_without_writing(tmp_path):

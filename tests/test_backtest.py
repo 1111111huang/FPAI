@@ -84,6 +84,23 @@ def test_process_match_row_scores_markets_correctly():
     mock_run.assert_called_once()
 
 
+def test_process_match_row_uses_league_scoped_base_dir():
+    """BUG-022: replay must look in the same per-league directory
+    agent-snapshot recorded into, not the old flat shared directory."""
+    from src.agent.snapshot_store import league_base_dir
+
+    recommendation = {
+        "match": {}, "overall": "no_bet", "markets": [],
+        "explanation": "x", "confidence": "high", "limitations": [], "prediction_basis": "team_history_and_market",
+    }
+    with patch("src.agent.graph.run_agent", return_value=recommendation), \
+         patch("src.agent.tools.configure_snapshot_store") as mock_configure:
+        process_match_row(_row(league="SWE", fthg=1, ftag=1), _make_config())
+
+    replay_call = mock_configure.call_args_list[0]
+    assert replay_call.kwargs["base_dir"] == league_base_dir("SWE")
+
+
 def test_process_match_row_propagates_snapshot_missing_error():
     with patch("src.agent.graph.run_agent", side_effect=SnapshotMissingError("web_search", "m1", "abc")), \
          patch("src.agent.tools.configure_snapshot_store"):

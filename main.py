@@ -14,6 +14,7 @@ import yaml
 
 load_dotenv()
 
+from src.agent.snapshot_store import DEFAULT_BASE_DIR, league_base_dir
 from src.features.feature_factory import FeatureFactory
 from src.evaluation import run_diagnostics
 from src.evaluation.mlflow_cleanup import MLflowStoreCleanup, save_cleanup_report
@@ -1086,11 +1087,11 @@ def run_agent_snapshot(
     with db.connection() as conn:
         matches = conn.execute(query, params).fetchdf()
 
-    base_dir = Path("data/agent_snapshots")
+    base_dir = DEFAULT_BASE_DIR
     to_process = []
     skipped = 0
     for _, row in matches.iterrows():
-        marker = base_dir / row["match_id"] / "_complete.json"
+        marker = league_base_dir(row["league"], base_dir=base_dir) / row["match_id"] / "_complete.json"
         if marker.exists():
             skipped += 1
             continue
@@ -1111,10 +1112,11 @@ def run_agent_snapshot(
         if row["odds_h"] and row["odds_d"] and row["odds_a"]:
             match_info["odds"] = {"home": row["odds_h"], "draw": row["odds_d"], "away": row["odds_a"]}
 
-        agent_tools.configure_snapshot_store("record", match_id=match_id, match_date=date_str)
+        match_base_dir = league_base_dir(row["league"], base_dir=base_dir)
+        agent_tools.configure_snapshot_store("record", match_id=match_id, match_date=date_str, base_dir=match_base_dir)
         try:
             run_agent(match_info=match_info, config=cfg, extra_system_instructions=snapshot_addendum)
-            marker_path = base_dir / match_id / "_complete.json"
+            marker_path = match_base_dir / match_id / "_complete.json"
             marker_path.parent.mkdir(parents=True, exist_ok=True)
             marker_path.write_text(json.dumps({"completed_at": datetime.now(timezone.utc).isoformat()}))
             print(f"[{i}/{len(to_process)}] OK {match_info['home_team']} vs {match_info['away_team']}")

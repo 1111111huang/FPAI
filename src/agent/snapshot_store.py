@@ -43,6 +43,17 @@ DEFAULT_BASE_DIR = _DEFAULT_BASE_DIR
 _VALID_MODES = {"live", "record", "replay"}
 
 
+def league_base_dir(league: str | None, base_dir: str | Path = _DEFAULT_BASE_DIR) -> Path:
+    """BUG-022: match_id is a content hash with no league component, so
+    without this, every league's recordings land in the same flat directory
+    and nothing on disk distinguishes them -- a cleanup scoped to one league
+    can silently destroy another's in-progress work (this actually happened:
+    an E0 corpus cleanup wiped a concurrently-running SWE snapshot job).
+    Normalizes league to a stable, case-insensitive directory name."""
+    safe_league = (league or "").strip().upper() or "unknown"
+    return Path(base_dir) / safe_league
+
+
 class SnapshotMissingError(Exception):
     """Raised in replay mode when no recorded snapshot exists for a tool call."""
 

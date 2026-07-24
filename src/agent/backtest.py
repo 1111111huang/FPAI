@@ -65,11 +65,14 @@ def process_match_row(row: pd.Series, config: AgentConfig) -> BacktestRecord:
     # which only works if these names are resolved at call time, not import time.
     from src.agent.graph import run_agent
     from src.agent import tools as agent_tools
+    from src.agent.snapshot_store import league_base_dir
 
     match_id = row["match_id"]
     match_info = _build_match_info(row)
 
-    agent_tools.configure_snapshot_store("replay", match_id=match_id)
+    agent_tools.configure_snapshot_store(
+        "replay", match_id=match_id, base_dir=league_base_dir(row["league"]),
+    )
     try:
         recommendation = run_agent(match_info=match_info, config=config)
     finally:
