@@ -287,7 +287,7 @@ def run_agent(
     tools: list | None = None,
     extra_system_instructions: str | None = None,
     return_full_state: bool = False,
-) -> MatchRecommendation:
+) -> MatchRecommendation | dict[str, Any]:
     """Run the betting agent for a single match and return a structured recommendation.
 
     Args:
@@ -302,8 +302,11 @@ def run_agent(
             whole prompt file.
         return_full_state: A33 -- when True, return the full graph state dict
             (recommendation, competition_resolution, research_evidence,
-            forecast_payload) instead of just the recommendation. Used by
-            agent-train to persist raw evidence to DuckDB.
+            forecast_payload, messages, match_info, tool_call_count) instead
+            of just the recommendation. Used by agent-train to persist raw
+            evidence to DuckDB. Note: messages is a list of LangChain
+            BaseMessage objects and is NOT JSON-serializable -- callers should
+            pick specific keys out of the dict rather than serialize it whole.
     """
     if config is None:
         config = AgentConfig.default()
