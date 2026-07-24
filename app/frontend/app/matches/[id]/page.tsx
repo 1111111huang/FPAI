@@ -5,7 +5,7 @@ export default function Page({
   searchParams,
 }: {
   params: { id: string };
-  searchParams: { home?: string; away?: string; date?: string };
+  searchParams: { home?: string; away?: string; date?: string; league?: string };
 }) {
   return (
     <MatchAnalysisPage
@@ -13,6 +13,7 @@ export default function Page({
       home={searchParams.home ?? ""}
       away={searchParams.away ?? ""}
       date={searchParams.date ?? ""}
+      league={searchParams.league ?? "E0"}
     />
   );
 }

@@ -26,10 +26,25 @@ vi.mock("@/lib/api", () => ({
   getCachedRecommendation: vi.fn(),
   getFixtures: vi.fn(),
   logBetFromRecommendation: vi.fn(),
+  // W64: MatchAnalysisPage now renders inside AppShell (Task 9), which
+  // independently calls getStatus() (unconditionally, on mount) and
+  // useSandboxAsOf() -> getSandboxStatus() -- neither existed as a
+  // dependency of this test file before that wiring. Both need mocks here
+  // or AppShell throws "No export is defined on the mock" the moment it
+  // mounts, same class of pre-existing-mock gap Tasks 7/8 already hit and
+  // fixed the same way (see AppShell.test.tsx, MatchUI.race.test.tsx, etc).
+  getStatus: vi.fn(),
+  getSandboxStatus: vi.fn(),
   ApiError: class ApiError extends Error {},
 }));
 
-import { generateRecommendation, getCachedRecommendation, logBetFromRecommendation } from "@/lib/api";
+import {
+  generateRecommendation,
+  getCachedRecommendation,
+  getSandboxStatus,
+  getStatus,
+  logBetFromRecommendation,
+} from "@/lib/api";
 
 const ALL_OVERALL_STATES: { overall: Overall; label: string }[] = [
   { overall: "direct_bet", label: "Direct Bet" },
@@ -236,6 +251,14 @@ describe("MatchAnalysisPage -- cache-first load (W47)", () => {
   beforeEach(() => {
     vi.mocked(getCachedRecommendation).mockReset();
     vi.mocked(generateRecommendation).mockReset();
+    // AppShell (wrapping MatchAnalysisPage as of Task 9) calls these
+    // unconditionally on mount -- give them harmless defaults so each
+    // test's real assertions aren't drowned out by an unrelated mock
+    // rejection/undefined-return from AppShell's own chrome. Rejecting
+    // getStatus matches AppShell.test.tsx's own precedent (AppShell
+    // catches the rejection and just shows "--" in its sidebar footer).
+    vi.mocked(getStatus).mockReset().mockRejectedValue(new Error("no backend"));
+    vi.mocked(getSandboxStatus).mockReset().mockResolvedValue({ sandbox_mode: false, as_of: null });
   });
 
   it("on a cache hit, renders the cached recommendation and never calls generateRecommendation", async () => {
@@ -265,6 +288,16 @@ describe("MatchAnalysisPage -- cache-first load (W47)", () => {
       league: "E0",
       match_id: "m1",
     });
+  });
+
+  it("W64: requests a recommendation with the passed league, not a hardcoded E0", async () => {
+    vi.mocked(getCachedRecommendation).mockResolvedValue(null);
+    vi.mocked(generateRecommendation).mockResolvedValue(makeRecommendation());
+
+    render(<MatchAnalysisPage id="m1" home="Malmo FF" away="AIK" date="2026-08-22" league="SWE" />);
+
+    await waitFor(() => expect(generateRecommendation).toHaveBeenCalled());
+    expect(generateRecommendation).toHaveBeenCalledWith(expect.objectContaining({ league: "SWE" }));
   });
 });
 

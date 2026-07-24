@@ -1066,11 +1066,13 @@ export function MatchAnalysisPage({
   home,
   away,
   date,
+  league = "E0",
 }: {
   id: string;
   home: string;
   away: string;
   date: string;
+  league?: string;
 }) {
   const [match, setMatch] = useState<Match | null>(null);
   const [rawRecommendation, setRawRecommendation] = useState<MatchRecommendationOut | null>(null);
@@ -1092,14 +1094,14 @@ export function MatchAnalysisPage({
         rec = null;
       }
       if (!rec) {
-        rec = await generateRecommendation({ home_team: home, away_team: away, date, league: "E0", match_id: id });
+        rec = await generateRecommendation({ home_team: home, away_team: away, date, league, match_id: id });
       }
       setRawRecommendation(rec);
       setMatch(
         applyRecommendation(
           {
             id,
-            league: "E0",
+            league,
             tier: "competition_specific",
             kickoffIso: date,
             home,
@@ -1130,26 +1132,23 @@ export function MatchAnalysisPage({
   useEffect(() => {
     load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [id, home, away, date]);
+  }, [id, home, away, date, league]);
 
   if (!home || !away || !date) {
     return (
-      <main className="mx-auto max-w-4xl px-4 py-8 sm:px-6">
-        <DraftNav active="matches" />
+      <AppShell active="matches">
         <p className="text-sm text-ink-secondary">
           Missing match details.{" "}
           <Link href="/matches" className="text-accent">
             Back to Match Explorer
           </Link>
         </p>
-      </main>
+      </AppShell>
     );
   }
 
   return (
-    <main className="mx-auto max-w-4xl px-4 py-8 sm:px-6">
-      <DraftNav active="matches" />
-
+    <AppShell active="matches">
       <Link
         href="/matches"
         className="inline-flex items-center gap-1.5 text-sm text-ink-secondary transition-colors duration-150 hover:text-ink"
@@ -1160,7 +1159,7 @@ export function MatchAnalysisPage({
       <div className="mt-4 flex items-start justify-between gap-4">
         <div>
           <div className="flex items-center gap-2 text-xs text-ink-secondary">
-            <span>E0</span>
+            <span>{league}</span>
             <TierTag tier="competition_specific" />
             <span>{date}</span>
           </div>
@@ -1252,6 +1251,6 @@ export function MatchAnalysisPage({
           </section>
         </>
       )}
-    </main>
+    </AppShell>
   );
 }
