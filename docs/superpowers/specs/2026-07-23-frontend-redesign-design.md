@@ -13,13 +13,13 @@ The sketch was designed against a much larger imagined product surface than this
 ## Goals
 
 - Rebuild the app frame around a left sidebar + right analytics rail, matching the sketch's structural identity, applied consistently across all 4 existing routes (`/`, `/matches`, `/matches/[id]`, `/bets`).
-- Every new UI element is backed by a real field already returned by `app/backend` (`MatchRecommendationOut`, `Fixture`, `StatusResponse`, `BetStats`) or a pure client-side derivation over data the pages already fetch — no new backend endpoints.
+- Every new UI element is backed by a real field already returned by `app/backend` (`MatchRecommendationOut`, `Fixture`, `StatusResponse`, `BetStats`) or a pure client-side derivation over data the pages already fetch — no new backend endpoints, and only the one minimal schema addition called out below.
 - Preserve the existing locked dark palette (D6, `app/globals.css`) and existing status-color semantics (`STATUS_META` in `MatchUI.tsx`) rather than introducing a new color system.
 - Preserve existing behavior test-observable via text content (team names/initials, `"Not yet generated"`, `"Log bet"`, status labels) — this is a visual/structural restyle, not a behavior change.
 
 ## Non-goals
 
-- No new backend endpoints, no schema changes to `MatchRecommendationOut`/`Fixture`/`Bet`/`StatusResponse`.
+- No new backend endpoints. **Revised during planning (2026-07-24):** `Fixture`/`NormalizedMatch` gains one new field, `competition: str = "E0"` — discovered while mapping this design to real code that `/api/fixtures` merges E0 and SWE into a single flat list with no field distinguishing them, which makes league-grouped Dashboard sections impossible to build honestly (team-name-based guessing would misclassify any club outside the existing, non-exhaustive `TEAM_COLORS` map). This is the one exception to "no schema changes" — confirmed with the user directly since it reverses this non-goal. `MatchRecommendationOut`/`Bet`/`StatusResponse` are unaffected.
 - No accounts/auth, notifications, or multi-user affordances (avatar, bell) — still single-user per D6/"Confirmed So Far."
 - No league expansion beyond the two currently supported (`E0`, `SWE`) — sketch's La Liga/Champions League/Serie A/Bundesliga sections are dropped, not stubbed.
 - No xG trend charts, "Model Signals" categorized panel, Live Monitor, Models page, Leagues page, Alerts, Reports, or Settings — none of these have any real data or endpoint behind them; they are omitted entirely rather than shown disabled.
@@ -53,14 +53,18 @@ Replaces `DraftNav` as the top-level chrome for all 4 routes. Three regions:
 
 ### Data flow summary
 
-No backend changes. All new visual elements are either:
+One small backend addition (the `competition` field above); everything else is either:
 1. A field the backend already returns, rendered somewhere new (Model Status, Last Updated), or
-2. A pure client-side derivation over data a page already fetches (Active Edges, sort, league grouping, Edge Distribution, Top Edges), or
-3. An existing fetch relocated/reused (top-bar search reuses Match Explorer's fixture fetch+filter).
+2. A pure client-side derivation over data a page already fetches (Active Edges, sort, league grouping via the new `competition` field, Edge Distribution, Top Edges), or
+3. An existing fetch relocated/reused (top-bar search reuses Match Explorer's fixture-fetch pattern, fetched lazily on first focus rather than eagerly, to avoid polluting the shared `getFixtures` mock's call count in existing tests — see Testing).
 
 ### Testing
 
 Existing component tests (`MatchUI.test.tsx` and siblings) assert on text content (`"ARS"`, `"Arsenal"`, `"Not yet generated"`, `"Log bet"`, status labels) and interaction flows, not on `DraftNav`/layout structure — grepped and confirmed no test references `DraftNav` or nav labels directly. Restyling is low-risk to these; the implementation plan should explicitly preserve the exact text strings/roles these tests query. New client-side derivations (Active Edges count, Edge Distribution counts, Top Edges ranking, league grouping, sort) get their own unit/component tests per this repo's existing test-strategy convention (W22).
+
+Two concrete compatibility risks found while mapping this to the real test suite, both resolved by design rather than by editing unrelated tests:
+- `BetTracker.fixtureError.test.tsx` asserts `expect(getFixtures).toHaveBeenCalledTimes(1)` / `(2)` against `ManualBetForm`'s own fixture search — since `getFixtures` is one shared mock per test file, `AppShell`'s top-bar search must **not** call `getFixtures` on mount. It fetches lazily, on the search input's first focus, so mounting `AppShell` never touches this shared mock's call count.
+- `BetTracker.fixtureError.test.tsx`/`BetTracker.race.test.tsx` already query `getByPlaceholderText("Search a real fixture by team name…")` for `ManualBetForm`'s own input — `AppShell`'s top-bar search must use a distinct placeholder (e.g. `"Search fixtures, teams…"`) so both remain independently queryable once a page renders both at once.
 
 ## User stories
 
