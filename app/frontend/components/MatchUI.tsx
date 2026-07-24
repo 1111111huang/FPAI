@@ -89,7 +89,7 @@ export type Match = {
 // Adapters -- real API shapes -> UI Match shape
 // ---------------------------------------------------------------------------
 
-function fixtureToMatch(fixture: Fixture, asOf?: Date, sandboxMode = false): Match {
+export function fixtureToMatch(fixture: Fixture, asOf?: Date, sandboxMode = false): Match {
   // W48: a fixture whose kickoff date is strictly after asOf's date hasn't
   // "happened yet" in the sandbox's own pretend timeline, even when it's
   // already really been played (real FINISHED status + real score) relative
@@ -106,7 +106,7 @@ function fixtureToMatch(fixture: Fixture, asOf?: Date, sandboxMode = false): Mat
   const status: Match["status"] = fixture.status === "FINISHED" && !isFutureInSandbox ? "completed" : "upcoming";
   return {
     id: fixture.match_id,
-    league: "E0",
+    league: fixture.competition ?? "E0",
     tier: "competition_specific",
     kickoffIso: fixture.utc_date,
     home: fixture.home_team,
@@ -630,7 +630,7 @@ export function MatchCard({
                 <Link
                   href={`/matches/${match.id}?home=${encodeURIComponent(match.home)}&away=${encodeURIComponent(
                     match.away
-                  )}&date=${match.kickoffIso.slice(0, 10)}`}
+                  )}&date=${match.kickoffIso.slice(0, 10)}&league=${encodeURIComponent(match.league)}`}
                   className="mt-3 inline-flex items-center gap-1 text-sm font-medium text-accent"
                 >
                   Full analysis <CaretRight size={12} />

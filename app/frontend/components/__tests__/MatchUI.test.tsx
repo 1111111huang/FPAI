@@ -9,8 +9,17 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 
-import { LogBetButton, MatchAnalysisPage, MatchCard, StatusBadge, TeamBadge, type Match, type Overall } from "../MatchUI";
-import type { MatchRecommendationOut } from "@/lib/types";
+import {
+  fixtureToMatch,
+  LogBetButton,
+  MatchAnalysisPage,
+  MatchCard,
+  StatusBadge,
+  TeamBadge,
+  type Match,
+  type Overall,
+} from "../MatchUI";
+import type { Fixture, MatchRecommendationOut } from "@/lib/types";
 
 vi.mock("@/lib/api", () => ({
   generateRecommendation: vi.fn(),
@@ -132,6 +141,34 @@ function makeRecommendation(overrides: Partial<MatchRecommendationOut> = {}): Ma
   };
 }
 
+function baseFixture(overrides: Partial<Fixture> = {}): Fixture {
+  return {
+    match_id: "m1",
+    utc_date: "2026-08-22T15:00:00Z",
+    status: "SCHEDULED",
+    home_team: "Arsenal",
+    away_team: "Everton",
+    home_goals: null,
+    away_goals: null,
+    ...overrides,
+  };
+}
+
+describe("fixtureToMatch -- W64 real competition, not a hardcoded E0", () => {
+  it("uses the fixture's real competition when present", () => {
+    const fixture = baseFixture({ competition: "SWE" });
+    expect(fixtureToMatch(fixture).league).toBe("SWE");
+  });
+
+  it("falls back to E0 when competition is genuinely absent", () => {
+    // baseFixture()'s default never sets `competition` at all (not merely
+    // `undefined`) -- proving the `?? "E0"` fallback works for a field
+    // that's truly missing, not just re-testing the SWE case above.
+    const fixtureWithoutCompetition = baseFixture();
+    expect(fixtureToMatch(fixtureWithoutCompetition).league).toBe("E0");
+  });
+});
+
 describe("MatchCard -- cache-first expand (W47)", () => {
   beforeEach(() => {
     vi.mocked(getCachedRecommendation).mockReset();
@@ -154,6 +191,19 @@ describe("MatchCard -- cache-first expand (W47)", () => {
     expect(onUpdate).toHaveBeenCalledWith(
       expect.objectContaining({ hasRecommendation: true, explanation: "cached explanation" })
     );
+  });
+
+  it("W64: requests a recommendation with the fixture's real competition, not a hardcoded E0", async () => {
+    vi.mocked(getCachedRecommendation).mockResolvedValue(null);
+    vi.mocked(generateRecommendation).mockResolvedValue(makeRecommendation());
+    const user = userEvent.setup();
+    const match = baseMatch({ hasRecommendation: false, league: "SWE" });
+
+    render(<MatchCard match={match} onUpdate={vi.fn()} />);
+    await user.click(screen.getByText("Not yet generated"));
+
+    await waitFor(() => expect(generateRecommendation).toHaveBeenCalled());
+    expect(generateRecommendation).toHaveBeenCalledWith(expect.objectContaining({ league: "SWE" }));
   });
 
   it("on a cache miss (null), falls back to generateRecommendation and applies its result unchanged", async () => {
