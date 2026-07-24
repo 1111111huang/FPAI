@@ -37,6 +37,9 @@ import {
 } from "@/lib/api";
 import type { Fixture, MatchRecommendationOut } from "@/lib/types";
 import { useSandboxAsOf } from "@/lib/useSandboxAsOf";
+import { groupByLeague, sortMatches, type MatchSort } from "@/lib/dashboardMetrics";
+import { AppShell } from "./AppShell";
+import { DashboardRail } from "./DashboardRail";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -236,7 +239,7 @@ function formatDay(iso: string, asOf: Date, sandboxMode: boolean): string {
 // ---------------------------------------------------------------------------
 
 const TIER_LABEL: Record<Tier, string> = {
-  competition_specific: "EPL",
+  competition_specific: "Modeled",
   general_purpose: "General",
 };
 
@@ -550,7 +553,7 @@ export function MatchCard({
   }
 
   return (
-    <div className="rounded-lg border border-border transition-transform duration-150 hover:-translate-y-px">
+    <div className="rounded-xl border border-border transition-all duration-150 hover:-translate-y-px hover:border-border-strong">
       <button type="button" onClick={handleExpand} className="w-full p-3.5 text-left">
         <div className="flex items-center justify-between">
           <span className="flex items-center gap-2 font-mono text-xs text-muted">
@@ -662,6 +665,7 @@ export function DashboardPage() {
   // from outside the effect (which would have no way to invalidate an
   // in-flight request from a *previous* run if the two race).
   const [retryTick, setRetryTick] = useState(0);
+  const [sort, setSort] = useState<MatchSort>("kickoff");
 
   useEffect(() => {
     let cancelled = false;
@@ -751,55 +755,81 @@ export function DashboardPage() {
     setNextMatches((prev) => prev?.map((m) => (m.id === updated.id ? updated : m)) ?? null);
   }
 
+  const usingFallback = matches !== null && matches.length === 0 && nextMatches !== null && nextMatches.length > 0;
+  const shownMatches = usingFallback ? nextMatches! : matches ?? [];
+  const updateShown = usingFallback ? updateNextMatch : updateMatch;
+  const activeEdgesCount = shownMatches.filter(
+    (m) => m.hasRecommendation && (m.overall === "direct_bet" || m.overall === "conditional")
+  ).length;
+  const leagueGroups = groupByLeague(sortMatches(shownMatches, sort));
+
   return (
-    <main className="mx-auto max-w-4xl px-4 py-8 sm:px-6">
-      <DraftNav active="dashboard" />
+    <AppShell active="dashboard" activeEdgesCount={matches !== null ? activeEdgesCount : undefined}>
+      <div className="lg:flex lg:items-start lg:gap-8">
+        <div className="min-w-0 flex-1">
+          <div className="flex flex-wrap items-center justify-between gap-4">
+            <div>
+              <h1 className="text-xl font-semibold tracking-tight text-ink">Today&apos;s Edges</h1>
+              <p className="mt-1 text-sm text-ink-secondary">
+                Real E0 &amp; Allsvenskan fixtures for today. Expand a card to generate its recommendation.
+              </p>
+            </div>
+            {shownMatches.length > 0 && (
+              <SegmentedControl
+                options={[
+                  { value: "kickoff", label: "Kickoff" },
+                  { value: "edge", label: "Edge %" },
+                ]}
+                value={sort}
+                onChange={setSort}
+              />
+            )}
+          </div>
 
-      <h1 className="text-xl font-semibold tracking-tight text-ink">Today&apos;s Edges</h1>
-      <p className="mt-1 text-sm text-ink-secondary">
-        Real E0 fixtures for today. Expand a card to generate its recommendation.
-      </p>
-
-      <div className="mt-6">
-        {error && <ErrorState message={error} onRetry={() => setRetryTick((t) => t + 1)} />}
-        {!error && matches === null && <LoadingRows />}
-        {!error && matches !== null && matches.length === 0 && (
-          <>
-            {nextMatches === null && (
+          <div className="mt-6">
+            {error && <ErrorState message={error} onRetry={() => setRetryTick((t) => t + 1)} />}
+            {!error && matches === null && <LoadingRows />}
+            {!error && matches !== null && matches.length === 0 && nextMatches === null && (
               <>
-                <p className="py-4 text-center text-sm text-ink-secondary">No E0 fixtures today.</p>
+                <p className="py-4 text-center text-sm text-ink-secondary">No fixtures today.</p>
                 <LoadingRows />
               </>
             )}
-            {nextMatches !== null && nextMatches.length === 0 && (
-              <p className="py-8 text-center text-sm text-ink-secondary">No E0 fixtures today.</p>
+            {!error && matches !== null && matches.length === 0 && nextMatches !== null && nextMatches.length === 0 && (
+              <p className="py-8 text-center text-sm text-ink-secondary">No fixtures today.</p>
             )}
-            {nextMatches !== null && nextMatches.length > 0 && (
-              <div>
-                {/* W46: explicitly not "today's" fixtures -- keep the
-                    distinction honest rather than presenting these as if
-                    they were happening today. */}
-                <p className="py-2 text-center text-sm text-ink-secondary">
-                  No E0 fixtures today — next matches:
-                </p>
-                <div className="flex flex-col gap-2.5">
-                  {nextMatches.map((m) => (
-                    <MatchCard key={m.id} match={m} onUpdate={updateNextMatch} asOf={asOf} sandboxMode={sandboxMode} />
-                  ))}
-                </div>
+            {!error && shownMatches.length > 0 && (
+              <div className="flex flex-col gap-6">
+                {usingFallback && (
+                  <p className="text-sm text-ink-secondary">No fixtures today — next matches:</p>
+                )}
+                {leagueGroups.map((group) => (
+                  <div key={group.league}>
+                    <div className="mb-2 flex items-center gap-2">
+                      <h2 className="text-xs font-semibold uppercase tracking-wide text-muted">{group.label}</h2>
+                      <span className="rounded-full border border-border px-1.5 py-0.5 text-[10px] text-ink-secondary">
+                        {group.matches.length} match{group.matches.length === 1 ? "" : "es"}
+                      </span>
+                    </div>
+                    <div className="flex flex-col gap-2.5">
+                      {group.matches.map((m) => (
+                        <MatchCard key={m.id} match={m} onUpdate={updateShown} asOf={asOf} sandboxMode={sandboxMode} />
+                      ))}
+                    </div>
+                  </div>
+                ))}
               </div>
             )}
-          </>
-        )}
-        {!error && matches && matches.length > 0 && (
-          <div className="flex flex-col gap-2.5">
-            {matches.map((m) => (
-              <MatchCard key={m.id} match={m} onUpdate={updateMatch} asOf={asOf} sandboxMode={sandboxMode} />
-            ))}
+          </div>
+        </div>
+
+        {shownMatches.length > 0 && (
+          <div className="mt-8 lg:mt-0">
+            <DashboardRail matches={shownMatches} />
           </div>
         )}
       </div>
-    </main>
+    </AppShell>
   );
 }
 
