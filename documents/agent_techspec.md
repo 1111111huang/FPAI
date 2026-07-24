@@ -641,6 +641,7 @@ Reflects `documents/agent_user_stories.md` as of this writing.
 | 8 — Full Season Backtest Expansion | A23–A26 | ⬜ Future — temperature=0 determinism fix, full-season data refresh, full-corpus snapshot collection, and full-season backtest report, in that dependency order |
 | 9 — League-Aware Model Routing | A27 | ✅ Implemented — `resolve_competition` tool, updated tool-selection prompt and stop-rule budget (Sections 4.4, 5, 19.1) |
 | 10 — Output Validation Hardening | A28–A29 | ✅ Implemented — Pydantic-backed field validation, BUG-013 null-odds downgrade, code-enforced odds bounds (Sections 2, 8, 19.2–19.3) |
+| 11 — Deterministic Evidence Pipeline & Critic Mode | A30–A33 | A30–A32 ✅ Implemented — deterministic `resolve_competition`/`research`/`forecast` graph nodes replacing LLM tool-choice (Section 19 cross-references pending a future write-up). A33 ✅ Implemented — `agent-train`/`agent-lessons` CLIs, competition/tier-scoped live-mode lesson injection (Section 20). A34 (rebaseline) ⬜ Future. |
 
 **A17 dependency resolved.** A17 (this document) formally depends on A08 *and* A14; both are now implemented, so this document covers the full backtesting/evaluation/comparison surface (Sections 9–14) it previously only described as design intent. `agent_prd.md` §7's CLI command examples (`agent-snapshot`, `agent-backtest`) match the flags actually implemented; §8 does not yet show the `agent-compare` example added in A16 — a documentation gap in `agent_prd.md`, not in this document or the code.
 
@@ -764,3 +765,76 @@ A29 extends A28's validation layer with a second semantic rule, immediately afte
 ### 19.4 Cross-references
 
 The factual specification of what changed lives in Sections 2 (`AgentConfig`), 4.4 (`resolve_competition`), 5 (system prompt workflow/stop-rule/value-calculation updates), and 8 (`extract_recommendation`'s new validation layer) — this section intentionally does not restate those details, only the narrative of why each story existed and what was learned running it live. Section 16's Implementation Status table and Section 17's Known Limitations have also been updated to reflect A27–A29.
+
+## 20. Critic/Train Mode and Competition-Scoped Lessons (A33)
+
+Design: `docs/superpowers/specs/2026-07-22-agent-phase11-design.md` (A33 section, revised 2026-07-24). Implementation plan: `docs/superpowers/plans/2026-07-24-agent-critic-mode-lessons.md`.
+
+### 20.1 `agent-train` CLI
+
+Structurally parallel to `agent-backtest` (Section 13): same `BacktestHarness.load_matches()` + `process_match_row()` replay path, same `src/agent/evaluation.py` ROI/hit-rate/drawdown scoring, same report shape (saved under `reports/agent_train/` instead of `reports/agent_backtest/` to keep the two apart — both directories are gitignored). Additionally, for every match that captured full graph state (`process_match_row(..., capture_state=True)`), `main.py`'s `_write_train_artifacts()` writes:
+
+- One row to `agent_telemetry` (`match_id`, `run_id`, `competition_resolution`, `research_evidence`, `forecast_payload`, `recommendation` — JSON-serialized TEXT columns — `created_at`). `run_id` is a single `uuid4().hex` shared by every match in one `agent-train` invocation.
+- One `status='pending'` row to `agent_lessons` (`lesson_text` from a deterministic template — `generate_lesson_text()` in `src/agent/lessons.py` — plus `competition_id`/`tier` recorded automatically from that match's `competition_resolution`).
+
+```bash
+python main.py agent-train --from-date 2026-01-01 --to-date 2026-01-31 --league E0 --stake-mode flat
+```
+
+All DB writes happen synchronously, single-threaded, strictly after `_run_backtest_concurrent`'s `asyncio.gather` over the concurrent per-match replay has fully completed — never from within a worker thread, so a single DuckDB connection is never touched concurrently.
+
+### 20.2 `agent-lessons approve/reject` CLI
+
+```bash
+python main.py agent-lessons approve <id> --scope competition   # or --scope tier
+python main.py agent-lessons reject <id>
+```
+
+`--scope` is required on `approve`, no default: `competition` pins the lesson to its recorded `competition_id`; `tier` widens it to every match resolving to its recorded `tier` (`general_purpose` / `competition_specific`), regardless of competition. This is the only point a human judges whether a lesson generalizes — `agent-train` itself makes no such judgment, it only records the two raw facts about its source match. `--reviewer` is optional and defaults to `getpass.getuser()`. An unknown lesson id raises `ValueError` (uncaught — surfaces as a traceback, matching this file's existing precedent for CLI-argument-driven errors, e.g. `agent-backtest --concurrency 0`).
+
+### 20.3 Live-mode injection (`lessons_node`, `src/agent/pipeline.py`)
+
+A new required graph node runs after `forecast_node` succeeds (`resolve_competition → research → forecast → lessons → agent`; `route_after_forecast` now returns `"lessons"` instead of `"agent"` on success). It loads `agent_lessons` rows where `status='approved'` AND (`scope='competition'` AND `competition_id` matches this match) OR (`scope='tier'` AND `tier` matches this match's tier), and injects them as a single `HumanMessage` ahead of the LLM's turn — the same mechanism `forecast_node` uses for forecast/research evidence (`_format_evidence_message`).
+
+Gated on `SnapshotStore.mode == "live"` (`src/agent/tools.get_snapshot_store()`): `agent-backtest`/`agent-train` replay and `agent-snapshot` record never see lessons, since injecting anything approved after a historical match ran would leak future information into the A13/A21/A34 baseline scoring methodology `agent-backtest` and `agent-train` share. This gating decision was made during implementation, not specified in the original design doc language, precisely to protect that methodology.
+
+`load_approved_lessons()` (`src/agent/lessons.py`) is the only function `lessons_node` imports from the lessons module — its SQL hardcodes `status='approved'` and never touches an outcome-bearing table, so live mode is structurally, not just conventionally, unable to read match outcomes or pending/rejected lessons (`tests/test_agent_pipeline.py::test_pipeline_module_never_imports_lesson_write_or_review_functions` asserts this at the source-text level).
+
+**Failure handling, found and fixed during implementation review:** `lessons_node` opens its DuckDB connection with `read_only=True`. A missing `agent_lessons` *table* (e.g. `agent-train` has never been run) raises `duckdb.CatalogException`, which `load_approved_lessons` catches and treats as "no lessons." A missing DuckDB *file* (a fresh deployment, before anything has ever written to it) raises a different exception, `duckdb.IOException`, at connection-open time — before `load_approved_lessons` is even called. Code review caught that this second case was originally unhandled and would crash `run_agent` on a fresh environment's very first live recommendation for any match whose forecast never happens to touch DuckDB (e.g. odds-based international forecasting, which loads `.joblib` models directly). `lessons_node` now also catches `duckdb.IOException` and returns no lessons in that case, with a dedicated test (`test_lessons_node_returns_empty_dict_when_db_file_does_not_exist`) using a real, non-mocked `DuckDBManager` pointed at a genuinely nonexistent file.
+
+### 20.4 Schema
+
+```sql
+CREATE SEQUENCE agent_lessons_id_seq START 1;
+CREATE TABLE agent_lessons (
+    id INTEGER PRIMARY KEY DEFAULT nextval('agent_lessons_id_seq'),
+    lesson_text TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending',   -- pending | approved | rejected
+    competition_id TEXT,                       -- NULL for leagueless internationals
+    tier TEXT NOT NULL,                         -- general_purpose | competition_specific
+    scope TEXT,                                 -- NULL until approved; competition | tier
+    source_match_id TEXT NOT NULL,
+    created_at TIMESTAMP NOT NULL,
+    reviewed_at TIMESTAMP,
+    reviewer TEXT
+);
+
+CREATE TABLE agent_telemetry (
+    match_id TEXT NOT NULL,
+    run_id TEXT NOT NULL,
+    competition_resolution TEXT,   -- JSON
+    research_evidence TEXT,        -- JSON
+    forecast_payload TEXT,         -- JSON
+    recommendation TEXT,           -- JSON
+    created_at TIMESTAMP NOT NULL,
+    PRIMARY KEY (match_id, run_id)
+);
+```
+
+Verified live against a real (non-`:memory:`) DuckDB file during implementation: `agent-train` → `agent-lessons approve` → `lessons_node` round-trips correctly end to end, independent of the unit test suite.
+
+### 20.5 Known limitations, accepted as designed
+
+- Approved lessons accumulate indefinitely within each `competition_id`/`tier` bucket, with no cap or conflict resolution. Acceptable for initial land (lesson volume will be low early on); revisit if it becomes a real prompt-bloat problem.
+- `_write_train_artifacts` does not wrap its per-record writes in an explicit transaction; a mid-loop failure leaves earlier records committed. Low risk in practice (the values it writes are already JSON-safe by the time they reach it) and acceptable given this is an isolated review/training tool, not a production-critical path — a bad row is just a `pending` candidate a human can reject.
+- `agent-train`/`agent-lessons`' unknown-id and CLI-argument errors surface as raw Python tracebacks rather than a friendly `[ERROR] ...` message (unlike `agent-recommend`). Matches this file's existing precedent elsewhere in `main.py`, not a regression introduced by A33.
