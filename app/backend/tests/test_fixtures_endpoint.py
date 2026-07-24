@@ -391,6 +391,58 @@ def test_fixtures_endpoint_merges_sweden_fixtures_alongside_epl(sweden_client_mo
     sweden_client_mock.get_fixtures.assert_called_once_with(date_from="2026-08-21", date_to="2026-08-28")
 
 
+def test_fixtures_endpoint_tags_each_fixture_with_its_source_competition(sweden_client_mock):
+    """The frontend has no way to distinguish an EPL fixture from an
+    Allsvenskan one unless the endpoint tags it -- both currently come back
+    as the same NormalizedMatch shape with no competition field. Tagging
+    must happen at the merge point in main.py (not just inside each
+    client's own normalize function), since this test -- like the existing
+    W57 tests above -- mocks the clients directly and bypasses their
+    internal normalize functions entirely."""
+    sweden_client_mock.get_fixtures.return_value = [_SWEDISH_FIXTURE]
+    with patch("app.backend.main.get_fixtures_client") as mock_get_client:
+        mock_get_client.return_value.get_fixtures.return_value = [_REAL_FIXTURE]
+        with TestClient(app) as client:
+            response = client.get(
+                "/api/fixtures", params={"date_from": "2026-08-21", "date_to": "2026-08-28"}
+            )
+
+    assert response.status_code == 200
+    body = response.json()
+    by_team = {m["home_team"]: m["competition"] for m in body}
+    assert by_team == {"Chelsea": "E0", "Malmo FF": "SWE"}
+
+
+def test_fixtures_endpoint_tags_epl_results_e0(sweden_client_mock):
+    """Mirrors the fixtures-side test above for the get_results() (past
+    date range) path -- a separate code path in get_fixtures() with its own
+    merge call, so needs its own coverage."""
+    with patch("app.backend.main._current_real_date", return_value=date(2025, 3, 10)):
+        with patch("app.backend.main.get_fixtures_client") as mock_get_client:
+            mock_get_client.return_value.get_results.return_value = [_REAL_RESULT]
+            with TestClient(app) as client:
+                response = client.get(
+                    "/api/fixtures", params={"date_from": "2025-03-08", "date_to": "2025-03-08"}
+                )
+
+    body = response.json()
+    assert body[0]["competition"] == "E0"
+
+
+def test_fixtures_endpoint_tags_sweden_results_swe(sweden_client_mock):
+    sweden_client_mock.get_results.return_value = [_SWEDISH_RESULT]
+    with patch("app.backend.main._current_real_date", return_value=date(2025, 3, 10)):
+        with patch("app.backend.main.get_fixtures_client") as mock_get_client:
+            mock_get_client.return_value.get_results.return_value = []
+            with TestClient(app) as client:
+                response = client.get(
+                    "/api/fixtures", params={"date_from": "2025-03-08", "date_to": "2025-03-08"}
+                )
+
+    body = response.json()
+    assert body[0]["competition"] == "SWE"
+
+
 def test_fixtures_endpoint_wholly_past_range_sources_swedish_results_not_football_data(sweden_client_mock):
     """The past portion of the range must go through SwedenFixturesClient's
     get_results (The Odds API), never football-data.org -- W55 confirmed
