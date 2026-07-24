@@ -113,6 +113,15 @@ describe("sortMatches", () => {
     expect(sortMatches(matches, "edge").map((m) => m.id)).toEqual(["priced", "no-market"]);
   });
 
+  it("sorts by edge descending, treating an unpriced best market (currentOdds null) as lowest, same as no markets at all", () => {
+    const matches = [
+      match({ id: "unpriced", markets: [{ market: "result_3way", selection: "home", recommendationType: "direct_bet", currentOdds: null, minOdds: 1.5, mlProbability: 0.5, impliedProbability: 0.5, valueEdge: 0.5 }] }),
+      match({ id: "priced", markets: [{ market: "result_3way", selection: "home", recommendationType: "direct_bet", currentOdds: 2.0, minOdds: 1.5, mlProbability: 0.5, impliedProbability: 0.5, valueEdge: 0.05 }] }),
+      match({ id: "no-market", markets: [] }),
+    ];
+    expect(sortMatches(matches, "edge").map((m) => m.id)).toEqual(["priced", "unpriced", "no-market"]);
+  });
+
   it("does not mutate the input array", () => {
     const matches = [match({ id: "a", kickoffIso: "2026-08-22T18:00:00Z" }), match({ id: "b", kickoffIso: "2026-08-22T11:00:00Z" })];
     const original = [...matches];

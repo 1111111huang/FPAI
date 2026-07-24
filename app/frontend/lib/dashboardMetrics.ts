@@ -15,17 +15,26 @@ export function countByOverall(matches: Match[]): OverallCounts {
 
 export type TopEdge = { match: Match; edge: number };
 
+/** The best market's value_edge, but only when it's a real, priced edge --
+ * a match with no markets at all, or whose best market has no live odds
+ * (current_odds null -- an unpriceable edge, not a real one), has no
+ * priced edge to report. Shared by rankTopEdges and sortMatches so both
+ * treat "no real edge" identically instead of drifting apart. */
+function pricedEdge(m: Match): number | null {
+  const shown = bestMarket(m);
+  return shown && shown.currentOdds !== null ? shown.valueEdge : null;
+}
+
 /** Ranks by the best-priced market's value_edge, descending. A match with
- * no recommendation, or whose best market has no live odds (current_odds
- * null -- an unpriceable edge, not a real one), is excluded rather than
- * ranked with a fabricated value. */
+ * no recommendation, or with no priced edge (see pricedEdge), is excluded
+ * rather than ranked with a fabricated value. */
 export function rankTopEdges(matches: Match[], limit: number): TopEdge[] {
   const priced: TopEdge[] = [];
   for (const m of matches) {
     if (!m.hasRecommendation) continue;
-    const shown = bestMarket(m);
-    if (!shown || shown.currentOdds === null) continue;
-    priced.push({ match: m, edge: shown.valueEdge });
+    const edge = pricedEdge(m);
+    if (edge === null) continue;
+    priced.push({ match: m, edge });
   }
   return priced.sort((a, b) => b.edge - a.edge).slice(0, limit);
 }
@@ -63,8 +72,8 @@ export function sortMatches(matches: Match[], sort: MatchSort): Match[] {
     return [...matches].sort((a, b) => a.kickoffIso.localeCompare(b.kickoffIso));
   }
   return [...matches].sort((a, b) => {
-    const edgeA = bestMarket(a)?.valueEdge ?? -Infinity;
-    const edgeB = bestMarket(b)?.valueEdge ?? -Infinity;
+    const edgeA = pricedEdge(a) ?? -Infinity;
+    const edgeB = pricedEdge(b) ?? -Infinity;
     return edgeB - edgeA;
   });
 }
