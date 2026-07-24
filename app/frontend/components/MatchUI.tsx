@@ -434,42 +434,6 @@ function SegmentedControl<T extends string>({
   );
 }
 
-export function DraftNav({ active }: { active: "dashboard" | "matches" | "bets" }) {
-  return (
-    <div className="mb-8 flex items-center justify-between">
-      <div className="flex items-baseline gap-1.5">
-        <span className="text-sm font-semibold tracking-tight text-ink">FPAI</span>
-      </div>
-      <nav className="flex items-center gap-5 text-sm">
-        <Link
-          href="/"
-          className={`transition-colors duration-150 ${
-            active === "dashboard" ? "text-ink" : "text-ink-secondary hover:text-ink"
-          }`}
-        >
-          Dashboard
-        </Link>
-        <Link
-          href="/matches"
-          className={`transition-colors duration-150 ${
-            active === "matches" ? "text-ink" : "text-ink-secondary hover:text-ink"
-          }`}
-        >
-          Matches
-        </Link>
-        <Link
-          href="/bets"
-          className={`transition-colors duration-150 ${
-            active === "bets" ? "text-ink" : "text-ink-secondary hover:text-ink"
-          }`}
-        >
-          Bets
-        </Link>
-      </nav>
-    </div>
-  );
-}
-
 export function ErrorState({ message, onRetry }: { message: string; onRetry?: () => void }) {
   return (
     <div className="flex items-center gap-2 rounded-lg border border-serious/40 p-3.5 text-sm text-serious">

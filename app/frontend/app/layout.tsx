@@ -1,6 +1,5 @@
 import type { Metadata } from "next";
 import "./globals.css";
-import { StatusFooter } from "@/components/StatusFooter";
 
 export const metadata: Metadata = {
   title: "FPAI",
@@ -14,10 +13,7 @@ export default function RootLayout({
 }) {
   return (
     <html lang="en">
-      <body>
-        {children}
-        <StatusFooter />
-      </body>
+      <body>{children}</body>
     </html>
   );
 }
