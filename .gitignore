@@ -50,3 +50,6 @@ app/data/
 # DB backups (exceed GitHub's 100MB file size limit)
 data/*.db.*_backup
 data/*.db.bak
+
+# Local git worktrees (superpowers:using-git-worktrees)
+.worktrees/
