@@ -10,7 +10,7 @@ from langgraph.graph.message import add_messages
 from langgraph.prebuilt import ToolNode
 
 from src.agent.agent_config import AgentConfig
-from src.agent.pipeline import forecast_node, research_node, resolve_competition_node
+from src.agent.pipeline import forecast_node, lessons_node, research_node, resolve_competition_node
 from src.agent.schema import MatchRecommendation, RecommendationParseError, extract_recommendation
 from src.utils.logger import get_logger
 
@@ -211,10 +211,10 @@ def build_graph(config: AgentConfig, tools: list):
         _LOG.info("should_continue | has_tool_calls=%s | tool_call_count=%d | route=%s", has_calls, state["tool_call_count"], route)
         return route
 
-    def route_after_forecast(state: AgentState) -> Literal["agent", "output"]:
+    def route_after_forecast(state: AgentState) -> Literal["lessons", "output"]:
         payload = state.get("forecast_payload")
         succeeded = bool(payload) and "error" not in payload
-        route = "agent" if succeeded else "output"
+        route = "lessons" if succeeded else "output"
         _LOG.info("route_after_forecast | succeeded=%s | route=%s", succeeded, route)
         return route
 
@@ -266,6 +266,7 @@ def build_graph(config: AgentConfig, tools: list):
     graph.add_node("resolve_competition", resolve_competition_node)
     graph.add_node("research", research_node)
     graph.add_node("forecast", forecast_node)
+    graph.add_node("lessons", lessons_node)
     graph.add_node("agent", agent_node)
     graph.add_node("tools", ToolNode(tools))
     graph.add_node("output", output_node)
@@ -273,7 +274,8 @@ def build_graph(config: AgentConfig, tools: list):
     graph.set_entry_point("resolve_competition")
     graph.add_edge("resolve_competition", "research")
     graph.add_edge("research", "forecast")
-    graph.add_conditional_edges("forecast", route_after_forecast, {"agent": "agent", "output": "output"})
+    graph.add_conditional_edges("forecast", route_after_forecast, {"lessons": "lessons", "output": "output"})
+    graph.add_edge("lessons", "agent")
     graph.add_conditional_edges("agent", should_continue, {"tools": "tools", "output": "output"})
     graph.add_edge("tools", "agent")
     graph.add_edge("output", END)

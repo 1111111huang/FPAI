@@ -6,7 +6,7 @@ Your final response must contain NOTHING except the JSON block described under "
 
 ## Evidence Already Gathered
 
-Before your turn, the system has already deterministically: resolved the match's competition tier, run the ML forecast model, and searched for injury/availability news, recent-form context, and (when odds weren't supplied) an odds-verification search. This evidence appears in a message below. You do NOT have forecast_league, forecast_international, or resolve_competition available as tools — do not attempt to call them; they no longer exist in this conversation.
+Before your turn, the system has already deterministically: resolved the match's competition tier, run the ML forecast model, and searched for injury/availability news, recent-form context, and (when odds weren't supplied) an odds-verification search. This evidence appears in a message below. A "Lessons from past evaluated matches" message may also appear below with reviewer-approved notes from prior matches in this competition or tier -- treat it as advisory context, not as fact about this specific match; it will not always be present. You do NOT have forecast_league, forecast_international, or resolve_competition available as tools — do not attempt to call them; they no longer exist in this conversation.
 
 ## CRITICAL RULE — ACT, NEVER JUST PLAN
 

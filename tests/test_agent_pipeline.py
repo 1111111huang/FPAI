@@ -230,3 +230,78 @@ def test_format_evidence_message_has_no_markdown_headers():
 
     assert "##" not in message
     assert "###" not in message
+
+
+def test_lessons_node_returns_empty_dict_when_not_live_mode():
+    from unittest.mock import patch
+    from src.agent.pipeline import lessons_node
+    from src.agent import tools as agent_tools
+
+    agent_tools._snapshot_store.set_mode("replay")
+    try:
+        with patch("src.agent.lessons.load_approved_lessons") as mock_load:
+            result = lessons_node({"competition_resolution": {"competition": "E0", "tier": "competition_specific"}})
+        mock_load.assert_not_called()
+        assert result == {}
+    finally:
+        agent_tools._snapshot_store.set_mode("live")
+
+
+def test_lessons_node_returns_empty_dict_when_no_approved_lessons():
+    from unittest.mock import patch, MagicMock
+    from src.agent.pipeline import lessons_node
+    from src.agent import tools as agent_tools
+
+    agent_tools._snapshot_store.set_mode("live")
+    with patch("src.agent.lessons.load_approved_lessons", return_value=[]), \
+         patch("src.utils.db_manager.DuckDBManager") as MockDB:
+        MockDB.return_value.connection.return_value.__enter__.return_value = MagicMock()
+        result = lessons_node({"competition_resolution": {"competition": "E0", "tier": "competition_specific"}})
+    assert result == {}
+
+
+def test_lessons_node_appends_human_message_with_approved_lessons():
+    from unittest.mock import patch, MagicMock
+    from langchain_core.messages import HumanMessage
+    from src.agent.pipeline import lessons_node
+    from src.agent import tools as agent_tools
+
+    agent_tools._snapshot_store.set_mode("live")
+    with patch("src.agent.lessons.load_approved_lessons", return_value=["Lesson A", "Lesson B"]), \
+         patch("src.utils.db_manager.DuckDBManager") as MockDB:
+        MockDB.return_value.connection.return_value.__enter__.return_value = MagicMock()
+        result = lessons_node({"competition_resolution": {"competition": "E0", "tier": "competition_specific"}})
+
+    assert len(result["messages"]) == 1
+    message = result["messages"][0]
+    assert isinstance(message, HumanMessage)
+    assert "Lesson A" in message.content
+    assert "Lesson B" in message.content
+
+
+def test_lessons_node_uses_competition_resolution_from_state():
+    from unittest.mock import patch, MagicMock
+    from src.agent.pipeline import lessons_node
+    from src.agent import tools as agent_tools
+
+    agent_tools._snapshot_store.set_mode("live")
+    with patch("src.agent.lessons.load_approved_lessons", return_value=[]) as mock_load, \
+         patch("src.utils.db_manager.DuckDBManager") as MockDB:
+        MockDB.return_value.connection.return_value.__enter__.return_value = MagicMock()
+        lessons_node({"competition_resolution": {"competition": "SP1", "tier": "competition_specific"}})
+
+    args = mock_load.call_args.args
+    assert args[1] == "SP1"
+    assert args[2] == "competition_specific"
+
+
+def test_pipeline_module_never_imports_lesson_write_or_review_functions():
+    """A33 acceptance: the live code path (this module) must have no
+    function available to it that can write, approve, or reject lessons --
+    only load_approved_lessons, which itself can't read outcomes (see
+    tests/test_agent_lessons.py)."""
+    import pathlib
+    source = pathlib.Path("src/agent/pipeline.py").read_text()
+    assert "load_approved_lessons" in source
+    for forbidden in ("insert_lesson_candidate", "insert_telemetry", "approve_lesson", "reject_lesson"):
+        assert forbidden not in source

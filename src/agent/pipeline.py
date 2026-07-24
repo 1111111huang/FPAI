@@ -174,3 +174,38 @@ def forecast_node(state: dict) -> dict:
 
     evidence_message = _format_evidence_message(payload, state.get("research_evidence"))
     return {"forecast_payload": payload, "messages": [HumanMessage(content=evidence_message)]}
+
+
+def lessons_node(state: dict) -> dict:
+    """A33: inject reviewer-approved lessons scoped to this match's
+    competition/tier as a HumanMessage before the LLM's turn -- same
+    injection pattern forecast_node uses for evidence (a node-returned
+    "messages" list is appended via AgentState's add_messages reducer).
+
+    Gated on SnapshotStore mode == "live": outside genuine live runs
+    (agent-backtest/agent-train replay, or agent-snapshot record), lessons
+    are skipped entirely. Injecting lessons approved *after* a historical
+    match would leak future information into backtest/train scoring,
+    corrupting the A13/A21/A34 baseline methodology agent-backtest and
+    agent-train share. Gating here (rather than a config flag) means the
+    same compiled graph is correct for every CLI entry point.
+
+    Only imports load_approved_lessons from src.agent.lessons -- see that
+    module's docstring and tests/test_agent_lessons.py for why that function
+    alone can't read match outcomes or pending/rejected lessons.
+    """
+    from src.agent.tools import get_snapshot_store
+
+    if get_snapshot_store().mode != "live":
+        return {}
+
+    from src.agent.lessons import extract_competition_scope, load_approved_lessons
+    from src.utils.db_manager import DuckDBManager
+
+    competition_id, tier = extract_competition_scope(state)
+    with DuckDBManager().connection(read_only=True) as conn:
+        lessons = load_approved_lessons(conn, competition_id, tier)
+    if not lessons:
+        return {}
+    lessons_text = "Lessons from past evaluated matches:\n" + "\n".join(f"- {lesson}" for lesson in lessons)
+    return {"messages": [HumanMessage(content=lessons_text)]}
