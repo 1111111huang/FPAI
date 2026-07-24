@@ -910,11 +910,9 @@ export function MatchExplorerPage() {
   }, [matches, query]);
 
   return (
-    <main className="mx-auto max-w-4xl px-4 py-8 sm:px-6">
-      <DraftNav active="matches" />
-
+    <AppShell active="matches">
       <h1 className="text-xl font-semibold tracking-tight text-ink">Match Explorer</h1>
-      <p className="mt-1 text-sm text-ink-secondary">Search real upcoming E0 fixtures (next 90 days).</p>
+      <p className="mt-1 text-sm text-ink-secondary">Search real upcoming fixtures (next 90 days).</p>
 
       <div className="relative mt-5">
         <MagnifyingGlass size={16} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-muted" />
@@ -940,7 +938,7 @@ export function MatchExplorerPage() {
           </div>
         )}
       </div>
-    </main>
+    </AppShell>
   );
 }
 
