@@ -25,6 +25,11 @@ class NormalizedMatch:
     away_team: str
     home_goals: int | None
     away_goals: int | None
+    # W64: which competition this fixture belongs to -- "E0" or "SWE" today.
+    # Defaults to "E0" so every existing construction site across the
+    # codebase (tests included) keeps working unchanged; only
+    # get_fixtures()'s merge logic in main.py sets it explicitly per source.
+    competition: str = "E0"
 
 
 def _normalize(raw: dict) -> NormalizedMatch:

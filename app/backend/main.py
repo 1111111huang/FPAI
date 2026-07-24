@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 from contextlib import asynccontextmanager
+import dataclasses
 from datetime import date, datetime, timezone
 import os
 import time
@@ -305,27 +306,46 @@ async def get_fixtures(date_from: str | None = None, date_to: str | None = None)
     sweden_client = get_sweden_fixtures_client()
     results_range, fixtures_range = _split_fixture_date_range(date_from, date_to, _current_real_date())
 
+    def _tag(matches: list[NormalizedMatch], competition: str) -> list[NormalizedMatch]:
+        # W64: explicit tagging here (not inside each client's own
+        # normalize function) is deliberate -- this is the one place every
+        # return path through this endpoint passes through, real or
+        # test-mocked, so it's the only place a tag is guaranteed to stick.
+        return [dataclasses.replace(m, competition=competition) for m in matches]
+
     matches: list[NormalizedMatch] = []
     if results_range is not None:
         past_from, past_to = results_range
-        matches += await _cached_fixture_call(
-            ("results", past_from, past_to), client.get_results, date_from=past_from, date_to=past_to
+        matches += _tag(
+            await _cached_fixture_call(
+                ("results", past_from, past_to), client.get_results, date_from=past_from, date_to=past_to
+            ),
+            "E0",
         )
         # W57: Sweden (Allsvenskan) merged in alongside EPL, sourced from The
         # Odds API instead of football-data.org (W55 -- football-data.org's
         # free tier has no Allsvenskan coverage at all). Cache-keyed
         # separately ("results_swe" vs "results") so it can never collide
         # with football-data.org's entry for the identical date range.
-        matches += await _cached_fixture_call(
-            ("results_swe", past_from, past_to), sweden_client.get_results, date_from=past_from, date_to=past_to
+        matches += _tag(
+            await _cached_fixture_call(
+                ("results_swe", past_from, past_to), sweden_client.get_results, date_from=past_from, date_to=past_to
+            ),
+            "SWE",
         )
     if fixtures_range is not None:
         future_from, future_to = fixtures_range
-        matches += await _cached_fixture_call(
-            ("fixtures", future_from, future_to), client.get_fixtures, date_from=future_from, date_to=future_to
+        matches += _tag(
+            await _cached_fixture_call(
+                ("fixtures", future_from, future_to), client.get_fixtures, date_from=future_from, date_to=future_to
+            ),
+            "E0",
         )
-        matches += await _cached_fixture_call(
-            ("fixtures_swe", future_from, future_to), sweden_client.get_fixtures, date_from=future_from, date_to=future_to
+        matches += _tag(
+            await _cached_fixture_call(
+                ("fixtures_swe", future_from, future_to), sweden_client.get_fixtures, date_from=future_from, date_to=future_to
+            ),
+            "SWE",
         )
     return matches
 

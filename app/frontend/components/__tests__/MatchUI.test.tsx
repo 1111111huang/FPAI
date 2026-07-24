@@ -9,18 +9,42 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 
-import { LogBetButton, MatchAnalysisPage, MatchCard, StatusBadge, TeamBadge, type Match, type Overall } from "../MatchUI";
-import type { MatchRecommendationOut } from "@/lib/types";
+import {
+  fixtureToMatch,
+  LogBetButton,
+  MatchAnalysisPage,
+  MatchCard,
+  StatusBadge,
+  TeamBadge,
+  type Match,
+  type Overall,
+} from "../MatchUI";
+import type { Fixture, MatchRecommendationOut } from "@/lib/types";
 
 vi.mock("@/lib/api", () => ({
   generateRecommendation: vi.fn(),
   getCachedRecommendation: vi.fn(),
   getFixtures: vi.fn(),
   logBetFromRecommendation: vi.fn(),
+  // W64: MatchAnalysisPage now renders inside AppShell (Task 9), which
+  // independently calls getStatus() (unconditionally, on mount) and
+  // useSandboxAsOf() -> getSandboxStatus() -- neither existed as a
+  // dependency of this test file before that wiring. Both need mocks here
+  // or AppShell throws "No export is defined on the mock" the moment it
+  // mounts, same class of pre-existing-mock gap Tasks 7/8 already hit and
+  // fixed the same way (see AppShell.test.tsx, MatchUI.race.test.tsx, etc).
+  getStatus: vi.fn(),
+  getSandboxStatus: vi.fn(),
   ApiError: class ApiError extends Error {},
 }));
 
-import { generateRecommendation, getCachedRecommendation, logBetFromRecommendation } from "@/lib/api";
+import {
+  generateRecommendation,
+  getCachedRecommendation,
+  getSandboxStatus,
+  getStatus,
+  logBetFromRecommendation,
+} from "@/lib/api";
 
 const ALL_OVERALL_STATES: { overall: Overall; label: string }[] = [
   { overall: "direct_bet", label: "Direct Bet" },
@@ -107,6 +131,13 @@ describe("MatchCard", () => {
     render(<MatchCard match={match} onUpdate={vi.fn()} />);
     expect(screen.getByText("Not yet generated")).toBeInTheDocument();
   });
+
+  it("W64: shows 'Modeled' (not the old league-specific 'EPL') for a competition_specific match, since this tag now renders on both E0 and SWE cards", () => {
+    const match = baseMatch({ tier: "competition_specific" });
+    render(<MatchCard match={match} onUpdate={vi.fn()} />);
+    expect(screen.getByText("Modeled")).toBeInTheDocument();
+    expect(screen.queryByText("EPL")).not.toBeInTheDocument();
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -132,6 +163,34 @@ function makeRecommendation(overrides: Partial<MatchRecommendationOut> = {}): Ma
   };
 }
 
+function baseFixture(overrides: Partial<Fixture> = {}): Fixture {
+  return {
+    match_id: "m1",
+    utc_date: "2026-08-22T15:00:00Z",
+    status: "SCHEDULED",
+    home_team: "Arsenal",
+    away_team: "Everton",
+    home_goals: null,
+    away_goals: null,
+    ...overrides,
+  };
+}
+
+describe("fixtureToMatch -- W64 real competition, not a hardcoded E0", () => {
+  it("uses the fixture's real competition when present", () => {
+    const fixture = baseFixture({ competition: "SWE" });
+    expect(fixtureToMatch(fixture).league).toBe("SWE");
+  });
+
+  it("falls back to E0 when competition is genuinely absent", () => {
+    // baseFixture()'s default never sets `competition` at all (not merely
+    // `undefined`) -- proving the `?? "E0"` fallback works for a field
+    // that's truly missing, not just re-testing the SWE case above.
+    const fixtureWithoutCompetition = baseFixture();
+    expect(fixtureToMatch(fixtureWithoutCompetition).league).toBe("E0");
+  });
+});
+
 describe("MatchCard -- cache-first expand (W47)", () => {
   beforeEach(() => {
     vi.mocked(getCachedRecommendation).mockReset();
@@ -154,6 +213,19 @@ describe("MatchCard -- cache-first expand (W47)", () => {
     expect(onUpdate).toHaveBeenCalledWith(
       expect.objectContaining({ hasRecommendation: true, explanation: "cached explanation" })
     );
+  });
+
+  it("W64: requests a recommendation with the fixture's real competition, not a hardcoded E0", async () => {
+    vi.mocked(getCachedRecommendation).mockResolvedValue(null);
+    vi.mocked(generateRecommendation).mockResolvedValue(makeRecommendation());
+    const user = userEvent.setup();
+    const match = baseMatch({ hasRecommendation: false, league: "SWE" });
+
+    render(<MatchCard match={match} onUpdate={vi.fn()} />);
+    await user.click(screen.getByText("Not yet generated"));
+
+    await waitFor(() => expect(generateRecommendation).toHaveBeenCalled());
+    expect(generateRecommendation).toHaveBeenCalledWith(expect.objectContaining({ league: "SWE" }));
   });
 
   it("on a cache miss (null), falls back to generateRecommendation and applies its result unchanged", async () => {
@@ -186,6 +258,14 @@ describe("MatchAnalysisPage -- cache-first load (W47)", () => {
   beforeEach(() => {
     vi.mocked(getCachedRecommendation).mockReset();
     vi.mocked(generateRecommendation).mockReset();
+    // AppShell (wrapping MatchAnalysisPage as of Task 9) calls these
+    // unconditionally on mount -- give them harmless defaults so each
+    // test's real assertions aren't drowned out by an unrelated mock
+    // rejection/undefined-return from AppShell's own chrome. Rejecting
+    // getStatus matches AppShell.test.tsx's own precedent (AppShell
+    // catches the rejection and just shows "--" in its sidebar footer).
+    vi.mocked(getStatus).mockReset().mockRejectedValue(new Error("no backend"));
+    vi.mocked(getSandboxStatus).mockReset().mockResolvedValue({ sandbox_mode: false, as_of: null });
   });
 
   it("on a cache hit, renders the cached recommendation and never calls generateRecommendation", async () => {
@@ -215,6 +295,16 @@ describe("MatchAnalysisPage -- cache-first load (W47)", () => {
       league: "E0",
       match_id: "m1",
     });
+  });
+
+  it("W64: requests a recommendation with the passed league, not a hardcoded E0", async () => {
+    vi.mocked(getCachedRecommendation).mockResolvedValue(null);
+    vi.mocked(generateRecommendation).mockResolvedValue(makeRecommendation());
+
+    render(<MatchAnalysisPage id="m1" home="Malmo FF" away="AIK" date="2026-08-22" league="SWE" />);
+
+    await waitFor(() => expect(generateRecommendation).toHaveBeenCalled());
+    expect(generateRecommendation).toHaveBeenCalledWith(expect.objectContaining({ league: "SWE" }));
   });
 });
 

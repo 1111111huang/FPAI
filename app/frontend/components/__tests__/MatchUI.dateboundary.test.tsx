@@ -30,12 +30,12 @@ describe("date-boundary correctness via the sandbox clock (W38)", () => {
     // useSandboxAsOf() fetches once per mount (empty effect deps, W30) --
     // a same-instance rerender() never re-fires it, so unmount+remount (a
     // page reload) is how a new simulated day is actually observed.
-    vi.mocked(getSandboxStatus).mockResolvedValueOnce({ sandbox_mode: true, as_of: "2026-03-01" });
+    vi.mocked(getSandboxStatus).mockResolvedValue({ sandbox_mode: true, as_of: "2026-03-01" });
     const { unmount } = render(<DashboardPage />);
     await waitFor(() => expect(getFixtures).toHaveBeenCalledWith("2026-03-01", "2026-03-01"));
     unmount();
 
-    vi.mocked(getSandboxStatus).mockResolvedValueOnce({ sandbox_mode: true, as_of: "2026-03-02" });
+    vi.mocked(getSandboxStatus).mockResolvedValue({ sandbox_mode: true, as_of: "2026-03-02" });
     render(<DashboardPage />);
 
     await waitFor(() => expect(getFixtures).toHaveBeenCalledWith("2026-03-02", "2026-03-02"));
@@ -120,9 +120,9 @@ describe("MatchCard's relative-day label respects the sandbox clock", () => {
 // W48: sandbox mode must not leak real results for fixtures that are still
 // "in the future" relative to the sandbox's own pretend as_of, even when
 // they've genuinely already been played (real FINISHED status + score)
-// relative to actual wall-clock time. fixtureToMatch() (not exported --
-// exercised here the same way the rest of this file already does, by
-// mocking getFixtures/getSandboxStatus and rendering the real pages) must
+// relative to actual wall-clock time. fixtureToMatch() -- exercised here
+// the same way the rest of this file already does, by mocking
+// getFixtures/getSandboxStatus and rendering the real pages -- must
 // derive Match.status with asOf/sandboxMode in mind, only in sandbox mode,
 // only for a kickoff date strictly after asOf's date.
 // ---------------------------------------------------------------------------

@@ -27,6 +27,12 @@ vi.mock("@/lib/api", () => ({
   logBetManual: vi.fn(),
   settleOpenBets: vi.fn(),
   getSandboxStatus: vi.fn(),
+  // AppShell (wired into BetTrackerPage as of this task) calls getStatus()
+  // on mount for its top-bar status indicator -- without this the mock
+  // module has no such export and AppShell's mount throws. Explicitly
+  // rejected in beforeEach below (AppShell.test.tsx's own precedent),
+  // rather than left unresolved.
+  getStatus: vi.fn(),
   ApiError: class ApiError extends Error {
     status?: number;
     constructor(message: string, status?: number) {
@@ -37,7 +43,7 @@ vi.mock("@/lib/api", () => ({
   },
 }));
 
-import { ApiError, getBets, getBetStats, getFixtures, getSandboxStatus } from "@/lib/api";
+import { ApiError, getBets, getBetStats, getFixtures, getSandboxStatus, getStatus } from "@/lib/api";
 
 describe("ManualBetForm surfaces a visible error when the fixture fetch fails (W52)", () => {
   beforeEach(() => {
@@ -45,6 +51,7 @@ describe("ManualBetForm surfaces a visible error when the fixture fetch fails (W
     vi.mocked(getSandboxStatus).mockReset();
     vi.mocked(getBets).mockReset();
     vi.mocked(getBetStats).mockReset();
+    vi.mocked(getStatus).mockReset();
     vi.mocked(getBets).mockResolvedValue([]);
     vi.mocked(getBetStats).mockResolvedValue({
       bets_settled: 0, bets_open: 0, bets_won: 0, roi: 0, hit_rate: 0,
@@ -52,6 +59,7 @@ describe("ManualBetForm surfaces a visible error when the fixture fetch fails (W
       starting_bankroll: 0, current_bankroll: 0,
     });
     vi.mocked(getSandboxStatus).mockResolvedValue({ sandbox_mode: false, as_of: null });
+    vi.mocked(getStatus).mockRejectedValue(new Error("no backend"));
   });
 
   it("shows a visible error message when the fixture fetch rejects, not just a silent empty search", async () => {

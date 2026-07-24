@@ -10,6 +10,12 @@ export type Fixture = {
   away_team: string;
   home_goals: number | null;
   away_goals: number | null;
+  // W64: "E0" or "SWE". Optional (not `competition: string`) so every
+  // existing hand-built Fixture literal across the test suite -- there are
+  // several, none of which set this field -- keeps type-checking without
+  // modification; fixtureToMatch() (Task 3) defaults a missing value to
+  // "E0", mirroring the backend's own default.
+  competition?: string;
 };
 
 export type MarketRecommendationOut = {
