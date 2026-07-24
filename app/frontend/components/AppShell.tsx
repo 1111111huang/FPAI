@@ -29,6 +29,10 @@ export function AppShell({
   activeEdgesCount?: number;
   children: React.ReactNode;
 }) {
+  // Independent of whatever page renders us, which may also call this hook
+  // itself (e.g. DashboardPage) -- a known, accepted duplicate GET
+  // /api/sandbox/status per mount, not shared/cached. Cheap local read;
+  // worth revisiting if AppShell ends up wrapping many more pages.
   const { asOf } = useSandboxAsOf();
   const [status, setStatus] = useState<StatusResponse | null>(null);
   const [query, setQuery] = useState("");

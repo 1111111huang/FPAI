@@ -652,6 +652,8 @@ export function MatchCard({
 // ---------------------------------------------------------------------------
 
 export function DashboardPage() {
+  // AppShell (below) independently calls this same hook too -- see its own
+  // comment. Known duplicate fetch, not shared/cached; accepted for now.
   const { asOf, sandboxMode } = useSandboxAsOf();
   const [matches, setMatches] = useState<Match[] | null>(null);
   // W46: populated only when the same-day query above comes back empty --

@@ -17,7 +17,7 @@
  * the list is capped at 10" requirement.
  */
 import { describe, expect, it, vi, beforeEach } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { DashboardPage, MatchExplorerPage } from "../MatchUI";
 import { generateRecommendation, getCachedRecommendation, getFixtures, getSandboxStatus } from "@/lib/api";
@@ -76,8 +76,12 @@ describe("Dashboard initial-list precompute visibility (W53)", () => {
     render(<DashboardPage />);
 
     // Proven purely from the initial fetch -- no userEvent.click anywhere in
-    // this test.
-    expect(await screen.findAllByText("Direct Bet")).not.toHaveLength(0);
+    // this test. Scoped to the card's own <button> (not just screen-wide)
+    // since DashboardRail's legend independently renders "Direct Bet" too --
+    // this keeps the assertion specific to the card's own status badge.
+    const card = (await screen.findByText("Arsenal")).closest("button");
+    expect(card).not.toBeNull();
+    expect(within(card!).getByText("Direct Bet")).toBeInTheDocument();
     expect(screen.queryByText("Not yet generated")).not.toBeInTheDocument();
     expect(getCachedRecommendation).toHaveBeenCalledWith("precomputed-match", today);
     expect(generateRecommendation).not.toHaveBeenCalled();
@@ -116,7 +120,11 @@ describe("Dashboard initial-list precompute visibility (W53)", () => {
       league: "E0",
       match_id: "uncached-match",
     }));
-    expect(await screen.findAllByText("Direct Bet")).not.toHaveLength(0);
+    // Scoped to the card's own <button>, not screen-wide -- see the previous
+    // test's comment on why (DashboardRail's legend also renders this text).
+    const card = (await screen.findByText("Arsenal")).closest("button");
+    expect(card).not.toBeNull();
+    expect(within(card!).getByText("Direct Bet")).toBeInTheDocument();
   });
 
   it("resolves the cache check concurrently across the whole initial list, not one match at a time", async () => {
