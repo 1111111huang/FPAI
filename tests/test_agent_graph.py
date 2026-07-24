@@ -6,7 +6,7 @@ from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from langchain_core.tools import tool
 
 from src.agent.agent_config import AgentConfig
-from src.agent.graph import AgentState, _extract_text, build_graph
+from src.agent.graph import AgentState, _extract_text, build_graph, route_after_forecast
 
 
 @tool
@@ -270,22 +270,16 @@ def test_extract_text_handles_bare_string_list_entries():
     assert _extract_text(["a", "b"]) == "ab"
 
 
-def _route_after_forecast_for_state(forecast_payload):
-    """Helper: extract forecast-routing logic without building the full graph."""
-    succeeded = bool(forecast_payload) and "error" not in forecast_payload
-    return "agent" if succeeded else "output"
-
-
-def test_route_after_forecast_routes_to_agent_on_success():
-    assert _route_after_forecast_for_state({"result_3way": {}}) == "agent"
+def test_route_after_forecast_routes_to_lessons_on_success():
+    assert route_after_forecast({"forecast_payload": {"result_3way": {}}}) == "lessons"
 
 
 def test_route_after_forecast_routes_to_output_on_error():
-    assert _route_after_forecast_for_state({"error": "no odds", "status": "no_odds"}) == "output"
+    assert route_after_forecast({"forecast_payload": {"error": "no odds", "status": "no_odds"}}) == "output"
 
 
 def test_route_after_forecast_routes_to_output_when_payload_missing():
-    assert _route_after_forecast_for_state(None) == "output"
+    assert route_after_forecast({"forecast_payload": None}) == "output"
 
 
 def test_run_agent_short_circuits_to_insufficient_data_when_no_odds_available():

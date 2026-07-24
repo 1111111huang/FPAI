@@ -181,6 +181,24 @@ def _build_recommendation(
     return recommendation
 
 
+def route_after_forecast(state: AgentState) -> Literal["lessons", "output"]:
+    """A31/A33: a successful forecast proceeds to the lessons node (which
+    itself no-ops outside live mode) before the LLM ever sees the match; a
+    failed/impossible forecast (no odds from any source, or a tool error)
+    routes straight to output. Module-level (not nested in build_graph, unlike
+    its sibling node/route closures) since it's a pure function of state with
+    no dependency on config/llm/tools -- this lets tests call the real
+    function directly instead of hand-duplicating its logic, which is what
+    let this function's success target silently drift out of sync with a
+    test during A33's development (route target changed from "agent" to
+    "lessons" but a duplicated test helper kept asserting the old value)."""
+    payload = state.get("forecast_payload")
+    succeeded = bool(payload) and "error" not in payload
+    route = "lessons" if succeeded else "output"
+    _LOG.info("route_after_forecast | succeeded=%s | route=%s", succeeded, route)
+    return route
+
+
 def build_graph(config: AgentConfig, tools: list):
     """Compile and return the LangGraph StateGraph for the betting agent.
 
@@ -209,13 +227,6 @@ def build_graph(config: AgentConfig, tools: list):
         under_budget = state["tool_call_count"] < config.max_tool_calls
         route = "tools" if has_calls and under_budget else "output"
         _LOG.info("should_continue | has_tool_calls=%s | tool_call_count=%d | route=%s", has_calls, state["tool_call_count"], route)
-        return route
-
-    def route_after_forecast(state: AgentState) -> Literal["lessons", "output"]:
-        payload = state.get("forecast_payload")
-        succeeded = bool(payload) and "error" not in payload
-        route = "lessons" if succeeded else "output"
-        _LOG.info("route_after_forecast | succeeded=%s | route=%s", succeeded, route)
         return route
 
     def output_node(state: AgentState) -> dict:
