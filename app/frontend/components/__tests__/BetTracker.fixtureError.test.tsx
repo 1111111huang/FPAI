@@ -27,6 +27,12 @@ vi.mock("@/lib/api", () => ({
   logBetManual: vi.fn(),
   settleOpenBets: vi.fn(),
   getSandboxStatus: vi.fn(),
+  // AppShell (wired into BetTrackerPage as of this task) calls getStatus()
+  // on mount for its top-bar status indicator -- without this the mock
+  // module has no such export and AppShell's mount throws. AppShell
+  // degrades its status display to "--" whether this resolves or rejects,
+  // so an unresolved vi.fn() is sufficient here (same fix as Tasks 7/9).
+  getStatus: vi.fn(),
   ApiError: class ApiError extends Error {
     status?: number;
     constructor(message: string, status?: number) {

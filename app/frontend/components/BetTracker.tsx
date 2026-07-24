@@ -11,7 +11,8 @@ import { MagnifyingGlass, WarningCircle } from "@phosphor-icons/react";
 import { ApiError, getBetStats, getBets, getFixtures, logBetManual, settleOpenBets } from "@/lib/api";
 import type { Bet, BetStats, Fixture } from "@/lib/types";
 import { useSandboxAsOf } from "@/lib/useSandboxAsOf";
-import { DraftNav, ErrorState, TeamBadge } from "./MatchUI";
+import { AppShell } from "./AppShell";
+import { ErrorState, TeamBadge } from "./MatchUI";
 
 function formatDate(iso: string): string {
   return iso.slice(0, 10);
@@ -287,9 +288,7 @@ export function BetTrackerPage() {
   }, []);
 
   return (
-    <main className="mx-auto max-w-4xl px-4 py-8 sm:px-6">
-      <DraftNav active="bets" />
-
+    <AppShell active="bets">
       <h1 className="text-xl font-semibold tracking-tight text-ink">Bet Tracker</h1>
       <p className="mt-1 text-sm text-ink-secondary">Bets you've actually placed -- not automatic hypothetical tracking.</p>
 
@@ -329,6 +328,6 @@ export function BetTrackerPage() {
           </div>
         )}
       </div>
-    </main>
+    </AppShell>
   );
 }
