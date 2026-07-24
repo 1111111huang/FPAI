@@ -57,7 +57,7 @@ export function DashboardRail({ matches }: { matches: Match[] }) {
           <p className="mt-3 text-sm text-ink-secondary">No matches loaded yet.</p>
         ) : (
           <div className="mt-3 flex items-center gap-4">
-            <svg viewBox="0 0 100 100" width={88} height={88} className="shrink-0 -rotate-90">
+            <svg viewBox="0 0 100 100" width={88} height={88} className="shrink-0 -rotate-90" aria-hidden="true">
               <circle cx="50" cy="50" r={RADIUS} fill="none" stroke="var(--gridline)" strokeWidth={14} />
               {arcs.map((arc) => (
                 <circle
