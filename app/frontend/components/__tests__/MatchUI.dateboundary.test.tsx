@@ -120,9 +120,9 @@ describe("MatchCard's relative-day label respects the sandbox clock", () => {
 // W48: sandbox mode must not leak real results for fixtures that are still
 // "in the future" relative to the sandbox's own pretend as_of, even when
 // they've genuinely already been played (real FINISHED status + score)
-// relative to actual wall-clock time. fixtureToMatch() (not exported --
-// exercised here the same way the rest of this file already does, by
-// mocking getFixtures/getSandboxStatus and rendering the real pages) must
+// relative to actual wall-clock time. fixtureToMatch() -- exercised here
+// the same way the rest of this file already does, by mocking
+// getFixtures/getSandboxStatus and rendering the real pages -- must
 // derive Match.status with asOf/sandboxMode in mind, only in sandbox mode,
 // only for a kickoff date strictly after asOf's date.
 // ---------------------------------------------------------------------------
