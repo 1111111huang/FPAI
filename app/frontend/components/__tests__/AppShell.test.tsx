@@ -11,6 +11,17 @@ vi.mock("@/lib/api", () => ({
 
 import { getFixtures, getSandboxStatus, getStatus } from "@/lib/api";
 
+/** A promise whose resolution is controlled from outside, so the test can
+ * force a specific out-of-order resolution sequence -- same helper as
+ * MatchUI.race.test.tsx's W42 regression tests. */
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((res) => {
+    resolve = res;
+  });
+  return { promise, resolve };
+}
+
 describe("AppShell", () => {
   beforeEach(() => {
     vi.mocked(getStatus).mockReset();
@@ -108,5 +119,34 @@ describe("AppShell", () => {
     const link = await screen.findByText(/Malmo FF/);
     expect(link.closest("a")).toHaveAttribute("href", expect.stringContaining("league=SWE"));
     expect(screen.queryByText(/Arsenal/)).not.toBeInTheDocument();
+  });
+
+  it("re-fetches search fixtures with the corrected sandbox date once asOf resolves after an early focus (W42-style race)", async () => {
+    vi.mocked(getStatus).mockRejectedValue(new Error("no backend"));
+    const today = new Date().toISOString().slice(0, 10);
+    const sandboxDate = "2025-03-05";
+    const sandboxWindowEnd = "2025-06-03"; // 2025-03-05 + 90 days
+
+    const sandboxStatus = deferred<{ sandbox_mode: boolean; as_of: string | null }>();
+    vi.mocked(getSandboxStatus).mockReturnValue(sandboxStatus.promise);
+    vi.mocked(getFixtures).mockResolvedValue([]);
+
+    const user = userEvent.setup();
+    render(
+      <AppShell active="dashboard">
+        <p>content</p>
+      </AppShell>
+    );
+
+    // Focus lands before the sandbox status corrects `asOf` -- fires the
+    // first (stale, real-clock) fetch.
+    await user.click(screen.getByPlaceholderText("Search fixtures, teams…"));
+    await waitFor(() => expect(getFixtures).toHaveBeenCalledWith(today, expect.any(String)));
+
+    // Now the sandbox status resolves, correcting `asOf` -- this must
+    // trigger a second, corrected fetch rather than leaving the search box
+    // permanently locked into the stale real-clock window.
+    sandboxStatus.resolve({ sandbox_mode: true, as_of: sandboxDate });
+    await waitFor(() => expect(getFixtures).toHaveBeenCalledWith(sandboxDate, sandboxWindowEnd));
   });
 });

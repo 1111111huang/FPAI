@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useRef, useState, useEffect } from "react";
+import { useState, useEffect } from "react";
 import { MagnifyingGlass } from "@phosphor-icons/react";
 
 import { getFixtures, getStatus } from "@/lib/api";
@@ -33,9 +33,12 @@ export function AppShell({
   const [status, setStatus] = useState<StatusResponse | null>(null);
   const [query, setQuery] = useState("");
   const [searchFixtures, setSearchFixtures] = useState<Fixture[]>([]);
-  const fetchedSearchRef = useRef(false);
+  const [hasFocused, setHasFocused] = useState(false);
 
   useEffect(() => {
+    // Refetched on every mount -- AppShell is instantiated per-page like the
+    // DraftNav it replaces, not persisted across navigation; the sidebar
+    // footer briefly shows placeholders after each route change.
     let cancelled = false;
     (async () => {
       try {
@@ -52,24 +55,34 @@ export function AppShell({
     };
   }, []);
 
-  function ensureSearchFixturesLoaded() {
+  useEffect(() => {
     // Lazy on purpose -- see this plan's "Before you start" note. Eagerly
     // fetching on mount would add a call to the same shared `getFixtures`
     // mock BetTracker.fixtureError.test.tsx asserts an exact count against.
-    if (fetchedSearchRef.current) return;
-    fetchedSearchRef.current = true;
+    // Keyed on [hasFocused, asOf] rather than a one-shot ref (W42 pattern,
+    // see MatchUI.tsx's DashboardPage/MatchExplorerPage): useSandboxAsOf()
+    // resolves asynchronously -- the real browser clock first, then the
+    // corrected sandbox date once GET /api/sandbox/status returns -- so a
+    // focus that happens before that correction lands must still trigger a
+    // second, corrected fetch rather than being locked into the stale
+    // real-clock window for the rest of the mount's life.
+    if (!hasFocused) return;
+    let cancelled = false;
     const from = new Date(asOf);
     const to = new Date(asOf);
     to.setUTCDate(to.getUTCDate() + 90);
     (async () => {
       try {
         const fixtures = await getFixtures(from.toISOString().slice(0, 10), to.toISOString().slice(0, 10));
-        setSearchFixtures(fixtures ?? []);
+        if (!cancelled) setSearchFixtures(fixtures ?? []);
       } catch {
-        setSearchFixtures([]);
+        if (!cancelled) setSearchFixtures([]);
       }
     })();
-  }
+    return () => {
+      cancelled = true;
+    };
+  }, [hasFocused, asOf]);
 
   const q = query.trim().toLowerCase();
   const results =
@@ -136,7 +149,7 @@ export function AppShell({
             <input
               value={query}
               onChange={(e) => setQuery(e.target.value)}
-              onFocus={ensureSearchFixturesLoaded}
+              onFocus={() => setHasFocused(true)}
               placeholder="Search fixtures, teams…"
               className="w-full rounded-lg border border-border bg-surface py-2 pl-9 pr-3 text-sm text-ink outline-none placeholder:text-muted focus:border-accent"
             />
