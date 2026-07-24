@@ -30,12 +30,12 @@ describe("date-boundary correctness via the sandbox clock (W38)", () => {
     // useSandboxAsOf() fetches once per mount (empty effect deps, W30) --
     // a same-instance rerender() never re-fires it, so unmount+remount (a
     // page reload) is how a new simulated day is actually observed.
-    vi.mocked(getSandboxStatus).mockResolvedValueOnce({ sandbox_mode: true, as_of: "2026-03-01" });
+    vi.mocked(getSandboxStatus).mockResolvedValue({ sandbox_mode: true, as_of: "2026-03-01" });
     const { unmount } = render(<DashboardPage />);
     await waitFor(() => expect(getFixtures).toHaveBeenCalledWith("2026-03-01", "2026-03-01"));
     unmount();
 
-    vi.mocked(getSandboxStatus).mockResolvedValueOnce({ sandbox_mode: true, as_of: "2026-03-02" });
+    vi.mocked(getSandboxStatus).mockResolvedValue({ sandbox_mode: true, as_of: "2026-03-02" });
     render(<DashboardPage />);
 
     await waitFor(() => expect(getFixtures).toHaveBeenCalledWith("2026-03-02", "2026-03-02"));

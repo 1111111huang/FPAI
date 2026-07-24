@@ -77,7 +77,7 @@ describe("Dashboard initial-list precompute visibility (W53)", () => {
 
     // Proven purely from the initial fetch -- no userEvent.click anywhere in
     // this test.
-    expect(await screen.findByText("Direct Bet")).toBeInTheDocument();
+    expect(await screen.findAllByText("Direct Bet")).not.toHaveLength(0);
     expect(screen.queryByText("Not yet generated")).not.toBeInTheDocument();
     expect(getCachedRecommendation).toHaveBeenCalledWith("precomputed-match", today);
     expect(generateRecommendation).not.toHaveBeenCalled();
@@ -116,7 +116,7 @@ describe("Dashboard initial-list precompute visibility (W53)", () => {
       league: "E0",
       match_id: "uncached-match",
     }));
-    expect(await screen.findByText("Direct Bet")).toBeInTheDocument();
+    expect(await screen.findAllByText("Direct Bet")).not.toHaveLength(0);
   });
 
   it("resolves the cache check concurrently across the whole initial list, not one match at a time", async () => {

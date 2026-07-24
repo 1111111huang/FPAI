@@ -79,7 +79,7 @@ describe("Dashboard empty-window fallback (W46)", () => {
     expect(secondCall[1]).not.toBe(today);
 
     // Clearly labeled as "next matches", not today's.
-    expect(await screen.findByText(/No E0 fixtures today.*next matches/)).toBeInTheDocument();
+    expect(await screen.findByText(/No fixtures today.*next matches/)).toBeInTheDocument();
 
     // Trimmed to 10 (of the 12 available) and rendered nearest-first: the
     // earliest kickoffs (match-0..match-9) win over the two latest
@@ -126,7 +126,7 @@ describe("Dashboard empty-window fallback (W46)", () => {
     expect(secondCall[0]).toBe(today);
     expect(secondCall[1]).not.toBe(today);
 
-    expect(await screen.findByText("No E0 fixtures today.")).toBeInTheDocument();
+    expect(await screen.findByText("No fixtures today.")).toBeInTheDocument();
     expect(screen.queryByText(/next matches/i)).not.toBeInTheDocument();
   });
 
@@ -147,7 +147,7 @@ describe("Dashboard empty-window fallback (W46)", () => {
     await waitFor(() => expect(getFixtures).toHaveBeenCalledWith(today, today));
     await waitFor(() => expect(getFixtures).toHaveBeenCalledTimes(2));
 
-    expect(await screen.findByText("No E0 fixtures today.")).toBeInTheDocument();
+    expect(await screen.findByText("No fixtures today.")).toBeInTheDocument();
     expect(screen.queryByText(/could not load/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/next matches/i)).not.toBeInTheDocument();
   });

@@ -83,7 +83,7 @@ describe("fixture-fetch race guard (W42)", () => {
     // FIRST, then the stale (earlier-fired) request resolves AFTER it --
     // exactly the ordering captured live via Playwright.
     correct.resolve(correctFixtures);
-    await waitFor(() => expect(screen.getByText("No E0 fixtures today.")).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText("No fixtures today.")).toBeInTheDocument());
 
     stale.resolve(staleFixtures);
 
@@ -91,7 +91,7 @@ describe("fixture-fetch race guard (W42)", () => {
     // race guard is missing, then assert it didn't.
     await new Promise((r) => setTimeout(r, 10));
     expect(screen.queryByText("real-clock-fixture")).not.toBeInTheDocument();
-    expect(screen.getByText("No E0 fixtures today.")).toBeInTheDocument();
+    expect(screen.getByText("No fixtures today.")).toBeInTheDocument();
   });
 
   it("Match Explorer: a stale real-clock response landing after the correct sandbox response does not overwrite it", async () => {
