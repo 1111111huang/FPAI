@@ -69,6 +69,14 @@ _REPLAY_MISS_RE = re.compile(r"sandbox_agent_replay_miss")
 
 
 def sample_dates(from_date: str, to_date: str, every_days: int) -> list[str]:
+    # every_days<=0 would either never advance `d` (0 -- infinite loop,
+    # unbounded memory growth as `out` keeps appending the same date) or
+    # walk away from `end` (negative -- only terminates via an
+    # OverflowError near date.min after ~700k+ iterations). Validated here,
+    # not just at the CLI layer, so this function has a correct contract
+    # regardless of caller.
+    if every_days <= 0:
+        raise ValueError(f"sample_every_days must be positive, got {every_days}")
     start = date.fromisoformat(from_date)
     end = date.fromisoformat(to_date)
     out = []
@@ -138,6 +146,17 @@ def run_one_scenario(date_str: str, timeout: float = 300.0) -> dict:
     Returns a result dict for the summary report."""
     result: dict = {"date": date_str, "leagues": {}, "replay_miss_count": 0, "errors": []}
     output = ""
+    # Tracks whether the launch call itself timed out, as distinct from
+    # completing (successfully or with a normal error). launch_sandbox.py
+    # detaches its backend/frontend subprocesses via os.setsid and only
+    # writes its state file (which --stop needs to find their PIDs) after
+    # both health checks pass -- if our own timeout fires between
+    # "processes spawned" and "state file written," the already-spawned
+    # uvicorn/npm grandchildren survive as orphans holding the default
+    # ports, --stop below finds no state file and reports nothing to do,
+    # and every later sampled date then fails to bind those same fixed
+    # ports. That must not be silently treated as a normal clean stop.
+    timed_out = False
     try:
         launch = subprocess.run(
             [sys.executable, str(LAUNCH_SCRIPT), date_str, "--precompute"],
@@ -147,8 +166,15 @@ def run_one_scenario(date_str: str, timeout: float = 300.0) -> dict:
         if launch.returncode != 0:
             result["errors"].append(f"launch failed (exit {launch.returncode}): {output[-2000:]}")
     except subprocess.TimeoutExpired as exc:
+        timed_out = True
         output = (exc.stdout or "") + (exc.stderr or "")
-        result["errors"].append(f"launch timed out after {timeout}s")
+        result["errors"].append(
+            f"launch timed out after {timeout}s -- the backend/frontend may already have spawned "
+            "before the timeout fired, and since launch_sandbox.py only writes its state file after "
+            "both health checks pass, the following --stop call cannot reliably find/kill them. "
+            "If subsequent dates in this run also fail to launch, check for orphaned processes on "
+            "the default backend/frontend ports manually (e.g. `lsof -i :8000` / `lsof -i :3000`)."
+        )
     finally:
         try:
             stop = subprocess.run(
@@ -156,8 +182,14 @@ def run_one_scenario(date_str: str, timeout: float = 300.0) -> dict:
                 capture_output=True, text=True, timeout=60,
             )
             stop_output = stop.stdout + stop.stderr
-            if stop.returncode != 0 and "No recorded sandbox launch found" not in stop_output:
+            nothing_to_stop = "No recorded sandbox launch found" in stop_output
+            if stop.returncode != 0 and not nothing_to_stop:
                 result["errors"].append(f"--stop reported an error: {stop_output[-500:]}")
+            elif timed_out and nothing_to_stop:
+                result["errors"].append(
+                    "--stop reported nothing to clean up after a timeout -- this does NOT confirm a "
+                    "clean state (see above); possible orphaned backend/frontend on default ports."
+                )
         except subprocess.TimeoutExpired:
             result["errors"].append("--stop itself timed out after 60s -- a backend/frontend may still be running.")
 

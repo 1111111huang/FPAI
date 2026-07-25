@@ -11,11 +11,15 @@ mocked one)."""
 from __future__ import annotations
 
 from pathlib import Path
+import subprocess
 import sys
+from unittest.mock import MagicMock, patch
+
+import pytest
 
 sys.path.append(str(Path(__file__).resolve().parent))
 
-from scenario_runbook import parse_precompute_output, sample_dates  # noqa: E402
+from scenario_runbook import parse_precompute_output, run_one_scenario, sample_dates  # noqa: E402
 
 
 class TestSampleDates:
@@ -37,6 +41,20 @@ class TestSampleDates:
         assert len(dates) >= 5
         assert dates[0] == "2025-08-01"
         assert dates[-1] <= "2026-05-31"
+
+    def test_zero_every_days_raises_instead_of_looping_forever(self) -> None:
+        # every_days=0 never advances `d` -- an infinite loop with
+        # unbounded memory growth (a plausible typo: fat-fingering 0
+        # instead of 1). Must raise immediately, not hang.
+        with pytest.raises(ValueError, match="sample_every_days must be positive"):
+            sample_dates("2025-08-01", "2025-09-01", 0)
+
+    def test_negative_every_days_raises_instead_of_walking_away_from_to_date(self) -> None:
+        # every_days<0 moves `d` away from `end`, only ever terminating
+        # (if at all) via an OverflowError near date.min after 700k+
+        # iterations. Must raise immediately.
+        with pytest.raises(ValueError, match="sample_every_days must be positive"):
+            sample_dates("2025-08-01", "2025-09-01", -7)
 
 
 class TestParsePrecomputeOutput:
@@ -107,3 +125,62 @@ class TestParsePrecomputeOutput:
         entry = parsed["leagues"]["E0"]
         assert entry["fixtures_found"] == 4
         assert entry["reported_complete"] is False
+
+
+class TestRunOneScenarioTimeout:
+    """launch_sandbox.py detaches its backend/frontend via os.setsid and
+    only writes its state file (which --stop needs) after both health
+    checks pass. If run_one_scenario()'s own subprocess timeout fires
+    between "processes spawned" and "state file written," the already-
+    spawned uvicorn/npm survive as orphans, and the subsequent --stop call
+    finds no state file -- indistinguishable, at the --stop layer, from a
+    normal clean run that never launched anything. These tests confirm
+    run_one_scenario() surfaces that ambiguity explicitly instead of
+    silently treating "nothing to stop" as proof of a clean state whenever
+    a timeout actually occurred."""
+
+    @staticmethod
+    def _stop_result(stdout: str = "No recorded sandbox launch found (nothing to stop).\n") -> MagicMock:
+        result = MagicMock()
+        result.stdout = stdout
+        result.stderr = ""
+        result.returncode = 0
+        return result
+
+    def test_timeout_produces_an_explicit_warning_not_a_silent_clean_stop(self) -> None:
+        def fake_run(cmd, **kwargs):
+            if "--stop" in cmd:
+                return self._stop_result()
+            raise subprocess.TimeoutExpired(cmd=cmd, timeout=kwargs.get("timeout", 300))
+
+        with patch("scenario_runbook.subprocess.run", side_effect=fake_run):
+            result = run_one_scenario("2025-08-01", timeout=1)
+
+        assert any("launch timed out after" in e for e in result["errors"])
+        assert any(
+            "does NOT confirm a clean state" in e and "orphaned backend/frontend" in e
+            for e in result["errors"]
+        )
+
+    def test_a_normal_stop_with_nothing_to_clean_up_is_not_flagged_when_there_was_no_timeout(self) -> None:
+        # Regression guard: the extra "does NOT confirm a clean state"
+        # warning must only fire when a timeout actually happened -- a
+        # date with genuinely zero fixtures (so launch_sandbox.py never
+        # started servers at all) also produces "No recorded sandbox
+        # launch found" from --stop, and that is a perfectly normal,
+        # non-alarming outcome.
+        launch_result = MagicMock()
+        launch_result.stdout = "Precompute [E0]: nothing to generate.\n"
+        launch_result.stderr = ""
+        launch_result.returncode = 0
+
+        def fake_run(cmd, **kwargs):
+            if "--stop" in cmd:
+                return self._stop_result()
+            return launch_result
+
+        with patch("scenario_runbook.subprocess.run", side_effect=fake_run):
+            result = run_one_scenario("2025-08-01", timeout=300)
+
+        assert not any("does NOT confirm a clean state" in e for e in result["errors"])
+        assert result["errors"] == []
