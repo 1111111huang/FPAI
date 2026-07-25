@@ -8,7 +8,6 @@ that predate A28/A29 (e.g. from a future cache)."""
 from __future__ import annotations
 
 from pathlib import Path
-import threading
 
 from pydantic import BaseModel, ValidationError
 
@@ -17,7 +16,9 @@ from app.backend.recommendation_cache import RecommendationCache
 from app.backend.sandbox_clock import is_sandbox_mode, sandbox_scoped_path
 from src.agent import tools as agent_tools
 from src.agent.graph import run_agent as _real_run_agent
-from src.agent.snapshot_store import SnapshotMissingError
+from src.agent.snapshot_store import league_base_dir, SnapshotMissingError
+from src.ingestion.common.team_mapping import TeamNameMapper
+from src.utils.db_manager import DuckDBManager
 from src.utils.logger import get_logger
 
 _LOG = get_logger(__name__)
@@ -25,25 +26,44 @@ _LOG = get_logger(__name__)
 _cache_singleton: RecommendationCache | None = None
 _SANDBOX_CACHE_DB_PATH = sandbox_scoped_path("recommendation_cache.db")
 _SANDBOX_SNAPSHOT_BASE_DIR = Path(__file__).parent.parent.parent / "data" / "agent_snapshots" / "sandbox"
-_sandbox_recorded_matches: set[str] = set()
-# Guards the read-check-then-add sequence around _sandbox_recorded_matches in
-# run_agent() below. Without this, two concurrent requests for the *same*
-# sandboxed match could both see match_key not yet recorded and both run in
-# "record" mode simultaneously -- wasteful duplicate live calls that defeat
-# the "first run records, rest replay" guarantee.
-_recorded_matches_lock = threading.Lock()
+_CORPUS_BASE_DIR = Path(__file__).parent.parent.parent / "data" / "agent_snapshots"
+_TEAM_MAPPING_PATH = Path(__file__).parent.parent.parent / "config" / "team_mapping.json"
 
 
 def _composite_match_key(home_team: str, away_team: str, date: str) -> str:
     return f"{home_team}__{away_team}__{date}".replace(" ", "_")
 
 
-def _run_agent_in_mode(mode: str, match_info: dict, config, match_key: str):
+def _lookup_corpus_match_id(home_team: str, away_team: str, date: str, league: str | None) -> str | None:
+    """Resolves a fixture to the real raw_matches.match_id the standalone
+    agent-snapshot CLI's corpus is keyed by, so the sandbox can replay from
+    it directly. Team names come from whatever the fixtures API returned
+    (football-data.org/Odds API), not necessarily the ML engine's canonical
+    spelling -- mapped through TeamNameMapper first, same tool/pattern
+    eod_batch.py's odds_lookup()/match_odds() already use for the identical
+    class of problem (W06/BUG-015). Returns None on any kind of miss
+    (unmapped team, no matching row, no league) -- never raises; a miss just
+    means "no corpus entry, fall through to record," not an error."""
+    if not league:
+        return None
+    mapper = TeamNameMapper(mapping_path=str(_TEAM_MAPPING_PATH))
+    canonical_home = mapper.map_team(home_team)
+    canonical_away = mapper.map_team(away_team)
+    db = DuckDBManager()
+    with db.connection(read_only=True) as conn:
+        row = conn.execute(
+            "SELECT match_id FROM raw_matches WHERE league = ? AND date = ? AND home_team = ? AND away_team = ?",
+            [league, date, canonical_home, canonical_away],
+        ).fetchone()
+    return row[0] if row else None
+
+
+def _run_agent_in_mode(mode: str, match_info: dict, config, match_id: str, base_dir: Path):
     """Configure the snapshot store for `mode` and run the real agent,
     always resetting the store to live mode afterward regardless of
     outcome."""
     agent_tools.configure_snapshot_store(
-        mode, match_id=match_key, match_date=match_info.get("date"), base_dir=_SANDBOX_SNAPSHOT_BASE_DIR,
+        mode, match_id=match_id, match_date=match_info.get("date"), base_dir=base_dir,
     )
     try:
         return _real_run_agent(match_info, config=config)
@@ -51,46 +71,69 @@ def _run_agent_in_mode(mode: str, match_info: dict, config, match_key: str):
         agent_tools.configure_snapshot_store("live")
 
 
+def _select_sandbox_snapshot_source(match_info: dict) -> tuple[str, str, Path]:
+    """W70: decides record vs replay -- and which namespace to use -- by
+    checking disk directly, in priority order: (1) the sandbox's own prior
+    recording for this exact match (fixes recordings not surviving a
+    backend restart -- previously tracked in an in-memory set that started
+    empty every process, so a fresh process always re-recorded and silently
+    overwrote whatever was already there); (2) a matching complete entry in
+    the standalone agent-snapshot corpus, resolved via
+    _lookup_corpus_match_id; (3) otherwise, record fresh into the sandbox's
+    own partition, unchanged from before this story. Returns
+    (mode, match_id, base_dir)."""
+    home_team = match_info.get("home_team")
+    away_team = match_info.get("away_team")
+    date = match_info.get("date")
+    sandbox_match_id = _composite_match_key(home_team, away_team, date)
+
+    if (_SANDBOX_SNAPSHOT_BASE_DIR / sandbox_match_id / "_complete.json").exists():
+        return "replay", sandbox_match_id, _SANDBOX_SNAPSHOT_BASE_DIR
+
+    league = match_info.get("league")
+    corpus_match_id = _lookup_corpus_match_id(home_team, away_team, date, league)
+    if corpus_match_id:
+        corpus_league_dir = league_base_dir(league, base_dir=_CORPUS_BASE_DIR)
+        if (corpus_league_dir / corpus_match_id / "_complete.json").exists():
+            return "replay", corpus_match_id, corpus_league_dir
+
+    return "record", sandbox_match_id, _SANDBOX_SNAPSHOT_BASE_DIR
+
+
 def run_agent(match_info: dict, config=None):
-    """W37: routes through SnapshotStore record/replay when sandbox mode is
-    active, so a sandboxed match's real web_search calls are date-filtered
-    (record) and every subsequent run of the same match makes zero live
-    calls at all (replay) -- otherwise passes straight through to the real,
-    live run_agent, unchanged from before this story.
+    """W37/W70: routes through SnapshotStore record/replay when sandbox mode
+    is active -- replaying from an existing recording (the sandbox's own, or
+    W70's agent-snapshot corpus bridge) whenever one already exists on disk,
+    recording fresh into the sandbox partition only when neither does.
+    Otherwise passes straight through to the real, live run_agent.
 
     W43: a replay-mode SnapshotMissingError can happen even for a match
-    that's genuinely already been recorded -- SnapshotStore's replay lookup
-    key is a hash of the tool call's exact input arguments (e.g. the
-    web_search query text the LLM itself generates), and LLM output isn't
-    reproducible run-to-run (agent_techspec.md Sec 18.6, a known/accepted
-    limitation). Rather than let that 500 the request, fall back to one
-    fresh record-mode pass for this request -- matching this codebase's
-    "never assume the agent/its own optimizations hold, degrade gracefully"
+    that's genuinely already recorded -- SnapshotStore's replay lookup key
+    is a hash of the tool call's exact input arguments (e.g. an LLM-chosen
+    optional follow-up web_search query), and that specific text isn't
+    reproducible run-to-run (agent_techspec.md Sec 18.6). Rather than let
+    that 500 the request, fall back to one fresh record-mode pass into the
+    sandbox partition for this request -- matching this codebase's "never
+    assume the agent/its own optimizations hold, degrade gracefully"
     philosophy (W02/W15/W16's validate_and_degrade). Any other exception --
     including a second failure from the record-mode retry itself -- is not
     caught here and propagates uncaught, so this isn't a silent catch-all."""
     if not is_sandbox_mode():
         return _real_run_agent(match_info, config=config)
 
-    match_key = _composite_match_key(
-        match_info.get("home_team"), match_info.get("away_team"), match_info.get("date"),
-    )
-    with _recorded_matches_lock:
-        mode = "replay" if match_key in _sandbox_recorded_matches else "record"
+    mode, match_id, base_dir = _select_sandbox_snapshot_source(match_info)
     try:
-        result = _run_agent_in_mode(mode, match_info, config, match_key)
+        return _run_agent_in_mode(mode, match_info, config, match_id, base_dir)
     except SnapshotMissingError:
         if mode != "replay":
             raise
         _LOG.warning(
-            "sandbox_agent_replay_miss | match=%s | retrying_in_record_mode", match_key,
+            "sandbox_agent_replay_miss | match=%s | retrying_in_record_mode", match_id,
         )
-        mode = "record"
-        result = _run_agent_in_mode(mode, match_info, config, match_key)
-    if mode == "record":
-        with _recorded_matches_lock:
-            _sandbox_recorded_matches.add(match_key)
-    return result
+        sandbox_match_id = _composite_match_key(
+            match_info.get("home_team"), match_info.get("away_team"), match_info.get("date"),
+        )
+        return _run_agent_in_mode("record", match_info, config, sandbox_match_id, _SANDBOX_SNAPSHOT_BASE_DIR)
 
 
 def get_cache() -> RecommendationCache:
