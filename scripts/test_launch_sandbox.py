@@ -313,6 +313,7 @@ class TestPrecomputeRecommendationsOrdering:
         with patch("scripts.launch_sandbox.FootballDataClient") as mock_client_cls, \
              patch("app.backend.scheduler_wiring.build_odds_client") as mock_build_odds, \
              patch("app.backend.recommendations.get_cache") as mock_get_cache, \
+             patch("app.backend.sweden_fixtures_client.historical_results_from_raw_matches", return_value=[]), \
              patch("app.backend.eod_batch.run_eod_batch", new_callable=AsyncMock) as mock_run_batch:
             mock_client_cls.return_value.get_results.side_effect = lambda **_: (
                 _snapshot("fetch_fixtures"), [fixture]
@@ -357,6 +358,7 @@ class TestPrecomputeRecommendationsFallbackReporting:
         with patch("scripts.launch_sandbox.FootballDataClient") as mock_client_cls, \
              patch("app.backend.scheduler_wiring.build_odds_client", return_value=None), \
              patch("app.backend.recommendations.get_cache", return_value=object()), \
+             patch("app.backend.sweden_fixtures_client.historical_results_from_raw_matches", return_value=[]), \
              patch("app.backend.eod_batch.run_eod_batch", new_callable=AsyncMock) as mock_run_batch:
 
             def _get_results(**kwargs):
@@ -382,3 +384,50 @@ class TestPrecomputeRecommendationsFallbackReporting:
         # The exact-date-has-fixtures wording must NOT also appear -- these
         # are mutually exclusive status lines, not both printed.
         assert "real fixture(s) found for" not in output
+
+
+class TestPrecomputeRecommendationsBothLeagues:
+    """W72 acceptance criterion (documents/app_user_stories.md): a precompute
+    run for a date with both real E0 and real SWE fixtures must generate
+    recommendations for both leagues, not just E0 -- before this fix,
+    precompute_recommendations() only ever looked at football-data.org (E0),
+    so a sandbox session's SWE fixtures were silently never precomputed
+    regardless of real data availability."""
+
+    def test_precomputes_both_leagues_with_correct_league_tags(self):
+        date_str = "2025-03-08"
+        e0_fixture = NormalizedMatch(
+            match_id="1", utc_date="2025-03-08T15:00:00Z", status="FINISHED",
+            home_team="Arsenal", away_team="Everton", home_goals=2, away_goals=1,
+        )
+        swe_fixture = NormalizedMatch(
+            match_id="2", utc_date="2025-03-08T17:00:00Z", status="FINISHED",
+            home_team="Malmo FF", away_team="AIK", home_goals=1, away_goals=0,
+        )
+
+        with patch("scripts.launch_sandbox.FootballDataClient") as mock_client_cls, \
+             patch("app.backend.scheduler_wiring.build_odds_client", return_value=None), \
+             patch("app.backend.recommendations.get_cache", return_value=object()), \
+             patch(
+                 "app.backend.sweden_fixtures_client.historical_results_from_raw_matches",
+                 return_value=[swe_fixture],
+             ), \
+             patch("app.backend.eod_batch.run_eod_batch", new_callable=AsyncMock) as mock_run_batch:
+            mock_client_cls.return_value.get_results.return_value = [e0_fixture]
+            mock_run_batch.return_value = EodBatchResult(fixtures=[e0_fixture], generated=1, skipped=0)
+
+            try:
+                precompute_recommendations(date_str)
+            finally:
+                os.environ.pop("SANDBOX_MODE", None)
+                os.environ.pop("SANDBOX_DATE", None)
+
+        assert mock_run_batch.await_count == 2
+        leagues_called = {call.kwargs["league"] for call in mock_run_batch.await_args_list}
+        assert leagues_called == {"E0", "SWE"}
+
+        fixtures_by_league = {
+            call.kwargs["league"]: call.kwargs["fixtures"] for call in mock_run_batch.await_args_list
+        }
+        assert fixtures_by_league["E0"] == [e0_fixture]
+        assert fixtures_by_league["SWE"] == [swe_fixture]
