@@ -46,15 +46,28 @@ def _lookup_corpus_match_id(home_team: str, away_team: str, date: str, league: s
     means "no corpus entry, fall through to record," not an error."""
     if not league:
         return None
-    mapper = TeamNameMapper(mapping_path=str(_TEAM_MAPPING_PATH))
-    canonical_home = mapper.map_team(home_team)
-    canonical_away = mapper.map_team(away_team)
-    db = DuckDBManager()
-    with db.connection(read_only=True) as conn:
-        row = conn.execute(
-            "SELECT match_id FROM raw_matches WHERE league = ? AND date = ? AND home_team = ? AND away_team = ?",
-            [league, date, canonical_home, canonical_away],
-        ).fetchone()
+    try:
+        mapper = TeamNameMapper(mapping_path=str(_TEAM_MAPPING_PATH))
+        canonical_home = mapper.map_team(home_team)
+        canonical_away = mapper.map_team(away_team)
+        db = DuckDBManager()
+        with db.connection(read_only=True) as conn:
+            row = conn.execute(
+                "SELECT match_id FROM raw_matches WHERE league = ? AND date = ? AND home_team = ? AND away_team = ?",
+                [league, date, canonical_home, canonical_away],
+            ).fetchone()
+    except Exception:
+        # DuckDBManager()/load_settings() can raise (missing/invalid
+        # config.yaml) and conn.execute() can raise a duckdb.Error (e.g. no
+        # raw_matches table in this environment yet) -- neither is a
+        # "there's no corpus entry" signal worth surfacing as a 500, so this
+        # degrades the same as an ordinary lookup miss: log and fall through
+        # to record mode.
+        _LOG.warning(
+            "corpus_match_id_lookup_failed | home=%s | away=%s | date=%s | league=%s",
+            home_team, away_team, date, league, exc_info=True,
+        )
+        return None
     return row[0] if row else None
 
 
