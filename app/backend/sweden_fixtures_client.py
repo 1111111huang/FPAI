@@ -20,9 +20,11 @@ entirely, unchanged."""
 
 from __future__ import annotations
 
+import pandas as pd
 import requests
 
 from app.backend.football_data_client import NormalizedMatch
+from src.utils.db_manager import DuckDBManager
 
 BASE_URL = "https://api.the-odds-api.com/v4"
 SPORT_KEY = "soccer_sweden_allsvenskan"
@@ -113,3 +115,41 @@ class SwedenFixturesClient:
             for event in response.json()
             if event.get("completed") and _in_range(event["commence_time"], date_from, date_to)
         ]
+
+
+def historical_results_from_raw_matches(date_from: str | None, date_to: str | None) -> list[NormalizedMatch]:
+    """W71: The Odds API's /scores endpoint (get_results, below) can only
+    ever see the last few real days (daysFrom<=3, a hard provider limit) --
+    it structurally cannot serve an arbitrary historical date the way
+    football-data.org's get_results() does for E0 (W45). raw_matches
+    already has real Allsvenskan history back to 2012 (the ML engine's own
+    ingestion target, src/ingestion/football_data/sweden_fetcher.py), so
+    historical SWE fixtures are sourced from there instead for any
+    already-past date range. get_fixtures() (future dates) is unaffected --
+    the Odds API's /events endpoint serves that correctly."""
+    db = DuckDBManager()
+    query = "SELECT match_id, date, home_team, away_team, fthg, ftag FROM raw_matches WHERE league = 'SWE'"
+    params: list[str] = []
+    if date_from:
+        query += " AND date >= ?"
+        params.append(date_from)
+    if date_to:
+        query += " AND date <= ?"
+        params.append(date_to)
+    query += " ORDER BY date"
+    with db.connection(read_only=True) as conn:
+        rows = conn.execute(query, params).fetchdf()
+
+    return [
+        NormalizedMatch(
+            match_id=row["match_id"],
+            utc_date=row["date"].strftime("%Y-%m-%dT%H:%M:%SZ"),
+            status="FINISHED",
+            home_team=row["home_team"],
+            away_team=row["away_team"],
+            home_goals=None if row["fthg"] is None or pd.isna(row["fthg"]) else int(row["fthg"]),
+            away_goals=None if row["ftag"] is None or pd.isna(row["ftag"]) else int(row["ftag"]),
+            competition="SWE",
+        )
+        for _, row in rows.iterrows()
+    ]

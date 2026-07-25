@@ -430,39 +430,78 @@ def test_fixtures_endpoint_tags_epl_results_e0(sweden_client_mock):
 
 
 def test_fixtures_endpoint_tags_sweden_results_swe(sweden_client_mock):
-    sweden_client_mock.get_results.return_value = [_SWEDISH_RESULT]
-    with patch("app.backend.main._current_real_date", return_value=date(2025, 3, 10)):
-        with patch("app.backend.main.get_fixtures_client") as mock_get_client:
-            mock_get_client.return_value.get_results.return_value = []
-            with TestClient(app) as client:
-                response = client.get(
-                    "/api/fixtures", params={"date_from": "2025-03-08", "date_to": "2025-03-08"}
-                )
+    # W71: the past-date SWE branch is sourced from
+    # historical_results_from_raw_matches, not sweden_client.get_results()
+    # (see the reconciliation note on the test below) -- patched here rather
+    # than through sweden_client_mock.
+    with patch("app.backend.main.historical_results_from_raw_matches", return_value=[_SWEDISH_RESULT]):
+        with patch("app.backend.main._current_real_date", return_value=date(2025, 3, 10)):
+            with patch("app.backend.main.get_fixtures_client") as mock_get_client:
+                mock_get_client.return_value.get_results.return_value = []
+                with TestClient(app) as client:
+                    response = client.get(
+                        "/api/fixtures", params={"date_from": "2025-03-08", "date_to": "2025-03-08"}
+                    )
 
     body = response.json()
     assert body[0]["competition"] == "SWE"
 
 
 def test_fixtures_endpoint_wholly_past_range_sources_swedish_results_not_football_data(sweden_client_mock):
-    """The past portion of the range must go through SwedenFixturesClient's
-    get_results (The Odds API), never football-data.org -- W55 confirmed
-    football-data.org has no Allsvenskan coverage on this account's plan at
-    all, so routing Sweden's results through FootballDataClient would
-    silently return nothing rather than erroring."""
-    sweden_client_mock.get_results.return_value = [_SWEDISH_RESULT]
-    with patch("app.backend.main._current_real_date", return_value=date(2025, 3, 10)):
-        with patch("app.backend.main.get_fixtures_client") as mock_get_client:
-            mock_get_client.return_value.get_results.return_value = [_REAL_RESULT]
-            with TestClient(app) as client:
-                response = client.get(
-                    "/api/fixtures", params={"date_from": "2025-03-08", "date_to": "2025-03-08"}
-                )
+    """The past portion of the range must go through raw_matches (via
+    historical_results_from_raw_matches), never football-data.org -- W55
+    confirmed football-data.org has no Allsvenskan coverage on this
+    account's plan at all, so routing Sweden's results through
+    FootballDataClient would silently return nothing rather than erroring.
+
+    W71 reconciliation: this test previously asserted
+    sweden_client_mock.get_results.assert_called_once_with(...) -- i.e. that
+    the past-date SWE branch went through SwedenFixturesClient (The Odds
+    API). That's now intentionally false: The Odds API's /scores endpoint
+    structurally cannot serve an arbitrary historical date (daysFrom<=3 is a
+    hard provider limit), so W71 moved this branch onto
+    historical_results_from_raw_matches (backed by raw_matches, which has
+    real Allsvenskan history back to 2012) instead. Updated to patch and
+    assert against that function directly, and to confirm
+    sweden_client.get_results() is no longer called at all for this path."""
+    with patch(
+        "app.backend.main.historical_results_from_raw_matches", return_value=[_SWEDISH_RESULT]
+    ) as mock_historical_swe:
+        with patch("app.backend.main._current_real_date", return_value=date(2025, 3, 10)):
+            with patch("app.backend.main.get_fixtures_client") as mock_get_client:
+                mock_get_client.return_value.get_results.return_value = [_REAL_RESULT]
+                with TestClient(app) as client:
+                    response = client.get(
+                        "/api/fixtures", params={"date_from": "2025-03-08", "date_to": "2025-03-08"}
+                    )
 
     assert response.status_code == 200
     body = response.json()
     assert {m["home_team"] for m in body} == {"Liverpool", "Kalmar FF"}
-    sweden_client_mock.get_results.assert_called_once_with(date_from="2025-03-08", date_to="2025-03-08")
+    mock_historical_swe.assert_called_once_with(date_from="2025-03-08", date_to="2025-03-08")
+    sweden_client_mock.get_results.assert_not_called()
     sweden_client_mock.get_fixtures.assert_not_called()
+
+
+def test_fixtures_endpoint_sources_historical_swe_results_from_raw_matches_not_the_odds_api(sweden_client_mock):
+    """W71: the past-date SWE branch must not call the Odds-API-backed
+    sweden_client.get_results() at all -- that endpoint structurally can't
+    serve an arbitrary historical date. Confirms the real raw_matches-backed
+    source is used instead, via a real (not mocked) query against a date
+    with known real SWE data."""
+    with patch("app.backend.main._current_real_date", return_value=date(2026, 7, 20)):
+        with patch("app.backend.main.get_fixtures_client") as mock_get_client:
+            mock_get_client.return_value.get_results.return_value = []
+            with TestClient(app) as client:
+                response = client.get(
+                    "/api/fixtures", params={"date_from": "2026-05-24", "date_to": "2026-05-24"}
+                )
+
+    assert response.status_code == 200
+    body = response.json()
+    swe_rows = [m for m in body if m["competition"] == "SWE"]
+    assert len(swe_rows) > 0
+    sweden_client_mock.get_results.assert_not_called()
 
 
 def test_fixtures_endpoint_sweden_fixture_cache_key_is_independent_of_epls(sweden_client_mock):

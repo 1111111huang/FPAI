@@ -15,12 +15,16 @@ from __future__ import annotations
 
 from pathlib import Path
 import sys
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 sys.path.append(str(Path(__file__).resolve().parents[3]))
 
 from app.backend.football_data_client import NormalizedMatch
-from app.backend.sweden_fixtures_client import SPORT_KEY, SwedenFixturesClient
+from app.backend.sweden_fixtures_client import (
+    SPORT_KEY,
+    SwedenFixturesClient,
+    historical_results_from_raw_matches,
+)
 
 # Real event captured live 2026-07-23 (id/commence_time/team spelling, incl.
 # diacritics as The Odds API actually returned them for these two teams --
@@ -140,3 +144,37 @@ def test_get_results_hits_the_scores_endpoint_with_days_from_clamped_to_provider
     params = session.get.call_args.kwargs["params"]
     assert called_url.endswith(f"/sports/{SPORT_KEY}/scores")
     assert params["daysFrom"] == 3  # The Odds API rejects daysFrom > 3 (confirmed live, 422)
+
+
+def test_historical_results_from_raw_matches_queries_and_normalizes(monkeypatch):
+    """W71: unlike get_results() (live Odds API, only the last few real
+    days), this must be able to return a real historical fixture for any
+    date raw_matches has SWE data for -- The Odds API's /scores endpoint
+    has no arbitrary-historical-date capability at all (daysFrom<=3 is a
+    hard provider limit), so this is a structurally different data source,
+    not a parameter change to the existing method."""
+    import pandas as pd
+
+    fake_df = pd.DataFrame([
+        {
+            "match_id": "swe-real-id-1", "date": pd.Timestamp("2025-09-15"),
+            "home_team": "Malmo FF", "away_team": "AIK", "fthg": 2, "ftag": 1,
+        },
+    ])
+
+    class FakeConnectionCtx:
+        def __enter__(self):
+            return type("C", (), {"execute": lambda self, q, p: type("R", (), {"fetchdf": lambda self: fake_df})()})()
+        def __exit__(self, *a):
+            return False
+
+    with patch("app.backend.sweden_fixtures_client.DuckDBManager") as mock_db_cls:
+        mock_db_cls.return_value.connection.return_value = FakeConnectionCtx()
+        results = historical_results_from_raw_matches("2025-09-01", "2025-09-30")
+
+    assert results == [
+        NormalizedMatch(
+            match_id="swe-real-id-1", utc_date="2025-09-15T00:00:00Z", status="FINISHED",
+            home_team="Malmo FF", away_team="AIK", home_goals=2, away_goals=1, competition="SWE",
+        )
+    ]
