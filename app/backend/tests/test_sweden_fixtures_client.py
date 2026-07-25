@@ -178,3 +178,50 @@ def test_historical_results_from_raw_matches_queries_and_normalizes(monkeypatch)
             home_team="Malmo FF", away_team="AIK", home_goals=2, away_goals=1, competition="SWE",
         )
     ]
+
+
+def test_historical_results_from_raw_matches_normalizes_null_goals_to_none():
+    """W71 code review Fix 4: fthg/ftag can be null for a data-quality-gap
+    (or genuinely unplayed) row in raw_matches -- pd.isna(NaN) must map to
+    None on both home_goals/away_goals rather than crashing int(nan) or
+    leaking a NaN through the API response."""
+    import pandas as pd
+
+    fake_df = pd.DataFrame([
+        {
+            "match_id": "swe-null-goals-1", "date": pd.Timestamp("2025-09-16"),
+            "home_team": "Hammarby IF", "away_team": "IFK Goteborg", "fthg": None, "ftag": None,
+        },
+    ])
+
+    class FakeConnectionCtx:
+        def __enter__(self):
+            return type("C", (), {"execute": lambda self, q, p: type("R", (), {"fetchdf": lambda self: fake_df})()})()
+        def __exit__(self, *a):
+            return False
+
+    with patch("app.backend.sweden_fixtures_client.DuckDBManager") as mock_db_cls:
+        mock_db_cls.return_value.connection.return_value = FakeConnectionCtx()
+        results = historical_results_from_raw_matches("2025-09-01", "2025-09-30")
+
+    assert results == [
+        NormalizedMatch(
+            match_id="swe-null-goals-1", utc_date="2025-09-16T00:00:00Z", status="FINISHED",
+            home_team="Hammarby IF", away_team="IFK Goteborg", home_goals=None, away_goals=None,
+            competition="SWE",
+        )
+    ]
+
+
+def test_historical_results_from_raw_matches_degrades_to_empty_list_on_db_failure():
+    """W71 code review Fix 2: a DuckDBManager()/connection failure (e.g.
+    missing config.yaml, or no raw_matches table in this environment) must
+    not propagate uncaught -- it would 500 the whole /api/fixtures response
+    and discard E0 results that already succeeded from a separate merge
+    branch. Mirrors recommendations._lookup_corpus_match_id's identical
+    never-raises contract for the same class of DB-availability failure."""
+    with patch("app.backend.sweden_fixtures_client.DuckDBManager") as mock_db_cls:
+        mock_db_cls.side_effect = RuntimeError("missing/invalid config.yaml")
+        results = historical_results_from_raw_matches("2025-09-01", "2025-09-30")
+
+    assert results == []

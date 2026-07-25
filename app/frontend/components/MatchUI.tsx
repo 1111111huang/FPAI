@@ -216,9 +216,19 @@ function formatKickoff(iso: string): string {
 // not incidental. Extracted (W48) so formatDay's relative-day label and
 // fixtureToMatch's sandbox-future-fixture check share one implementation of
 // this getter choice instead of two copies that could drift out of sync.
-function dayDiff(iso: string, asOf: Date, sandboxMode: boolean): number {
+export function dayDiff(iso: string, asOf: Date, sandboxMode: boolean): number {
   const date = new Date(iso);
-  const dOnly = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+  // W71: fixture-side day must also use UTC getters in sandbox mode,
+  // mirroring the asOf-side branch immediately below -- local getters here
+  // silently disagree with UTC for a midnight-UTC fixture (exactly what
+  // W71's raw_matches-backed historical SWE source synthesizes, since
+  // raw_matches carries no real kickoff time) whenever the viewer is in a
+  // negative-UTC-offset timezone, which can flip isFutureInSandbox's
+  // result (W48's leak guard) for that fixture. Confirmed via direct
+  // reproduction during W71's code review, not a theoretical concern.
+  const dOnly = sandboxMode
+    ? new Date(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate())
+    : new Date(date.getFullYear(), date.getMonth(), date.getDate());
   const tOnly = sandboxMode
     ? new Date(asOf.getUTCFullYear(), asOf.getUTCMonth(), asOf.getUTCDate())
     : new Date(asOf.getFullYear(), asOf.getMonth(), asOf.getDate());

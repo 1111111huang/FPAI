@@ -25,9 +25,12 @@ import requests
 
 from app.backend.football_data_client import NormalizedMatch
 from src.utils.db_manager import DuckDBManager
+from src.utils.logger import get_logger
 
 BASE_URL = "https://api.the-odds-api.com/v4"
 SPORT_KEY = "soccer_sweden_allsvenskan"
+
+_LOG = get_logger(__name__)
 
 
 def _extract_goals(scores: list[dict] | None, team: str) -> int | None:
@@ -126,19 +129,47 @@ def historical_results_from_raw_matches(date_from: str | None, date_to: str | No
     ingestion target, src/ingestion/football_data/sweden_fetcher.py), so
     historical SWE fixtures are sourced from there instead for any
     already-past date range. get_fixtures() (future dates) is unaffected --
-    the Odds API's /events endpoint serves that correctly."""
-    db = DuckDBManager()
-    query = "SELECT match_id, date, home_team, away_team, fthg, ftag FROM raw_matches WHERE league = 'SWE'"
-    params: list[str] = []
-    if date_from:
-        query += " AND date >= ?"
-        params.append(date_from)
-    if date_to:
-        query += " AND date <= ?"
-        params.append(date_to)
-    query += " ORDER BY date"
-    with db.connection(read_only=True) as conn:
-        rows = conn.execute(query, params).fetchdf()
+    the Odds API's /events endpoint serves that correctly.
+
+    Never raises: DuckDBManager()/load_settings() can raise (missing/invalid
+    config.yaml) and conn.execute() can raise a duckdb.Error (e.g. no
+    raw_matches table in this environment yet) -- neither should take down
+    the whole /api/fixtures response (which may already have real E0 results
+    merged in from a separate branch); a lookup failure here degrades to an
+    empty SWE result set instead, mirroring
+    recommendations._lookup_corpus_match_id's identical never-raises
+    contract for the same class of DB-availability failure.
+
+    W71 known limitation (match_id id-space discontinuity, out of scope to
+    fix here): this returns raw_matches.match_id, a different id space than
+    SwedenFixturesClient.get_fixtures()'s Odds-API event ids (see this
+    module's get_fixtures/get_results above) -- mirrors the same disjoint-
+    id-space situation settlement.py already documents for football-data.org
+    vs The Odds API match ids. In live/production mode this means a SWE
+    match's cached recommendation (keyed by match_id) can become unreachable
+    once the match transitions from "upcoming" (Odds API event id) to
+    "finished" (raw_matches match_id) mid-session. This only matters outside
+    sandbox mode -- a sandbox session's SANDBOX_DATE is static, so a fixture
+    never transitions status within one session."""
+    try:
+        db = DuckDBManager()
+        query = "SELECT match_id, date, home_team, away_team, fthg, ftag FROM raw_matches WHERE league = 'SWE'"
+        params: list[str] = []
+        if date_from:
+            query += " AND date >= ?"
+            params.append(date_from)
+        if date_to:
+            query += " AND date <= ?"
+            params.append(date_to)
+        query += " ORDER BY date"
+        with db.connection(read_only=True) as conn:
+            rows = conn.execute(query, params).fetchdf()
+    except Exception:
+        _LOG.warning(
+            "historical_swe_results_lookup_failed | date_from=%s | date_to=%s",
+            date_from, date_to, exc_info=True,
+        )
+        return []
 
     return [
         NormalizedMatch(
