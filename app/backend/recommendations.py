@@ -8,6 +8,7 @@ that predate A28/A29 (e.g. from a future cache)."""
 from __future__ import annotations
 
 from pathlib import Path
+import threading
 
 from pydantic import BaseModel, ValidationError
 
@@ -32,6 +33,30 @@ _TEAM_MAPPING_PATH = Path(__file__).parent.parent.parent / "config" / "team_mapp
 
 def _composite_match_key(home_team: str, away_team: str, date: str) -> str:
     return f"{home_team}__{away_team}__{date}".replace(" ", "_")
+
+
+_sandbox_recording_locks: dict[str, threading.Lock] = {}
+_sandbox_recording_locks_guard = threading.Lock()
+
+
+def _lock_for_match(match_id: str) -> threading.Lock:
+    """One lock per sandbox match_id, created lazily. Guards the whole
+    record/replay decision + agent call for a given match so two
+    concurrent requests for the SAME match (double-click, two open tabs,
+    a live request racing a --precompute run) can't both slip past the
+    disk check and both make a duplicate live LLM/Tavily call -- the
+    second request blocks, then re-checks disk after the first completes
+    and correctly finds the just-written marker (replay), instead of also
+    recording. Different matches use different locks and never contend
+    with each other. The registry itself grows unboundedly over a long
+    process lifetime (one entry per distinct match ever requested in
+    sandbox mode) -- acceptable for this app's real scale (single-user,
+    local, a sandbox session covers a handful of fixtures at a time), not
+    worth adding eviction for."""
+    with _sandbox_recording_locks_guard:
+        if match_id not in _sandbox_recording_locks:
+            _sandbox_recording_locks[match_id] = threading.Lock()
+        return _sandbox_recording_locks[match_id]
 
 
 def _lookup_corpus_match_id(home_team: str, away_team: str, date: str, league: str | None) -> str | None:
@@ -140,23 +165,31 @@ def run_agent(match_info: dict, config=None):
     assume the agent/its own optimizations hold, degrade gracefully"
     philosophy (W02/W15/W16's validate_and_degrade). Any other exception --
     including a second failure from the record-mode retry itself -- is not
-    caught here and propagates uncaught, so this isn't a silent catch-all."""
+    caught here and propagates uncaught, so this isn't a silent catch-all.
+
+    Holds a per-match lock (_lock_for_match) across the whole decision+call
+    sequence, so two concurrent requests for the identical match (double-
+    click, two open tabs, a live request racing a --precompute run) can't
+    both slip past the disk check and both make a duplicate live call --
+    the second blocks until the first finishes, then re-checks disk and
+    correctly finds the just-written marker (replay)."""
     if not is_sandbox_mode():
         return _real_run_agent(match_info, config=config)
 
-    mode, match_id, base_dir = _select_sandbox_snapshot_source(match_info)
-    try:
-        return _run_agent_in_mode(mode, match_info, config, match_id, base_dir)
-    except SnapshotMissingError:
-        if mode != "replay":
-            raise
-        _LOG.warning(
-            "sandbox_agent_replay_miss | match=%s | retrying_in_record_mode", match_id,
-        )
-        sandbox_match_id = _composite_match_key(
-            match_info.get("home_team"), match_info.get("away_team"), match_info.get("date"),
-        )
-        return _run_agent_in_mode("record", match_info, config, sandbox_match_id, _SANDBOX_SNAPSHOT_BASE_DIR)
+    sandbox_match_id = _composite_match_key(
+        match_info.get("home_team"), match_info.get("away_team"), match_info.get("date"),
+    )
+    with _lock_for_match(sandbox_match_id):
+        mode, match_id, base_dir = _select_sandbox_snapshot_source(match_info)
+        try:
+            return _run_agent_in_mode(mode, match_info, config, match_id, base_dir)
+        except SnapshotMissingError:
+            if mode != "replay":
+                raise
+            _LOG.warning(
+                "sandbox_agent_replay_miss | match=%s | retrying_in_record_mode", match_id,
+            )
+            return _run_agent_in_mode("record", match_info, config, sandbox_match_id, _SANDBOX_SNAPSHOT_BASE_DIR)
 
 
 def get_cache() -> RecommendationCache:

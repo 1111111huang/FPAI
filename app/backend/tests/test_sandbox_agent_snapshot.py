@@ -10,6 +10,8 @@ from __future__ import annotations
 
 from pathlib import Path
 import sys
+import threading
+import time
 from unittest.mock import patch
 
 import pytest
@@ -335,3 +337,67 @@ def test_run_agent_does_not_retry_a_snapshot_miss_that_happens_during_record_mod
             recommendations.run_agent(_MATCH_INFO)
 
     mock_run.assert_called_once()
+
+
+def test_two_concurrent_requests_for_the_same_match_do_not_both_record(monkeypatch, _sandbox_snapshot_tmp_dirs):
+    """W70 follow-up: two near-simultaneous requests for the identical
+    match must not both slip into record mode and both make a live call
+    concurrently -- the second must block on the first's per-match lock
+    until the first finishes (and writes the completion marker), then
+    correctly find that marker on its own disk check and replay instead of
+    also recording.
+
+    Proving this needs more than a call-count assertion: call count alone
+    can't distinguish "properly serialized" from "raced but both eventually
+    ran anyway" -- two unsynchronized calls still add up to 2. Instead this
+    pins thread 1 mid-call (blocked on release_thread1), then explicitly
+    checks, while thread 1 is still blocked, that thread 2 has NOT yet
+    entered its own _real_run_agent call -- i.e. thread 2 is provably still
+    waiting on the lock, not racing ahead to its own disk check. This is
+    exactly the scenario the old, pre-Task-1 in-memory-set lock was too
+    weak to prevent (it only protected the read-check-then-add instant, not
+    the multi-second call itself), and exactly what has zero protection at
+    all without _lock_for_match."""
+    monkeypatch.setenv("SANDBOX_MODE", "1")
+    monkeypatch.setenv("SANDBOX_DATE", "2026-03-01")
+
+    call_count = {"n": 0}
+    call_count_guard = threading.Lock()
+    thread1_entered_call = threading.Event()
+    release_thread1 = threading.Event()
+
+    def slow_real_run_agent(match_info, config=None):
+        with call_count_guard:
+            call_count["n"] += 1
+            my_index = call_count["n"]
+        if my_index == 1:
+            thread1_entered_call.set()
+            assert release_thread1.wait(timeout=5), "test setup deadlocked"
+        return _RECOMMENDATION
+
+    with patch("app.backend.recommendations._real_run_agent", side_effect=slow_real_run_agent):
+        t1 = threading.Thread(target=recommendations.run_agent, args=(_MATCH_INFO,))
+        t1.start()
+        assert thread1_entered_call.wait(timeout=5), "thread 1 never reached its agent call"
+
+        t2 = threading.Thread(target=recommendations.run_agent, args=(_MATCH_INFO,))
+        t2.start()
+
+        # Thread 1 is deliberately still blocked inside its call right now
+        # (holding the per-match lock, on fixed code). Give thread 2 a real
+        # window to misbehave: if the lock were missing, thread 2 would sail
+        # straight through _select_sandbox_snapshot_source (no marker on
+        # disk yet -- thread 1 hasn't written it) into its own
+        # _real_run_agent call, bumping call_count to 2 immediately.
+        time.sleep(0.3)
+        assert call_count["n"] == 1, (
+            "thread 2 entered its own agent call while thread 1 was still mid-call -- "
+            "the per-match lock did not serialize the two requests"
+        )
+
+        release_thread1.set()
+        t1.join(timeout=5)
+        t2.join(timeout=5)
+
+    assert not t1.is_alive() and not t2.is_alive()
+    assert call_count["n"] == 2
