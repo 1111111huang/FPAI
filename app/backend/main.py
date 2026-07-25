@@ -28,7 +28,10 @@ from app.backend.bet_tracker import BetTracker
 from app.backend.bets import BetFromRecommendationRequest, BetManualRequest, BetOut
 from app.backend.football_data_client import FootballDataClient, NormalizedMatch
 from app.backend.odds_sport_keys import DEFAULT_SPORT_KEY, ODDS_SPORT_KEY_BY_COMPETITION
-from app.backend.sweden_fixtures_client import SwedenFixturesClient
+from app.backend.sweden_fixtures_client import (
+    SwedenFixturesClient,
+    historical_results_from_raw_matches,
+)
 from app.backend.llm_check import check_llm_reachable
 from app.backend.recommendation_cache import RecommendationCache
 from app.backend.bet_stats import compute_bet_stats
@@ -322,14 +325,16 @@ async def get_fixtures(date_from: str | None = None, date_to: str | None = None)
             ),
             "E0",
         )
-        # W57: Sweden (Allsvenskan) merged in alongside EPL, sourced from The
-        # Odds API instead of football-data.org (W55 -- football-data.org's
-        # free tier has no Allsvenskan coverage at all). Cache-keyed
-        # separately ("results_swe" vs "results") so it can never collide
-        # with football-data.org's entry for the identical date range.
+        # W71: sourced from raw_matches directly, not sweden_client.get_results()
+        # (The Odds API's /scores endpoint can only see the last few real
+        # days -- it has no arbitrary-historical-date capability at all,
+        # unlike football-data.org's get_results() for E0). Still
+        # cache-keyed as "results_swe" -- same TTL-cache slot as before,
+        # just backed by a different underlying source.
         matches += _tag(
             await _cached_fixture_call(
-                ("results_swe", past_from, past_to), sweden_client.get_results, date_from=past_from, date_to=past_to
+                ("results_swe", past_from, past_to),
+                historical_results_from_raw_matches, date_from=past_from, date_to=past_to,
             ),
             "SWE",
         )

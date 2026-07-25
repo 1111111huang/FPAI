@@ -1,6 +1,6 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
-import { DashboardPage, MatchExplorerPage, MatchCard, type Match } from "../MatchUI";
+import { DashboardPage, MatchExplorerPage, MatchCard, dayDiff, type Match } from "../MatchUI";
 import { generateRecommendation, getCachedRecommendation, getFixtures, getSandboxStatus } from "@/lib/api";
 import type { Fixture, MatchRecommendationOut } from "@/lib/types";
 
@@ -223,5 +223,21 @@ describe("sandbox mode does not leak real results for fixtures still-future rela
     expect(await screen.findByText("Direct Bet")).toBeInTheDocument();
     expect(screen.queryByText("Not yet generated")).not.toBeInTheDocument();
     expect(generateRecommendation).not.toHaveBeenCalled();
+  });
+});
+
+describe("dayDiff -- sandbox-mode UTC-day computation (W71 regression)", () => {
+  it("uses the fixture's UTC calendar day (not the local one) when sandboxMode is true, even for a midnight-UTC fixture", () => {
+    // W71: historical_results_from_raw_matches synthesizes a midnight-UTC
+    // timestamp for every SWE historical fixture. Before this fix,
+    // dayDiff's fixture-side computed its calendar day via *local* Date
+    // getters regardless of sandboxMode, silently disagreeing with UTC for
+    // any negative-UTC-offset viewer -- confirmed during code review to
+    // flip isFutureInSandbox's result (W48's leak guard). This asserts the
+    // fixed, timezone-independent contract directly (the whole point of
+    // the fix is that this result no longer depends on the test runner's
+    // own system timezone).
+    expect(dayDiff("2026-07-19T00:00:00Z", new Date("2026-07-18T00:00:00Z"), true)).toBe(1);
+    expect(dayDiff("2026-07-18T00:00:00Z", new Date("2026-07-18T00:00:00Z"), true)).toBe(0);
   });
 });

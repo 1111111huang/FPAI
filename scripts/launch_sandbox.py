@@ -324,15 +324,50 @@ def fetch_sandbox_fixtures(
     return sorted(upcoming, key=lambda m: m.utc_date)[:10], True
 
 
+def fetch_sandbox_fixtures_swe(date_str: str) -> tuple[list[NormalizedMatch], bool]:
+    """W72: SWE analogue of fetch_sandbox_fixtures(), sourced from W71's
+    historical_results_from_raw_matches() instead of FootballDataClient --
+    SwedenFixturesClient's own get_results() can't serve an arbitrary past
+    date at all (see W71), so there's no equivalent single-client call to
+    parameterize the way the E0 version does."""
+    from app.backend.sweden_fixtures_client import historical_results_from_raw_matches
+
+    exact = historical_results_from_raw_matches(date_str, date_str)
+    if exact:
+        return exact, False
+    to_date = (date_cls.fromisoformat(date_str) + datetime_mod.timedelta(days=90)).isoformat()
+    upcoming = historical_results_from_raw_matches(date_str, to_date)
+    return sorted(upcoming, key=lambda m: m.utc_date)[:10], True
+
+
+def _fetch_sandbox_fixtures_for_league(
+    league: str, fixtures_client: FootballDataClient, date_str: str,
+) -> tuple[list[NormalizedMatch], bool]:
+    """W72: dispatches to the right per-league fetch function, mirroring
+    scheduler_wiring.py's _fetch_fixtures_for_league shape (same
+    per-competition dispatch idea), adapted for precompute's need to also
+    track the used_fallback flag for its status-line reporting."""
+    if league == "SWE":
+        return fetch_sandbox_fixtures_swe(date_str)
+    return fetch_sandbox_fixtures(fixtures_client, date_str)
+
+
 def precompute_recommendations(date_str: str) -> None:
     """Pre-populates the sandbox-scoped RecommendationCache (W29) for every
-    real fixture on `date_str` (or, per W51, the nearest real fixtures in
-    the following 90 days if `date_str` itself has none -- see
-    fetch_sandbox_fixtures() above), using run_eod_batch()'s
-    exact generation/odds-matching/fault-tolerance logic (W09, benefiting
-    from W49's odds-attachment fix) -- the same code path the live EOD
-    batch uses, just fed this date's already-played fixtures instead of
-    tomorrow's scheduled ones.
+    real fixture on `date_str` across every competition in
+    scheduler_wiring.COMPETITIONS (E0 via fetch_sandbox_fixtures(), SWE via
+    W72's fetch_sandbox_fixtures_swe() -- or, per W51, the nearest real
+    fixtures in the following 90 days if `date_str` itself has none for a
+    given league), using run_eod_batch()'s exact generation/odds-matching/
+    fault-tolerance logic (W09, benefiting from W49's odds-attachment fix)
+    -- the same code path the live EOD batch uses, just fed this date's
+    already-played fixtures instead of tomorrow's scheduled ones. W62's
+    `league` parameter is passed through per-league, and per-league fixture
+    discovery is wrapped in its own try/except (mirroring
+    scheduler_wiring.py's _eod_job) so one competition's fetch failure
+    (e.g. a football-data.org outage for E0) doesn't prevent the other
+    competition -- which doesn't even depend on that client -- from
+    running.
 
     Sets SANDBOX_MODE/SANDBOX_DATE in this process's own environment (mirroring
     launch_backend()'s subprocess env) so recommendations.get_cache() and
@@ -354,43 +389,56 @@ def precompute_recommendations(date_str: str) -> None:
 
     from app.backend import recommendations
     from app.backend.eod_batch import run_eod_batch
-    from app.backend.scheduler_wiring import build_odds_client
+    from app.backend.scheduler_wiring import COMPETITIONS, build_odds_client
     from src.agent.agent_config import AgentConfig
-
-    fixtures_client = FootballDataClient(api_key=os.environ.get("FOOTBALL_DATA_API_KEY", ""))
-    fixtures, used_fallback = fetch_sandbox_fixtures(fixtures_client, date_str)
-    if used_fallback:
-        print(
-            f"Precompute: no real fixtures on {date_str} -- falling back to the next {len(fixtures)} "
-            "match(es) in the following 90 days (same window/cap DashboardPage itself falls back to, W46/W51)."
-        )
-    else:
-        print(f"Precompute: {len(fixtures)} real fixture(s) found for {date_str}.")
-    if not fixtures:
-        print("Precompute: nothing to generate.")
-        return
 
     odds_client = build_odds_client()
     cache = recommendations.get_cache()
     config = AgentConfig.default()
-    tally = {"generated": 0, "skipped": 0}
+    fixtures_client = FootballDataClient(api_key=os.environ.get("FOOTBALL_DATA_API_KEY", ""))
 
-    def _on_progress(fixture: NormalizedMatch, outcome: str) -> None:
-        tally[outcome] += 1
-        done = tally["generated"] + tally["skipped"]
+    for league in COMPETITIONS:
+        try:
+            fixtures, used_fallback = _fetch_sandbox_fixtures_for_league(league, fixtures_client, date_str)
+        except Exception:
+            print(f"Precompute [{league}]: fixture discovery failed -- skipping this competition, others unaffected.")
+            continue
+
+        if used_fallback:
+            print(
+                f"Precompute [{league}]: no real fixtures on {date_str} -- falling back to the next "
+                f"{len(fixtures)} match(es) in the following 90 days (same window/cap DashboardPage itself "
+                "falls back to, W46/W51)."
+            )
+        else:
+            print(f"Precompute [{league}]: {len(fixtures)} real fixture(s) found for {date_str}.")
+        if not fixtures:
+            print(f"Precompute [{league}]: nothing to generate.")
+            continue
+
+        tally = {"generated": 0, "skipped": 0}
+
+        def _on_progress(
+            fixture: NormalizedMatch, outcome: str, _league=league, _tally=tally, _total=len(fixtures),
+        ) -> None:
+            _tally[outcome] += 1
+            done = _tally["generated"] + _tally["skipped"]
+            print(
+                f"Precompute [{_league}]: [{done}/{_total}] {fixture.home_team} vs {fixture.away_team}: "
+                f"{outcome} (generated={_tally['generated']} skipped={_tally['skipped']})"
+            )
+
+        result = asyncio.run(
+            run_eod_batch(
+                fixtures_client=fixtures_client, odds_client=odds_client, cache=cache, config=config,
+                schedule_t30=lambda fixture: None, date_str=date_str, fixtures=fixtures,
+                on_progress=_on_progress, league=league,
+            )
+        )
         print(
-            f"Precompute: [{done}/{len(fixtures)}] {fixture.home_team} vs {fixture.away_team}: {outcome} "
-            f"(generated={tally['generated']} skipped={tally['skipped']})"
+            f"Precompute [{league}] complete: generated={result.generated} skipped={result.skipped} "
+            f"of {len(fixtures)} fixture(s)."
         )
-
-    result = asyncio.run(
-        run_eod_batch(
-            fixtures_client=fixtures_client, odds_client=odds_client, cache=cache, config=config,
-            schedule_t30=lambda fixture: None, date_str=date_str, fixtures=fixtures,
-            on_progress=_on_progress,
-        )
-    )
-    print(f"Precompute complete: generated={result.generated} skipped={result.skipped} of {len(fixtures)} fixture(s).")
 
 
 def main(argv: list[str] | None = None) -> None:
