@@ -88,6 +88,46 @@ def test_lookup_corpus_match_id_returns_none_when_league_is_missing():
     assert recommendations._lookup_corpus_match_id("Arsenal", "Everton", "2026-03-01", None) is None
 
 
+def test_lookup_corpus_match_id_returns_none_instead_of_raising_on_a_db_error(monkeypatch):
+    """Covers the try/except added to satisfy this function's own
+    documented contract: DuckDBManager()/load_settings() can raise on a
+    missing or invalid config.yaml, and conn.execute() can raise a
+    duckdb.Error (e.g. no raw_matches table yet in some environment) --
+    neither should ever surface as an uncaught exception out of a "just
+    tell me if there's a corpus entry" lookup."""
+    with patch("app.backend.recommendations.TeamNameMapper") as mock_mapper_cls, \
+         patch("app.backend.recommendations.DuckDBManager") as mock_db_cls:
+        mock_mapper_cls.return_value.map_team.side_effect = lambda name: name
+        mock_db_cls.side_effect = RuntimeError("config.yaml not found")
+
+        result = recommendations._lookup_corpus_match_id("Arsenal", "Everton", "2026-03-01", "E0")
+
+    assert result is None
+
+
+def test_lookup_corpus_match_id_returns_none_instead_of_raising_on_a_query_error(monkeypatch):
+    """Same contract, but the failure happens later -- inside conn.execute()
+    itself (e.g. a duckdb.Error because raw_matches doesn't exist yet)."""
+    class FakeConnection:
+        def execute(self, query, params):
+            raise RuntimeError("no such table: raw_matches")
+
+    class FakeConnectionCtx:
+        def __enter__(self):
+            return FakeConnection()
+        def __exit__(self, *a):
+            return False
+
+    with patch("app.backend.recommendations.TeamNameMapper") as mock_mapper_cls, \
+         patch("app.backend.recommendations.DuckDBManager") as mock_db_cls:
+        mock_mapper_cls.return_value.map_team.side_effect = lambda name: name
+        mock_db_cls.return_value.connection.return_value = FakeConnectionCtx()
+
+        result = recommendations._lookup_corpus_match_id("Arsenal", "Everton", "2026-03-01", "E0")
+
+    assert result is None
+
+
 @pytest.fixture()
 def _sandbox_snapshot_tmp_dirs(tmp_path, monkeypatch):
     """Points both the sandbox partition and the corpus base dir at a fresh
@@ -140,6 +180,30 @@ def test_no_existing_recording_anywhere_uses_record_mode_into_the_sandbox_partit
     record_call = mock_configure.call_args_list[0]
     assert record_call.kwargs["base_dir"] == sandbox_dir
     assert record_call.kwargs["match_id"] == _MATCH_KEY
+
+
+def test_a_successful_record_pass_is_replayed_on_the_very_next_call(monkeypatch, _sandbox_snapshot_tmp_dirs):
+    """W70: the actual regression test for the restart-persistence fix --
+    unlike test_a_prior_sandbox_recording_on_disk_is_replayed_..., which
+    fabricates the marker by hand, this one drives a REAL record-mode pass
+    through configure_snapshot_store/SnapshotStore.wrap (only _real_run_agent
+    itself is mocked, at the LLM/agent boundary) and confirms the write
+    actually happens, closing the exact gap that let the marker-never-
+    written bug ship undetected."""
+    monkeypatch.setenv("SANDBOX_MODE", "1")
+    monkeypatch.setenv("SANDBOX_DATE", "2026-03-01")
+    sandbox_dir, _ = _sandbox_snapshot_tmp_dirs
+
+    with patch("app.backend.recommendations._real_run_agent", return_value=_RECOMMENDATION):
+        recommendations.run_agent(_MATCH_INFO)  # first call: real record pass, real disk write
+
+    marker = sandbox_dir / _MATCH_KEY / "_complete.json"
+    assert marker.exists()
+
+    mode, match_id, base_dir = recommendations._select_sandbox_snapshot_source(_MATCH_INFO)
+    assert mode == "replay"
+    assert match_id == _MATCH_KEY
+    assert base_dir == sandbox_dir
 
 
 def test_a_prior_sandbox_recording_on_disk_is_replayed_even_from_a_fresh_process(monkeypatch, _sandbox_snapshot_tmp_dirs):

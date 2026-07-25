@@ -79,7 +79,17 @@ def _run_agent_in_mode(mode: str, match_info: dict, config, match_id: str, base_
         mode, match_id=match_id, match_date=match_info.get("date"), base_dir=base_dir,
     )
     try:
-        return _real_run_agent(match_info, config=config)
+        result = _real_run_agent(match_info, config=config)
+        if mode == "record":
+            # Mirrors main.py's agent-snapshot CLI convention exactly (the
+            # only other writer of this marker) -- without it, a
+            # successful record pass is never recognized as "already
+            # recorded" on a later check, defeating the whole point of
+            # checking disk instead of in-memory state.
+            marker = base_dir / match_id / "_complete.json"
+            marker.parent.mkdir(parents=True, exist_ok=True)
+            marker.write_text("{}")
+        return result
     finally:
         agent_tools.configure_snapshot_store("live")
 
