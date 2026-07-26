@@ -31,9 +31,9 @@ _RECOMMENDATION = {
 }
 
 
-def _fixture(match_id: str, home: str, away: str) -> NormalizedMatch:
+def _fixture(match_id: str, home: str, away: str, utc_date: str = "2026-08-22T15:00:00Z") -> NormalizedMatch:
     return NormalizedMatch(
-        match_id=match_id, utc_date="2026-08-22T15:00:00Z", status="SCHEDULED",
+        match_id=match_id, utc_date=utc_date, status="SCHEDULED",
         home_team=home, away_team=away, home_goals=None, away_goals=None,
     )
 
@@ -383,3 +383,100 @@ def test_on_progress_called_once_per_fixture_with_outcome(tmp_path: Path) -> Non
         )
 
     assert sorted(progress) == [("m1", "generated"), ("m2", "skipped")]
+
+
+# --- W54: sandbox fallback-window fixtures must be cached/scoped under their
+# own date, not the batch's date_str (which is only ever correct for a true
+# one-day batch: the live scheduler, or an exact-date sandbox precompute). ---
+
+def test_fixture_with_a_different_date_than_date_str_is_cached_under_its_own_date(tmp_path: Path) -> None:
+    """W54: SANDBOX_DATE (date_str) has no real fixtures, so the fallback
+    window (W51) supplies a fixture dated well after it -- the cache row
+    must land under the fixture's real date, since that's what the Dashboard
+    (and W53's initial-list check) actually queries by."""
+    fixtures_client = MagicMock()
+    odds_client = MagicMock()
+    odds_client.get_odds.return_value = []
+    cache = RecommendationCache(db_path=tmp_path / "cache.db")
+    config = AgentConfig.default()
+    fixture = _fixture("m1", "Sunderland", "Brighton Hove", utc_date="2026-03-14T15:00:00Z")
+
+    with patch("app.backend.recommendations.run_agent", return_value=_RECOMMENDATION):
+        asyncio.run(
+            run_eod_batch(
+                fixtures_client=fixtures_client, odds_client=odds_client, cache=cache, config=config,
+                schedule_t30=lambda f: None, date_str="2026-03-08", fixtures=[fixture],
+            )
+        )
+
+    agent_config_hash = compute_agent_config_hash(config)
+    assert cache.get_latest("m1", "2026-03-14", agent_config_hash) is not None
+    assert cache.get_latest("m1", "2026-03-08", agent_config_hash) is None
+
+
+def test_match_info_date_uses_the_fixtures_own_date_not_date_str(tmp_path: Path) -> None:
+    fixtures_client = MagicMock()
+    odds_client = MagicMock()
+    odds_client.get_odds.return_value = []
+    cache = RecommendationCache(db_path=tmp_path / "cache.db")
+    config = AgentConfig.default()
+    fixture = _fixture("m1", "Sunderland", "Brighton Hove", utc_date="2026-03-14T15:00:00Z")
+    captured_match_info = {}
+
+    def _capture(match_info, config):
+        captured_match_info.update(match_info)
+        return _RECOMMENDATION
+
+    with patch("app.backend.recommendations.run_agent", side_effect=_capture):
+        asyncio.run(
+            run_eod_batch(
+                fixtures_client=fixtures_client, odds_client=odds_client, cache=cache, config=config,
+                schedule_t30=lambda f: None, date_str="2026-03-08", fixtures=[fixture],
+            )
+        )
+
+    assert captured_match_info["date"] == "2026-03-14"
+
+
+def test_odds_fetched_per_distinct_fixture_date_when_fixtures_span_multiple_dates(tmp_path: Path) -> None:
+    """W54: a fallback window can contain fixtures on several different
+    dates (not just one date later than date_str) -- each fixture's odds
+    must come from its own date, not a single date_str-scoped lookup that
+    would (per HistoricalOddsClient) return odds for none of them."""
+    fixtures_client = MagicMock()
+    cache = RecommendationCache(db_path=tmp_path / "cache.db")
+    config = AgentConfig.default()
+    fixture_14 = _fixture("m1", "Sunderland", "Brighton Hove", utc_date="2026-03-14T15:00:00Z")
+    fixture_15 = _fixture("m2", "Arsenal", "Everton", utc_date="2026-03-15T15:00:00Z")
+
+    def _odds_for_date(sport_key: str, date: str | None = None):
+        if date == "2026-03-14":
+            return [NormalizedOdds(
+                home_team="Sunderland", away_team="Brighton Hove", commence_time="2026-03-14T15:00:00Z",
+                home_odds=2.5, draw_odds=3.2, away_odds=2.9,
+            )]
+        if date == "2026-03-15":
+            return [NormalizedOdds(
+                home_team="Arsenal", away_team="Everton", commence_time="2026-03-15T15:00:00Z",
+                home_odds=1.5, draw_odds=4.0, away_odds=6.0,
+            )]
+        return []
+
+    odds_client = MagicMock()
+    odds_client.get_odds.side_effect = _odds_for_date
+    captured: dict[str, dict] = {}
+
+    def _capture(match_info, config):
+        captured[match_info["home_team"]] = match_info.get("odds")
+        return _RECOMMENDATION
+
+    with patch("app.backend.recommendations.run_agent", side_effect=_capture):
+        asyncio.run(
+            run_eod_batch(
+                fixtures_client=fixtures_client, odds_client=odds_client, cache=cache, config=config,
+                schedule_t30=lambda f: None, date_str="2026-03-08", fixtures=[fixture_14, fixture_15],
+            )
+        )
+
+    assert captured["Sunderland"] == {"home": 2.5, "draw": 3.2, "away": 2.9}
+    assert captured["Arsenal"] == {"home": 1.5, "draw": 4.0, "away": 6.0}

@@ -86,6 +86,32 @@ def test_get_odds_matches_the_normalizedodds_shape_odds_api_client_uses() -> Non
     }
 
 
+def test_get_odds_date_param_overrides_the_constructor_sandbox_date(tmp_path: Path) -> None:
+    """W54: a sandbox fallback batch needs odds for fixture dates other than
+    the client's own construction-time sandbox_date (e.g. precompute for
+    SANDBOX_DATE=2026-03-08 covering a real fixture on 2026-03-02, the
+    fallback window's nearest matchday) -- an explicit `date` must win over
+    the instance default, per-call, without needing a new client instance."""
+    manager = _seed_db(tmp_path)
+    client = HistoricalOddsClient(sandbox_date="2026-03-01", db_manager=manager)
+
+    result = client.get_odds(date="2026-03-02")
+
+    assert result is not None
+    assert len(result) == 1
+    assert result[0].home_team == "Liverpool"
+
+
+def test_get_odds_without_date_param_falls_back_to_constructor_sandbox_date(tmp_path: Path) -> None:
+    manager = _seed_db(tmp_path)
+    client = HistoricalOddsClient(sandbox_date="2026-03-01", db_manager=manager)
+
+    result = client.get_odds()
+
+    assert result is not None
+    assert {odds.home_team for odds in result} == {"Arsenal", "Chelsea"}
+
+
 def test_odds_lookup_and_match_odds_resolve_historical_client_output_unmodified(tmp_path: Path) -> None:
     """W28's acceptance: a real football-data.org fixture for the sandbox
     date must successfully match to HistoricalOddsClient's output via the

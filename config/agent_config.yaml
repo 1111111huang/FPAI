@@ -1,8 +1,8 @@
 # Betting agent configuration — all tunable knobs.
 # Swap model/provider to change the LLM tier without touching code.
 
-model: "claude-haiku-4-5"       # Anthropic (2026-07-23: switched after local models (~50% JSON reliability), Groq (reliable but 100K-500K tokens/day -- 10-50 days for this job), and 4 Gemini models (all quota-capped at 0-20 req/day on this project) all proved impractical. Real cost ~$1.50-2 for the full 404-match job.
-provider: "anthropic"           # "ollama" | "anthropic" | "groq" | "gemini"
+model: "llama3.1:8b"            # Ollama (2026-07-25: switched back for budget scenario-testing runs -- Anthropic credit balance exhausted. Real matches still replay tool calls (web_search/forecast_league) from the agent-snapshot corpus regardless of provider; only the LLM's own reasoning call is live. Revert to "claude-haiku-4-5" / provider "anthropic" (2026-07-23 entry below) once credits are topped up -- local models measured at ~50% JSON reliability for the full batch job.
+provider: "ollama"              # "ollama" | "anthropic" | "groq" | "gemini"
 temperature: 0.1                # lower = more deterministic; use 0.0 for backtesting
 max_tool_calls: 10              # per-match tool budget
 

@@ -167,7 +167,11 @@ class OddsAPIClient:
         self._credit_limit = credit_limit
         self._safety_margin = safety_margin
 
-    def get_odds(self, sport_key: str = "soccer_epl") -> list[NormalizedOdds] | None:
+    def get_odds(self, sport_key: str = "soccer_epl", date: str | None = None) -> list[NormalizedOdds] | None:
+        # date is unused here -- accepted only for interface parity with
+        # HistoricalOddsClient.get_odds() (W54): this is a live-current-odds
+        # call with no historical-date concept, so callers that duck-type
+        # across both client types (run_eod_batch) can pass it unconditionally.
         cost = len(self._markets) * len(self._regions)
 
         if self._credit_counter.would_exceed(cost, self._credit_limit, self._safety_margin):

@@ -401,3 +401,210 @@ def test_run_agent_injects_lessons_message_before_llm_call_in_live_mode():
         assert len(lesson_messages) == 1
     finally:
         agent_tools._snapshot_store.set_mode("live")
+
+
+# --- A37: schema-constrained structured output (Ollama JSON-reliability fix) ---
+
+def _structured_model(**overrides):
+    from src.agent.schema import MatchRecommendationModel
+
+    data = dict(
+        match={"home": "A", "away": "B", "date": "2026-08-22", "league": "E0"},
+        overall="direct_bet",
+        markets=[],
+        explanation="Structured call produced this.",
+        confidence="high",
+        limitations=[],
+        prediction_basis="team_history_and_market",
+    )
+    data.update(overrides)
+    return MatchRecommendationModel(**data)
+
+
+def test_structured_output_returns_dict_on_success():
+    from src.agent.graph import _structured_output
+    from src.agent.schema import MatchRecommendationModel
+
+    mock_llm = MagicMock()
+    mock_llm.with_structured_output.return_value.invoke.return_value = _structured_model()
+
+    result = _structured_output(mock_llm, [HumanMessage(content="hi")])
+
+    assert result["overall"] == "direct_bet"
+    assert result["explanation"] == "Structured call produced this."
+    mock_llm.with_structured_output.assert_called_once_with(MatchRecommendationModel)
+
+
+def test_structured_output_returns_none_when_provider_raises():
+    from src.agent.graph import _structured_output
+
+    mock_llm = MagicMock()
+    mock_llm.with_structured_output.side_effect = NotImplementedError("no structured output support")
+
+    result = _structured_output(mock_llm, [HumanMessage(content="hi")])
+
+    assert result is None
+
+
+def test_structured_output_returns_none_on_unexpected_return_shape():
+    """Defense-in-depth: a provider/binding that doesn't raise but also doesn't
+    return the expected Pydantic instance (e.g. a loosely-typed integration)
+    must not be treated as success -- this is also what protects every
+    pre-existing test in this file that mocks `llm` as a bare MagicMock
+    without configuring with_structured_output at all."""
+    from src.agent.graph import _structured_output
+
+    mock_llm = MagicMock()
+    mock_llm.with_structured_output.return_value.invoke.return_value = {"overall": "no_bet"}
+
+    result = _structured_output(mock_llm, [HumanMessage(content="hi")])
+
+    assert result is None
+
+
+def test_run_agent_uses_structured_output_on_ollama_when_available():
+    """A37: for provider=ollama, output_node prefers the schema-constrained
+    structured call over free-text regex extraction. Proven by returning an
+    `overall` that free-text parsing of the (deliberately unparseable) last
+    message could never have produced."""
+    from unittest.mock import MagicMock, patch
+    from langchain_core.messages import AIMessage
+    from src.agent.graph import run_agent
+    from src.agent import tools as agent_tools
+
+    agent_tools._snapshot_store.set_mode("live")
+    fake_forecast_result = {
+        "result_3way": {"probabilities": {"home": 0.4}},
+        "data_quality": {"prediction_basis": "team_history_and_market"},
+    }
+
+    with patch("src.agent.graph._build_llm") as mock_build_llm, \
+         patch("src.agent.graph._load_system_prompt", return_value="stub prompt"), \
+         patch("src.agent.tools._dated_web_search", return_value="No results found."), \
+         patch("src.forecast.forecast_service.ForecastService") as MockSvc, \
+         patch("src.agent.lessons.load_approved_lessons", return_value=[]), \
+         patch("src.utils.db_manager.DuckDBManager") as MockDB:
+        MockDB.return_value.connection.return_value.__enter__.return_value = MagicMock()
+        instance = MagicMock()
+        MockSvc.return_value = instance
+        instance.forecast_upcoming.return_value = fake_forecast_result
+
+        mock_llm = MagicMock()
+        # Not valid JSON -- if the free-text path were used by mistake, this
+        # would parse-fail into overall="insufficient_data", not "direct_bet".
+        mock_llm.bind_tools.return_value.invoke.return_value = AIMessage(content="not json at all")
+        mock_llm.with_structured_output.return_value.invoke.return_value = _structured_model(overall="direct_bet")
+        mock_build_llm.return_value = mock_llm
+
+        cfg = _make_config(provider="ollama")
+        recommendation = run_agent(
+            match_info={
+                "home_team": "Man City", "away_team": "Arsenal", "date": "2026-06-21", "league": "E0",
+                "odds": {"home": 2.0, "draw": 3.4, "away": 3.6},
+            },
+            config=cfg,
+            tools=[],
+        )
+
+    assert recommendation["overall"] == "direct_bet"
+    assert recommendation["explanation"] == "Structured call produced this."
+
+
+def test_run_agent_falls_back_to_free_text_on_ollama_when_structured_output_fails():
+    """A37 regression safety: if the provider/binding can't do structured
+    output, the pre-existing free-text extraction path still works exactly
+    as before -- this is strictly additive, never a regression."""
+    from unittest.mock import MagicMock, patch
+    from langchain_core.messages import AIMessage
+    from src.agent.graph import run_agent
+    from src.agent import tools as agent_tools
+
+    agent_tools._snapshot_store.set_mode("live")
+    llm_json = json.dumps({
+        "match": {"home": "Man City", "away": "Arsenal", "date": "2026-06-21", "league": "E0"},
+        "overall": "no_bet", "markets": [], "explanation": "Balanced match.",
+        "confidence": "medium", "limitations": [], "prediction_basis": "team_history_and_market",
+    })
+    fake_forecast_result = {
+        "result_3way": {"probabilities": {"home": 0.4}},
+        "data_quality": {"prediction_basis": "team_history_and_market"},
+    }
+
+    with patch("src.agent.graph._build_llm") as mock_build_llm, \
+         patch("src.agent.graph._load_system_prompt", return_value="stub prompt"), \
+         patch("src.agent.tools._dated_web_search", return_value="No results found."), \
+         patch("src.forecast.forecast_service.ForecastService") as MockSvc, \
+         patch("src.agent.lessons.load_approved_lessons", return_value=[]), \
+         patch("src.utils.db_manager.DuckDBManager") as MockDB:
+        MockDB.return_value.connection.return_value.__enter__.return_value = MagicMock()
+        instance = MagicMock()
+        MockSvc.return_value = instance
+        instance.forecast_upcoming.return_value = fake_forecast_result
+
+        mock_llm = MagicMock()
+        mock_llm.bind_tools.return_value.invoke.return_value = AIMessage(content=llm_json)
+        mock_llm.with_structured_output.side_effect = NotImplementedError("no structured output support")
+        mock_build_llm.return_value = mock_llm
+
+        cfg = _make_config(provider="ollama")
+        recommendation = run_agent(
+            match_info={
+                "home_team": "Man City", "away_team": "Arsenal", "date": "2026-06-21", "league": "E0",
+                "odds": {"home": 2.0, "draw": 3.4, "away": 3.6},
+            },
+            config=cfg,
+            tools=[],
+        )
+
+    assert recommendation["overall"] == "no_bet"
+    assert recommendation["explanation"] == "Balanced match."
+
+
+def test_run_agent_never_attempts_structured_output_on_non_ollama_providers():
+    """A37 is gated to provider=ollama only -- Anthropic/Groq/Gemini already
+    produce reliable free-text JSON, and an unconditional extra call would
+    silently double per-request cost on paid providers nobody asked to pay
+    twice for."""
+    from unittest.mock import MagicMock, patch
+    from langchain_core.messages import AIMessage
+    from src.agent.graph import run_agent
+    from src.agent import tools as agent_tools
+
+    agent_tools._snapshot_store.set_mode("live")
+    llm_json = json.dumps({
+        "match": {"home": "Man City", "away": "Arsenal", "date": "2026-06-21", "league": "E0"},
+        "overall": "no_bet", "markets": [], "explanation": "Balanced match.",
+        "confidence": "medium", "limitations": [], "prediction_basis": "team_history_and_market",
+    })
+    fake_forecast_result = {
+        "result_3way": {"probabilities": {"home": 0.4}},
+        "data_quality": {"prediction_basis": "team_history_and_market"},
+    }
+
+    with patch("src.agent.graph._build_llm") as mock_build_llm, \
+         patch("src.agent.graph._load_system_prompt", return_value="stub prompt"), \
+         patch("src.agent.tools._dated_web_search", return_value="No results found."), \
+         patch("src.forecast.forecast_service.ForecastService") as MockSvc, \
+         patch("src.agent.lessons.load_approved_lessons", return_value=[]), \
+         patch("src.utils.db_manager.DuckDBManager") as MockDB:
+        MockDB.return_value.connection.return_value.__enter__.return_value = MagicMock()
+        instance = MagicMock()
+        MockSvc.return_value = instance
+        instance.forecast_upcoming.return_value = fake_forecast_result
+
+        mock_llm = MagicMock()
+        mock_llm.bind_tools.return_value.invoke.return_value = AIMessage(content=llm_json)
+        mock_build_llm.return_value = mock_llm
+
+        cfg = _make_config(provider="anthropic")
+        recommendation = run_agent(
+            match_info={
+                "home_team": "Man City", "away_team": "Arsenal", "date": "2026-06-21", "league": "E0",
+                "odds": {"home": 2.0, "draw": 3.4, "away": 3.6},
+            },
+            config=cfg,
+            tools=[],
+        )
+
+    assert recommendation["overall"] == "no_bet"
+    mock_llm.with_structured_output.assert_not_called()

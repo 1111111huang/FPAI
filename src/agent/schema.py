@@ -39,7 +39,7 @@ _REQUIRED_KEYS = {"match", "overall", "markets", "explanation", "confidence", "l
 _VALID_OVERALL = {"direct_bet", "conditional", "no_bet", "insufficient_data"}
 
 
-class _MarketRecommendationModel(BaseModel):
+class MarketRecommendationModel(BaseModel):
     """A28: type/enum validation for every market-level field. current_odds is
     nullable -- that's a legitimate state (odds simply weren't found for this
     market) -- the direct_bet + null-odds combination (BUG-013) is a separate
@@ -55,13 +55,18 @@ class _MarketRecommendationModel(BaseModel):
     value_edge: float
 
 
-class _MatchRecommendationModel(BaseModel):
+class MatchRecommendationModel(BaseModel):
     """A28: adds type/enum validation for confidence and every market field,
-    beyond the pre-existing key-presence/overall-enum checks."""
+    beyond the pre-existing key-presence/overall-enum checks.
+
+    A37: also used directly as the schema passed to
+    llm.with_structured_output() for the final-answer synthesis call --
+    public (no leading underscore) since it's now imported cross-module by
+    src/agent/graph.py, not just used internally by extract_recommendation()."""
 
     match: dict
     overall: Literal["direct_bet", "conditional", "no_bet", "insufficient_data"]
-    markets: list[_MarketRecommendationModel]
+    markets: list[MarketRecommendationModel]
     explanation: str
     confidence: Literal["low", "medium", "high"]
     limitations: list[str]
@@ -175,7 +180,7 @@ def extract_recommendation(
         # A28: type/enum validation for every market field and top-level
         # confidence, beyond the key-presence/overall-enum checks above.
         try:
-            _MatchRecommendationModel.model_validate(data)
+            MatchRecommendationModel.model_validate(data)
         except ValidationError as exc:
             last_error = f"field validation failed: {exc}"
             continue

@@ -66,6 +66,10 @@ def odds_lookup(odds_events: list[NormalizedOdds]) -> dict[tuple[str, str], Norm
     return {(mapper.map_team(o.home_team), mapper.map_team(o.away_team)): o for o in odds_events}
 
 
+def _fixture_date(fixture: NormalizedMatch) -> str:
+    return fixture.utc_date[:10]
+
+
 def match_odds(
     fixture: NormalizedMatch, odds_by_teams: dict[tuple[str, str], NormalizedOdds]
 ) -> dict[str, float] | None:
@@ -123,19 +127,36 @@ async def run_eod_batch(
 
     # W58: explicit sport_key from the competition-id mapping, rather than
     # relying on get_odds()'s own "soccer_epl" default parameter.
-    odds_events = odds_client.get_odds(sport_key=ODDS_SPORT_KEY_BY_COMPETITION[league]) if odds_client is not None else None
-    odds_by_teams = odds_lookup(odds_events or [])
+    #
+    # W54: a true one-day batch (the live scheduler; an exact-date sandbox
+    # precompute) has every fixture dated exactly date_str -- preserve the
+    # original single get_odds() call unchanged for that case. A sandbox
+    # fallback-window batch (W51) can contain fixtures on other dates (even
+    # several different ones), and date_str's own odds lookup would find
+    # none of them -- fetch per distinct fixture date instead.
+    fixture_dates = {_fixture_date(fixture) for fixture in fixtures}
+    sport_key = ODDS_SPORT_KEY_BY_COMPETITION[league]
+    if odds_client is None:
+        odds_by_teams_by_date: dict[str, dict] = {}
+    elif fixture_dates <= {date_str}:
+        odds_by_teams_by_date = {date_str: odds_lookup(odds_client.get_odds(sport_key=sport_key) or [])}
+    else:
+        odds_by_teams_by_date = {
+            fixture_date: odds_lookup(odds_client.get_odds(sport_key=sport_key, date=fixture_date) or [])
+            for fixture_date in fixture_dates
+        }
 
     agent_config_hash = compute_agent_config_hash(config)
     semaphore = asyncio.Semaphore(concurrency)
     result = EodBatchResult(fixtures=list(fixtures))
 
     async def _generate_one(fixture: NormalizedMatch) -> None:
+        fixture_date = _fixture_date(fixture)
         match_info = {
             "home_team": fixture.home_team, "away_team": fixture.away_team,
-            "date": date_str, "league": league,
+            "date": fixture_date, "league": league,
         }
-        odds = match_odds(fixture, odds_by_teams)
+        odds = match_odds(fixture, odds_by_teams_by_date.get(fixture_date, {}))
         if odds is not None:
             match_info["odds"] = odds
 
@@ -154,7 +175,7 @@ async def run_eod_batch(
 
         degraded = validate_and_degrade(raw)
         cache.record_generation(
-            match_id=fixture.match_id, date=date_str, agent_config_hash=agent_config_hash,
+            match_id=fixture.match_id, date=fixture_date, agent_config_hash=agent_config_hash,
             odds=odds or {}, recommendation=degraded.model_dump(), triggered_by="scheduled",
         )
         result.generated += 1

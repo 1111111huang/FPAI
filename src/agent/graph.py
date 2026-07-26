@@ -11,7 +11,12 @@ from langgraph.prebuilt import ToolNode
 
 from src.agent.agent_config import AgentConfig
 from src.agent.pipeline import forecast_node, lessons_node, research_node, resolve_competition_node
-from src.agent.schema import MatchRecommendation, RecommendationParseError, extract_recommendation
+from src.agent.schema import (
+    MatchRecommendation,
+    MatchRecommendationModel,
+    RecommendationParseError,
+    extract_recommendation,
+)
 from src.utils.logger import get_logger
 
 _PROMPTS_DIR = Path(__file__).parent.parent.parent / "config" / "prompts"
@@ -146,6 +151,44 @@ def _apply_research_coverage_downgrade(recommendation: dict, research_evidence: 
     return recommendation
 
 
+def _finalize_recommendation(
+    recommendation: dict, forecast_payload: dict | None, research_evidence: dict | None,
+) -> dict:
+    """Shared normalization pass applied regardless of how `recommendation`
+    was produced (schema-constrained structured output, A37, or free-text
+    regex extraction below) -- diagnostics/backstop/downgrade are all
+    deterministic, pipeline-state-derived, and must apply identically either
+    way (A30/A31/A32)."""
+    recommendation.update(_extract_forecast_diagnostics(forecast_payload))
+    recommendation = _apply_a30_backstop(recommendation, forecast_payload)
+    recommendation = _apply_research_coverage_downgrade(recommendation, research_evidence)
+    return recommendation
+
+
+def _structured_output(llm, messages: list) -> dict | None:
+    """A37: request a schema-constrained final answer directly from the
+    provider via LangChain's with_structured_output(), instead of relying on
+    the LLM to freely write JSON that then gets regex-extracted by
+    extract_recommendation() below. When the provider/binding actually
+    supports it, this guarantees field names/types/enums match
+    MatchRecommendationModel -- it cannot return the wrong shape the way
+    free text can.
+
+    Returns None on any failure or unexpected return shape (no structured-
+    output support, a network error, a loosely-typed integration that
+    doesn't raise but also doesn't return the real Pydantic instance) --
+    callers fall back to the pre-existing free-text path in that case, so
+    this is strictly additive, never a regression."""
+    try:
+        result = llm.with_structured_output(MatchRecommendationModel).invoke(messages)
+    except Exception:
+        _LOG.warning("output_node | structured_output_unavailable", exc_info=True)
+        return None
+    if not isinstance(result, MatchRecommendationModel):
+        return None
+    return result.model_dump()
+
+
 def _build_recommendation(
     text: str,
     match_info: dict,
@@ -175,10 +218,7 @@ def _build_recommendation(
             "limitations": ["Agent output could not be parsed as a structured recommendation"],
             "prediction_basis": "unknown",
         }
-    recommendation.update(_extract_forecast_diagnostics(forecast_payload))
-    recommendation = _apply_a30_backstop(recommendation, forecast_payload)
-    recommendation = _apply_research_coverage_downgrade(recommendation, research_evidence)
-    return recommendation
+    return _finalize_recommendation(recommendation, forecast_payload, research_evidence)
 
 
 def route_after_forecast(state: AgentState) -> Literal["lessons", "output"]:
@@ -248,6 +288,16 @@ def build_graph(config: AgentConfig, tools: list):
                 "feature_completeness": None,
                 "unknown_team": False,
             }}
+
+        if config.provider == "ollama":
+            structured = _structured_output(llm, state["messages"])
+            if structured is not None:
+                _LOG.info("output_node | structured_output=success | overall=%s", structured.get("overall"))
+                recommendation = _finalize_recommendation(
+                    structured, forecast_payload, state.get("research_evidence"),
+                )
+                return {"recommendation": recommendation}
+            _LOG.info("output_node | structured_output=unavailable_or_failed | falling_back_to_free_text")
 
         last = state["messages"][-1]
         text = _extract_text(last.content)

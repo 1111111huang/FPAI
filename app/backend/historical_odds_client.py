@@ -30,11 +30,17 @@ class HistoricalOddsClient:
         self._sandbox_date = sandbox_date
         self._db_manager = db_manager or DuckDBManager()
 
-    def get_odds(self, sport_key: str = "soccer_epl") -> list[NormalizedOdds] | None:
+    def get_odds(self, sport_key: str = "soccer_epl", date: str | None = None) -> list[NormalizedOdds] | None:
         # sport_key is unused here -- accepted only for interface parity
         # with OddsAPIClient.get_odds(), since raw_matches is already
         # scoped to a single league (LEAGUE_CODE) and needs no sport
         # selector.
+        #
+        # W54: `date`, when given, overrides the instance's own sandbox_date
+        # for this call only -- lets one client serve odds for several
+        # different fixture dates (a sandbox fallback-window batch), not
+        # just the single date it was constructed with.
+        query_date = date or self._sandbox_date
         with self._db_manager.connection(read_only=True) as conn:
             # odds_h/odds_d/odds_a are FLOAT (32-bit) in raw_matches, so a
             # value stored as 1.80 round-trips as 1.7999999523162842 without
@@ -50,7 +56,7 @@ class HistoricalOddsClient:
                 FROM raw_matches
                 WHERE league = '{LEAGUE_CODE}' AND CAST(date AS DATE) = CAST(? AS DATE)
                 """,
-                (self._sandbox_date,),
+                (query_date,),
             ).fetchall()
 
         if not rows:
