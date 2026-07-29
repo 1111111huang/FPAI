@@ -20,6 +20,28 @@ from src.utils.db_manager import DuckDBManager
 
 _VALID_SPLITS = ("all", "train", "test")
 
+# A46: the actual instruction text is shared verbatim with main.py's
+# run_agent_snapshot() (recording) via this constant, specifically so the two
+# can never drift apart -- discarding leaked post-match content matters
+# identically in both modes, for the same reason (research_node's queries are
+# deterministic and web search can return post-match recaps despite the
+# before:<date> filter, which is a query-string hint to the search provider,
+# not an enforced constraint -- confirmed live: a "recent form" search for a
+# real backtested match returned a BBC Sport recap of that exact match's
+# result, including goalscorers, plus a second result titled "<home> N-M
+# <away> (<date>) Final Score - ESPN"). Recording already had this guard;
+# replay (process_match_row, below) did not until now -- a structural gap,
+# not a per-match miss, since process_match_row is the one shared path both
+# agent-backtest and agent-train (and agent-compare, via BacktestHarness.run)
+# route through. This mitigates the live model's willingness to *use* leaked
+# text going forward -- it does not retroactively remove already-recorded
+# leaked content from the snapshot corpus itself; that would need
+# re-recording, out of scope here.
+LEAKAGE_GUARD_INSTRUCTIONS = (
+    "Discard and ignore any web_search result that mentions a final score, match result, "
+    "or post-match analysis for this match — treat it as still upcoming."
+)
+
 
 def match_in_test_split(match_id: str, test_fraction: float) -> bool:
     """A40: stable per-match_id train/test assignment for critic-mode holdout.
@@ -107,6 +129,18 @@ def process_match_row(
     Removing the tool during replay doesn't change what evidence the LLM has
     (still the full research_node/forecast_node payload) -- it just removes
     a call that could never succeed in this mode, for any provider.
+
+    A46: always passes LEAKAGE_GUARD_INSTRUCTIONS as extra_system_instructions
+    -- agent-snapshot (record mode) already told the LLM to discard any
+    web_search result mentioning a final score/post-match analysis, but
+    replay never did, despite reading the exact same recorded search text.
+    Confirmed live, not hypothetical: a real backtested match's "recent form"
+    search returned a BBC Sport recap of that match's own result (goalscorers
+    included) plus a result titled "<home> N-M <away> (<date>) Final Score -
+    ESPN", and every backtest/train ROI number to date was computed with zero
+    defense against exactly this. Does not remove already-leaked content from
+    the snapshot corpus itself (that needs re-recording, out of scope here) --
+    only makes the live model less likely to use it going forward.
     """
     # Local imports: keep these inside the function — tests patch
     # src.agent.graph.run_agent and src.agent.tools.configure_snapshot_store,
@@ -124,10 +158,16 @@ def process_match_row(
     )
     try:
         if capture_state:
-            full_state = run_agent(match_info=match_info, config=config, tools=[], return_full_state=True)
+            full_state = run_agent(
+                match_info=match_info, config=config, tools=[],
+                extra_system_instructions=LEAKAGE_GUARD_INSTRUCTIONS, return_full_state=True,
+            )
             recommendation = full_state["recommendation"]
         else:
-            recommendation = run_agent(match_info=match_info, config=config, tools=[])
+            recommendation = run_agent(
+                match_info=match_info, config=config, tools=[],
+                extra_system_instructions=LEAKAGE_GUARD_INSTRUCTIONS,
+            )
             full_state = None
     finally:
         agent_tools.configure_snapshot_store("live")

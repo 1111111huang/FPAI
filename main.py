@@ -1104,15 +1104,16 @@ def run_agent_snapshot(
     from pathlib import Path
 
     from src.agent.agent_config import AgentConfig
+    from src.agent.backtest import LEAKAGE_GUARD_INSTRUCTIONS
     from src.agent.graph import run_agent
     from src.agent import tools as agent_tools
     from src.utils.db_manager import DuckDBManager
 
+    # A46: shares its actual instruction text with process_match_row's replay
+    # path via LEAKAGE_GUARD_INSTRUCTIONS so the two can never drift apart.
     snapshot_addendum = (
         "## SNAPSHOT COLLECTION MODE\n\n"
-        "You are collecting training data from a historical match. Discard and ignore any "
-        "web_search result that mentions a final score, match result, or post-match analysis — "
-        "treat this match as still upcoming."
+        "You are collecting training data from a historical match. " + LEAKAGE_GUARD_INSTRUCTIONS
     )
 
     cfg = AgentConfig.from_yaml(config_path) if config_path else AgentConfig.default()

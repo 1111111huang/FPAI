@@ -8,6 +8,7 @@ import pytest
 
 from src.agent.agent_config import AgentConfig
 from src.agent.backtest import (
+    LEAKAGE_GUARD_INSTRUCTIONS,
     BacktestHarness,
     BacktestRecord,
     load_outcome,
@@ -113,6 +114,39 @@ def test_process_match_row_threads_allow_lessons_in_replay_to_configure_snapshot
 
     replay_call = mock_configure.call_args_list[0]
     assert replay_call.kwargs["allow_lessons_in_replay"] is True
+
+
+def test_process_match_row_passes_leakage_guard_instructions_to_run_agent():
+    """A46: replay must tell the LLM to discard leaked post-match content in
+    recorded web_search snapshots, same as agent-snapshot's record-mode
+    instruction -- confirmed live that such leakage exists and, before this
+    fix, replay had zero defense against it."""
+    recommendation = {
+        "match": {}, "overall": "no_bet", "markets": [],
+        "explanation": "x", "confidence": "high", "limitations": [], "prediction_basis": "team_history_and_market",
+    }
+    with patch("src.agent.graph.run_agent", return_value=recommendation) as mock_run, \
+         patch("src.agent.tools.configure_snapshot_store"):
+        process_match_row(_row(), _make_config())
+
+    assert mock_run.call_args.kwargs["extra_system_instructions"] == LEAKAGE_GUARD_INSTRUCTIONS
+
+
+def test_process_match_row_passes_leakage_guard_instructions_with_capture_state():
+    full_state = {
+        "recommendation": {
+            "match": {}, "overall": "no_bet", "markets": [],
+            "explanation": "x", "confidence": "high", "limitations": [], "prediction_basis": "team_history_and_market",
+        },
+        "competition_resolution": {"competition": "E0", "tier": "competition_specific"},
+        "research_evidence": {"availability": "ok"},
+        "forecast_payload": {"result_3way": {}},
+    }
+    with patch("src.agent.graph.run_agent", return_value=full_state) as mock_run, \
+         patch("src.agent.tools.configure_snapshot_store"):
+        process_match_row(_row(), _make_config(), capture_state=True)
+
+    assert mock_run.call_args.kwargs["extra_system_instructions"] == LEAKAGE_GUARD_INSTRUCTIONS
 
 
 def test_process_match_row_propagates_snapshot_missing_error():
