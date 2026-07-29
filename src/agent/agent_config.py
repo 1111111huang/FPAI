@@ -16,7 +16,7 @@ _DEFAULT_CONFIG = Path(__file__).parent.parent.parent / "config" / "agent_config
 @dataclass
 class AgentConfig:
     model: str
-    provider: Literal["ollama", "anthropic", "groq", "gemini"]
+    provider: Literal["ollama", "anthropic", "groq", "gemini", "deepseek"]
     temperature: float
     max_tool_calls: int
     min_odds_threshold: float

@@ -183,13 +183,21 @@ def lessons_node(state: dict) -> dict:
     injection pattern forecast_node uses for evidence (a node-returned
     "messages" list is appended via AgentState's add_messages reducer).
 
-    Gated on SnapshotStore mode == "live": outside genuine live runs
-    (agent-backtest/agent-train replay, or agent-snapshot record), lessons
-    are skipped entirely. Injecting lessons approved *after* a historical
-    match would leak future information into backtest/train scoring,
-    corrupting the A13/A21/A34 baseline methodology agent-backtest and
-    agent-train share. Gating here (rather than a config flag) means the
-    same compiled graph is correct for every CLI entry point.
+    Gated on SnapshotStore mode == "live", OR mode == "replay" with
+    allow_lessons_in_replay explicitly set (A41): outside those two cases
+    (agent-backtest/agent-train replay without that flag, or agent-snapshot
+    record), lessons are skipped entirely. Injecting lessons approved *after*
+    a historical match would leak future information into backtest/train
+    scoring, corrupting the A13/A21/A34 baseline methodology agent-backtest
+    and agent-train share -- this is still true in general, which is why the
+    replay exception is opt-in and narrow rather than a blanket "replay also
+    loads lessons". It's only safe when the lessons being loaded were
+    themselves generated from a disjoint set of matches (A40's train split)
+    from the ones now being scored (A40's test split) -- main.py's CLI layer
+    enforces that precondition (agent-backtest requires --split test to pass
+    --use-lessons at all), not this function. Gating here (rather than a
+    config flag) means the same compiled graph is correct for every CLI
+    entry point.
 
     Only imports load_approved_lessons from src.agent.lessons -- see that
     module's docstring and tests/test_agent_lessons.py for why that function
@@ -206,7 +214,8 @@ def lessons_node(state: dict) -> dict:
     """
     from src.agent.tools import get_snapshot_store
 
-    if get_snapshot_store().mode != "live":
+    store = get_snapshot_store()
+    if not (store.mode == "live" or (store.mode == "replay" and store.allow_lessons_in_replay)):
         return {}
 
     from src.agent.lessons import extract_competition_scope, load_approved_lessons

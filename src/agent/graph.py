@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from typing import Annotated, Any, Literal, TypedDict
 
@@ -46,6 +47,14 @@ def _build_llm(config: AgentConfig) -> Any:
     if config.provider == "gemini":
         from langchain_google_genai import ChatGoogleGenerativeAI
         return ChatGoogleGenerativeAI(model=config.model, temperature=config.temperature)
+    if config.provider == "deepseek":
+        # A42: DeepSeek exposes an OpenAI-compatible chat-completions endpoint,
+        # so it needs no dedicated langchain-deepseek package -- ChatOpenAI
+        # pointed at DeepSeek's base_url is the standard integration path.
+        # Reads DEEPSEEK_API_KEY the same way every other provider here reads
+        # its own *_API_KEY (langchain's own env-var convention, not custom).
+        from langchain_openai import ChatOpenAI
+        return ChatOpenAI(model=config.model, temperature=config.temperature, base_url="https://api.deepseek.com", api_key=os.environ.get("DEEPSEEK_API_KEY"))
     raise ValueError(f"Unknown provider: {config.provider!r}")
 
 

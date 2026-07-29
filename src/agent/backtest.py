@@ -8,14 +8,31 @@ synchronous BacktestHarness.run() and the concurrent agent-backtest CLI path
 
 from __future__ import annotations
 
+import hashlib
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Literal
 
 import pandas as pd
 
 from src.agent.agent_config import AgentConfig
 from src.agent.market_resolution import build_actual_outcome, market_correct as _market_correct
 from src.utils.db_manager import DuckDBManager
+
+_VALID_SPLITS = ("all", "train", "test")
+
+
+def match_in_test_split(match_id: str, test_fraction: float) -> bool:
+    """A40: stable per-match_id train/test assignment for critic-mode holdout.
+
+    Hashes match_id directly rather than sampling the DataFrame (e.g.
+    df.sample(frac=...)) so a given match's assignment never shifts as the
+    snapshot corpus grows or as different date/league filters are applied --
+    the same match_id always lands in the same split, with no split
+    assignment table to persist or keep in sync.
+    """
+    digest = hashlib.sha256(match_id.encode()).hexdigest()
+    bucket = int(digest[:8], 16) / 0xFFFFFFFF
+    return bucket < test_fraction
 
 
 @dataclass
@@ -53,7 +70,9 @@ def _build_match_info(row: pd.Series) -> dict[str, Any]:
     return match_info
 
 
-def process_match_row(row: pd.Series, config: AgentConfig, capture_state: bool = False) -> BacktestRecord:
+def process_match_row(
+    row: pd.Series, config: AgentConfig, capture_state: bool = False, allow_lessons_in_replay: bool = False,
+) -> BacktestRecord:
     """Replay one historical match through the agent and score its recommendation.
 
     Sets the module-level SnapshotStore to replay mode for this match_id before
@@ -64,6 +83,30 @@ def process_match_row(row: pd.Series, config: AgentConfig, capture_state: bool =
     capture_state (A33): when True, also captures the full graph state
     (competition_resolution/research_evidence/forecast_payload) on the
     returned record's full_state, for agent-train's telemetry persistence.
+
+    allow_lessons_in_replay (A41): when True, lessons_node loads approved
+    lessons during this replay instead of skipping (A33's default for every
+    non-live run). Only meaningful for agent-backtest --split test
+    --use-lessons -- evaluating a held-out split against lessons approved
+    from the disjoint train split. main.py's CLI layer is responsible for
+    refusing --use-lessons on anything but --split test; this function has
+    no split awareness of its own and just does what it's told.
+
+    A42: runs the agent with no LLM-callable tools during replay (tools=[]),
+    regardless of config.provider. The only LLM-callable tool is web_search
+    (A31/A32 moved forecast/resolve_competition off the LLM entirely) --
+    research_node already guarantees deterministic baseline evidence before
+    the LLM's turn, and the prompt itself says most matches need nothing
+    further ("skip straight to step 3 unless there's a specific gap").
+    Whenever the LLM chooses to call web_search anyway, its query text is its
+    own invention and essentially never byte-matches whatever was recorded
+    (deterministic templated queries from research_node do match; this is
+    specifically the LLM's *optional* follow-up call) -- SnapshotMissingError
+    aborts that whole match. Observed at a 100% rate on a live DeepSeek smoke
+    sample and previously implicated in llama3.1:8b's ~69% E0 skip rate.
+    Removing the tool during replay doesn't change what evidence the LLM has
+    (still the full research_node/forecast_node payload) -- it just removes
+    a call that could never succeed in this mode, for any provider.
     """
     # Local imports: keep these inside the function — tests patch
     # src.agent.graph.run_agent and src.agent.tools.configure_snapshot_store,
@@ -76,14 +119,15 @@ def process_match_row(row: pd.Series, config: AgentConfig, capture_state: bool =
     match_info = _build_match_info(row)
 
     agent_tools.configure_snapshot_store(
-        "replay", match_id=match_id, base_dir=league_base_dir(row["league"]),
+        "replay", match_id=match_id, match_date=match_info["date"], base_dir=league_base_dir(row["league"]),
+        allow_lessons_in_replay=allow_lessons_in_replay,
     )
     try:
         if capture_state:
-            full_state = run_agent(match_info=match_info, config=config, return_full_state=True)
+            full_state = run_agent(match_info=match_info, config=config, tools=[], return_full_state=True)
             recommendation = full_state["recommendation"]
         else:
-            recommendation = run_agent(match_info=match_info, config=config)
+            recommendation = run_agent(match_info=match_info, config=config, tools=[])
             full_state = None
     finally:
         agent_tools.configure_snapshot_store("live")
@@ -119,7 +163,11 @@ class BacktestHarness:
         to_date: str,
         league: str | None = None,
         sample: int | None = None,
+        split: Literal["all", "train", "test"] = "all",
+        test_fraction: float = 0.2,
     ) -> pd.DataFrame:
+        if split not in _VALID_SPLITS:
+            raise ValueError(f"split must be one of {_VALID_SPLITS}, got {split!r}")
         query = (
             "SELECT match_id, league, date, home_team, away_team, "
             "odds_h, odds_d, odds_a, fthg, ftag, hc, ac "
@@ -132,6 +180,10 @@ class BacktestHarness:
         query += " ORDER BY date"
         with self.db.connection() as conn:
             matches = conn.execute(query, params).fetchdf()
+
+        if split != "all":
+            is_test = matches["match_id"].apply(lambda m: match_in_test_split(m, test_fraction))
+            matches = matches[is_test if split == "test" else ~is_test].reset_index(drop=True)
 
         if sample is not None and len(matches) > sample:
             matches = self._stratified_sample(matches, sample)
@@ -173,6 +225,8 @@ class BacktestHarness:
         to_date: str,
         league: str | None = None,
         sample: int | None = None,
+        split: Literal["all", "train", "test"] = "all",
+        test_fraction: float = 0.2,
     ) -> list[BacktestRecord]:
-        matches = self.load_matches(from_date, to_date, league=league, sample=sample)
+        matches = self.load_matches(from_date, to_date, league=league, sample=sample, split=split, test_fraction=test_fraction)
         return [process_match_row(row, self.config) for _, row in matches.iterrows()]

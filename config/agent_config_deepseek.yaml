@@ -1,0 +1,22 @@
+# Betting agent configuration -- DeepSeek variant (A42).
+# Separate file rather than editing the shared config/agent_config.yaml: keeps
+# every other CLI/webapp entry point on its existing default (ollama) and
+# only opts in via --config config/agent_config_deepseek.yaml.
+
+model: "deepseek-chat"          # DeepSeek's OpenAI-compatible chat endpoint (aliases to their current flagship non-reasoning model)
+provider: "deepseek"
+temperature: 0.1
+max_tool_calls: 10
+
+min_odds_threshold: 1.2
+max_odds_threshold: 11.0
+min_value_edge: 0.05
+
+markets:
+  - result_3way
+  - btts
+  - total_goals
+  - home_corners
+  - away_corners
+
+system_prompt_version: "v1"

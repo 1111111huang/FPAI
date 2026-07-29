@@ -29,6 +29,7 @@ def configure_snapshot_store(
     match_id: str | None = None,
     match_date: str | None = None,
     base_dir: str | Path | None = None,
+    allow_lessons_in_replay: bool | None = None,
 ) -> None:
     """Configure the module-level SnapshotStore shared by all tool functions.
     Call this before run_agent() to switch between live/record/replay. In
@@ -44,7 +45,11 @@ def configure_snapshot_store(
     default -- this matters for callers/tests (e.g. test_agent_tools_snapshot.py)
     that set a base_dir once (directly, or via an earlier configure_snapshot_store
     call) and then make several bare mode-only calls expecting it to stick.
-    Pass base_dir explicitly (e.g. DEFAULT_BASE_DIR) to force a reset."""
+    Pass base_dir explicitly (e.g. DEFAULT_BASE_DIR) to force a reset.
+    allow_lessons_in_replay (A41) is likewise sticky-if-omitted (None leaves
+    it untouched) -- set once per CLI invocation (e.g. agent-backtest
+    --use-lessons calling this once per match via process_match_row) rather
+    than needing to be re-passed on every per-match call."""
     global _snapshot_store
     with _configure_lock:
         if base_dir is not None:
@@ -54,6 +59,8 @@ def configure_snapshot_store(
         _snapshot_store.set_mode(mode)
         if match_id is not None:
             _snapshot_store.set_match(match_id, match_date)
+        if allow_lessons_in_replay is not None:
+            _snapshot_store.set_allow_lessons_in_replay(allow_lessons_in_replay)
 
 
 def get_snapshot_store() -> SnapshotStore:

@@ -15,8 +15,25 @@ def reset_snapshot_store(tmp_path):
     """Point the module-level store at a tmp dir and reset to live mode after each test."""
     agent_tools._snapshot_store.base_dir = tmp_path
     agent_tools._snapshot_store.set_mode("live")
+    agent_tools._snapshot_store.set_allow_lessons_in_replay(False)
     yield
     agent_tools._snapshot_store.set_mode("live")
+    agent_tools._snapshot_store.set_allow_lessons_in_replay(False)
+
+
+def test_configure_snapshot_store_allow_lessons_in_replay_defaults_false():
+    assert agent_tools.get_snapshot_store().allow_lessons_in_replay is False
+
+
+def test_configure_snapshot_store_sets_allow_lessons_in_replay():
+    agent_tools.configure_snapshot_store("replay", match_id="m1", allow_lessons_in_replay=True)
+    assert agent_tools.get_snapshot_store().allow_lessons_in_replay is True
+
+
+def test_configure_snapshot_store_allow_lessons_in_replay_is_sticky_if_omitted():
+    agent_tools.configure_snapshot_store("replay", match_id="m1", allow_lessons_in_replay=True)
+    agent_tools.configure_snapshot_store("live")  # no allow_lessons_in_replay passed
+    assert agent_tools.get_snapshot_store().allow_lessons_in_replay is True
 
 
 def test_web_search_record_then_replay(tmp_path):

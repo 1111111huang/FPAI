@@ -81,6 +81,14 @@ class SnapshotStore:
         self._match_date_var: contextvars.ContextVar[str | None] = contextvars.ContextVar(
             "snapshot_match_date", default=None
         )
+        # A41: lets lessons_node load approved lessons during a *replay* run,
+        # not just "live" -- only meaningful for a held-out test-split
+        # backtest (agent-backtest --split test --use-lessons), never set for
+        # an ordinary backtest/train replay. Default False preserves A33's
+        # original leakage guard for every other caller.
+        self._allow_lessons_var: contextvars.ContextVar[bool] = contextvars.ContextVar(
+            "snapshot_allow_lessons_in_replay", default=False
+        )
 
     @property
     def mode(self) -> SnapshotMode:
@@ -94,6 +102,10 @@ class SnapshotStore:
     def match_date(self) -> str | None:
         return self._match_date_var.get()
 
+    @property
+    def allow_lessons_in_replay(self) -> bool:
+        return self._allow_lessons_var.get()
+
     def set_mode(self, mode: SnapshotMode) -> None:
         if mode not in _VALID_MODES:
             raise ValueError(f"Unknown snapshot mode: {mode!r}")
@@ -102,6 +114,9 @@ class SnapshotStore:
     def set_match(self, match_id: str, match_date: str | None = None) -> None:
         self._match_id_var.set(match_id)
         self._match_date_var.set(match_date)
+
+    def set_allow_lessons_in_replay(self, allow: bool) -> None:
+        self._allow_lessons_var.set(allow)
 
     @staticmethod
     def key_for(inputs: dict[str, Any]) -> str:

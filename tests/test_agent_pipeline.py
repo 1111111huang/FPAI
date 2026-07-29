@@ -295,6 +295,44 @@ def test_lessons_node_uses_competition_resolution_from_state():
     assert args[2] == "competition_specific"
 
 
+def test_lessons_node_returns_empty_dict_in_replay_without_allow_lessons_flag():
+    """A41: the pre-existing leakage guard stays the default -- replay mode
+    alone is still not enough to load lessons."""
+    from unittest.mock import patch
+    from src.agent.pipeline import lessons_node
+    from src.agent import tools as agent_tools
+
+    agent_tools._snapshot_store.set_mode("replay")
+    agent_tools._snapshot_store.set_allow_lessons_in_replay(False)
+    try:
+        with patch("src.agent.lessons.load_approved_lessons") as mock_load:
+            result = lessons_node({"competition_resolution": {"competition": "E0", "tier": "competition_specific"}})
+        mock_load.assert_not_called()
+        assert result == {}
+    finally:
+        agent_tools._snapshot_store.set_mode("live")
+
+
+def test_lessons_node_loads_approved_lessons_in_replay_with_allow_lessons_flag():
+    """A41: agent-backtest --split test --use-lessons opts a replay run into
+    loading approved lessons, evaluating them against the held-out split."""
+    from unittest.mock import patch, MagicMock
+    from src.agent.pipeline import lessons_node
+    from src.agent import tools as agent_tools
+
+    agent_tools._snapshot_store.set_mode("replay")
+    agent_tools._snapshot_store.set_allow_lessons_in_replay(True)
+    try:
+        with patch("src.agent.lessons.load_approved_lessons", return_value=["Trust the ML forecast over draw hunches"]), \
+             patch("src.utils.db_manager.DuckDBManager") as MockDB:
+            MockDB.return_value.connection.return_value.__enter__.return_value = MagicMock()
+            result = lessons_node({"competition_resolution": {"competition": "E0", "tier": "competition_specific"}})
+        assert "Trust the ML forecast over draw hunches" in result["messages"][0].content
+    finally:
+        agent_tools._snapshot_store.set_mode("live")
+        agent_tools._snapshot_store.set_allow_lessons_in_replay(False)
+
+
 def test_lessons_node_returns_empty_dict_when_db_file_does_not_exist(tmp_path):
     """Critical bug fix: duckdb.connect(..., read_only=True) raises
     duckdb.IOException (not duckdb.CatalogException) when the DB *file*

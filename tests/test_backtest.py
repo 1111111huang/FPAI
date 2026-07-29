@@ -11,6 +11,7 @@ from src.agent.backtest import (
     BacktestHarness,
     BacktestRecord,
     load_outcome,
+    match_in_test_split,
     process_match_row,
 )
 from src.agent.snapshot_store import SnapshotMissingError
@@ -101,6 +102,19 @@ def test_process_match_row_uses_league_scoped_base_dir():
     assert replay_call.kwargs["base_dir"] == league_base_dir("SWE")
 
 
+def test_process_match_row_threads_allow_lessons_in_replay_to_configure_snapshot_store():
+    recommendation = {
+        "match": {}, "overall": "no_bet", "markets": [],
+        "explanation": "x", "confidence": "high", "limitations": [], "prediction_basis": "team_history_and_market",
+    }
+    with patch("src.agent.graph.run_agent", return_value=recommendation), \
+         patch("src.agent.tools.configure_snapshot_store") as mock_configure:
+        process_match_row(_row(), _make_config(), allow_lessons_in_replay=True)
+
+    replay_call = mock_configure.call_args_list[0]
+    assert replay_call.kwargs["allow_lessons_in_replay"] is True
+
+
 def test_process_match_row_propagates_snapshot_missing_error():
     with patch("src.agent.graph.run_agent", side_effect=SnapshotMissingError("web_search", "m1", "abc")), \
          patch("src.agent.tools.configure_snapshot_store"):
@@ -178,6 +192,52 @@ def test_backtest_harness_stratified_sample_balances_result_categories():
     # category should contribute exactly 3 rows (not just "present").
     assert set(counts.index) == {"home", "draw", "away"}
     assert counts.to_dict() == {"home": 3, "draw": 3, "away": 3}
+
+
+def test_match_in_test_split_is_deterministic():
+    match_id = "78da66d1356eb6254a5015ec90ffb819a5bd751ca41ba411cf0f6a618663932d"
+    assert match_in_test_split(match_id, 0.2) == match_in_test_split(match_id, 0.2)
+
+
+def test_match_in_test_split_roughly_matches_fraction():
+    match_ids = [f"match-{i}" for i in range(2000)]
+    test_count = sum(match_in_test_split(m, 0.2) for m in match_ids)
+    # Hash-bucketed, not exact -- allow a wide statistical band rather than pinning a count.
+    assert 300 <= test_count <= 500
+
+
+def test_backtest_harness_load_matches_train_test_split_is_disjoint_and_stable():
+    harness = BacktestHarness(config=_make_config())
+    fake_df = pd.DataFrame(
+        [_row(match_id=f"m{i}", date=pd.Timestamp("2025-01-01") + pd.Timedelta(days=i)) for i in range(200)]
+    )
+    mock_conn = MagicMock()
+    mock_conn.execute.return_value.fetchdf.return_value = fake_df
+    with patch.object(harness.db, "connection") as mock_connection:
+        mock_connection.return_value.__enter__.return_value = mock_conn
+        train = harness.load_matches("2025-01-01", "2025-12-31", split="train", test_fraction=0.2)
+        test = harness.load_matches("2025-01-01", "2025-12-31", split="test", test_fraction=0.2)
+
+    train_ids, test_ids = set(train["match_id"]), set(test["match_id"])
+    assert train_ids.isdisjoint(test_ids)
+    assert train_ids | test_ids == set(fake_df["match_id"])
+    assert 0 < len(test_ids) < len(train_ids)  # roughly 20/80, never empty or majority for this size
+
+
+def test_backtest_harness_load_matches_rejects_invalid_split():
+    harness = BacktestHarness(config=_make_config())
+    with pytest.raises(ValueError):
+        harness.load_matches("2025-01-01", "2025-12-31", split="bogus")
+
+
+def test_run_agent_backtest_rejects_use_lessons_without_split_test():
+    from main import run_agent_backtest
+
+    with pytest.raises(ValueError, match="--split test"):
+        run_agent_backtest(
+            from_date="2025-01-01", to_date="2025-12-31", league="E0", stake_mode="flat",
+            sample=None, concurrency=5, config_path=None, split="all", use_lessons=True,
+        )
 
 
 def test_backtest_harness_run_uses_process_match_row():

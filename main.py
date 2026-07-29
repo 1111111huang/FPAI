@@ -6,6 +6,7 @@ import argparse
 from datetime import datetime
 import json
 from pathlib import Path
+from typing import Any
 
 from dotenv import load_dotenv
 import mlflow
@@ -319,6 +320,9 @@ def _build_parser() -> argparse.ArgumentParser:
     agent_backtest_parser.add_argument("--sample", type=int, default=None, help="Stratified sample size before running the full set")
     agent_backtest_parser.add_argument("--concurrency", type=int, default=5, help="Max concurrent agent runs")
     agent_backtest_parser.add_argument("--config", default=None, help="Path to agent_config.yaml (default: config/agent_config.yaml)")
+    agent_backtest_parser.add_argument("--split", choices=["all", "train", "test"], default="all", help="Restrict to a stable train/test partition of the matched corpus (A40). 'test' is the held-out complement of agent-train's 'train' split for the same --test-fraction.")
+    agent_backtest_parser.add_argument("--test-fraction", type=float, default=0.2, help="Fraction of matches (by match_id hash) assigned to the 'test' split. Only used when --split != all.")
+    agent_backtest_parser.add_argument("--use-lessons", action="store_true", help="Load approved lessons during replay (A41), evaluating them against a held-out split. Requires --split test.")
 
     # agent-train (A33)
     agent_train_parser = subparsers.add_parser(
@@ -332,6 +336,9 @@ def _build_parser() -> argparse.ArgumentParser:
     agent_train_parser.add_argument("--sample", type=int, default=None, help="Stratified sample size before running the full set")
     agent_train_parser.add_argument("--concurrency", type=int, default=5, help="Max concurrent agent runs")
     agent_train_parser.add_argument("--config", default=None, help="Path to agent_config.yaml (default: config/agent_config.yaml)")
+    agent_train_parser.add_argument("--split", choices=["all", "train", "test"], default="all", help="Restrict to a stable train/test partition of the matched corpus (A40). Use 'train' so the critic never sees the held-out 'test' matches agent-backtest will later report on.")
+    agent_train_parser.add_argument("--test-fraction", type=float, default=0.2, help="Fraction of matches (by match_id hash) reserved for the 'test' split. Only used when --split != all.")
+    agent_train_parser.add_argument("--batch-size", type=int, default=1, help="Aggregate up to N same-competition/tier matches into one deterministic lesson candidate (A39) instead of one per match. Default 1 preserves the original one-row-per-match behavior.")
 
     # agent-lessons (A33)
     agent_lessons_parser = subparsers.add_parser(
@@ -347,6 +354,9 @@ def _build_parser() -> argparse.ArgumentParser:
         help="competition: applies only to the lesson's source competition. tier: applies to every match in the lesson's tier.",
     )
     agent_lessons_approve_parser.add_argument("--reviewer", default=None, help="Reviewer name (default: current OS user)")
+    agent_lessons_approve_parser.add_argument("--rule", default=None, help="Distilled, prompt-ready rule text to store as rule_text (A44). Omit to auto-distill via LLM from the lesson's full text.")
+    agent_lessons_approve_parser.add_argument("--config", default=None, help="Path to agent_config.yaml for the LLM used to auto-distill (if --rule omitted) and to check for conflicts with existing approved rules (always). Default: config/agent_config.yaml.")
+    agent_lessons_approve_parser.add_argument("--force", action="store_true", help="Approve even if the conflict check (A45) finds a contradiction with an existing approved rule.")
 
     agent_lessons_reject_parser = agent_lessons_subparsers.add_parser("reject", help="Reject a pending lesson")
     agent_lessons_reject_parser.add_argument("id", type=int, help="Lesson id")
@@ -1161,7 +1171,9 @@ def run_agent_snapshot(
     print(f"\nDone. Processed: {len(to_process) - errors} | Errors: {errors} | Skipped: {skipped}")
 
 
-async def _run_backtest_concurrent(matches, config, concurrency: int, capture_state: bool = False) -> list:
+async def _run_backtest_concurrent(
+    matches, config, concurrency: int, capture_state: bool = False, allow_lessons_in_replay: bool = False,
+) -> list:
     """Run process_match_row for every match concurrently, bounded by a semaphore.
     Each call runs in its own thread via asyncio.to_thread since the agent graph
     and tools are synchronous; SnapshotStore's thread-local state (A09) keeps
@@ -1171,7 +1183,11 @@ async def _run_backtest_concurrent(matches, config, concurrency: int, capture_st
     error-tolerance pattern.
 
     capture_state (A33): threaded through to process_match_row so agent-train
-    can persist each match's raw evidence to DuckDB telemetry."""
+    can persist each match's raw evidence to DuckDB telemetry.
+
+    allow_lessons_in_replay (A41): threaded through to process_match_row so
+    agent-backtest --split test --use-lessons can evaluate the held-out split
+    with approved lessons active."""
     import asyncio
     import sys
 
@@ -1186,7 +1202,10 @@ async def _run_backtest_concurrent(matches, config, concurrency: int, capture_st
     async def _run_one(row):
         async with semaphore:
             try:
-                record = await asyncio.to_thread(process_match_row, row, config, capture_state=capture_state)
+                record = await asyncio.to_thread(
+                    process_match_row, row, config,
+                    capture_state=capture_state, allow_lessons_in_replay=allow_lessons_in_replay,
+                )
             except Exception as exc:
                 match_id = row.get("match_id", "?") if hasattr(row, "get") else "?"
                 print(f"  SKIP {match_id}: {exc}", file=sys.stderr)
@@ -1214,8 +1233,17 @@ def run_agent_backtest(
     sample: int | None,
     concurrency: int,
     config_path: str | None,
+    split: str = "all",
+    test_fraction: float = 0.2,
+    use_lessons: bool = False,
 ) -> None:
-    """Replay agent recommendations over historical snapshots and report bankroll performance (A14)."""
+    """Replay agent recommendations over historical snapshots and report bankroll performance (A14).
+
+    use_lessons (A41): loads approved lessons during this replay, evaluating
+    them against a held-out split instead of the live-only default (A33).
+    Requires --split test -- applying lessons to --split train or --split all
+    would evaluate them against (some of) the very matches that shaped them,
+    the exact leakage A40's train/test split exists to prevent."""
     import asyncio
 
     from src.agent.agent_config import AgentConfig
@@ -1225,13 +1253,15 @@ def run_agent_backtest(
 
     if concurrency < 1:
         raise ValueError(f"--concurrency must be >= 1, got {concurrency}")
+    if use_lessons and split != "test":
+        raise ValueError("--use-lessons requires --split test (evaluating lessons against their own train/all data leaks)")
 
     cfg = AgentConfig.from_yaml(config_path) if config_path else AgentConfig.default()
     harness = BacktestHarness(config=cfg)
-    matches = harness.load_matches(from_date, to_date, league=league, sample=sample)
-    print(f"Running backtest over {len(matches)} matches (concurrency={concurrency})...")
+    matches = harness.load_matches(from_date, to_date, league=league, sample=sample, split=split, test_fraction=test_fraction)
+    print(f"Running backtest over {len(matches)} matches (concurrency={concurrency}, split={split}, use_lessons={use_lessons})...")
 
-    records = asyncio.run(_run_backtest_concurrent(matches, cfg, concurrency))
+    records = asyncio.run(_run_backtest_concurrent(matches, cfg, concurrency, allow_lessons_in_replay=use_lessons))
 
     stake_fn = simulate_kelly_stake if stake_mode == "kelly" else simulate_flat_stake
     bankroll_result = stake_fn(records)
@@ -1241,21 +1271,55 @@ def run_agent_backtest(
     print(f"\nReport saved to {path}")
 
 
-def _write_train_artifacts(conn, records: list, run_id: str) -> int:
-    """Write one telemetry row and one pending lesson candidate per scored
-    record that captured full graph state. Records without full_state (e.g.
+def _build_llm_invoke(config) -> Any:
+    """Wrap this run's configured LLM into a plain str->str callable, so
+    src/agent/lessons.py's generate_batch_reflection() stays decoupled from
+    langchain (see that function's docstring). Reuses _build_llm/_extract_text
+    from src.agent.graph -- the same provider the agent-train run itself used
+    (DeepSeek, Anthropic, whichever --config specified) writes the batch's
+    reflection too, not a hardcoded second provider."""
+    from src.agent.graph import _build_llm, _extract_text
+
+    llm = _build_llm(config)
+
+    def _invoke(prompt: str) -> str:
+        response = llm.invoke(prompt)
+        return _extract_text(response.content)
+
+    return _invoke
+
+
+def _write_train_artifacts(
+    conn, records: list, run_id: str, batch_size: int = 1, config: Any = None,
+) -> tuple[int, int]:
+    """Write one telemetry row per scored record that captured full graph
+    state, and one pending lesson candidate per record (batch_size <= 1,
+    A33's original behavior, left as a fully separate code path so it stays
+    byte-identical) or per batch of up to batch_size same-(competition_id,
+    tier) records (batch_size > 1, A39). Records without full_state (e.g.
     a per-match failure that skipped capture) are silently skipped -- there's
-    nothing to persist. Returns the number of lessons written."""
+    nothing to persist. Returns (lessons_written, telemetry_written).
+
+    config (A42-follow-up): when given (and batch_size > 1), each batch's
+    lesson also gets an LLM-synthesized reflective narrative appended
+    (generate_batch_reflection) on top of the deterministic stats -- the
+    stats alone were reviewed and judged "not very sensible" (2026-07-28).
+    None (the batch_size <= 1 code path never receives it, and it's optional
+    here) skips the reflection entirely, keeping every existing caller that
+    doesn't pass config unaffected."""
     from src.agent.lessons import (
         create_lessons_tables,
         extract_competition_scope,
+        generate_batch_lesson_text,
+        generate_batch_reflection,
         generate_lesson_text,
         insert_lesson_candidate,
         insert_telemetry,
     )
 
     create_lessons_tables(conn)
-    written = 0
+    scoped = []  # (record, competition_id, tier), only records with full_state
+    telemetry_written = 0
     for record in records:
         if not record.full_state:
             continue
@@ -1269,10 +1333,55 @@ def _write_train_artifacts(conn, records: list, run_id: str) -> int:
             forecast_payload=record.full_state.get("forecast_payload"),
             recommendation=record.recommendation,
         )
-        lesson_text = generate_lesson_text(record)
-        insert_lesson_candidate(conn, lesson_text, competition_id, tier, record.match_id)
-        written += 1
-    return written
+        telemetry_written += 1
+        scoped.append((record, competition_id, tier))
+
+    if batch_size <= 1:
+        lessons_written = 0
+        for record, competition_id, tier in scoped:
+            lesson_text = generate_lesson_text(record)
+            insert_lesson_candidate(conn, lesson_text, competition_id, tier, record.match_id)
+            lessons_written += 1
+        return lessons_written, telemetry_written
+
+    # A39: chunk consecutive same-(competition_id, tier) records into groups
+    # of up to batch_size, never spanning a scope boundary (insert_lesson_candidate
+    # takes one competition_id/tier per row) -- relies on `records` already
+    # being date-ordered (BacktestHarness.load_matches' ORDER BY date,
+    # preserved through asyncio.gather) so "consecutive" is meaningful, not
+    # an arbitrary grouping.
+    llm_invoke = _build_llm_invoke(config) if config is not None else None
+    lessons_written = 0
+    current_scope = None
+    current_batch: list = []
+
+    def _flush() -> None:
+        nonlocal lessons_written
+        if not current_batch:
+            return
+        competition_id, tier = current_scope
+        stats_text = generate_batch_lesson_text(current_batch)
+        lesson_text = stats_text
+        if llm_invoke is not None:
+            reflection = generate_batch_reflection(current_batch, stats_text, llm_invoke)
+            if reflection:
+                lesson_text = f"{stats_text}\n\nReflection: {reflection}"
+            else:
+                print(f"  note: LLM reflection unavailable for batch of {len(current_batch)} ({competition_id}/{tier})")
+        match_ids = ",".join(r.match_id for r in current_batch)
+        insert_lesson_candidate(conn, lesson_text, competition_id, tier, match_ids)
+        lessons_written += 1
+
+    for record, competition_id, tier in scoped:
+        scope = (competition_id, tier)
+        if scope != current_scope or len(current_batch) >= batch_size:
+            _flush()
+            current_batch = []
+            current_scope = scope
+        current_batch.append(record)
+    _flush()
+
+    return lessons_written, telemetry_written
 
 
 def run_agent_train(
@@ -1283,10 +1392,15 @@ def run_agent_train(
     sample: int | None,
     concurrency: int,
     config_path: str | None,
+    split: str = "all",
+    test_fraction: float = 0.2,
+    batch_size: int = 1,
 ) -> None:
     """Critic/train mode (A33): replay completed matches, score them the same
     way agent-backtest does, and additionally write one competition/tier-
-    tagged lesson candidate plus a raw-evidence telemetry row per match."""
+    tagged lesson candidate (A39: per batch of up to batch_size matches,
+    default 1 -- one per match, A33's original behavior) plus a raw-evidence
+    telemetry row per match."""
     import asyncio
     import uuid
 
@@ -1297,11 +1411,13 @@ def run_agent_train(
 
     if concurrency < 1:
         raise ValueError(f"--concurrency must be >= 1, got {concurrency}")
+    if batch_size < 1:
+        raise ValueError(f"--batch-size must be >= 1, got {batch_size}")
 
     cfg = AgentConfig.from_yaml(config_path) if config_path else AgentConfig.default()
     harness = BacktestHarness(config=cfg)
-    matches = harness.load_matches(from_date, to_date, league=league, sample=sample)
-    print(f"Running train mode over {len(matches)} matches (concurrency={concurrency})...")
+    matches = harness.load_matches(from_date, to_date, league=league, sample=sample, split=split, test_fraction=test_fraction)
+    print(f"Running train mode over {len(matches)} matches (concurrency={concurrency}, split={split}, batch_size={batch_size})...")
 
     records = asyncio.run(_run_backtest_concurrent(matches, cfg, concurrency, capture_state=True))
 
@@ -1314,22 +1430,94 @@ def run_agent_train(
 
     run_id = uuid.uuid4().hex
     with harness.db.connection() as conn:
-        lessons_written = _write_train_artifacts(conn, records, run_id)
-    print(f"Wrote {lessons_written} lesson candidates and telemetry rows (run_id={run_id})")
+        lessons_written, telemetry_written = _write_train_artifacts(conn, records, run_id, batch_size=batch_size, config=cfg)
+    print(f"Wrote {lessons_written} lesson candidates and {telemetry_written} telemetry rows (run_id={run_id})")
 
 
-def run_agent_lessons_approve(lesson_id: int, scope: str, reviewer: str | None) -> None:
+def run_agent_lessons_approve(
+    lesson_id: int, scope: str, reviewer: str | None, rule: str | None = None,
+    config_path: str | None = None, force: bool = False,
+) -> None:
     """Approve a pending lesson candidate (A33). scope='competition' pins it
-    to its source competition; scope='tier' widens it to the whole tier."""
+    to its source competition; scope='tier' widens it to the whole tier.
+
+    rule (A44): the distilled, prompt-ready rule_text stored on approval --
+    required for the lesson to ever reach the live agent (load_approved_lessons
+    reads rule_text only). If given, used verbatim, no LLM call for
+    distillation. If omitted, auto-distilled from the lesson's full
+    lesson_text via generate_rule_from_lesson, using config_path's provider
+    (default: AgentConfig.default()) -- printed for visibility before being
+    stored, so a bad distillation is easy to notice and redo with an
+    explicit --rule.
+
+    force (A45, design 3): before storing, rule_text is checked against
+    every already-approved rule that could co-occur with it live (same
+    competition_id or same tier) via find_conflicting_rule -- one LLM call,
+    run regardless of whether rule_text came from --rule or auto-distillation,
+    since the point is protecting live-prompt coherence, not just checking
+    auto-generated text. Two independent failure modes, handled differently
+    on purpose: if the *check itself* raises (network/provider error), this
+    fails open -- warns and still approves, since blocking a reviewer's
+    workflow on a transient API error is worse than the check being skipped
+    this one time (mirrors A43/A44's fallback philosophy). If the check
+    *succeeds and finds a real conflict*, this fails closed -- refuses to
+    approve unless force=True, since a silently-approved contradiction is
+    exactly what this story exists to prevent."""
     import getpass
 
-    from src.agent.lessons import approve_lesson, create_lessons_tables
+    from src.agent.agent_config import AgentConfig
+    from src.agent.lessons import (
+        approve_lesson, create_lessons_tables, find_conflicting_rule, generate_rule_from_lesson, load_approved_lessons,
+    )
     from src.utils.db_manager import DuckDBManager
 
     db = DuckDBManager()
     with db.connection() as conn:
         create_lessons_tables(conn)
-        approve_lesson(conn, lesson_id, scope, reviewer or getpass.getuser())
+        row = conn.execute(
+            "SELECT lesson_text, competition_id, tier FROM agent_lessons WHERE id = ?", [lesson_id]
+        ).fetchone()
+        if row is None:
+            raise ValueError(f"No lesson with id={lesson_id}")
+        lesson_text, competition_id, tier = row
+
+        cfg = AgentConfig.from_yaml(config_path) if config_path else AgentConfig.default()
+        llm_invoke = _build_llm_invoke(cfg)
+
+        if rule is not None:
+            rule_text = rule
+        else:
+            rule_text = generate_rule_from_lesson(lesson_text, llm_invoke)
+            if not rule_text:
+                raise ValueError(
+                    f"Could not auto-distill a rule for lesson {lesson_id} (LLM call failed or returned "
+                    'empty). Re-run with --rule "..." to supply one manually.'
+                )
+            print(f"Auto-distilled rule: {rule_text}")
+
+        # Reuses load_approved_lessons' own scope-aware query rather than
+        # duplicating it: a pending lesson is never 'approved', so no self-
+        # exclusion is needed, and this is exactly the same set a real live
+        # match with this competition_id/tier would ever be loaded alongside
+        # -- unlike a naive "competition_id = ? OR tier = ?" match, which
+        # would (wrongly) count e.g. an unrelated competition's own
+        # competition-scoped rule as co-occurring just because it happens to
+        # share the same tier string.
+        existing_rules = load_approved_lessons(conn, competition_id, tier)
+        try:
+            conflict = find_conflicting_rule(rule_text, existing_rules, llm_invoke)
+        except Exception as exc:
+            print(f"  warning: conflict check failed ({exc}) -- proceeding without it")
+            conflict = None
+        if conflict:
+            if not force:
+                raise ValueError(
+                    f"Proposed rule conflicts with an existing approved rule: {conflict} "
+                    "Re-run with --force to approve anyway, or reword the rule."
+                )
+            print(f"  warning: approving despite detected conflict: {conflict}")
+
+        approve_lesson(conn, lesson_id, scope, reviewer or getpass.getuser(), rule_text)
     print(f"Approved lesson {lesson_id} (scope={scope})")
 
 
@@ -1585,6 +1773,9 @@ def main() -> None:
             sample=args.sample,
             concurrency=args.concurrency,
             config_path=args.config,
+            split=args.split,
+            test_fraction=args.test_fraction,
+            use_lessons=args.use_lessons,
         )
     elif args.command == "agent-train":
         run_agent_train(
@@ -1595,10 +1786,13 @@ def main() -> None:
             sample=args.sample,
             concurrency=args.concurrency,
             config_path=args.config,
+            split=args.split,
+            test_fraction=args.test_fraction,
+            batch_size=args.batch_size,
         )
     elif args.command == "agent-lessons":
         if args.lessons_action == "approve":
-            run_agent_lessons_approve(lesson_id=args.id, scope=args.scope, reviewer=args.reviewer)
+            run_agent_lessons_approve(lesson_id=args.id, scope=args.scope, reviewer=args.reviewer, rule=args.rule, config_path=args.config, force=args.force)
         elif args.lessons_action == "reject":
             run_agent_lessons_reject(lesson_id=args.id, reviewer=args.reviewer)
     elif args.command == "agent-compare":
