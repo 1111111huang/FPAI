@@ -71,6 +71,82 @@ def test_web_search_unavailable_message_bypasses_snapshot_key_consistently():
     assert "TOOL_PERMANENTLY_UNAVAILABLE" in result
 
 
+class TestPostMatchResultFilter:
+    """A47: leaked post-match content is filtered before it reaches the
+    model, at the Tavily-result level. Real examples below are taken
+    verbatim (titles) or paraphrased (content) from genuine leaks/false
+    positives found during the 2026-07-29 corpus investigation, not
+    invented -- see _RESULT_LEAK_MARKERS' docstring in src/agent/tools.py."""
+
+    def test_flags_score_in_title(self):
+        from src.agent.tools import _looks_like_post_match_result
+        assert _looks_like_post_match_result(
+            "Sunderland 2-0 Wolves (Oct 18, 2025) Final Score - ESPN", "score table",
+        ) is True
+
+    def test_flags_recap_language_without_score_in_title(self):
+        from src.agent.tools import _looks_like_post_match_result
+        assert _looks_like_post_match_result(
+            "Sunderland maintain fine home form as Wolves lose again - BBC Sport",
+            "Sunderland maintained their fine start to the Premier League season "
+            "as they condemned Wolves to a sixth defeat",
+        ) is True
+
+    def test_flags_match_report_instant_reaction(self):
+        from src.agent.tools import _looks_like_post_match_result
+        assert _looks_like_post_match_result(
+            "Everton 2-1 Crystal Palace: Match Report & Instant Reaction",
+            "The biggest miss for Everton was the suspension to Kiernan Dewsbury-Hall.",
+        ) is True
+
+    def test_does_not_flag_head_to_head_table(self):
+        """False positive from the same investigation: a score coincidentally
+        matching elsewhere in a legitimate historical head-to-head table,
+        with no score in the title itself and no recap-language marker."""
+        from src.agent.tools import _looks_like_post_match_result
+        assert _looks_like_post_match_result(
+            "Liverpool football club: record v Nottingham Forest",
+            "14 Sep 2024 | Liverpool v Nottingham Forest | L | 0-1 | Premier League | "
+            "14 Jan 2025 | Nottingham Forest v Liverpool | D | 1-1 | Premier League",
+        ) is False
+
+    def test_does_not_flag_prediction_article_referencing_a_past_meeting(self):
+        from src.agent.tools import _looks_like_post_match_result
+        assert _looks_like_post_match_result(
+            "Wolves vs Liverpool Prediction: Team News",
+            "The most recent encounter between these two sides was a Premier League "
+            "fixture at Anfield, which ended in a 2-1 home win for Liverpool.",
+        ) is False
+
+    def test_web_search_impl_drops_leaked_result_keeps_clean_one(self):
+        from src.agent.tools import _web_search_impl
+        with patch("src.agent.tools.os.environ.get", return_value="fake-key"), \
+             patch("tavily.TavilyClient") as MockClient:
+            instance = MagicMock()
+            MockClient.return_value = instance
+            instance.search.return_value = {"results": [
+                {"title": "Sunderland 2-0 Wolves (Oct 18, 2025) Final Score - ESPN", "content": "x", "url": "u1"},
+                {"title": "Sunderland v Wolves Confirmed Starting Lineups", "content": "team news", "url": "u2"},
+            ]}
+            result = _web_search_impl("Sunderland Wolves recent form")
+
+        assert "Final Score" not in result
+        assert "Confirmed Starting Lineups" in result
+
+    def test_web_search_impl_returns_no_results_found_when_everything_filtered(self):
+        from src.agent.tools import _web_search_impl
+        with patch("src.agent.tools.os.environ.get", return_value="fake-key"), \
+             patch("tavily.TavilyClient") as MockClient:
+            instance = MagicMock()
+            MockClient.return_value = instance
+            instance.search.return_value = {"results": [
+                {"title": "Team A 2-0 Team B Final Score - ESPN", "content": "x", "url": "u1"},
+            ]}
+            result = _web_search_impl("Team A Team B recent form")
+
+        assert result == "No results found."
+
+
 def test_web_search_date_filter_applied_during_record_and_replay(tmp_path):
     with patch("tavily.TavilyClient") as MockClient:
         instance = MagicMock()

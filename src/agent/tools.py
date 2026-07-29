@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import threading
 from pathlib import Path
 
@@ -67,6 +68,46 @@ def get_snapshot_store() -> SnapshotStore:
     return _snapshot_store
 
 
+# A47: generic post-match-result markers -- never tied to any specific known
+# score, so this applies identically to a genuinely upcoming live match
+# (where the real score isn't knowable yet) and to backtest/train replay of
+# an already-played historical match. Confirmed live (2026-07-29 investigation)
+# that Tavily's before:<date> query hint does not reliably keep recap/result
+# articles out of results -- e.g. a "recent form" search for a real
+# backtested match returned "[Sunderland maintain fine home form as Wolves
+# lose again - BBC Sport]" and a second result titled "Sunderland 2-0 Wolves
+# (Oct 18, 2025) Final Score - ESPN". Ponytail: a naive keyword/title-pattern
+# heuristic, not a precise classifier -- verified against a hand-labeled
+# sample of 10 real leaked/clean results (6 genuine leaks, 4 false positives
+# from coincidentally-matching historical head-to-head tables) to catch the
+# clear cases without being perfect; upgrade path is a smarter title-vs-table
+# classifier if false positives/negatives prove to matter in practice.
+_RESULT_LEAK_MARKERS = (
+    "final score", "full-time", "full time", "match report", "instant reaction",
+    "post-match", "after the match", "as it happened", "player ratings",
+    "goals and highlights", "highlights:", "game analysis", "live updates",
+    "surge back", "condemned", "maintained their", "clinched",
+    "secured all three points", "returned to winning ways",
+)
+_TITLE_SCORE_PATTERN = re.compile(r"\b\d{1,2}\s*[-–]\s*\d{1,2}\b")
+
+
+def _looks_like_post_match_result(title: str, content: str) -> bool:
+    """A47: best-effort filter for a single search result that reveals a
+    match's already-known outcome. See _RESULT_LEAK_MARKERS docstring for
+    rationale. The score-pattern check is deliberately restricted to the
+    title only, not the full content -- a lone "N-M"-shaped number pair
+    anywhere in a long body of text (e.g. a head-to-head table listing many
+    past meetings' scores) is common and not a reliable leak signal, but the
+    same pattern appearing in the title itself ("Team A N-M Team B") is --
+    every genuine leak found during investigation had the score in the title,
+    a recap-language marker, or both."""
+    combined = f"{title} {content}".lower()
+    if any(marker in combined for marker in _RESULT_LEAK_MARKERS):
+        return True
+    return bool(_TITLE_SCORE_PATTERN.search(title))
+
+
 def _web_search_impl(query: str) -> str:
     from tavily import TavilyClient
 
@@ -85,6 +126,8 @@ def _web_search_impl(query: str) -> str:
         title = r.get("title", "")
         content = r.get("content", "")
         url = r.get("url", "")
+        if _looks_like_post_match_result(title, content):
+            continue
         snippets.append(f"[{title}]\n{content}\nSource: {url}")
     return "\n\n---\n\n".join(snippets) if snippets else "No results found."
 
