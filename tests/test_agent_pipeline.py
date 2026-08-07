@@ -174,6 +174,13 @@ def test_forecast_node_returns_no_odds_error_when_neither_source_has_odds():
 
 
 def test_forecast_node_calls_forecast_international_when_recommended():
+    """A49: replaced "La Liga" as this test's stock unregistered/general_purpose
+    competition example with "Bundesliga" -- La Liga (SP1) is now genuinely
+    registered competition_specific (US#147), so it no longer demonstrates
+    the general_purpose-fallback path this test exercises (competition_resolution
+    is directly supplied here, not resolved via the real registry, so the
+    string choice is purely about not misleadingly implying La Liga still
+    routes here). Bundesliga/D1 is confirmed to still have no registry entry."""
     fake_result = {"result_3way": {"probabilities": {"home": 0.4}}, "data_quality": {"prediction_basis": "market_odds_only"}}
     with patch("src.forecast.forecast_service.ForecastService") as MockSvc:
         instance = MagicMock()
@@ -182,14 +189,39 @@ def test_forecast_node_calls_forecast_international_when_recommended():
 
         state = _base_state(
             match_info={
-                "home_team": "Real Madrid", "away_team": "Barcelona", "date": "2026-06-21",
-                "league": "La Liga", "odds": {"home": 2.1, "draw": 3.4, "away": 3.3},
+                "home_team": "Bayern Munich", "away_team": "Borussia Dortmund", "date": "2026-06-21",
+                "league": "Bundesliga", "odds": {"home": 2.1, "draw": 3.4, "away": 3.3},
             },
-            competition_resolution={"competition": "La Liga", "tier": "general_purpose", "recommended_tool": "forecast_international"},
+            competition_resolution={"competition": "Bundesliga", "tier": "general_purpose", "recommended_tool": "forecast_international"},
         )
         result = forecast_node(state)
 
     assert instance.forecast_upcoming.call_args.kwargs["match_type"] == "international"
+    assert "error" not in result["forecast_payload"]
+
+
+def test_forecast_node_calls_forecast_league_for_sp1():
+    """A49: SP1 (La Liga) is now registered competition_specific (US#147) --
+    confirm forecast_node routes it through forecast_league/match_type="league"
+    exactly like E0, not the general_purpose fallback."""
+    fake_result = {"result_3way": {"probabilities": {"home": 0.4}}, "data_quality": {"prediction_basis": "team_history_and_market"}}
+    with patch("src.forecast.forecast_service.ForecastService") as MockSvc:
+        instance = MagicMock()
+        MockSvc.return_value = instance
+        instance.forecast_upcoming.return_value = fake_result
+
+        state = _base_state(
+            match_info={
+                "home_team": "Real Madrid", "away_team": "Sevilla FC", "date": "2026-06-21",
+                "league": "SP1", "odds": {"home": 1.8, "draw": 3.6, "away": 4.2},
+            },
+            competition_resolution={"competition": "SP1", "tier": "competition_specific", "recommended_tool": "forecast_league"},
+        )
+        result = forecast_node(state)
+
+    call_kwargs = instance.forecast_upcoming.call_args.kwargs
+    assert call_kwargs["match_type"] == "league"
+    assert call_kwargs["league"] == "SP1"
     assert "error" not in result["forecast_payload"]
 
 
