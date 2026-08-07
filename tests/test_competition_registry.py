@@ -49,6 +49,38 @@ def test_get_competition_definition_rejects_unknown_competition() -> None:
         get_competition_definition("nonexistent")
 
 
+def test_get_competition_definition_normalizes_la_liga_free_text_name_to_sp1() -> None:
+    """A50: 'La Liga' (the free-text name) has no registry entry of its own --
+    only 'SP1' (the code) does -- but resolve_competition's own docstring
+    tells the calling LLM 'La Liga' is a valid example input. A small,
+    case-insensitive alias table closes that gap at the one choke point
+    every caller (resolve_competition, ForecastService.forecast_upcoming)
+    already routes through, rather than duplicating the table per caller."""
+    definition = get_competition_definition("La Liga")
+    assert definition.competition_id == "SP1"
+    assert definition.tier == "competition_specific"
+
+
+def test_get_competition_definition_alias_lookup_is_case_insensitive() -> None:
+    definition = get_competition_definition("la liga")
+    assert definition.competition_id == "SP1"
+
+
+def test_get_competition_definition_real_code_always_wins_over_any_alias() -> None:
+    """Passing the real code directly must never be shadowed by the alias
+    table -- confirmed by the exact-match branch running first."""
+    definition = get_competition_definition("SP1")
+    assert definition.competition_id == "SP1"
+
+
+def test_get_competition_definition_still_rejects_a_genuinely_unregistered_free_text_name() -> None:
+    """A name that isn't in the alias table either must still raise, not
+    silently default to something -- Bundesliga (D1) is confirmed
+    unregistered (A49)."""
+    with pytest.raises(ValueError, match="Unknown competition"):
+        get_competition_definition("Bundesliga")
+
+
 def test_list_competition_definitions_is_stable() -> None:
     names = [definition.competition_id for definition in list_competition_definitions()]
     assert names == sorted(names)
