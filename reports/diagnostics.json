@@ -1,0 +1,13 @@
+{
+  "calibration": {
+    "available": false,
+    "reason": "calibration_curve currently applies to binary targets"
+  },
+  "metrics": {
+    "accuracy": 0.5263157894736842,
+    "log_loss": 0.9969657473437782
+  },
+  "model_path": "models/result_3way_sp1_lr_v1_20260806.joblib",
+  "target": "result_3way",
+  "task_type": "multiclass_classification"
+}
