@@ -51,6 +51,22 @@ def sweden_client_mock():
         yield client_mock
 
 
+@pytest.fixture(autouse=True)
+def la_liga_client_mock():
+    """W76: /api/fixtures now also merges in La Liga (SP1) fixtures via
+    get_la_liga_fixtures_client() -- a separate accessor patched independently
+    of get_fixtures_client() specifically so this mock's own default-empty
+    behavior can't collide with any pre-existing E0-only test's blanket
+    `.return_value` on the *E0* client mock. Autouse + defaulted to empty,
+    mirroring sweden_client_mock exactly, so every pre-existing test in this
+    file keeps working completely unchanged."""
+    with patch("app.backend.main.get_la_liga_fixtures_client") as mock_get_client:
+        client_mock = mock_get_client.return_value
+        client_mock.get_fixtures.return_value = []
+        client_mock.get_results.return_value = []
+        yield client_mock
+
+
 def test_fixtures_endpoint_returns_normalized_matches():
     fake_fixtures = [
         NormalizedMatch(
@@ -520,6 +536,95 @@ def test_fixtures_endpoint_sweden_fixture_cache_key_is_independent_of_epls(swede
     assert {m["home_team"] for m in body} == {"Chelsea", "Malmo FF"}
     mock_get_client.return_value.get_fixtures.assert_called_once_with(date_from="2027-05-01", date_to="2027-05-05")
     sweden_client_mock.get_fixtures.assert_called_once_with(date_from="2027-05-01", date_to="2027-05-05")
+
+
+# ---------------------------------------------------------------------------
+# W76: /api/fixtures merges in La Liga (SP1) alongside E0/SWE, sourced from
+# the *same* football-data.org provider as E0 (W74 live-confirmed the `PD`
+# competition code covers La Liga directly) via get_la_liga_fixtures_client()
+# -- a separate accessor purely for test/cache isolation, not a separate
+# client class the way SWE needed one.
+# ---------------------------------------------------------------------------
+
+_LA_LIGA_FIXTURE = NormalizedMatch(
+    match_id="560701", utc_date="2026-08-25T19:00:00Z", status="SCHEDULED",
+    home_team="Real Madrid", away_team="Sevilla FC", home_goals=None, away_goals=None,
+)
+_LA_LIGA_RESULT = NormalizedMatch(
+    match_id="560700", utc_date="2025-03-08T20:00:00Z", status="FINISHED",
+    home_team="Barcelona", away_team="Villarreal CF", home_goals=3, away_goals=1,
+)
+
+
+def test_fixtures_endpoint_merges_la_liga_fixtures_alongside_e0_and_swe(la_liga_client_mock):
+    la_liga_client_mock.get_fixtures.return_value = [_LA_LIGA_FIXTURE]
+    with patch("app.backend.main.get_fixtures_client") as mock_get_client:
+        mock_get_client.return_value.get_fixtures.return_value = [_REAL_FIXTURE]
+        with TestClient(app) as client:
+            response = client.get(
+                "/api/fixtures", params={"date_from": "2026-08-21", "date_to": "2026-08-28"}
+            )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert {m["home_team"] for m in body} == {"Chelsea", "Real Madrid"}
+    la_liga_client_mock.get_fixtures.assert_called_once_with(
+        competition_code="PD", date_from="2026-08-21", date_to="2026-08-28"
+    )
+
+
+def test_fixtures_endpoint_tags_la_liga_fixtures_sp1(la_liga_client_mock):
+    la_liga_client_mock.get_fixtures.return_value = [_LA_LIGA_FIXTURE]
+    with patch("app.backend.main.get_fixtures_client") as mock_get_client:
+        mock_get_client.return_value.get_fixtures.return_value = [_REAL_FIXTURE]
+        with TestClient(app) as client:
+            response = client.get(
+                "/api/fixtures", params={"date_from": "2026-08-21", "date_to": "2026-08-28"}
+            )
+
+    body = response.json()
+    by_team = {m["home_team"]: m["competition"] for m in body}
+    assert by_team == {"Chelsea": "E0", "Real Madrid": "SP1"}
+
+
+def test_fixtures_endpoint_tags_la_liga_results_sp1(la_liga_client_mock):
+    la_liga_client_mock.get_results.return_value = [_LA_LIGA_RESULT]
+    with patch("app.backend.main._current_real_date", return_value=date(2025, 3, 10)):
+        with patch("app.backend.main.get_fixtures_client") as mock_get_client:
+            mock_get_client.return_value.get_results.return_value = []
+            with TestClient(app) as client:
+                response = client.get(
+                    "/api/fixtures", params={"date_from": "2025-03-08", "date_to": "2025-03-08"}
+                )
+
+    body = response.json()
+    assert body[0]["competition"] == "SP1"
+    la_liga_client_mock.get_results.assert_called_once_with(
+        competition_code="PD", date_from="2025-03-08", date_to="2025-03-08"
+    )
+
+
+def test_fixtures_endpoint_la_liga_fixture_cache_key_is_independent_of_e0s_and_swes(la_liga_client_mock, sweden_client_mock):
+    """A cached E0 call for a date range must not accidentally serve (or be
+    served by) La Liga's cache entry for the identical range -- keyed
+    separately even though the date range string is the same, mirroring
+    the existing SWE cache-key-independence test."""
+    la_liga_client_mock.get_fixtures.return_value = [_LA_LIGA_FIXTURE]
+    sweden_client_mock.get_fixtures.return_value = [_SWEDISH_FIXTURE]
+    with patch("app.backend.main.get_fixtures_client") as mock_get_client:
+        mock_get_client.return_value.get_fixtures.return_value = [_REAL_FIXTURE]
+        with TestClient(app) as client:
+            response = client.get(
+                "/api/fixtures", params={"date_from": "2027-06-10", "date_to": "2027-06-15"}
+            )
+
+    body = response.json()
+    assert {m["home_team"] for m in body} == {"Chelsea", "Malmo FF", "Real Madrid"}
+    mock_get_client.return_value.get_fixtures.assert_called_once_with(date_from="2027-06-10", date_to="2027-06-15")
+    sweden_client_mock.get_fixtures.assert_called_once_with(date_from="2027-06-10", date_to="2027-06-15")
+    la_liga_client_mock.get_fixtures.assert_called_once_with(
+        competition_code="PD", date_from="2027-06-10", date_to="2027-06-15"
+    )
 
 
 class TestSplitFixtureDateRange:

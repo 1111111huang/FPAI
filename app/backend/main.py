@@ -59,6 +59,22 @@ def get_fixtures_client() -> FootballDataClient:
     return _fixtures_client
 
 
+def get_la_liga_fixtures_client() -> FootballDataClient:
+    """W76: La Liga uses the *same* football-data.org provider/class as E0 --
+    live-verified (W74) the `PD` competition code returns real La Liga
+    fixtures, unlike SWE which needed an entirely separate Odds-API-backed
+    client (football-data.org has no Allsvenskan coverage at all). This
+    thin wrapper around the same singleton exists purely so tests can mock
+    La Liga's calls independently of E0's own (mirroring
+    get_sweden_fixtures_client()'s test-isolation rationale) without paying
+    for a second real HTTP client/session -- both accessors return the same
+    underlying FootballDataClient instance in production."""
+    return get_fixtures_client()
+
+
+LA_LIGA_COMPETITION_CODE = "PD"
+
+
 _sweden_fixtures_client: SwedenFixturesClient | None = None
 
 
@@ -307,6 +323,7 @@ async def get_fixtures(date_from: str | None = None, date_to: str | None = None)
     the API)."""
     client = get_fixtures_client()
     sweden_client = get_sweden_fixtures_client()
+    la_liga_client = get_la_liga_fixtures_client()
     results_range, fixtures_range = _split_fixture_date_range(date_from, date_to, _current_real_date())
 
     def _tag(matches: list[NormalizedMatch], competition: str) -> list[NormalizedMatch]:
@@ -338,6 +355,13 @@ async def get_fixtures(date_from: str | None = None, date_to: str | None = None)
             ),
             "SWE",
         )
+        matches += _tag(
+            await _cached_fixture_call(
+                ("results_sp1", past_from, past_to), la_liga_client.get_results,
+                competition_code=LA_LIGA_COMPETITION_CODE, date_from=past_from, date_to=past_to,
+            ),
+            "SP1",
+        )
     if fixtures_range is not None:
         future_from, future_to = fixtures_range
         matches += _tag(
@@ -351,6 +375,13 @@ async def get_fixtures(date_from: str | None = None, date_to: str | None = None)
                 ("fixtures_swe", future_from, future_to), sweden_client.get_fixtures, date_from=future_from, date_to=future_to
             ),
             "SWE",
+        )
+        matches += _tag(
+            await _cached_fixture_call(
+                ("fixtures_sp1", future_from, future_to), la_liga_client.get_fixtures,
+                competition_code=LA_LIGA_COMPETITION_CODE, date_from=future_from, date_to=future_to,
+            ),
+            "SP1",
         )
     return matches
 
