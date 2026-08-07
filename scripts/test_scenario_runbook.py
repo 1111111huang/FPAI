@@ -184,3 +184,43 @@ class TestRunOneScenarioTimeout:
 
         assert not any("does NOT confirm a clean state" in e for e in result["errors"])
         assert result["errors"] == []
+
+
+class TestRunOneScenarioConfigForwarding:
+    """--config lets a scenario run opt into a non-default agent config (e.g.
+    config/agent_config_deepseek.yaml), forwarded to launch_sandbox.py's own
+    --config. Omitting it must preserve the exact prior launch command."""
+
+    @staticmethod
+    def _ok_result(stdout: str = "Precompute [E0]: nothing to generate.\n") -> MagicMock:
+        result = MagicMock()
+        result.stdout = stdout
+        result.stderr = ""
+        result.returncode = 0
+        return result
+
+    def test_config_path_is_forwarded_to_the_launch_command(self) -> None:
+        launch_cmds = []
+
+        def fake_run(cmd, **kwargs):
+            launch_cmds.append(cmd)
+            return self._ok_result()
+
+        with patch("scenario_runbook.subprocess.run", side_effect=fake_run):
+            run_one_scenario("2025-08-01", config_path="config/agent_config_deepseek.yaml")
+
+        launch_cmd = launch_cmds[0]
+        assert "--config" in launch_cmd
+        assert launch_cmd[launch_cmd.index("--config") + 1] == "config/agent_config_deepseek.yaml"
+
+    def test_omitting_config_path_does_not_add_the_flag(self) -> None:
+        launch_cmds = []
+
+        def fake_run(cmd, **kwargs):
+            launch_cmds.append(cmd)
+            return self._ok_result()
+
+        with patch("scenario_runbook.subprocess.run", side_effect=fake_run):
+            run_one_scenario("2025-08-01")
+
+        assert "--config" not in launch_cmds[0]

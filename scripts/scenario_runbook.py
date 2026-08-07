@@ -136,14 +136,19 @@ def parse_precompute_output(output: str) -> dict:
     return {"leagues": leagues, "replay_miss_count": replay_miss_count}
 
 
-def run_one_scenario(date_str: str, timeout: float = 300.0) -> dict:
+def run_one_scenario(date_str: str, timeout: float = 300.0, config_path: str | None = None) -> dict:
     """Launches the sandbox for date_str with --precompute, captures
     whether each league found fixtures (exact date or the W51 90-day
     fallback) and the real generated/skipped tally, plus any
     sandbox_agent_replay_miss occurrences, then always stops the sandbox
     afterward (even if the launch itself errored or timed out, so a failed
     date doesn't leave a backend/frontend running for the next one).
-    Returns a result dict for the summary report."""
+    Returns a result dict for the summary report.
+
+    `config_path`, when given, is forwarded to launch_sandbox.py's own
+    --config (e.g. config/agent_config_deepseek.yaml) -- same opt-in-only
+    convention as everywhere else this config selection appears; omitting it
+    preserves this script's exact prior behavior (AgentConfig.default())."""
     result: dict = {"date": date_str, "leagues": {}, "replay_miss_count": 0, "errors": []}
     output = ""
     # Tracks whether the launch call itself timed out, as distinct from
@@ -157,9 +162,12 @@ def run_one_scenario(date_str: str, timeout: float = 300.0) -> dict:
     # and every later sampled date then fails to bind those same fixed
     # ports. That must not be silently treated as a normal clean stop.
     timed_out = False
+    launch_cmd = [sys.executable, str(LAUNCH_SCRIPT), date_str, "--precompute"]
+    if config_path:
+        launch_cmd += ["--config", config_path]
     try:
         launch = subprocess.run(
-            [sys.executable, str(LAUNCH_SCRIPT), date_str, "--precompute"],
+            launch_cmd,
             capture_output=True, text=True, timeout=timeout,
         )
         output = launch.stdout + launch.stderr
@@ -217,6 +225,11 @@ def main(argv: list[str] | None = None) -> None:
         "--timeout", type=float, default=300.0,
         help="Per-date subprocess timeout (seconds) for the launch+precompute step.",
     )
+    parser.add_argument(
+        "--config", default=None,
+        help="Agent config YAML forwarded to launch_sandbox.py's own --config (e.g. "
+             "config/agent_config_deepseek.yaml). Defaults to AgentConfig.default() when omitted.",
+    )
     args = parser.parse_args(argv)
 
     dates = sample_dates(args.from_date, args.to_date, args.sample_every_days)
@@ -224,7 +237,7 @@ def main(argv: list[str] | None = None) -> None:
         f"Scenario runbook: {len(dates)} sampled date(s) from {args.from_date} to {args.to_date} "
         f"(every {args.sample_every_days}d)."
     )
-    results = [run_one_scenario(d, timeout=args.timeout) for d in dates]
+    results = [run_one_scenario(d, timeout=args.timeout, config_path=args.config) for d in dates]
 
     print("\n=== Summary ===")
     total_replay_miss = 0

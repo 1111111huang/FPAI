@@ -173,7 +173,7 @@ async def run_eod_batch(
                     on_progress(fixture, "skipped")
                 return
 
-        degraded = validate_and_degrade(raw)
+        degraded = validate_and_degrade(raw, fixture.home_team, fixture.away_team)
         cache.record_generation(
             match_id=fixture.match_id, date=fixture_date, agent_config_hash=agent_config_hash,
             odds=odds or {}, recommendation=degraded.model_dump(), triggered_by="scheduled",

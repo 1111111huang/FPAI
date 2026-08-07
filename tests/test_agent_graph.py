@@ -353,6 +353,58 @@ def test_run_agent_produces_recommendation_when_forecast_succeeds():
     mock_llm.bind_tools.return_value.invoke.assert_called_once()
 
 
+def test_run_agent_degrades_when_llm_hallucinates_a_different_match():
+    """BUG-023/024 end-to-end: the agent's LLM call hallucinated a
+    "Manchester City vs Liverpool" analysis for a real Brentford vs
+    Wolverhampton request (confirmed live in a sandbox precompute batch).
+    run_agent() must degrade to insufficient_data keyed on the *real*
+    match_info, not silently return the hallucinated content."""
+    from unittest.mock import MagicMock, patch
+    from langchain_core.messages import AIMessage
+    from src.agent.graph import run_agent
+    from src.agent import tools as agent_tools
+
+    agent_tools._snapshot_store.set_mode("live")
+    llm_json = json.dumps({
+        "match": {"home_team": "Manchester City", "away_team": "Liverpool"},
+        "overall": "direct_bet", "markets": [], "explanation": "Man City to win.",
+        "confidence": "medium", "limitations": [], "prediction_basis": "team_history_and_market",
+    })
+    fake_forecast_result = {"result_3way": {"probabilities": {"home": 0.4}}, "data_quality": {"prediction_basis": "team_history_and_market"}}
+
+    with patch("src.agent.graph._build_llm") as mock_build_llm, \
+         patch("src.agent.graph._load_system_prompt", return_value="stub prompt"), \
+         patch("src.agent.tools._dated_web_search", return_value="No results found."), \
+         patch("src.forecast.forecast_service.ForecastService") as MockSvc, \
+         patch("src.agent.lessons.load_approved_lessons", return_value=[]), \
+         patch("src.utils.db_manager.DuckDBManager") as MockDB:
+        MockDB.return_value.connection.return_value.__enter__.return_value = MagicMock()
+        instance = MagicMock()
+        MockSvc.return_value = instance
+        instance.forecast_upcoming.return_value = fake_forecast_result
+
+        mock_llm = MagicMock()
+        mock_llm.bind_tools.return_value.invoke.return_value = AIMessage(content=llm_json)
+        mock_build_llm.return_value = mock_llm
+
+        cfg = _make_config()
+        recommendation = run_agent(
+            match_info={
+                "home_team": "Brentford", "away_team": "Wolverhampton", "date": "2026-03-16", "league": "E0",
+                "odds": {"home": 2.0, "draw": 3.4, "away": 3.6},
+            },
+            config=cfg,
+            tools=[],
+        )
+
+    assert recommendation["overall"] == "insufficient_data"
+    assert recommendation["match"] == {
+        "home_team": "Brentford", "away_team": "Wolverhampton", "date": "2026-03-16", "league": "E0",
+        "odds": {"home": 2.0, "draw": 3.4, "away": 3.6},
+    }
+    assert recommendation["markets"] == []
+
+
 def test_run_agent_injects_lessons_message_before_llm_call_in_live_mode():
     from unittest.mock import MagicMock, patch
     from langchain_core.messages import AIMessage, HumanMessage

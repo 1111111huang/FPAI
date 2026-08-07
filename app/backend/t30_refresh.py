@@ -94,7 +94,7 @@ def refresh_match_at_t30(
         LOGGER.warning("T-30 refresh: run_agent failed for match_id=%s: %s", fixture.match_id, exc)
         return T30RefreshResult(match_id=fixture.match_id, outcome="skipped_error")
 
-    degraded = validate_and_degrade(raw)
+    degraded = validate_and_degrade(raw, fixture.home_team, fixture.away_team)
     cache.record_generation(
         match_id=fixture.match_id, date=date_str, agent_config_hash=agent_config_hash,
         odds=fresh_odds, recommendation=degraded.model_dump(), triggered_by="scheduled",

@@ -4,7 +4,7 @@ contexts:
       metric_name: test_mae
       metric_value: 2.0786
       mlflow_run_id: 6fbea054c29c41d4904124e3be6153f6
-      model_path: file:///Users/tianqihuang/Documents/GitHub/FPAI/mlruns/366593725223276547/6fbea054c29c41d4904124e3be6153f6/artifacts/model
+      model_path: models/away_corners_xgboostregressor_v1_20260627.joblib
       model_type: xgb_regressor
       previous_model_path: models/away_corners_xgboostregressor_v1_20260627.joblib
       selected_at: '2026-07-06T05:15:38Z'
@@ -12,7 +12,7 @@ contexts:
       metric_name: test_mae
       metric_value: 0.827586
       mlflow_run_id: 968f8fff23124e8ca0c56258df5e6fb9
-      model_path: file:///Users/tianqihuang/Documents/GitHub/FPAI/mlruns/813364324253558157/968f8fff23124e8ca0c56258df5e6fb9/artifacts/model
+      model_path: models/away_goals_xgboostregressor_v1_20260627.joblib
       model_type: xgb_regressor
       previous_model_path: models/away_goals_xgboostregressor_v1_20260627.joblib
       selected_at: '2026-07-06T05:34:13Z'
@@ -175,7 +175,7 @@ contexts:
       metric_name: test_mae
       metric_value: 2.142982
       mlflow_run_id: 37ef1f64639a4a03b0a8fc7a5d0eaaa1
-      model_path: file:///Users/tianqihuang/Documents/GitHub/FPAI/mlruns/402744524999985595/37ef1f64639a4a03b0a8fc7a5d0eaaa1/artifacts/model
+      model_path: models/home_corners_xgboostregressor_v1_20260627.joblib
       model_type: xgb_regressor
       previous_model_path: models/home_corners_xgboostregressor_v1_20260627.joblib
       selected_at: '2026-07-06T06:47:34Z'
@@ -183,7 +183,7 @@ contexts:
       metric_name: test_mae
       metric_value: 0.946158
       mlflow_run_id: 117dd2897de44bcc89a3568a6a39dbe7
-      model_path: file:///Users/tianqihuang/Documents/GitHub/FPAI/mlruns/652854365409093260/117dd2897de44bcc89a3568a6a39dbe7/artifacts/model
+      model_path: models/home_goals_xgboostregressor_v1_20260627.joblib
       model_type: xgb_regressor
       previous_model_path: models/home_goals_xgboostregressor_v1_20260701.joblib
       selected_at: '2026-07-06T07:07:16Z'
@@ -191,7 +191,7 @@ contexts:
       metric_name: test_log_loss
       metric_value: 0.999072
       mlflow_run_id: 998f1bcf5de04efd8e549745b36217ce
-      model_path: file:///Users/tianqihuang/Documents/GitHub/FPAI/mlruns/325053306736649294/998f1bcf5de04efd8e549745b36217ce/artifacts/model
+      model_path: models/result_3way_xgboost_v1_20260627.joblib
       model_type: xgboost
       previous_model_path: models/result_3way_xgboost_v1_20260627.joblib
       selected_at: '2026-07-06T07:10:36Z'
@@ -199,7 +199,7 @@ contexts:
       metric_name: test_mae
       metric_value: 2.651686
       mlflow_run_id: a3d5ede352a646c1b7f120183f365af8
-      model_path: file:///Users/tianqihuang/Documents/GitHub/FPAI/mlruns/720388190291245510/a3d5ede352a646c1b7f120183f365af8/artifacts/model
+      model_path: models/total_corners_xgboostregressor_v1_20260627.joblib
       model_type: xgb_regressor
       previous_model_path: models/total_corners_xgboostregressor_v1_20260627.joblib
       selected_at: '2026-07-06T07:30:14Z'
@@ -207,7 +207,7 @@ contexts:
       metric_name: test_mae
       metric_value: 1.231935
       mlflow_run_id: c2000f84fb5f437fb93dd0ea85b66086
-      model_path: file:///Users/tianqihuang/Documents/GitHub/FPAI/mlruns/925000129830376942/c2000f84fb5f437fb93dd0ea85b66086/artifacts/model
+      model_path: models/total_goals_xgboostregressor_v1_20260627.joblib
       model_type: xgb_regressor
       previous_model_path: models/total_goals_randomforestregressor_v1_20260705.joblib
       selected_at: '2026-07-06T08:04:44Z'

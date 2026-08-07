@@ -178,6 +178,16 @@ class TestParseArgs:
 
         assert args.precompute is True
 
+    def test_config_flag_defaults_to_none(self):
+        args = parse_args(["2025-03-08", "--precompute"])
+
+        assert args.config is None
+
+    def test_config_flag(self):
+        args = parse_args(["2025-03-08", "--precompute", "--config", "config/agent_config_deepseek.yaml"])
+
+        assert args.config == "config/agent_config_deepseek.yaml"
+
 
 class TestFetchSandboxFixtures:
     """W50: a sandbox date is always in the past, so fixture sourcing must
@@ -342,6 +352,49 @@ class TestPrecomputeRecommendationsOrdering:
         # competition_code) -- SWE finds nothing (historical_results_from_raw_matches
         # mocked to []), so run_eod_batch fires twice, not once.
         assert mock_run_batch.await_count == 2
+
+
+class TestPrecomputeRecommendationsConfigSelection:
+    """`--config` lets --precompute opt into a non-default agent config (e.g.
+    config/agent_config_deepseek.yaml) without changing what every other
+    entry point (webapp, plain CLI) defaults to -- same opt-in-only
+    convention A42 already established. Omitting it must preserve the exact
+    prior behavior: AgentConfig.default()."""
+
+    def _run(self, date_str: str, config_path: str | None):
+        fixture = NormalizedMatch(
+            match_id="1", utc_date=f"{date_str}T15:00:00Z", status="FINISHED",
+            home_team="Arsenal", away_team="Everton", home_goals=2, away_goals=1,
+        )
+        with patch("scripts.launch_sandbox.FootballDataClient") as mock_client_cls, \
+             patch("app.backend.scheduler_wiring.build_odds_client", return_value=None), \
+             patch("app.backend.recommendations.get_cache", return_value=object()), \
+             patch("app.backend.sweden_fixtures_client.historical_results_from_raw_matches", return_value=[]), \
+             patch("app.backend.eod_batch.run_eod_batch", new_callable=AsyncMock) as mock_run_batch, \
+             patch("src.agent.agent_config.AgentConfig.default") as mock_default, \
+             patch("src.agent.agent_config.AgentConfig.from_yaml") as mock_from_yaml:
+            mock_client_cls.return_value.get_results.return_value = [fixture]
+            mock_run_batch.return_value = EodBatchResult(fixtures=[fixture], generated=1, skipped=0)
+            try:
+                precompute_recommendations(date_str, config_path=config_path)
+            finally:
+                os.environ.pop("SANDBOX_MODE", None)
+                os.environ.pop("SANDBOX_DATE", None)
+        return mock_default, mock_from_yaml
+
+    def test_omitting_config_path_uses_agent_config_default(self):
+        mock_default, mock_from_yaml = self._run("2025-03-08", config_path=None)
+
+        mock_default.assert_called_once()
+        mock_from_yaml.assert_not_called()
+
+    def test_config_path_loads_that_yaml_instead_of_the_default(self):
+        mock_default, mock_from_yaml = self._run(
+            "2025-03-08", config_path="config/agent_config_deepseek.yaml"
+        )
+
+        mock_from_yaml.assert_called_once_with("config/agent_config_deepseek.yaml")
+        mock_default.assert_not_called()
 
 
 class TestPrecomputeRecommendationsFallbackReporting:
