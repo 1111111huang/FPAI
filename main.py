@@ -589,6 +589,16 @@ def run_refresh_sweden_data(app_settings: AppSettings, db_manager: DuckDBManager
     LOGGER.info("refresh-data complete.")
 
 
+# US#150: football-data.co.uk hosts each "big five" league on its own scraper
+# page (US#144) -- config.yaml's scraper section only ever holds one page's
+# defaults (E0/englandm.php). A per-league override table keeps refresh-data
+# generic without turning config.yaml into a list-of-pages schema (same
+# lightest-option reasoning US#144 already applied to the scrape CLI itself).
+_SCRAPE_SOURCE_OVERRIDE_BY_LEAGUE: dict[str, dict[str, object]] = {
+    "SP1": {"league_page_url": "https://www.football-data.co.uk/spainm.php", "leagues": ["SP1"]},
+}
+
+
 def run_refresh_data(app_settings: AppSettings, db_manager: DuckDBManager, league: str = "E0", force: bool = False) -> None:
     """Run scrape → ingest → fetch-understat → fetch-fotmob → fetch-lineups in sequence (US#81, US#95, US#101).
 
@@ -600,7 +610,7 @@ def run_refresh_data(app_settings: AppSettings, db_manager: DuckDBManager, leagu
         run_refresh_sweden_data(app_settings, db_manager)
         return
     LOGGER.info("Executing command: refresh-data | league=%s | force=%s", league, force)
-    run_scrape(app_settings, force=force)
+    run_scrape(app_settings, force=force, **_SCRAPE_SOURCE_OVERRIDE_BY_LEAGUE.get(league, {}))
     run_ingest(app_settings, db_manager, force=force)
     run_fetch_understat(app_settings, db_manager, league=league, rebuild_features=True)
     run_fetch_fotmob(app_settings, db_manager, league=league)
