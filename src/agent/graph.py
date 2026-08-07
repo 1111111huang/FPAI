@@ -214,6 +214,8 @@ def _build_recommendation(
             text,
             min_odds_threshold=config.min_odds_threshold,
             max_odds_threshold=config.max_odds_threshold,
+            home_team=match_info.get("home_team"),
+            away_team=match_info.get("away_team"),
         )
         _LOG.info("output_node | parse=success | overall=%s", recommendation.get("overall"))
     except RecommendationParseError as exc:

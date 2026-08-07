@@ -489,6 +489,11 @@ export function MatchCard({
   const [error, setError] = useState<string | null>(null);
   const isCompleted = match.status === "completed";
   const shown = bestMarket(match);
+  // The fallback list spans many different days (W46/W51's 90-day window),
+  // so the day label must show on every card, not just ones with no market
+  // to display -- previously `shown ? market/selection : day` hid it
+  // entirely whenever a card had a recommendation.
+  const day = formatDay(match.kickoffIso, asOf, sandboxMode);
 
   async function handleExpand() {
     const next = !open;
@@ -556,7 +561,7 @@ export function MatchCard({
 
         <div className="mt-3 flex items-end justify-between gap-3 border-t border-border pt-2.5">
           <span className="truncate text-xs text-ink-secondary">
-            {shown ? `${shown.market} · ${shown.selection}` : formatDay(match.kickoffIso, asOf, sandboxMode)}
+            {shown ? `${shown.market} · ${shown.selection} · ${day}` : day}
           </span>
           <div className="flex shrink-0 items-end gap-4">
             <div className="text-right">

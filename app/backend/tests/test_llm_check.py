@@ -56,6 +56,18 @@ def test_anthropic_unreachable_when_api_key_missing(monkeypatch) -> None:
     assert check_llm_reachable(config) is False
 
 
+def test_deepseek_reachable_when_api_key_present(monkeypatch) -> None:
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-fake")
+    config = _config("deepseek", model="deepseek-chat")
+    assert check_llm_reachable(config) is True
+
+
+def test_deepseek_unreachable_when_api_key_missing(monkeypatch) -> None:
+    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+    config = _config("deepseek", model="deepseek-chat")
+    assert check_llm_reachable(config) is False
+
+
 def test_check_never_raises_on_unexpected_error() -> None:
     config = _config("ollama")
     with patch("app.backend.llm_check.requests.get", side_effect=RuntimeError("boom")):

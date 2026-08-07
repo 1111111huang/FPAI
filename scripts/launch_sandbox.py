@@ -70,6 +70,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--backend-port", type=int, default=DEFAULT_BACKEND_PORT)
     parser.add_argument("--frontend-port", type=int, default=DEFAULT_FRONTEND_PORT)
     parser.add_argument("--startup-timeout", type=float, default=45.0, help="Seconds to wait for each server to become healthy")
+    parser.add_argument(
+        "--config", default=None,
+        help="Agent config YAML for the --precompute step (e.g. config/agent_config_deepseek.yaml). "
+             "Defaults to AgentConfig.default() (config/agent_config.yaml) when omitted -- matches every "
+             "other entry point's default, DeepSeek/other providers stay opt-in per-invocation.",
+    )
     args = parser.parse_args(argv)
 
     if not args.stop and not args.date:
@@ -352,7 +358,7 @@ def _fetch_sandbox_fixtures_for_league(
     return fetch_sandbox_fixtures(fixtures_client, date_str)
 
 
-def precompute_recommendations(date_str: str) -> None:
+def precompute_recommendations(date_str: str, config_path: str | None = None) -> None:
     """Pre-populates the sandbox-scoped RecommendationCache (W29) for every
     real fixture on `date_str` across every competition in
     scheduler_wiring.COMPETITIONS (E0 via fetch_sandbox_fixtures(), SWE via
@@ -383,7 +389,14 @@ def precompute_recommendations(date_str: str) -> None:
 
     Backend modules (agent/LLM/ML dependencies) are imported here, not at
     module load time, so a plain launch/--stop/--dry-run invocation that
-    never passes --precompute doesn't pay for importing them."""
+    never passes --precompute doesn't pay for importing them.
+
+    `config_path`, when given, loads that YAML instead of AgentConfig's own
+    default (e.g. config/agent_config_deepseek.yaml) -- same opt-in-only
+    convention A42 already established for the standalone CLI (`--config` on
+    any agent-* command), now threaded through this script's own --precompute
+    step too. Omitting it preserves the exact prior default (AgentConfig.default(),
+    whatever config/agent_config.yaml currently says)."""
     os.environ["SANDBOX_MODE"] = "1"
     os.environ["SANDBOX_DATE"] = date_str
 
@@ -394,7 +407,7 @@ def precompute_recommendations(date_str: str) -> None:
 
     odds_client = build_odds_client()
     cache = recommendations.get_cache()
-    config = AgentConfig.default()
+    config = AgentConfig.from_yaml(config_path) if config_path else AgentConfig.default()
     fixtures_client = FootballDataClient(api_key=os.environ.get("FOOTBALL_DATA_API_KEY", ""))
 
     for league in COMPETITIONS:
@@ -468,7 +481,7 @@ def main(argv: list[str] | None = None) -> None:
 
     if args.precompute:
         print(f"=== Precompute (SANDBOX_DATE={args.date}) === -- this can take several minutes")
-        precompute_recommendations(args.date)
+        precompute_recommendations(args.date, config_path=args.config)
         print()
 
     print(f"Starting backend on :{args.backend_port} (SANDBOX_DATE={args.date}) -- log: {BACKEND_LOG}")

@@ -19,9 +19,9 @@ def check_llm_reachable(config: AgentConfig, timeout: float = 2.0) -> bool:
     """Best-effort reachability check for config.provider.
 
     Ollama: a real probe against the local daemon's own API.
-    Anthropic: presence of ANTHROPIC_API_KEY only -- a live call would spend
-    real API credits just to check connectivity, not worth it for a soft
-    startup check.
+    Anthropic/DeepSeek: presence of the provider's own API key only -- a live
+    call would spend real API credits just to check connectivity, not worth
+    it for a soft startup check.
     """
     if config.provider == "ollama":
         try:
@@ -31,4 +31,6 @@ def check_llm_reachable(config: AgentConfig, timeout: float = 2.0) -> bool:
             return False
     if config.provider == "anthropic":
         return bool(os.environ.get("ANTHROPIC_API_KEY"))
+    if config.provider == "deepseek":
+        return bool(os.environ.get("DEEPSEEK_API_KEY"))
     return False

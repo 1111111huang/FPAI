@@ -114,3 +114,51 @@ def test_overall_as_unhashable_list_raises_parse_error_not_type_error():
     bad = {**_VALID, "overall": ["direct_bet", "no_bet"]}
     with pytest.raises(RecommendationParseError):
         extract_recommendation(_wrap_json(bad))
+
+
+def test_match_mismatch_raises_when_requested_teams_given():
+    """BUG-023/024: the agent hallucinated a "Manchester City vs Liverpool"
+    analysis for a real Brentford vs Wolverhampton request (confirmed live in
+    a sandbox precompute batch). When the real requested teams are passed
+    in, a candidate naming a different pair of clubs must be rejected, not
+    silently returned."""
+    bad = {**_VALID, "match": {"home": "Manchester City", "away": "Liverpool"}}
+    with pytest.raises(RecommendationParseError, match="match mismatch"):
+        extract_recommendation(_wrap_json(bad), home_team="Brentford", away_team="Wolverhampton")
+
+
+def test_match_mismatch_check_is_skipped_when_teams_not_supplied():
+    """Backward compatible: every pre-existing caller/test omits home_team/
+    away_team, so the check must not run (and must not raise) by default."""
+    bad = {**_VALID, "match": {"home": "Manchester City", "away": "Liverpool"}}
+    rec = extract_recommendation(_wrap_json(bad))
+    assert rec["match"]["home"] == "Manchester City"
+
+
+def test_non_canonical_market_name_raises():
+    """The agent has been observed calling result_3way "1X2" for one real
+    fixture, and inventing markets entirely outside this schema for others
+    ("Asian Handicap", a team name used as the market itself) -- confirmed
+    live in the sandbox cache. config/prompts/agent_v1.txt already specifies
+    the fixed vocabulary; nothing enforced it until now."""
+    bad_market = {**_VALID_MARKET, "market": "1X2"}
+    bad = {**_VALID, "markets": [bad_market]}
+    with pytest.raises(RecommendationParseError, match="market"):
+        extract_recommendation(_wrap_json(bad))
+
+
+def test_non_canonical_selection_raises():
+    """Observed live: a result_3way selection reported as a team name
+    ("Vasteras SK") or "home_win" instead of the specified home/draw/away."""
+    bad_market = {**_VALID_MARKET, "selection": "home_win"}
+    bad = {**_VALID, "markets": [bad_market]}
+    with pytest.raises(RecommendationParseError, match="selection"):
+        extract_recommendation(_wrap_json(bad))
+
+
+def test_home_away_swap_alone_is_not_a_match_mismatch():
+    """A plain home/away swap is not the hallucination bug -- only a
+    genuinely different pair of clubs should be rejected."""
+    data = {**_VALID, "match": {"home": "Chelsea", "away": "Arsenal"}}
+    rec = extract_recommendation(_wrap_json(data), home_team="Arsenal", away_team="Chelsea")
+    assert rec["overall"] == "direct_bet"

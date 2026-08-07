@@ -100,6 +100,30 @@ describe("MatchCard's relative-day label respects the sandbox clock", () => {
     expect(screen.getByText("tomorrow")).toBeInTheDocument();
   });
 
+  it("still shows the relative-day label even when a market is being displayed, not just when there's nothing else to show", () => {
+    // Bug: the day label and the market/selection text shared one line via
+    // `shown ? market/selection : day`, so any card with a recommended
+    // market hid the day entirely -- on a fallback list spanning many
+    // different days (W46/W51's 90-day window), only the cards with no
+    // market happened to show which day they were on.
+    const match = {
+      ...matchWithKickoff("2026-03-02T12:00:00Z"),
+      markets: [
+        {
+          market: "result_3way", selection: "home", recommendationType: "direct_bet" as const,
+          currentOdds: 1.8, minOdds: 1.5, mlProbability: 0.55, impliedProbability: 0.5, valueEdge: 0.05,
+        },
+      ],
+    };
+
+    render(
+      <MatchCard match={match} onUpdate={vi.fn()} asOf={new Date("2026-03-01T00:00:00Z")} sandboxMode={true} />
+    );
+
+    expect(screen.getByText(/result_3way/)).toBeInTheDocument();
+    expect(screen.getByText(/tomorrow/)).toBeInTheDocument();
+  });
+
   it("uses the real local clock (not UTC getters) when sandbox mode is off, even with an explicit asOf", () => {
     // Regression guard for the bug the prior fix introduced: reading a real
     // new Date() via UTC getters mislabels "today" as "yesterday"/"tomorrow"

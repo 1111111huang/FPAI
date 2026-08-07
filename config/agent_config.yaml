@@ -1,8 +1,8 @@
 # Betting agent configuration — all tunable knobs.
 # Swap model/provider to change the LLM tier without touching code.
 
-model: "llama3.1:8b"            # Ollama (2026-07-25: switched back for budget scenario-testing runs -- Anthropic credit balance exhausted. Real matches still replay tool calls (web_search/forecast_league) from the agent-snapshot corpus regardless of provider; only the LLM's own reasoning call is live. Revert to "claude-haiku-4-5" / provider "anthropic" (2026-07-23 entry below) once credits are topped up -- local models measured at ~50% JSON reliability for the full batch job.
-provider: "ollama"              # "ollama" | "anthropic" | "groq" | "gemini"
+model: "deepseek-chat"           # DeepSeek (2026-08-06: switched from local llama3.1:8b/ollama -- BUG-023/024/027 (documents/bugs.md) found the local model hallucinating a completely different match/odds/markets on ~50% of a real sandbox batch; a live 20-fixture DeepSeek re-run on the same real data (same odds, same evidence) produced 0 hallucinations and correct canonical market naming throughout. See documents/agent_user_stories.md A46 and config/agent_config_deepseek.yaml (A42, now redundant with this default but left in place as an explicit pin).
+provider: "deepseek"            # "ollama" | "anthropic" | "groq" | "gemini" | "deepseek"
 temperature: 0.1                # lower = more deterministic; use 0.0 for backtesting
 max_tool_calls: 10              # per-match tool budget
 

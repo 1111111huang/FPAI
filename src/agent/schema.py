@@ -1,16 +1,21 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 import re
 from typing import Literal, TypedDict
 
 import json_repair
 from pydantic import BaseModel, ValidationError
 
+from src.ingestion.common.team_mapping import TeamNameMapper
+
+_TEAM_MAPPING_PATH = Path(__file__).resolve().parent.parent.parent / "config" / "team_mapping.json"
+
 
 class MarketRecommendation(TypedDict):
-    market: str
-    selection: str
+    market: Literal["result_3way", "btts", "total_goals", "home_corners", "away_corners"]
+    selection: Literal["home", "draw", "away", "yes", "no", "over_2.5", "under_2.5"]
     recommendation_type: Literal["direct_bet", "conditional", "no_bet"]
     current_odds: float
     min_odds: float
@@ -43,10 +48,23 @@ class MarketRecommendationModel(BaseModel):
     """A28: type/enum validation for every market-level field. current_odds is
     nullable -- that's a legitimate state (odds simply weren't found for this
     market) -- the direct_bet + null-odds combination (BUG-013) is a separate
-    semantic rule applied after this structural validation passes."""
+    semantic rule applied after this structural validation passes.
 
-    market: str
-    selection: str
+    `market`/`selection` were plain `str` (any value accepted) until this
+    codebase's prompt (config/prompts/agent_v1.txt) already specified this
+    exact fixed vocabulary for both -- nothing enforced it. Confirmed live in
+    the sandbox cache: the same result_3way market rendered as "1X2" for one
+    fixture; other real generations invented markets/selections entirely
+    outside this schema ("Asian Handicap", "IF Brommapojkarna to win",
+    team names used as a result_3way selection instead of home/draw/away).
+    A market naming a real but different betting line (e.g. a 1.5-goal line
+    reported as market="Over 1.5 goals") can't be safely renamed to a
+    canonical name without misrepresenting which line it actually was --
+    rejecting it (same as any other malformed market) is the safe choice for
+    a betting app, not silently relabeling it."""
+
+    market: Literal["result_3way", "btts", "total_goals", "home_corners", "away_corners"]
+    selection: Literal["home", "draw", "away", "yes", "no", "over_2.5", "under_2.5"]
     recommendation_type: Literal["direct_bet", "conditional", "no_bet"]
     current_odds: float | None
     min_odds: float
@@ -115,6 +133,28 @@ def _downgrade_direct_bet_outside_odds_bounds(
     return data
 
 
+def reported_teams(match_field: dict) -> tuple[str, str] | None:
+    """The two team names the agent's own `match` field claims this
+    recommendation is about, tolerating the `home`/`away` key spelling the
+    LLM sometimes uses instead of `home_team`/`away_team`. None if either
+    side is missing -- some raw payloads omit `match` entirely, which is
+    not itself a mismatch. Public (no leading underscore): reused by
+    app/backend/recommendations.py's own defensive check on cached/historical
+    recommendations (BUG-023/024), so there's one canonical implementation."""
+    home = match_field.get("home_team") or match_field.get("home")
+    away = match_field.get("away_team") or match_field.get("away")
+    return (home, away) if home and away else None
+
+
+def teams_match(requested: tuple[str, str], reported: tuple[str, str]) -> bool:
+    """Canonical, order-independent comparison via TeamNameMapper/
+    config/team_mapping.json (the same pattern BUG-015 established for
+    odds-to-fixture matching). Order-independent so a plain home/away swap
+    isn't flagged as a mismatch, only a genuinely different pair of clubs."""
+    mapper = TeamNameMapper(mapping_path=str(_TEAM_MAPPING_PATH))
+    return {mapper.map_team(t) for t in requested} == {mapper.map_team(t) for t in reported}
+
+
 class RecommendationParseError(Exception):
     def __init__(self, raw_text: str, reason: str = ""):
         self.raw_text = raw_text
@@ -125,12 +165,30 @@ class RecommendationParseError(Exception):
 
 
 def extract_recommendation(
-    text: str, min_odds_threshold: float = 1.2, max_odds_threshold: float = 11.0
+    text: str,
+    min_odds_threshold: float = 1.2,
+    max_odds_threshold: float = 11.0,
+    home_team: str | None = None,
+    away_team: str | None = None,
 ) -> MatchRecommendation:
     """Extract and validate a MatchRecommendation JSON block from agent output text.
 
     Tries all fenced ```json blocks last-to-first (the final block is the recommendation),
     then falls back to the outermost bare JSON object.
+
+    BUG-023/024: the agent's LLM call has been observed hallucinating a
+    completely unrelated match's analysis (most often "Manchester City vs
+    Liverpool", confirmed on 5/10 fixtures in one live sandbox batch) instead
+    of grounding itself in the real requested fixture. When `home_team`/
+    `away_team` are supplied (the real fixture this call was for), a
+    candidate whose own `match` field names a different pair of clubs is
+    rejected the same way any other malformed candidate is -- tried against
+    the next candidate JSON block if one exists, otherwise surfaced as the
+    existing RecommendationParseError degrade path (graph.py's
+    `_build_recommendation` already turns that into a safe
+    `insufficient_data` placeholder keyed on the *real* match_info, not the
+    hallucinated one). Optional/backward compatible: omitting them (as every
+    pre-existing caller/test in this file does) skips the check entirely.
     """
     candidates: list[str] = []
 
@@ -184,6 +242,17 @@ def extract_recommendation(
         except ValidationError as exc:
             last_error = f"field validation failed: {exc}"
             continue
+
+        # BUG-023/024: reject a candidate whose self-reported match is a
+        # different pair of clubs than what was actually requested.
+        if home_team and away_team:
+            reported = reported_teams(data.get("match") or {})
+            if reported is not None and not teams_match((home_team, away_team), reported):
+                last_error = (
+                    f"match mismatch: agent reported {reported[0]!r} v {reported[1]!r}, "
+                    f"requested {home_team!r} v {away_team!r}"
+                )
+                continue
 
         data = _downgrade_direct_bet_with_null_odds(data)
         data = _downgrade_direct_bet_outside_odds_bounds(data, min_odds_threshold, max_odds_threshold)

@@ -436,7 +436,7 @@ async def create_recommendation(
     # run_agent is a real ~10-30s synchronous call (LLM + Tavily) -- must run
     # off the event loop or it blocks every other request.
     raw = await run_in_threadpool(recommendations.run_agent, match_info)
-    result = validate_and_degrade(raw)
+    result = validate_and_degrade(raw, request.home_team, request.away_team)
 
     cache.record_generation(
         match_id=request.effective_match_id(),
@@ -463,11 +463,19 @@ async def get_cached_recommendation(
 ) -> MatchRecommendationOut:
     """Reads exclusively from the cache (W11) -- never calls run_agent. The
     normal path for an already-scheduled fixture; a cache miss means nothing
-    has generated a recommendation for this match/date yet."""
+    has generated a recommendation for this match/date yet.
+
+    BUG-028: routes through validate_and_degrade (no home_team/away_team --
+    this endpoint only has match_id/date, so the match-mismatch check is
+    skipped, but per-market validation still gracefully drops a malformed
+    market) instead of a raw MatchRecommendationOut.model_validate(), which
+    raised an uncaught ValidationError (a 500) for any pre-existing cached
+    row using a market/selection value that predates BUG-027's Literal
+    constraints -- routine for local-model-hallucinated rows."""
     entry = cache.get_latest(match_id, date, compute_agent_config_hash(AgentConfig.default()))
     if entry is None:
         raise HTTPException(status_code=404, detail="No cached recommendation for this match/date yet.")
-    return MatchRecommendationOut.model_validate(entry.recommendation)
+    return validate_and_degrade(entry.recommendation)
 
 
 @app.post("/api/bets/from-recommendation")

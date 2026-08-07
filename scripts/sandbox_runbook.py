@@ -77,7 +77,7 @@ def main() -> None:
         league="E0", match_id=fixture.match_id,
     )
     raw = recommendations.run_agent(request.to_match_info())
-    result = validate_and_degrade(raw)
+    result = validate_and_degrade(raw, fixture.home_team, fixture.away_team)
     print(f"Recommendation overall={result.overall} markets={len(result.markets)}")
 
     cache = recommendations.get_cache()

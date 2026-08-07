@@ -96,6 +96,32 @@ def test_get_reads_back_what_post_wrote(tmp_path: Path):
         app.dependency_overrides.clear()
 
 
+def test_get_degrades_a_legacy_cached_row_instead_of_500ing(tmp_path: Path):
+    """BUG-028: found live -- GET /api/recommendations/{match_id} used to
+    call MatchRecommendationOut.model_validate() directly on the raw cached
+    dict, which raises an uncaught ValidationError (-> 500) for any
+    pre-existing row whose market/selection predates BUG-027's Literal
+    constraints. Confirmed live against a real cached row (a local-model
+    hallucination with selection="Arsenal" instead of home/draw/away) that
+    was crashing this exact endpoint before the fix below."""
+    cache = _override_cache(tmp_path)
+    legacy_market = {**_VALID_MARKET, "market": "1X2", "selection": "Arsenal"}
+    cache.record_generation(
+        match_id="m1", date="2026-08-22",
+        agent_config_hash=compute_agent_config_hash(AgentConfig.default()),
+        odds={}, recommendation={**_VALID_RECOMMENDATION, "markets": [legacy_market]},
+        triggered_by="scheduled",
+    )
+    try:
+        with TestClient(app) as client:
+            response = client.get("/api/recommendations/m1", params={"date": "2026-08-22"})
+        assert response.status_code == 200
+        assert response.json()["markets"] == []
+        assert response.json()["invalid_market_count"] == 1
+    finally:
+        app.dependency_overrides.clear()
+
+
 def test_cache_entry_exposes_the_odds_it_was_generated_from(tmp_path: Path):
     cache = _override_cache(tmp_path)
     try:

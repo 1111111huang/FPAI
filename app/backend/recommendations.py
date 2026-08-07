@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from pathlib import Path
 import threading
+from typing import Literal
 
 from pydantic import BaseModel, ValidationError
 
@@ -17,6 +18,7 @@ from app.backend.recommendation_cache import RecommendationCache
 from app.backend.sandbox_clock import is_sandbox_mode, sandbox_scoped_path
 from src.agent import tools as agent_tools
 from src.agent.graph import run_agent as _real_run_agent
+from src.agent.schema import reported_teams, teams_match
 from src.agent.snapshot_store import league_base_dir, SnapshotMissingError
 from src.ingestion.common.team_mapping import TeamNameMapper
 from src.utils.db_manager import DuckDBManager
@@ -237,8 +239,15 @@ class RecommendationRequest(BaseModel):
 
 
 class MarketRecommendationOut(BaseModel):
-    market: str
-    selection: str
+    # Constrained to the same vocabulary config/prompts/agent_v1.txt already
+    # specifies to the LLM (result_3way/btts/total_goals/home_corners/
+    # away_corners, home/draw/away/yes/no/over_2.5/under_2.5) -- previously
+    # plain `str`, so a non-canonical name the agent invented (observed live:
+    # "1X2" for what should be result_3way, "Asian Handicap", team names used
+    # as a selection) passed validation instead of being dropped like any
+    # other malformed market.
+    market: Literal["result_3way", "btts", "total_goals", "home_corners", "away_corners"]
+    selection: Literal["home", "draw", "away", "yes", "no", "over_2.5", "under_2.5"]
     recommendation_type: str
     current_odds: float | None
     min_odds: float
@@ -264,11 +273,58 @@ class MatchRecommendationOut(BaseModel):
     unknown_team: bool = False
 
 
-def validate_and_degrade(raw: dict) -> MatchRecommendationOut:
+def validate_and_degrade(
+    raw: dict, home_team: str | None = None, away_team: str | None = None
+) -> MatchRecommendationOut:
     """Validate a raw MatchRecommendation dict (from run_agent, a cache, or
     anywhere else), dropping any market that fails validation rather than
     raising for the whole request. Top-level fields default safely too, so
-    even a badly malformed payload can't crash the endpoint."""
+    even a badly malformed payload can't crash the endpoint.
+
+    BUG-023/024: the agent's LLM call has been observed hallucinating a
+    completely unrelated match's analysis (most often "Manchester City vs
+    Liverpool", confirmed on 5/10 fixtures in one live sandbox precompute
+    batch) instead of grounding itself in the real requested fixture -- with
+    nothing else in the pipeline catching it before this recommendation is
+    cached and served. `home_team`/`away_team` are the fixture actually
+    requested, so a mismatch against the agent's own self-reported `match`
+    field can be caught and degraded here, the one layer already responsible
+    for never trusting the agent's output blindly. Optional (mirroring
+    extract_recommendation's own home_team/away_team params, src/agent/schema.py):
+    `GET /api/recommendations/{match_id}` (main.py) only has match_id/date, not
+    a ground-truth fixture to compare against, so it calls this with neither --
+    the match-mismatch check is skipped, but the per-market validation below
+    still runs, which is what that endpoint actually needs (BUG-028: it used
+    to call MatchRecommendationOut.model_validate() directly instead of this
+    function at all, so any pre-existing cached row with a market/selection
+    that predates the Literal constraints below -- extremely common, since the
+    local-model hallucinations this file's other bugs document routinely wrote
+    non-canonical values -- raised an uncaught ValidationError, a 500 for a
+    plain cache read, not the graceful degrade every other caller already got.)
+    """
+    if home_team and away_team:
+        reported = reported_teams(raw.get("match") or {})
+    else:
+        reported = None
+    if reported is not None and not teams_match((home_team, away_team), reported):
+        _LOG.warning(
+            "agent_match_mismatch | requested=%s v %s | agent_reported=%s v %s",
+            home_team, away_team, reported[0], reported[1],
+        )
+        return MatchRecommendationOut(
+            match={"home_team": home_team, "away_team": away_team},
+            overall="insufficient_data",
+            markets=[],
+            explanation="The agent's analysis referenced a different match than requested and was discarded.",
+            confidence="low",
+            limitations=[
+                f"Agent output was for {reported[0]} v {reported[1]}, not the requested "
+                f"{home_team} v {away_team} -- discarded as a mismatch."
+            ],
+            prediction_basis="unknown",
+            invalid_market_count=len(raw.get("markets") or []),
+        )
+
     valid_markets: list[MarketRecommendationOut] = []
     invalid_count = 0
     for market in raw.get("markets") or []:
