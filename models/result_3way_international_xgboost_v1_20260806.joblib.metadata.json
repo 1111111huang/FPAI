@@ -1,0 +1,92 @@
+{
+  "artifact_name": "result_3way_international_xgboost_v1_20260806.joblib",
+  "artifact_path": "models/result_3way_international_xgboost_v1_20260806.joblib",
+  "classes": [
+    "home",
+    "draw",
+    "away"
+  ],
+  "created_at": "2026-08-07T03:19:27Z",
+  "feature_importance": [
+    {
+      "feature": "MKT_IMPLIED_AWAY",
+      "importance": 0.3752255141735077
+    },
+    {
+      "feature": "MKT_IMPLIED_HOME",
+      "importance": 0.2206275910139084
+    },
+    {
+      "feature": "MKT_IMPLIED_DRAW",
+      "importance": 0.10866771638393402
+    },
+    {
+      "feature": "MKT_LAMBDA_TOTAL",
+      "importance": 0.04122958332300186
+    },
+    {
+      "feature": "MKT_LAMBDA_HOME",
+      "importance": 0.03923221305012703
+    },
+    {
+      "feature": "MKT_OVERROUND",
+      "importance": 0.0371256060898304
+    },
+    {
+      "feature": "MKT_LAMBDA_AWAY",
+      "importance": 0.03685609996318817
+    },
+    {
+      "feature": "MKT_AH_AWAY_ODDS",
+      "importance": 0.036763034760951996
+    },
+    {
+      "feature": "MKT_POISSON_BTTS_PROB",
+      "importance": 0.0365547277033329
+    },
+    {
+      "feature": "MKT_AH_HOME_ODDS",
+      "importance": 0.03606955334544182
+    },
+    {
+      "feature": "MKT_AH_LINE",
+      "importance": 0.031648311764001846
+    },
+    {
+      "feature": "MKT_LAMBDA_AH_DIFF",
+      "importance": 0.0
+    },
+    {
+      "feature": "MKT_IMPLIED_OVER25",
+      "importance": 0.0
+    }
+  ],
+  "feature_names": [
+    "MKT_IMPLIED_HOME",
+    "MKT_IMPLIED_DRAW",
+    "MKT_IMPLIED_AWAY",
+    "MKT_OVERROUND",
+    "MKT_LAMBDA_TOTAL",
+    "MKT_LAMBDA_HOME",
+    "MKT_LAMBDA_AWAY",
+    "MKT_POISSON_BTTS_PROB",
+    "MKT_LAMBDA_AH_DIFF",
+    "MKT_AH_LINE",
+    "MKT_AH_HOME_ODDS",
+    "MKT_AH_AWAY_ODDS",
+    "MKT_IMPLIED_OVER25"
+  ],
+  "feature_schema_version": "v1",
+  "metrics": {
+    "accuracy": 0.5222355769230769,
+    "log_loss": 0.9924130718316674
+  },
+  "model_type": "XGBoostModel",
+  "primary_metric": "log_loss",
+  "secondary_metrics": [
+    "accuracy"
+  ],
+  "target": "result_3way",
+  "task_type": "multiclass_classification",
+  "training_cutoff": "2023-04-01T00:00:00"
+}
