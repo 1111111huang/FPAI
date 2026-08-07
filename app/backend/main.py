@@ -211,6 +211,10 @@ async def lifespan(app: FastAPI):
             # nightly EOD batch / T-30 refresh, sourced from The Odds API
             # (W55/W57) rather than football-data.org.
             sweden_fixtures_client=get_sweden_fixtures_client(),
+            # W81: La Liga processed alongside E0/SWE in the same nightly
+            # EOD batch / T-30 refresh, sourced from football-data.org --
+            # the same provider/class as E0 (W74/W76), unlike SWE.
+            la_liga_fixtures_client=get_la_liga_fixtures_client(),
         )
         scheduler.start()
         LOGGER.info("W08/W09/W10 scheduler started (ENABLE_SCHEDULER=1).")

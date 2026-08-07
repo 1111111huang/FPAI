@@ -31,11 +31,17 @@ EOD_JOB_ID = "eod_batch_generation"
 EOD_HOUR = 23
 EOD_MINUTE = 0
 
-# W62: every competition_specific league (match_info.py's COMPETITION_ALLOWLIST)
-# the nightly EOD batch/T-30 refresh should attempt. "SWE" is only actually
-# processed when the caller supplies a sweden_fixtures_client -- omitting it
-# (the default) preserves the exact pre-W62, E0-only behavior.
-COMPETITIONS: tuple[str, ...] = (LEAGUE_CODE, "SWE")
+# W62/W81: every competition_specific league (match_info.py's
+# COMPETITION_ALLOWLIST) the nightly EOD batch/T-30 refresh should attempt.
+# "SWE" is only actually processed when the caller supplies a
+# sweden_fixtures_client; "SP1" only when the caller supplies a
+# la_liga_fixtures_client -- omitting either (the default) preserves the
+# exact pre-W62/pre-W81 behavior for that competition.
+COMPETITIONS: tuple[str, ...] = (LEAGUE_CODE, "SWE", "SP1")
+
+# W81: football-data.org's La Liga competition code (W74/W76 -- confirmed
+# live, same provider as E0, unlike SWE which needs a whole separate client).
+LA_LIGA_COMPETITION_CODE = "PD"
 
 
 class PersistingOddsClient:
@@ -110,15 +116,23 @@ def _fetch_fixtures_for_league(
     fixtures_client: FootballDataClient,
     sweden_fixtures_client: SwedenFixturesClient | None,
     date_str: str,
+    la_liga_fixtures_client: FootballDataClient | None = None,
 ) -> list[NormalizedMatch] | None:
     """Returns None (distinct from an empty list) when this league can't be
     attempted at all this run -- e.g. SWE requested but no
-    sweden_fixtures_client configured -- so the caller can skip it silently
+    sweden_fixtures_client configured, or SP1 requested but no
+    la_liga_fixtures_client configured -- so the caller can skip it silently
     rather than treating "not configured" the same as "0 fixtures today"."""
     if league == "SWE":
         if sweden_fixtures_client is None:
             return None
         return sweden_fixtures_client.get_fixtures(date_from=date_str, date_to=date_str)
+    if league == "SP1":
+        if la_liga_fixtures_client is None:
+            return None
+        return la_liga_fixtures_client.get_fixtures(
+            competition_code=LA_LIGA_COMPETITION_CODE, date_from=date_str, date_to=date_str
+        )
     return fixtures_client.get_fixtures(competition_code=COMPETITION_CODE, date_from=date_str, date_to=date_str)
 
 
@@ -130,26 +144,32 @@ def register_eod_job(
     config: AgentConfig,
     now_fn: Callable[[], datetime] = lambda: sandbox_now(NY_TZ),
     sweden_fixtures_client: SwedenFixturesClient | None = None,
+    la_liga_fixtures_client: FootballDataClient | None = None,
 ) -> None:
     """Registers the daily EOD batch job (W09) on the given scheduler.
     RecoverableScheduler.schedule_daily itself handles the restart/catch-up
     guarantee (W08) -- this just supplies the job body.
 
-    W62: loops over every competition in COMPETITIONS (currently E0 and
-    SWE), fetching each one's own fixtures via the client that actually
-    covers it (football-data.org for E0, the Odds-API-backed
-    sweden_fixtures_client for SWE, W55/W57) and running a separate
-    run_eod_batch() per competition, correctly league-tagged. A fixture-
-    fetch failure for one competition is caught and logged, not allowed to
-    block the other's batch. Omitting sweden_fixtures_client (the default)
-    preserves the exact pre-W62, E0-only behavior -- SWE is silently
-    skipped, not attempted."""
+    W62/W81: loops over every competition in COMPETITIONS (currently E0,
+    SWE, and SP1), fetching each one's own fixtures via the client that
+    actually covers it (football-data.org for E0 and SP1 -- the same
+    provider/class, just a different competition_code, W74/W76 -- the
+    Odds-API-backed sweden_fixtures_client for SWE, W55/W57) and running a
+    separate run_eod_batch() per competition, correctly league-tagged. A
+    fixture-fetch failure for one competition is caught and logged, not
+    allowed to block the others' batch. Omitting sweden_fixtures_client/
+    la_liga_fixtures_client (both default to None) preserves the exact
+    pre-W62/pre-W81 behavior for that competition -- silently skipped, not
+    attempted."""
 
     def _eod_job() -> None:
         date_str = next_day_date_str(now_fn)
         for league in COMPETITIONS:
             try:
-                fixtures = _fetch_fixtures_for_league(league, fixtures_client, sweden_fixtures_client, date_str)
+                fixtures = _fetch_fixtures_for_league(
+                    league, fixtures_client, sweden_fixtures_client, date_str,
+                    la_liga_fixtures_client=la_liga_fixtures_client,
+                )
             except Exception:
                 LOGGER.warning(
                     "EOD batch: fixture discovery failed for league=%s -- skipping this "

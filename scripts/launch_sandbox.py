@@ -343,12 +343,16 @@ def fetch_sandbox_fixtures_swe(date_str: str) -> tuple[list[NormalizedMatch], bo
 def _fetch_sandbox_fixtures_for_league(
     league: str, fixtures_client: FootballDataClient, date_str: str,
 ) -> tuple[list[NormalizedMatch], bool]:
-    """W72: dispatches to the right per-league fetch function, mirroring
+    """W72/W81: dispatches to the right per-league fetch function, mirroring
     scheduler_wiring.py's _fetch_fixtures_for_league shape (same
     per-competition dispatch idea), adapted for precompute's need to also
-    track the used_fallback flag for its status-line reporting."""
+    track the used_fallback flag for its status-line reporting. SP1 shares
+    E0's football-data.org provider/class (W74/W76) -- just a different
+    competition_code, unlike SWE which needs an entirely separate source."""
     if league == "SWE":
         return fetch_sandbox_fixtures_swe(date_str)
+    if league == "SP1":
+        return fetch_sandbox_fixtures(fixtures_client, date_str, competition_code="PD")
     return fetch_sandbox_fixtures(fixtures_client, date_str)
 
 

@@ -217,6 +217,89 @@ def test_register_eod_job_one_competitions_fixture_fetch_failure_does_not_block_
     assert mock_run_agent.call_args.kwargs["match_info"]["league"] == "E0"
 
 
+def test_register_eod_job_processes_e0_swe_and_sp1_when_all_clients_configured(tmp_path: Path) -> None:
+    """W81: register_eod_job extends cleanly to a third competition -- SP1
+    shares E0's football-data.org provider/class (unlike SWE) but is
+    dispatched through its own la_liga_fixtures_client parameter, mirroring
+    sweden_fixtures_client's opt-in shape exactly, purely for test/mock
+    isolation (production wiring can pass the same underlying client for
+    both)."""
+    e0_fixture = NormalizedMatch(
+        match_id="m1", utc_date="2026-08-22T15:00:00Z", status="SCHEDULED",
+        home_team="Arsenal", away_team="Everton", home_goals=None, away_goals=None,
+    )
+    swe_fixture = NormalizedMatch(
+        match_id="sw1", utc_date="2026-08-22T17:00:00Z", status="SCHEDULED",
+        home_team="Malmo FF", away_team="AIK", home_goals=None, away_goals=None,
+    )
+    sp1_fixture = NormalizedMatch(
+        match_id="sp1", utc_date="2026-08-22T19:00:00Z", status="SCHEDULED",
+        home_team="Real Madrid", away_team="Sevilla FC", home_goals=None, away_goals=None,
+    )
+    fixtures_client = MagicMock()
+    fixtures_client.get_fixtures.return_value = [e0_fixture]
+    sweden_fixtures_client = MagicMock()
+    sweden_fixtures_client.get_fixtures.return_value = [swe_fixture]
+    la_liga_fixtures_client = MagicMock()
+    la_liga_fixtures_client.get_fixtures.return_value = [sp1_fixture]
+    cache = RecommendationCache(db_path=tmp_path / "cache.db")
+    config = AgentConfig.default()
+    run_log = JobRunLog(db_path=tmp_path / "job_runs.db")
+    now = datetime(2026, 8, 22, 23, 30, tzinfo=NY_TZ)
+    scheduler = RecoverableScheduler(run_log=run_log, now_fn=lambda: now)
+
+    recommendation = {
+        "match": {"home": "A", "away": "B", "date": "2026-08-22", "league": "E0"},
+        "overall": "no_bet", "markets": [], "explanation": "test", "confidence": "low",
+        "limitations": [], "prediction_basis": "market_odds_only",
+    }
+    with patch("app.backend.recommendations.run_agent", return_value=recommendation) as mock_run_agent:
+        register_eod_job(
+            scheduler, fixtures_client=fixtures_client, odds_client=None,
+            cache=cache, config=config, now_fn=lambda: now,
+            sweden_fixtures_client=sweden_fixtures_client,
+            la_liga_fixtures_client=la_liga_fixtures_client,
+        )
+
+    leagues_seen = {call.kwargs["match_info"]["league"] for call in mock_run_agent.call_args_list}
+    assert leagues_seen == {"E0", "SWE", "SP1"}
+    la_liga_fixtures_client.get_fixtures.assert_called_once_with(
+        competition_code="PD", date_from="2026-08-23", date_to="2026-08-23"
+    )
+    assert run_log.has_run("t30_sp1", t30_run_at(sp1_fixture).isoformat())
+
+
+def test_register_eod_job_skips_la_liga_gracefully_when_no_la_liga_client_configured(tmp_path: Path) -> None:
+    """Backward compatibility: omitting la_liga_fixtures_client (its default)
+    behaves exactly like before W81 -- only E0 (and SWE, if configured) run,
+    no crash."""
+    e0_fixture = NormalizedMatch(
+        match_id="m1", utc_date="2026-08-22T15:00:00Z", status="SCHEDULED",
+        home_team="Arsenal", away_team="Everton", home_goals=None, away_goals=None,
+    )
+    fixtures_client = MagicMock()
+    fixtures_client.get_fixtures.return_value = [e0_fixture]
+    cache = RecommendationCache(db_path=tmp_path / "cache.db")
+    config = AgentConfig.default()
+    run_log = JobRunLog(db_path=tmp_path / "job_runs.db")
+    now = datetime(2026, 8, 22, 23, 30, tzinfo=NY_TZ)
+    scheduler = RecoverableScheduler(run_log=run_log, now_fn=lambda: now)
+
+    recommendation = {
+        "match": {"home": "A", "away": "B", "date": "2026-08-22", "league": "E0"},
+        "overall": "no_bet", "markets": [], "explanation": "test", "confidence": "low",
+        "limitations": [], "prediction_basis": "market_odds_only",
+    }
+    with patch("app.backend.recommendations.run_agent", return_value=recommendation) as mock_run_agent:
+        register_eod_job(
+            scheduler, fixtures_client=fixtures_client, odds_client=None,
+            cache=cache, config=config, now_fn=lambda: now,
+        )
+
+    assert mock_run_agent.call_count == 1
+    assert mock_run_agent.call_args.kwargs["match_info"]["league"] == "E0"
+
+
 def test_next_day_date_str_respects_sandbox_override(monkeypatch) -> None:
     monkeypatch.setenv("SANDBOX_MODE", "1")
     monkeypatch.setenv("SANDBOX_DATE", "2026-03-01")
