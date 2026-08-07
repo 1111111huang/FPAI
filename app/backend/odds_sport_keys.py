@@ -7,13 +7,18 @@ competition (Sweden) needs its own sport_key.
 
 SWE's value confirmed live (W55, 2026-07-23) against The Odds API's own
 /v4/sports/?all=true listing: {"key": "soccer_sweden_allsvenskan", ...,
-"active": true} -- not a guess."""
+"active": true} -- not a guess.
+
+SP1's value confirmed live (W74/W77, 2026-08-06) the same way:
+{"key": "soccer_spain_la_liga", "title": "La Liga - Spain", "active": true}
+-- not a guess."""
 
 from __future__ import annotations
 
 ODDS_SPORT_KEY_BY_COMPETITION: dict[str, str] = {
     "E0": "soccer_epl",
     "SWE": "soccer_sweden_allsvenskan",
+    "SP1": "soccer_spain_la_liga",
 }
 
 # Matches the pre-existing get_odds(sport_key="soccer_epl") default this

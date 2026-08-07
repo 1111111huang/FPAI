@@ -22,6 +22,12 @@ def test_swe_maps_to_the_real_confirmed_sport_key():
     assert ODDS_SPORT_KEY_BY_COMPETITION["SWE"] == "soccer_sweden_allsvenskan"
 
 
+def test_sp1_maps_to_the_real_confirmed_sport_key():
+    """W74 confirmed this live against The Odds API's own /v4/sports listing
+    (active: true) -- not a guess."""
+    assert ODDS_SPORT_KEY_BY_COMPETITION["SP1"] == "soccer_spain_la_liga"
+
+
 def test_default_sport_key_matches_e0():
     """A caller with no/unrecognized league falls back to EPL's sport_key --
     matches the pre-existing get_odds(sport_key="soccer_epl") default this
