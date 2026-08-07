@@ -949,4 +949,47 @@ Discovered 2026-07-26 investigating an `insufficient_data` report for Burnley vs
 
 A37's `with_structured_output()` (Section 8a) guarantees JSON *shape* — correct field names/types/enums — never that the *content* is about the requested match: `MatchRecommendationModel.match` is a bare, content-unchecked `dict`, and market `market`/`selection` fields are unconstrained strings. This is the same class of gap A30 already closed for diagnostics (never trust the LLM's own `prediction_basis`/`cold_start_risk` prose over deterministic pipeline state, Section 19.2) — A38 is the still-open story to extend that same "deterministic state wins, LLM prose is never authoritative" philosophy to match/market identity: deterministically overwrite `match` from `match_info` (straightforward, since it's a wholesale-replaceable dict), and at minimum detect-and-flag (e.g. a `limitations` entry, a confidence downgrade, or forcing `insufficient_data`) for markets-list grounding, which is a harder problem than `match` since `selection`/`market` strings can't simply be overwritten with a known-correct value the way `match` can. Not yet implemented — tracked here rather than silently assumed fixed by A37.
 
+## 23. La Liga Verification (A49–A51, 2026-08-07)
+
+Mirrors Section 22 (Swedish League Verification) — motivated by the web app's La Liga integration (`documents/app_user_stories.md` Phase 15, W74–W82) and the ML-engine side's own La Liga registration (`documents/user_stories.md` Phase 21).
+
+### 23.1 Third-Competition Routing Verification (A49)
+
+`resolve_competition_node`/`forecast_node` (Section 19) needed no code changes to route `SP1` correctly — both already key off `competition_id` generically, confirmed by two new regression tests: `tests/test_agent_tool_selection.py::test_resolve_competition_recommends_forecast_league_for_sp1` (real, unmocked call against the live `config/competitions.yaml`) and `tests/test_agent_pipeline.py::test_forecast_node_calls_forecast_league_for_sp1` (mocked `ForecastService`, confirms `match_type="league"` is used, not the international fallback).
+
+The other required half of this story: `"La Liga"` (the free-text name) was this codebase's standing example of an *unregistered* competition across 5 files — registering `SP1` doesn't retroactively change what those tests exercise (`gate_league`/`get_competition_definition` do exact-code lookups, no name normalization existed pre-A50), so they stayed technically valid but confusing (the codebase's own most prominent unregistered-league example was, in fact, now supported under a different string). Replaced with `"Bundesliga"`/`"D1"` (confirmed genuinely unregistered — the real registry has exactly `E0`, `SWE`, `SP1`, `international`) in 3 of the 5 files (`tests/test_agent_tool_selection.py`, `tests/test_agent_pipeline.py`, `tests/test_forecast_registry_fallback.py`); the 4th, `app/backend/tests/test_match_info_gating.py`, turned out to already be correctly handled by an earlier story (W75) — `gate_league` matches by code not free-text name, so `gate_league("La Liga") is None` stayed genuinely correct even with `SP1` registered, and W75 had already added `D1` in `SP1`'s old stock-example place. New explicit `SP1`-is-registered cases added alongside the retired examples, not just a find-and-replace.
+
+### 23.2 Free-Text League-Name Normalization (A50)
+
+`resolve_competition`'s own docstring told the calling LLM `'La Liga'` was a valid example input, but the registry only ever matched exact codes — an agent following the tool's own documented example for the very league this phase adds would get `general_purpose` back forever, even after `SP1` was fully registered and trained.
+
+Chose the deterministic code fix over a prompt-only one: this environment's real provider (`config/agent_config.yaml`, local Ollama `llama3.1:8b`) is documented elsewhere in this file (Section 17/BUG-019) as unreliable at strict instruction-following, so depending on a *new* prompt instruction being reliably followed would have been a shakier fix than the existing evidence already argues against.
+
+Root-cause placement mattered here: the naive fix (alias table only inside `_resolve_competition_impl`, `src/agent/tools.py`) would have left a real gap, because `ForecastService.forecast_upcoming()` (`src/forecast/forecast_service.py:356`) calls the *same* `get_competition_definition()` independently for its own tier lookup — fixing only `resolve_competition` would still leave `forecast_upcoming(league="La Liga", ...)` silently degrading to `market_odds_only`. The alias table (`COMPETITION_NAME_ALIASES`) lives in `get_competition_definition()` itself (`src/logic/competition_registry.py`) — the one choke point both callers route through — tried only as a case-insensitive fallback after the exact-code lookup misses, so a real registered code is never shadowed. `_resolve_competition_impl` now echoes the *resolved* code (e.g. `"SP1"`) in its `"competition"` JSON field rather than the caller's raw input, and its docstring tells the calling LLM to reuse that field for `forecast_league`'s own `league` argument (which has always required a code, never a free-text name, and was not changed).
+
+Explicitly scoped out: `forecast_node`'s own deterministic-pipeline path (`src/agent/pipeline.py`) passes `match_info["league"]` straight to `forecast_league`, bypassing `resolve_competition`'s resolved-code field entirely — a non-issue in practice since `match_info["league"]` is always populated by the app's own code-matching `gate_league()` or the CLI's `--league` flag, never free text, but a real, intentionally-undone piece of full generality flagged here rather than silently expanded into.
+
+### 23.3 La Liga Pilot Corpus and Baseline Backtest (A51)
+
+Unlike A36's Sweden attempt (Section 22.2, still blocked by BUG-018's intermittent recording gap), this pilot ran clean. `agent-snapshot --from-date 2026-05-23 --to-date 2026-05-24 --league SP1 --dry-run` confirmed 10 fixtures (the season's final two matchdays, the most recent finished SP1 matches in `raw_matches`); the real run reported `Done. Processed: 10 | Errors: 0 | Skipped: 0`.
+
+Per A51's explicit caution (BUG-018's lesson: never trust a clean CLI exit code alone), every one of the 10 resulting `data/agent_snapshots/SP1/<match_id>/` directories was directly inspected, not just the log: all 10 have exactly 4 real tool-response files (`resolve_competition`, `forecast_league`, 2×`web_search`) plus a non-empty `_complete.json` (52 bytes each, `{"completed_at": ...}`) — no BUG-018 recurrence this time, no partial/empty directories. Spot-checked one `resolve_competition` response directly: `{"competition": "SP1", "tier": "competition_specific", "recommended_tool": "forecast_league"}` — real, correct content, and (post-A50) already showing the resolved-code echo behavior.
+
+`agent-backtest --stake-mode flat` and `--stake-mode kelly` both ran to completion against the corpus (no `SnapshotMissingError`, confirming the corpus really is complete):
+
+| Metric | flat | kelly |
+|---|---|---|
+| matches_evaluated | 10 | 10 |
+| bets_placed | 3 | 3 |
+| bets_won | 0 | 1 |
+| roi | -1.0 | -0.939 |
+| hit_rate | 0.0 | 0.333 |
+| bet_frequency | 0.3 | 0.3 |
+| max_drawdown | 0.03 | 0.156 |
+| ending_bankroll (start 1000) | 970.0 | 843.81 |
+
+**Explicitly not compared apples-to-apples with E0 (Section 18) or SWE's own partial signal (Section 22.2)**, per this story's own acceptance criteria — different league, a 10-match sample sized for wall-clock feasibility (not a full-season backtest), and a genuinely weak baseline result (0-1 wins from 3 bets across both modes) that is not surprising or concerning at this sample size.
+
+**One honest, unexplained-but-expected observation, not investigated further**: `bets_won` differs between the flat and kelly runs (0 vs 1) despite both replaying the *identical* recorded tool-response corpus for the *identical* 10 matches. This is consistent with the LLM's own final synthesis call being outside what `SnapshotStore` replays (only `resolve_competition`/`forecast_league`/`web_search` — the deterministic-pipeline tool calls — are snapshotted; the LLM's own recommendation-generation turn is a fresh call each run) combined with this environment's local Ollama model's known non-determinism (Section 17) — i.e., the same underlying evidence can still produce a different `overall`/market selection across two separate agent-backtest invocations. Not a defect in the SP1 integration itself; flagged here as a real characteristic of this environment's baseline-reproducibility ceiling, worth keeping in mind for any future SP1 backtest comparison.
+
 **Secondary finding from the same investigation, not yet addressed:** `agent_config_hash` (Section 12.2) hashes only `config/agent_config.yaml`'s fields, never the graph/pipeline *code* itself, so the app's `recommendation_cache.db` has no way to detect that Phase 11's 2026-07-22 restructure changed what a cached row actually means. 33 of 136 sandbox cache rows predated the A31 commit and were purged as a one-off cleanup during this investigation, not a systematic fix — see Section 17.
