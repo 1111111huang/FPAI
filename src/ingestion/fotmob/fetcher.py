@@ -20,6 +20,7 @@ LOGGER = get_logger(__name__)
 
 LEAGUE_IDS: dict[str, int] = {
     "E0": 47,  # Premier League
+    "SP1": 87,  # LaLiga (US#146, live-verified 2026-08-06 against /api/data/matches)
 }
 
 _HEADERS = {

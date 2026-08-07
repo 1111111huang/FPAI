@@ -53,7 +53,8 @@ def test_list_competition_definitions_is_stable() -> None:
     names = [definition.competition_id for definition in list_competition_definitions()]
     assert names == sorted(names)
     # US#128: SWE joined the registry alongside E0/international.
-    assert set(names) == {"E0", "SWE", "international"}
+    # US#147/US#152: SP1 (La Liga) joined as a third competition_specific entry.
+    assert set(names) == {"E0", "SWE", "SP1", "international"}
 
 
 def test_resolve_feature_subset_for_general_purpose_matches_legacy_mkt_features() -> None:
@@ -209,6 +210,69 @@ def test_e0_available_targets_unrestricted() -> None:
     # E0 doesn't set available_targets, so every target (including corners)
     # remains available -- registering Sweden must not restrict E0.
     definition = get_competition_definition("E0")
+    assert definition.available_targets is None
+    for target in ("home_corners", "away_corners", "total_corners", "result_3way"):
+        assert is_target_available(definition, target) is True
+
+
+# ---------------------------------------------------------------------------
+# US#147: La Liga (SP1)'s real registration, verified against the real
+# config/competitions.yaml. Unlike Sweden, US#143's live column-parity check
+# found SP1's source has the exact same rich column set as E0, so SP1's
+# enabled_feature_groups mirrors E0's list minus SQUAD (FotMob backfill not
+# yet run) and available_targets is left unset (full parity, all 8 targets).
+# ---------------------------------------------------------------------------
+
+def test_la_liga_is_registered_competition_specific() -> None:
+    definition = get_competition_definition("SP1")
+    assert definition.tier == "competition_specific"
+    assert definition.league_code == "SP1"
+    assert definition.player_data_sources == ()
+
+
+def test_la_liga_enabled_feature_groups_match_us143_findings() -> None:
+    definition = get_competition_definition("SP1")
+    assert set(definition.enabled_feature_groups) == {
+        "OFF_GOALS", "OFF_SHOTS", "OFF_CORNERS",
+        "DEF_GOALS", "DEF_SHOTS", "DEF_CORNERS",
+        "OPP_ADJ_GOALS", "OPP_ADJ_SHOTS", "OPP_ADJ_CORNERS",
+        "STRENGTH_GOALS", "STRENGTH_SHOTS",
+        "INTERACTION_GOALS", "INTERACTION_SHOTS",
+        "DIS", "CTX", "CTX_CORNERS", "H2H_CORNERS", "MKT", "EFFICIENCY",
+    }
+    # SQUAD is the only E0 group SP1 doesn't have -- FotMob player-level
+    # backfill for La Liga hasn't been run yet (US#147's own completion notes).
+    assert "SQUAD" not in definition.enabled_feature_groups
+
+
+def test_la_liga_resolved_feature_count_matches_e0_minus_squad() -> None:
+    # "SQUAD" absent from enabled_feature_groups gates 5 prefixes, not just
+    # SQUAD_ itself (ModelManager._load_selected_features, US#97/Phase 14c/15a):
+    # SQUAD_, LUCK_, XOC_, FRDS_, DEF_ANCHOR_.
+    squad_gated_prefixes = ("SQUAD_", "LUCK_", "XOC_", "FRDS_", "DEF_ANCHOR_")
+    e0_features = set(_selected_features_for("E0"))
+    la_liga_features = set(_selected_features_for("SP1"))
+    squad_only = {f for f in e0_features if f not in la_liga_features}
+    assert all(f.startswith(squad_gated_prefixes) for f in squad_only), squad_only
+    assert la_liga_features < e0_features
+
+
+def test_la_liga_feature_set_is_superset_of_general_purpose_features() -> None:
+    features = set(_selected_features_for("SP1"))
+    assert set(GENERAL_PURPOSE_FEATURES) <= features
+
+
+def test_e0_and_sweden_still_resolve_unchanged_after_la_liga_registration() -> None:
+    # Regression: registering a third competition_specific competition must
+    # not change E0's or Sweden's own resolved feature sets.
+    assert len(_selected_features_for("E0")) == 167
+    assert len(_selected_features_for("SWE")) == 74
+
+
+def test_la_liga_available_targets_unrestricted() -> None:
+    # SP1 doesn't set available_targets (full column parity with E0), so
+    # every target -- including corners -- remains available.
+    definition = get_competition_definition("SP1")
     assert definition.available_targets is None
     for target in ("home_corners", "away_corners", "total_corners", "result_3way"):
         assert is_target_available(definition, target) is True

@@ -82,6 +82,22 @@ def test_fetch_league_season_maps_e0_to_epl():
     assert "2023" in captured_urls[0]
 
 
+def test_fetch_league_season_maps_sp1_to_la_liga():
+    """US#146: La Liga's real understat.com slug is 'La_liga' (live-verified
+    2026-08-06), not assumed from the EPL naming pattern."""
+    captured_urls = []
+
+    def fake_get(url, **kwargs):
+        captured_urls.append(url)
+        return _mock_resp([])
+
+    with patch("src.ingestion.understat.fetcher.requests.get", side_effect=fake_get), \
+         patch("src.ingestion.understat.fetcher.time.sleep"):
+        fetch_league_season("SP1", 2023, delay=0)
+
+    assert "La_liga" in captured_urls[0]
+
+
 def test_fetch_league_season_sends_xhr_header():
     """Server requires X-Requested-With: XMLHttpRequest to return JSON."""
     captured_headers = {}

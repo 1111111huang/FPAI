@@ -29,6 +29,17 @@ def test_gate_league_keeps_swe():
     assert gate_league("SWE") == "SWE"
 
 
+def test_sp1_is_in_the_allowlist():
+    """W75: La Liga is fully built engine-side (data, config/competitions.yaml
+    registration, US#143-147) -- the allowlist is the only remaining reason
+    it doesn't route through run_agent() correctly."""
+    assert "SP1" in COMPETITION_ALLOWLIST
+
+
+def test_gate_league_keeps_sp1():
+    assert gate_league("SP1") == "SP1"
+
+
 def test_request_to_match_info_includes_league_for_swe():
     request = RecommendationRequest(home_team="Malmo FF", away_team="AIK", date="2026-07-25", league="SWE")
     match_info = request.to_match_info()
@@ -40,8 +51,15 @@ def test_gate_league_keeps_allowlisted_competition():
 
 
 def test_gate_league_omits_non_allowlisted_competition():
+    # "La Liga" (the free-text name) stays gated out even after SP1 (the
+    # code) joined the allowlist (W75) -- gate_league matches by code, not
+    # name, so this is still a genuinely correct "not allowlisted" case, not
+    # a stale example (see the agent_user_stories.md Phase 15 note on the
+    # same free-text-vs-code distinction for resolve_competition).
     assert gate_league("La Liga") is None
-    assert gate_league("SP1") is None
+    # D1 (Bundesliga) is a still-genuinely-unregistered competition code, used
+    # here in SP1's old place now that SP1 itself is allowlisted (W75).
+    assert gate_league("D1") is None
     assert gate_league("Champions League") is None
 
 

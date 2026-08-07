@@ -45,7 +45,6 @@
   "Sheffield United": "Sheffield United",
   "Tottenham": "Tottenham",
   "Aston Villa": "Aston Villa",
-
   "Arsenal FC": "Arsenal",
   "Aston Villa FC": "Aston Villa",
   "AFC Bournemouth": "Bournemouth",
@@ -70,7 +69,6 @@
   "West Ham United FC": "West Ham",
   "Wolverhampton Wanderers FC": "Wolves",
   "Wolverhampton": "Wolves",
-
   "Brighton": "Brighton",
   "Cardiff": "Cardiff",
   "Huddersfield": "Huddersfield",
@@ -82,123 +80,158 @@
   "Sheff Wed": "Sheff Wed",
   "West Brom": "West Brom",
   "Wolves": "Wolves",
-
   "AFC Eskilstuna": "AFC Eskilstuna",
-
   "AIK Fotboll": "AIK",
   "AIK": "AIK",
-
   "Åtvidabergs FF": "Atvidabergs",
   "Atvidabergs": "Atvidabergs",
-
   "IFK Brage": "Brage",
   "Brage": "Brage",
-
   "IF Brommapojkarna": "Brommapojkarna",
   "Brommapojkarna": "Brommapojkarna",
-
   "Dalkurd FF": "Dalkurd",
   "Dalkurd": "Dalkurd",
-
   "Degerfors IF": "Degerfors",
   "Degerfors": "Degerfors",
-
   "Djurgårdens IF": "Djurgarden",
   "Djurgardens IF": "Djurgarden",
   "Djurgården": "Djurgarden",
   "Djurgarden": "Djurgarden",
-
   "IF Elfsborg": "Elfsborg",
   "Elfsborg": "Elfsborg",
-
   "Falkenbergs FF": "Falkenbergs",
   "Falkenbergs": "Falkenbergs",
-
   "GAIS": "GAIS",
-
   "Gefle IF": "Gefle",
   "Gefle": "Gefle",
-
   "IFK Göteborg": "Goteborg",
   "IFK Goteborg": "Goteborg",
   "Göteborg": "Goteborg",
   "Goteborg": "Goteborg",
-
   "BK Häcken": "Hacken",
   "BK Hacken": "Hacken",
   "Häcken": "Hacken",
   "Hacken": "Hacken",
-
   "Halmstads BK": "Halmstad",
   "Halmstad": "Halmstad",
-
   "Hammarby IF": "Hammarby",
   "Hammarby": "Hammarby",
-
   "Helsingborgs IF": "Helsingborg",
   "Helsingborg": "Helsingborg",
-
   "Jönköpings Södra IF": "Jonkopings",
   "Jönköpings": "Jonkopings",
   "Jonkopings": "Jonkopings",
-
   "Kalmar FF": "Kalmar",
   "Kalmar": "Kalmar",
-
   "Landskrona BoIS": "Landskrona",
   "Landskrona": "Landskrona",
-
   "Ljungskile SK": "Ljungskile",
   "Ljungskile": "Ljungskile",
-
   "Malmö FF": "Malmo FF",
   "Malmo FF": "Malmo FF",
-
   "Mjällby AIF": "Mjallby",
   "Mjällby": "Mjallby",
   "Mjallby": "Mjallby",
-
   "IFK Norrköping": "Norrkoping",
   "Norrköping": "Norrkoping",
   "Norrkoping": "Norrkoping",
-
   "Örebro SK": "Orebro",
   "Örebro": "Orebro",
   "Orebro": "Orebro",
-
   "Örgryte IS": "Orgryte",
   "Örgryte": "Orgryte",
   "Orgryte": "Orgryte",
-
   "Östers IF": "Oster",
   "Öster": "Oster",
   "Östers": "Oster",
   "Oster": "Oster",
   "Osters": "Oster",
-
   "Östersunds FK": "Ostersunds",
   "Östersunds": "Ostersunds",
   "Ostersunds": "Ostersunds",
-
   "IK Sirius": "Sirius",
   "Sirius": "Sirius",
-
   "GIF Sundsvall": "Sundsvall",
   "Sundsvall": "Sundsvall",
-
   "Syrianska FC": "Syrianska",
   "Syrianska": "Syrianska",
-
   "Trelleborgs FF": "Trelleborgs",
   "Trelleborgs": "Trelleborgs",
-
   "Varbergs BoIS": "Varberg",
   "Varberg": "Varberg",
-
   "IFK Värnamo": "Varnamo",
   "Värnamo": "Varnamo",
   "Varnamo": "Varnamo",
-
   "Västerås SK": "Vasteras SK",
-  "Vasteras SK": "Vasteras SK"
+  "Vasteras SK": "Vasteras SK",
+  "Alaves": "Alaves",
+  "Deportivo Alaves": "Alaves",
+  "Almeria": "Almeria",
+  "UD Almeria": "Almeria",
+  "Athletic Club": "Ath Bilbao",
+  "Ath Bilbao": "Ath Bilbao",
+  "Athletic Bilbao": "Ath Bilbao",
+  "Ath Madrid": "Ath Madrid",
+  "Atletico Madrid": "Ath Madrid",
+  "Atletico de Madrid": "Ath Madrid",
+  "FC Barcelona": "Barcelona",
+  "Barcelona": "Barcelona",
+  "Barca": "Barcelona",
+  "Betis": "Betis",
+  "Real Betis Balompie": "Betis",
+  "Real Betis": "Betis",
+  "Cadiz": "Cadiz",
+  "Cadiz CF": "Cadiz",
+  "Celta Vigo": "Celta",
+  "RC Celta": "Celta",
+  "Celta": "Celta",
+  "SD Eibar": "Eibar",
+  "Eibar": "Eibar",
+  "Elche": "Elche",
+  "Elche CF": "Elche",
+  "Espanol": "Espanol",
+  "Espanyol": "Espanol",
+  "RCD Espanyol": "Espanol",
+  "Getafe": "Getafe",
+  "Getafe CF": "Getafe",
+  "Girona": "Girona",
+  "Girona FC": "Girona",
+  "Granada": "Granada",
+  "Granada CF": "Granada",
+  "SD Huesca": "Huesca",
+  "Huesca": "Huesca",
+  "La Coruna": "La Coruna",
+  "Deportivo de La Coruna": "La Coruna",
+  "Deportivo La Coruna": "La Coruna",
+  "UD Las Palmas": "Las Palmas",
+  "Las Palmas": "Las Palmas",
+  "CD Leganes": "Leganes",
+  "Leganes": "Leganes",
+  "Levante UD": "Levante",
+  "Levante": "Levante",
+  "Malaga": "Malaga",
+  "Malaga CF": "Malaga",
+  "RCD Mallorca": "Mallorca",
+  "Mallorca": "Mallorca",
+  "Osasuna": "Osasuna",
+  "CA Osasuna": "Osasuna",
+  "Real Oviedo": "Oviedo",
+  "Oviedo": "Oviedo",
+  "Real Madrid": "Real Madrid",
+  "Real Madrid CF": "Real Madrid",
+  "Sevilla FC": "Sevilla",
+  "Sevilla": "Sevilla",
+  "Sociedad": "Sociedad",
+  "Real Sociedad": "Sociedad",
+  "Sporting Gijon": "Sp Gijon",
+  "Sp Gijon": "Sp Gijon",
+  "Sporting de Gijon": "Sp Gijon",
+  "Valencia": "Valencia",
+  "Valencia CF": "Valencia",
+  "Valladolid": "Valladolid",
+  "Real Valladolid": "Valladolid",
+  "Vallecano": "Vallecano",
+  "Rayo Vallecano": "Vallecano",
+  "Villarreal CF": "Villarreal",
+  "Villarreal": "Villarreal"
 }
