@@ -326,6 +326,15 @@ const TEAM_COLORS: Record<string, { primary: string; secondary?: string }> = {
   "Hammarby IF": { primary: "#046A38", secondary: "#FFFFFF" },
   "BK Hacken": { primary: "#FFD700", secondary: "#000000" },
   "IFK Goteborg": { primary: "#0057A0", secondary: "#FFFFFF" },
+  // W80: La Liga (Spanish top flight). Keys are the exact `shortName`
+  // football-data.org returns for these fixtures (confirmed live, W74/W76)
+  // -- not the ML engine's internal canonical short name
+  // (config/team_mapping.json), which is only used for odds/corpus
+  // matching and never rendered directly. Mirrors W61's exact rationale.
+  "Real Madrid": { primary: "#FFFFFF", secondary: "#00529F" },
+  "Barça": { primary: "#A50044", secondary: "#004D98" },
+  Atleti: { primary: "#CB3524", secondary: "#272E61" },
+  "Sevilla FC": { primary: "#D00027", secondary: "#FFFFFF" },
 };
 
 const BADGE_FALLBACK_COLORS = ["#199e70", "#c98500", "#008300", "#9085e9", "#e66767", "#d55181", "#d95926"];

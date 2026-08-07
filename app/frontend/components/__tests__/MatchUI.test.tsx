@@ -110,6 +110,33 @@ describe("TeamBadge -- Allsvenskan club colors (W61)", () => {
   });
 });
 
+describe("TeamBadge -- La Liga club colors (W80)", () => {
+  // Keys are the exact `shortName` football-data.org returns for these
+  // fixtures (confirmed live, W74/W76) -- not the ML engine's internal
+  // canonical short name, since that's only used for odds/corpus
+  // matching, never rendered.
+  it.each([
+    ["Real Madrid", "#FFFFFF"],
+    ["Barça", "#A50044"],
+    ["Atleti", "#CB3524"],
+    ["Sevilla FC", "#D00027"],
+  ])("renders %s with its real club color, not the generic hash-based fallback", (name, primary) => {
+    const { container } = render(<TeamBadge name={name} />);
+    const badge = container.querySelector("span");
+    expect(badge).toHaveStyle({ background: primary });
+  });
+
+  it("still falls back to the generic hash-based badge for an unmapped La Liga club", () => {
+    // No regression: a club not explicitly added (e.g. Santander, W78's
+    // documented cold-start case) must keep rendering via the existing
+    // fallback, not crash or render blank.
+    const { container } = render(<TeamBadge name="Santander" />);
+    const badge = container.querySelector("span");
+    expect(badge).toHaveAttribute("style");
+    expect(badge?.getAttribute("style")).not.toBe("");
+  });
+});
+
 describe("StatusBadge", () => {
   it.each(ALL_OVERALL_STATES)("renders the correct label for overall=$overall", ({ overall, label }) => {
     render(<StatusBadge status={overall} />);
