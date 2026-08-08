@@ -16,7 +16,7 @@ function match(overrides: Partial<Match> = {}): Match {
     overall: "direct_bet",
     confidence: "medium",
     markets: [{ market: "result_3way", selection: "home", recommendationType: "direct_bet", currentOdds: 2.0, minOdds: 1.5, mlProbability: 0.5, impliedProbability: 0.5, valueEdge: 0.05 }],
-    explanation: "",
+    explanation: [],
     limitations: [],
     predictionBasis: "team_history_and_market",
     coldStartRisk: false,

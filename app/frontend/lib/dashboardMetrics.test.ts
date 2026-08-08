@@ -15,7 +15,7 @@ function match(overrides: Partial<Match> = {}): Match {
     overall: "direct_bet",
     confidence: "medium",
     markets: [],
-    explanation: "",
+    explanation: [],
     limitations: [],
     predictionBasis: "team_history_and_market",
     coldStartRisk: false,
@@ -73,6 +73,28 @@ describe("rankTopEdges", () => {
       })
     );
     expect(rankTopEdges(matches, 3)).toHaveLength(3);
+  });
+
+  // Direct user report (2026-08-08): a "No Bet" match whose only market had
+  // a numerically higher (but below-threshold, hence still no_bet) edge
+  // than a genuine direct_bet elsewhere was still being ranked -- a match
+  // with nothing actionable has no business appearing in "Top Edges" at
+  // all, regardless of which market's number is highest.
+  it("excludes a match whose only market is no_bet, even with a higher raw edge than a real direct_bet", () => {
+    const matches = [
+      match({
+        id: "no-bet-high-edge",
+        overall: "no_bet",
+        markets: [{ market: "result_3way", selection: "away", recommendationType: "no_bet", currentOdds: 5.0, minOdds: 0, mlProbability: 0.23, impliedProbability: 0.2, valueEdge: 0.08 }],
+      }),
+      match({
+        id: "real-bet-lower-edge",
+        overall: "direct_bet",
+        markets: [{ market: "result_3way", selection: "home", recommendationType: "direct_bet", currentOdds: 1.8, minOdds: 0, mlProbability: 0.6, impliedProbability: 0.56, valueEdge: 0.04 }],
+      }),
+    ];
+    const ranked = rankTopEdges(matches, 5);
+    expect(ranked.map((r) => r.match.id)).toEqual(["real-bet-lower-edge"]);
   });
 });
 
@@ -156,5 +178,28 @@ describe("sortMatches", () => {
     const original = [...matches];
     sortMatches(matches, "kickoff");
     expect(matches).toEqual(original);
+  });
+
+  // Direct user report (2026-08-08): several No Bet cards showing +5.3%,
+  // +5.5%, +4.5% rendered in that literal order under "Edge %" sort --
+  // pricedEdge() correctly excludes every no_bet-only match from outranking
+  // a real bet (both collapse to the same -Infinity), but that also left
+  // them all tied relative to *each other*, falling back to array order
+  // instead of the numbers actually shown on their own cards.
+  it("sorts multiple no_bet-only matches by their own displayed edge, not left tied in array order", () => {
+    const matches = [
+      match({ id: "5.3pct", overall: "no_bet", markets: [{ market: "result_3way", selection: "away", recommendationType: "no_bet", currentOdds: 2.2, minOdds: 0, mlProbability: 0.5, impliedProbability: 0.45, valueEdge: 0.053 }] }),
+      match({ id: "5.5pct", overall: "no_bet", markets: [{ market: "result_3way", selection: "away", recommendationType: "no_bet", currentOdds: 6.25, minOdds: 0, mlProbability: 0.2, impliedProbability: 0.16, valueEdge: 0.055 }] }),
+      match({ id: "4.5pct", overall: "no_bet", markets: [{ market: "result_3way", selection: "draw", recommendationType: "no_bet", currentOdds: 3.0, minOdds: 0, mlProbability: 0.38, impliedProbability: 0.33, valueEdge: 0.045 }] }),
+    ];
+    expect(sortMatches(matches, "edge").map((m) => m.id)).toEqual(["5.5pct", "5.3pct", "4.5pct"]);
+  });
+
+  it("still never ranks a no_bet match above a genuine direct_bet, even with a much higher displayed edge", () => {
+    const matches = [
+      match({ id: "no-bet-9pct", overall: "no_bet", markets: [{ market: "result_3way", selection: "away", recommendationType: "no_bet", currentOdds: 5.0, minOdds: 0, mlProbability: 0.23, impliedProbability: 0.2, valueEdge: 0.09 }] }),
+      match({ id: "direct-bet-2pct", overall: "direct_bet", markets: [{ market: "result_3way", selection: "home", recommendationType: "direct_bet", currentOdds: 1.8, minOdds: 0, mlProbability: 0.58, impliedProbability: 0.56, valueEdge: 0.02 }] }),
+    ];
+    expect(sortMatches(matches, "edge").map((m) => m.id)).toEqual(["direct-bet-2pct", "no-bet-9pct"]);
   });
 });

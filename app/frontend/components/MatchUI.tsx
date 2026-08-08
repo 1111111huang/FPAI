@@ -82,7 +82,8 @@ export type Match = {
   overall: Overall;
   confidence: Confidence;
   markets: MarketRec[];
-  explanation: string;
+  // One bullet per aspect, mirroring lib/types.ts's MatchRecommendationOut.
+  explanation: string[];
   limitations: string[];
   predictionBasis: string;
   // W15: first-class trust signals, independent of predictionBasis/overall --
@@ -135,7 +136,7 @@ export function fixtureToMatch(fixture: Fixture, asOf?: Date, sandboxMode = fals
     overall: "insufficient_data",
     confidence: "low",
     markets: [],
-    explanation: "",
+    explanation: [],
     limitations: [],
     predictionBasis: "",
     coldStartRisk: false,
@@ -307,7 +308,18 @@ export function formatEdge(v: number) {
   return v >= 0 ? `+${pct}%` : `${pct}%`;
 }
 export function bestMarket(match: Match): MarketRec | undefined {
-  return [...match.markets].sort((a, b) => b.valueEdge - a.valueEdge)[0];
+  // Prefer an actually-recommended market (direct_bet/conditional) over a
+  // no_bet one, even if a no_bet market happens to have a numerically
+  // higher value_edge (a real case: a market can have positive edge and
+  // still be no_bet if it's below min_value_edge, or an ineligible-for-
+  // conditional market A54 downgraded) -- direct user report: a "No Bet"
+  // card was showing a prominent positive "+3.2% EDGE" from exactly this
+  // situation, reading as a good-looking bet that wasn't actually being
+  // recommended. Falls back to ranking among all markets (including
+  // no_bet) only when nothing is actionable at all.
+  const actionable = match.markets.filter((m) => m.recommendationType !== "no_bet");
+  const pool = actionable.length > 0 ? actionable : match.markets;
+  return [...pool].sort((a, b) => b.valueEdge - a.valueEdge)[0];
 }
 
 const TEAM_COLORS: Record<string, { primary: string; secondary?: string }> = {
@@ -617,7 +629,11 @@ export function MatchCard({
             <div className="text-right">
               <div
                 className={`font-mono text-sm ${
-                  shown?.currentOdds ? (shown.valueEdge >= 0 ? "text-good" : "text-ink-secondary") : "text-muted"
+                  shown?.currentOdds
+                    ? shown.recommendationType !== "no_bet" && shown.valueEdge >= 0
+                      ? "text-good"
+                      : "text-ink-secondary"
+                    : "text-muted"
                 }`}
               >
                 {shown?.currentOdds ? formatEdge(shown.valueEdge) : "—"}
@@ -639,7 +655,14 @@ export function MatchCard({
             {error && <ErrorState message={error} onRetry={handleExpand} />}
             {!loading && !error && match.hasRecommendation && (
               <>
-                <p className="text-ink-secondary">{match.explanation}</p>
+                <ul className="space-y-1 text-ink-secondary">
+                  {match.explanation.map((point, i) => (
+                    <li key={i} className="flex gap-1.5">
+                      <span aria-hidden="true">·</span>
+                      <span>{point}</span>
+                    </li>
+                  ))}
+                </ul>
                 {match.invalidMarketCount > 0 && (
                   <p className="mt-2 flex items-center gap-1.5 text-xs text-serious">
                     <WarningCircle weight="fill" size={13} />
@@ -763,7 +786,7 @@ export function DashboardPage() {
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center justify-between gap-4">
             <div>
-              <h1 className="text-xl font-semibold tracking-tight text-ink">Today&apos;s Edges</h1>
+              <h1 className="text-xl font-semibold tracking-tight text-ink">Daily Edges</h1>
               <p className="mt-1 text-sm text-ink-secondary">
                 Next 10 real E0, La Liga &amp; Allsvenskan fixtures. Expand a card to generate its recommendation.
               </p>
@@ -1050,7 +1073,11 @@ function ProbabilityRow({
       <span className={`text-right font-mono ${anomalous ? "text-serious" : "text-ink-secondary"}`}>
         {m.currentOdds ? m.currentOdds.toFixed(2) : anomalous ? "missing" : "—"}
       </span>
-      <span className={`text-right font-mono ${m.valueEdge >= 0 ? "text-good" : "text-ink-secondary"}`}>
+      <span
+        className={`text-right font-mono ${
+          m.recommendationType !== "no_bet" && m.valueEdge >= 0 ? "text-good" : "text-ink-secondary"
+        }`}
+      >
         {formatEdge(m.valueEdge)}
       </span>
       {anomalous ? (
@@ -1114,7 +1141,7 @@ export function MatchAnalysisPage({
             overall: "insufficient_data",
             confidence: "low",
             markets: [],
-            explanation: "",
+            explanation: [],
             limitations: [],
             predictionBasis: "",
             coldStartRisk: false,
@@ -1240,7 +1267,14 @@ export function MatchAnalysisPage({
           <section className="mt-8">
             <h2 className="text-sm font-semibold uppercase tracking-wide text-muted">Agent Reasoning</h2>
             <div className="mt-2 rounded-lg border border-border bg-surface p-4">
-              <p className="text-sm leading-relaxed text-ink-secondary">{match.explanation}</p>
+              <ul className="space-y-1.5 text-sm leading-relaxed text-ink-secondary">
+                {match.explanation.map((point, i) => (
+                  <li key={i} className="flex gap-1.5">
+                    <span aria-hidden="true">·</span>
+                    <span>{point}</span>
+                  </li>
+                ))}
+              </ul>
               {match.limitations.length > 0 && (
                 <ul className="mt-3 space-y-1 border-t border-border pt-3">
                   {match.limitations.map((l, i) => (

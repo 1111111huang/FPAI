@@ -464,7 +464,7 @@ def _structured_model(**overrides):
         match={"home": "A", "away": "B", "date": "2026-08-22", "league": "E0"},
         overall="direct_bet",
         markets=[],
-        explanation="Structured call produced this.",
+        explanation=["Structured call produced this."],
         confidence="high",
         limitations=[],
         prediction_basis="team_history_and_market",
@@ -483,7 +483,7 @@ def test_structured_output_returns_dict_on_success():
     result = _structured_output(mock_llm, [HumanMessage(content="hi")])
 
     assert result["overall"] == "direct_bet"
-    assert result["explanation"] == "Structured call produced this."
+    assert result["explanation"] == ["Structured call produced this."]
     mock_llm.with_structured_output.assert_called_once_with(MatchRecommendationModel)
 
 
@@ -559,7 +559,7 @@ def test_run_agent_uses_structured_output_on_ollama_when_available():
         )
 
     assert recommendation["overall"] == "direct_bet"
-    assert recommendation["explanation"] == "Structured call produced this."
+    assert recommendation["explanation"] == ["Structured call produced this."]
 
 
 def test_run_agent_falls_back_to_free_text_on_ollama_when_structured_output_fails():
@@ -609,7 +609,7 @@ def test_run_agent_falls_back_to_free_text_on_ollama_when_structured_output_fail
         )
 
     assert recommendation["overall"] == "no_bet"
-    assert recommendation["explanation"] == "Balanced match."
+    assert recommendation["explanation"] == ["Balanced match."]
 
 
 def test_run_agent_never_attempts_structured_output_on_non_ollama_providers():

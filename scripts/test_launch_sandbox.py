@@ -193,9 +193,15 @@ class TestFetchSandboxFixtures:
     """W50: a sandbox date is always in the past, so fixture sourcing must
     go through get_results() (status=FINISHED) -- get_fixtures()
     (status=SCHEDULED) structurally can never return anything for an
-    already-played date (the same root cause W45 fixed for /api/fixtures)."""
+    already-played date (the same root cause W45 fixed for /api/fixtures).
 
-    def test_calls_get_results_not_get_fixtures(self):
+    W86: always queries the same unconditional 90-day-forward window
+    DashboardPage itself always queries now, not just as an empty-date
+    fallback (W51's original design, superseded -- see
+    fetch_sandbox_fixtures()'s own docstring for the live-found drift bug
+    this replaced)."""
+
+    def test_calls_get_results_with_the_90_day_window_not_get_fixtures(self):
         fixtures_client = MagicMock()
         expected = [
             NormalizedMatch(
@@ -210,15 +216,11 @@ class TestFetchSandboxFixtures:
         assert result == expected
         assert used_fallback is False
         fixtures_client.get_results.assert_called_once_with(
-            competition_code="PL", date_from="2025-03-08", date_to="2025-03-08",
+            competition_code="PL", date_from="2025-03-08", date_to="2025-06-06",
         )
         fixtures_client.get_fixtures.assert_not_called()
 
     def test_passes_through_custom_competition_code(self):
-        # Exact date returns a (non-empty) result here so the W51 90-day
-        # fallback never fires -- this test is purely about competition_code
-        # pass-through on the exact-date query, not the fallback path
-        # (covered separately below).
         fixtures_client = MagicMock()
         fixtures_client.get_results.return_value = [
             NormalizedMatch(
@@ -230,7 +232,7 @@ class TestFetchSandboxFixtures:
         fetch_sandbox_fixtures(fixtures_client, "2025-03-08", competition_code="SP1")
 
         fixtures_client.get_results.assert_called_once_with(
-            competition_code="SP1", date_from="2025-03-08", date_to="2025-03-08",
+            competition_code="SP1", date_from="2025-03-08", date_to="2025-06-06",
         )
 
     def test_no_fixtures_returns_empty_list(self):
@@ -240,19 +242,18 @@ class TestFetchSandboxFixtures:
         result, used_fallback = fetch_sandbox_fixtures(fixtures_client, "2025-03-08")
 
         assert result == []
-        assert used_fallback is True
+        assert used_fallback is False
+        assert fixtures_client.get_results.call_count == 1
 
-    def test_exact_date_empty_falls_back_to_90_day_window_sorted_and_capped(self):
-        # W51: DashboardPage (MatchUI.tsx, W46) falls back to a 90-day
-        # forward window, sorted kickoff-ascending and capped at 10, when
-        # the exact sandbox date has zero real fixtures. Before this fix,
-        # fetch_sandbox_fixtures() only ever queried the exact date, so
-        # --precompute silently generated nothing for exactly the dates
-        # where the Dashboard's own fallback actually shows the user real
-        # matches. 12 out-of-order fixtures (more than the cap of 10) are
-        # used so a broken/no-op sort or a missing cap would both be caught
-        # -- a list that happens to already be sorted, or exactly 10 long,
-        # wouldn't prove either property.
+    def test_window_sorted_and_capped_at_10(self):
+        # 12 out-of-order fixtures (more than the cap of 10) are used so a
+        # broken/no-op sort or a missing cap would both be caught -- a list
+        # that happens to already be sorted, or exactly 10 long, wouldn't
+        # prove either property. Direct user report (2026-08-08): before
+        # this test's underlying fix, a league whose exact sandbox date had
+        # *some* (but not 0, and not >=10) real matches never queried this
+        # window at all, silently leaving the Dashboard's later-dated cards
+        # ("next 10" can span many days, W86) uncovered by --precompute.
         fixtures_client = MagicMock()
 
         def _make(n: int, day: int) -> NormalizedMatch:
@@ -264,19 +265,12 @@ class TestFetchSandboxFixtures:
         # Deliberately out of kickoff order.
         unordered_days = [20, 10, 30, 9, 25, 11, 22, 12, 28, 15, 13, 18]
         upcoming = [_make(i, day) for i, day in enumerate(unordered_days)]
-
-        def _get_results(**kwargs):
-            if kwargs["date_from"] == kwargs["date_to"] == "2025-03-08":
-                return []
-            assert kwargs == {"competition_code": "PL", "date_from": "2025-03-08", "date_to": "2025-06-06"}
-            return upcoming
-
-        fixtures_client.get_results.side_effect = _get_results
+        fixtures_client.get_results.return_value = upcoming
 
         result, used_fallback = fetch_sandbox_fixtures(fixtures_client, "2025-03-08")
 
-        assert used_fallback is True
-        assert fixtures_client.get_results.call_count == 2
+        assert used_fallback is False
+        assert fixtures_client.get_results.call_count == 1
         assert len(result) == 10
         assert [f.utc_date for f in result] == sorted(f.utc_date for f in result)
         # The two latest (by kickoff) fixtures -- days 28 and 30 -- must have
@@ -284,16 +278,6 @@ class TestFetchSandboxFixtures:
         assert {f.match_id for f in result} == {
             str(i) for i, day in enumerate(unordered_days) if day not in (28, 30)
         }
-
-    def test_exact_date_empty_and_fallback_window_also_empty_returns_empty_list(self):
-        fixtures_client = MagicMock()
-        fixtures_client.get_results.return_value = []
-
-        result, used_fallback = fetch_sandbox_fixtures(fixtures_client, "2025-03-08")
-
-        assert result == []
-        assert used_fallback is True
-        assert fixtures_client.get_results.call_count == 2
 
 
 class TestPrecomputeRecommendationsOrdering:
@@ -398,16 +382,14 @@ class TestPrecomputeRecommendationsConfigSelection:
 
 
 class TestPrecomputeRecommendationsFallbackReporting:
-    """W51 code-quality review finding: precompute_recommendations()'s
-    consumption of fetch_sandbox_fixtures()'s `used_fallback` flag -- the
-    honest status line distinguishing "N fixtures found for {date}" from
-    "no fixtures on {date}, falling back to the next N in the following
-    90 days" -- had no test exercising the fallback branch specifically,
-    only the exact-date-has-fixtures case (via the ordering test above)."""
+    """W51/W86 code-quality review finding: precompute_recommendations()'s
+    status line for what fetch_sandbox_fixtures() found -- covers a fixture
+    dated after the exact sandbox date (i.e. only reachable via the 90-day
+    window), which the exact-date-only ordering test above doesn't exercise."""
 
-    def test_prints_the_fallback_message_and_precomputes_the_fallback_fixtures(self, capsys):
+    def test_prints_the_window_message_and_precomputes_a_later_dated_fixture(self, capsys):
         date_str = "2025-03-08"
-        fallback_fixture = NormalizedMatch(
+        later_fixture = NormalizedMatch(
             match_id="99", utc_date="2025-03-14T15:00:00Z", status="FINISHED",
             home_team="Sunderland", away_team="Brighton Hove", home_goals=0, away_goals=1,
         )
@@ -418,13 +400,8 @@ class TestPrecomputeRecommendationsFallbackReporting:
              patch("app.backend.sweden_fixtures_client.historical_results_from_raw_matches", return_value=[]), \
              patch("app.backend.eod_batch.run_eod_batch", new_callable=AsyncMock) as mock_run_batch:
 
-            def _get_results(**kwargs):
-                if kwargs["date_from"] == kwargs["date_to"] == date_str:
-                    return []
-                return [fallback_fixture]
-
-            mock_client_cls.return_value.get_results.side_effect = _get_results
-            mock_run_batch.return_value = EodBatchResult(fixtures=[fallback_fixture], generated=1, skipped=0)
+            mock_client_cls.return_value.get_results.return_value = [later_fixture]
+            mock_run_batch.return_value = EodBatchResult(fixtures=[later_fixture], generated=1, skipped=0)
 
             try:
                 precompute_recommendations(date_str)
@@ -432,21 +409,17 @@ class TestPrecomputeRecommendationsFallbackReporting:
                 os.environ.pop("SANDBOX_MODE", None)
                 os.environ.pop("SANDBOX_DATE", None)
 
-        # W81: E0 and SP1 both go through the same mocked FootballDataClient/
-        # _get_results side_effect (keyed only on date, not competition_code),
-        # so both fall back identically -- run_eod_batch fires twice, not
-        # once. SWE finds nothing (historical_results_from_raw_matches
-        # mocked to []) so contributes no call.
+        # W81: E0 and SP1 both go through the same mocked FootballDataClient
+        # (keyed only on date range, not competition_code), so both find the
+        # same fixture -- run_eod_batch fires twice, not once. SWE finds
+        # nothing (historical_results_from_raw_matches mocked to []) so
+        # contributes no call.
         assert mock_run_batch.await_count == 2
         for call in mock_run_batch.await_args_list:
-            assert call.kwargs["fixtures"] == [fallback_fixture]
+            assert call.kwargs["fixtures"] == [later_fixture]
 
         output = capsys.readouterr().out
-        assert f"no real fixtures on {date_str}" in output
-        assert "falling back to the next 1 match(es) in the following 90 days" in output
-        # The exact-date-has-fixtures wording must NOT also appear -- these
-        # are mutually exclusive status lines, not both printed.
-        assert "real fixture(s) found for" not in output
+        assert f"1 match(es) found in the next 90 days from {date_str}" in output
 
 
 class TestPrecomputeRecommendationsBothLeagues:

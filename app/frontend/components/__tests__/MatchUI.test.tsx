@@ -66,7 +66,7 @@ function baseMatch(overrides: Partial<Match> = {}): Match {
     overall: "direct_bet",
     confidence: "medium",
     markets: [],
-    explanation: "test explanation",
+    explanation: ["test explanation"],
     limitations: [],
     predictionBasis: "team_history_and_market",
     coldStartRisk: false,
@@ -244,6 +244,59 @@ describe("MatchCard", () => {
 });
 
 // ---------------------------------------------------------------------------
+// Direct user report (2026-08-08): a "No Bet" card showed a prominent
+// positive "+3.2% EDGE" -- a real, positive-but-below-threshold edge on a
+// no_bet market (a legitimate state, e.g. A54's ineligible-market downgrade,
+// or simply below min_value_edge) was picked as bestMarket() purely because
+// it had the numerically highest value_edge, with no regard for whether
+// that market was actually being recommended. A green-colored positive edge
+// on a "No Bet" card reads as a good bet that isn't actually being offered.
+// ---------------------------------------------------------------------------
+describe("MatchCard -- bestMarket prefers an actionable market over a higher-edge no_bet one", () => {
+  it("shows the direct_bet market's odds/edge, not a no_bet market with a numerically higher edge", () => {
+    const match = baseMatch({
+      overall: "direct_bet",
+      markets: [
+        // Higher edge, but not actionable -- must not be the one shown.
+        {
+          market: "result_3way", selection: "away", recommendationType: "no_bet",
+          currentOdds: 5.0, minOdds: 0, mlProbability: 0.23, impliedProbability: 0.2, valueEdge: 0.08,
+          targetOdds: null,
+        },
+        // Lower edge, but this is the actual recommendation.
+        {
+          market: "result_3way", selection: "home", recommendationType: "direct_bet",
+          currentOdds: 1.8, minOdds: 0, mlProbability: 0.6, impliedProbability: 0.56, valueEdge: 0.04,
+          targetOdds: null,
+        },
+      ],
+    });
+    render(<MatchCard match={match} onUpdate={vi.fn()} />);
+    expect(screen.getByText("1.80")).toBeInTheDocument();
+    expect(screen.getByText("+4.0%")).toBeInTheDocument();
+    expect(screen.queryByText("5.00")).not.toBeInTheDocument();
+    expect(screen.queryByText("+8.0%")).not.toBeInTheDocument();
+  });
+
+  it("does not color a no_bet market's positive edge as 'good' when nothing is actionable", () => {
+    const match = baseMatch({
+      overall: "no_bet",
+      markets: [
+        {
+          market: "result_3way", selection: "away", recommendationType: "no_bet",
+          currentOdds: 5.0, minOdds: 0, mlProbability: 0.23, impliedProbability: 0.2, valueEdge: 0.032,
+          targetOdds: null,
+        },
+      ],
+    });
+    render(<MatchCard match={match} onUpdate={vi.fn()} />);
+    const edge = screen.getByText("+3.2%");
+    expect(edge).toBeInTheDocument();
+    expect(edge).not.toHaveClass("text-good");
+  });
+});
+
+// ---------------------------------------------------------------------------
 // W47: MatchCard.handleExpand / MatchAnalysisPage.load must check the
 // precomputed cache (getCachedRecommendation) before falling back to the
 // live "regenerate now" call (generateRecommendation).
@@ -254,7 +307,7 @@ function makeRecommendation(overrides: Partial<MatchRecommendationOut> = {}): Ma
     match: { home: "Arsenal", away: "Everton", date: "2026-08-22", league: "E0" },
     overall: "direct_bet",
     markets: [],
-    explanation: "test explanation",
+    explanation: ["test explanation"],
     confidence: "medium",
     limitations: [],
     prediction_basis: "team_history_and_market",
@@ -301,7 +354,7 @@ describe("MatchCard -- cache-first expand (W47)", () => {
   });
 
   it("on a cache hit, applies the cached recommendation and never calls generateRecommendation", async () => {
-    const cachedRec = makeRecommendation({ explanation: "cached explanation" });
+    const cachedRec = makeRecommendation({ explanation: ["cached explanation"] });
     vi.mocked(getCachedRecommendation).mockResolvedValue(cachedRec);
     const user = userEvent.setup();
     const onUpdate = vi.fn();
@@ -314,7 +367,7 @@ describe("MatchCard -- cache-first expand (W47)", () => {
     expect(getCachedRecommendation).toHaveBeenCalledWith("m1", "2026-08-22");
     expect(generateRecommendation).not.toHaveBeenCalled();
     expect(onUpdate).toHaveBeenCalledWith(
-      expect.objectContaining({ hasRecommendation: true, explanation: "cached explanation" })
+      expect.objectContaining({ hasRecommendation: true, explanation: ["cached explanation"] })
     );
   });
 
@@ -333,7 +386,7 @@ describe("MatchCard -- cache-first expand (W47)", () => {
 
   it("on a cache miss (null), falls back to generateRecommendation and applies its result unchanged", async () => {
     vi.mocked(getCachedRecommendation).mockResolvedValue(null);
-    const liveRec = makeRecommendation({ explanation: "live explanation" });
+    const liveRec = makeRecommendation({ explanation: ["live explanation"] });
     vi.mocked(generateRecommendation).mockResolvedValue(liveRec);
     const user = userEvent.setup();
     const onUpdate = vi.fn();
@@ -352,7 +405,7 @@ describe("MatchCard -- cache-first expand (W47)", () => {
       match_id: "m1",
     });
     expect(onUpdate).toHaveBeenCalledWith(
-      expect.objectContaining({ hasRecommendation: true, explanation: "live explanation" })
+      expect.objectContaining({ hasRecommendation: true, explanation: ["live explanation"] })
     );
   });
 });
@@ -372,7 +425,7 @@ describe("MatchAnalysisPage -- cache-first load (W47)", () => {
   });
 
   it("on a cache hit, renders the cached recommendation and never calls generateRecommendation", async () => {
-    const cachedRec = makeRecommendation({ explanation: "cached explanation" });
+    const cachedRec = makeRecommendation({ explanation: ["cached explanation"] });
     vi.mocked(getCachedRecommendation).mockResolvedValue(cachedRec);
 
     render(<MatchAnalysisPage id="m1" home="Arsenal" away="Everton" date="2026-08-22" />);
@@ -384,7 +437,7 @@ describe("MatchAnalysisPage -- cache-first load (W47)", () => {
 
   it("on a cache miss (null), falls back to generateRecommendation and renders its result unchanged", async () => {
     vi.mocked(getCachedRecommendation).mockResolvedValue(null);
-    const liveRec = makeRecommendation({ explanation: "live explanation" });
+    const liveRec = makeRecommendation({ explanation: ["live explanation"] });
     vi.mocked(generateRecommendation).mockResolvedValue(liveRec);
 
     render(<MatchAnalysisPage id="m1" home="Arsenal" away="Everton" date="2026-08-22" />);
@@ -479,7 +532,7 @@ describe("LogBetButton (bet-logging locked-except-stake behavior)", () => {
     markets: [
       { market: "result_3way", selection: "home", recommendation_type: "direct_bet", current_odds: 2.1, min_odds: 1.5, ml_probability: 0.5, implied_probability: 0.47, value_edge: 0.03 },
     ],
-    explanation: "test",
+    explanation: ["test"],
     confidence: "medium",
     limitations: [],
     prediction_basis: "team_history_and_market",

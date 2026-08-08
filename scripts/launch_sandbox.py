@@ -309,42 +309,44 @@ def fetch_sandbox_fixtures(
     eod_batch.py's run_eod_batch() `fixtures` parameter (W50), which this
     feeds.
 
-    W51: if the exact date genuinely has zero real fixtures, falls back to
-    the same 90-day-forward window DashboardPage itself falls back to
-    (MatchUI.tsx, W46) -- query the exact date first; if that's empty,
-    query date_str..date_str+90d, sort by kickoff ascending (utc_date is
-    already ISO 8601, so a plain string sort is correct -- same as the
-    frontend's `.sort((a, b) => a.kickoffIso.localeCompare(b.kickoffIso))`),
-    and cap at the same 10 matches the Dashboard renders. Keep this in sync
-    with DashboardPage's own fallback in MatchUI.tsx if either changes --
-    a matching comment lives there pointing back here.
+    W51/W86: always queries the same unconditional 90-day-forward window
+    DashboardPage itself always queries now (MatchUI.tsx) -- query
+    date_str..date_str+90d, sort by kickoff ascending (utc_date is already
+    ISO 8601, so a plain string sort is correct -- same as the frontend's
+    `.sort((a, b) => a.kickoffIso.localeCompare(b.kickoffIso))`), and cap at
+    the same 10 matches the Dashboard renders. **Found live** (direct user
+    report, 2026-08-08): this used to query the exact date first and only
+    widen the window when that came back completely empty -- W86 changed
+    DashboardPage to always query the wide window regardless of same-day
+    count, but this precompute-side copy was never updated to match, so any
+    league whose exact date had 1-9 real matches (not exactly 0) silently
+    left the Dashboard's later-dated cards uncovered, "not yet generated"
+    until clicked. Keep this in sync with DashboardPage's own query in
+    MatchUI.tsx if either changes -- a matching comment lives there pointing
+    back here.
 
-    Returns `(fixtures, used_fallback)`: `used_fallback` lets
-    precompute_recommendations() print an accurate status line for either
-    case without issuing a second, duplicate network call of its own."""
-    exact = fixtures_client.get_results(competition_code=competition_code, date_from=date_str, date_to=date_str)
-    if exact:
-        return exact, False
-
+    Returns `(fixtures, used_fallback)` for backward compatibility with
+    _fetch_sandbox_fixtures_for_league's tuple contract; `used_fallback` is
+    now always `False` -- there is no longer a separate fallback case, the
+    window is unconditional -- kept only so callers don't need updating."""
     to_date = (date_cls.fromisoformat(date_str) + datetime_mod.timedelta(days=90)).isoformat()
     upcoming = fixtures_client.get_results(competition_code=competition_code, date_from=date_str, date_to=to_date)
-    return sorted(upcoming, key=lambda m: m.utc_date)[:10], True
+    return sorted(upcoming, key=lambda m: m.utc_date)[:10], False
 
 
 def fetch_sandbox_fixtures_swe(date_str: str) -> tuple[list[NormalizedMatch], bool]:
-    """W72: SWE analogue of fetch_sandbox_fixtures(), sourced from W71's
+    """W72/W86: SWE analogue of fetch_sandbox_fixtures(), sourced from W71's
     historical_results_from_raw_matches() instead of FootballDataClient --
     SwedenFixturesClient's own get_results() can't serve an arbitrary past
     date at all (see W71), so there's no equivalent single-client call to
-    parameterize the way the E0 version does."""
+    parameterize the way the E0 version does. See fetch_sandbox_fixtures()'s
+    own docstring for why this always queries the unconditional 90-day
+    window now, not just as an empty-date fallback."""
     from app.backend.sweden_fixtures_client import historical_results_from_raw_matches
 
-    exact = historical_results_from_raw_matches(date_str, date_str)
-    if exact:
-        return exact, False
     to_date = (date_cls.fromisoformat(date_str) + datetime_mod.timedelta(days=90)).isoformat()
     upcoming = historical_results_from_raw_matches(date_str, to_date)
-    return sorted(upcoming, key=lambda m: m.utc_date)[:10], True
+    return sorted(upcoming, key=lambda m: m.utc_date)[:10], False
 
 
 def _fetch_sandbox_fixtures_for_league(
@@ -422,14 +424,14 @@ def precompute_recommendations(date_str: str, config_path: str | None = None) ->
             print(f"Precompute [{league}]: fixture discovery failed -- skipping this competition, others unaffected.")
             continue
 
-        if used_fallback:
-            print(
-                f"Precompute [{league}]: no real fixtures on {date_str} -- falling back to the next "
-                f"{len(fixtures)} match(es) in the following 90 days (same window/cap DashboardPage itself "
-                "falls back to, W46/W51)."
-            )
-        else:
-            print(f"Precompute [{league}]: {len(fixtures)} real fixture(s) found for {date_str}.")
+        # W86: the window is unconditional now (matching DashboardPage's own
+        # always-widened query) -- used_fallback is always False, no longer
+        # a meaningful distinction to print.
+        del used_fallback
+        print(
+            f"Precompute [{league}]: {len(fixtures)} match(es) found in the next 90 days from {date_str} "
+            "(same window/sort/cap DashboardPage itself always queries, W86)."
+        )
         if not fixtures:
             print(f"Precompute [{league}]: nothing to generate.")
             continue

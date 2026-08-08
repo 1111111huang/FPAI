@@ -59,7 +59,7 @@ describe("MatchCard's relative-day label respects the sandbox clock", () => {
       id: "m1", league: "E0", tier: "competition_specific", kickoffIso,
       home: "Arsenal", away: "Everton", status: "upcoming",
       hasRecommendation: true, overall: "no_bet", confidence: "medium",
-      markets: [], explanation: "", limitations: [],
+      markets: [], explanation: [], limitations: [],
       predictionBasis: "team_history_and_market", coldStartRisk: false,
       featureCompleteness: 0.9, unknownTeam: false, invalidMarketCount: 0,
     };
@@ -228,7 +228,7 @@ describe("sandbox mode does not leak real results for fixtures still-future rela
       match: { home: "Arsenal", away: "Everton", date: "2026-03-14", league: "E0" },
       overall: "direct_bet",
       markets: [],
-      explanation: "generated for a still-future (in sandbox) fixture",
+      explanation: ["generated for a still-future (in sandbox) fixture"],
       confidence: "medium",
       limitations: [],
       prediction_basis: "team_history_and_market",

@@ -15,14 +15,22 @@ export function countByOverall(matches: Match[]): OverallCounts {
 
 export type TopEdge = { match: Match; edge: number };
 
-/** The best market's value_edge, but only when it's a real, priced edge --
- * a match with no markets at all, or whose best market has no live odds
- * (current_odds null -- an unpriceable edge, not a real one), has no
- * priced edge to report. Shared by rankTopEdges and sortMatches so both
- * treat "no real edge" identically instead of drifting apart. */
+/** The best market's value_edge, but only when it's a real, priced,
+ * actionable edge -- a match with no markets at all, whose best market has
+ * no live odds (current_odds null -- an unpriceable edge, not a real one),
+ * or whose only markets are no_bet (nothing actually clears the value
+ * threshold), has no priced edge to report. That last case matters here
+ * specifically: bestMarket() already prefers an actionable market when one
+ * exists, but for an all-no_bet match it still returns the least-bad no_bet
+ * market so MatchCard has *something* to show -- "Top Edges" must not treat
+ * that fallback value as a real ranked edge, or a "No Bet" match could
+ * outrank a genuine direct_bet/conditional opportunity. Shared by
+ * rankTopEdges and sortMatches so both treat "no real edge" identically
+ * instead of drifting apart. */
 function pricedEdge(m: Match): number | null {
   const shown = bestMarket(m);
-  return shown && shown.currentOdds !== null ? shown.valueEdge : null;
+  if (!shown || shown.currentOdds === null || shown.recommendationType === "no_bet") return null;
+  return shown.valueEdge;
 }
 
 /** Ranks by the best-priced market's value_edge, descending. A match with
@@ -115,9 +123,25 @@ export function sortMatches(matches: Match[], sort: MatchSort): Match[] {
   if (sort === "kickoff") {
     return [...matches].sort((a, b) => a.kickoffIso.localeCompare(b.kickoffIso));
   }
+  // Direct user report (2026-08-08): every no_bet-only match collapsed to
+  // the same pricedEdge()-is-null/-Infinity tie, so within that tie the
+  // comparator fell back to array order (kickoff-ish) instead of the edge
+  // % each card actually displays -- e.g. +5.3%, +5.5%, +4.5% shown in that
+  // literal, unsorted order. Two-tier sort: pricedEdge (real, actionable
+  // edges only, matching bestMarket()'s own no_bet-never-outranks-a-real-
+  // bet preference) is the primary key, so a No Bet card can still never
+  // rank above a genuine direct_bet/conditional one regardless of its
+  // number -- but *within* either tier, break ties by each card's own
+  // displayed edge (bestMarket's value_edge, whatever market that is) so
+  // the visible order always matches the numbers on screen.
   return [...matches].sort((a, b) => {
-    const edgeA = pricedEdge(a) ?? -Infinity;
-    const edgeB = pricedEdge(b) ?? -Infinity;
-    return edgeB - edgeA;
+    const primaryA = pricedEdge(a);
+    const primaryB = pricedEdge(b);
+    if (primaryA !== null && primaryB === null) return -1;
+    if (primaryA === null && primaryB !== null) return 1;
+    if (primaryA !== null && primaryB !== null) return primaryB - primaryA;
+    const displayA = bestMarket(a)?.valueEdge ?? -Infinity;
+    const displayB = bestMarket(b)?.valueEdge ?? -Infinity;
+    return displayB - displayA;
   });
 }

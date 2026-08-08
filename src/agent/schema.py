@@ -32,7 +32,12 @@ class MatchRecommendation(TypedDict):
     match: dict
     overall: Literal["direct_bet", "conditional", "no_bet", "insufficient_data"]
     markets: list[MarketRecommendation]
-    explanation: str
+    # One bullet per aspect (value edge, team news, form, market caveats,
+    # ...) instead of one narrative paragraph -- direct user request. A plain
+    # string (a pre-this-change cached row, or a model that ignores the
+    # updated prompt) is still accepted and normalized to a single-item list,
+    # see normalize_explanation().
+    explanation: list[str]
     confidence: Literal["low", "medium", "high"]
     limitations: list[str]
     prediction_basis: str
@@ -103,10 +108,23 @@ class MatchRecommendationModel(BaseModel):
     match: dict
     overall: Literal["direct_bet", "conditional", "no_bet", "insufficient_data"]
     markets: list[MarketRecommendationModel]
-    explanation: str
+    explanation: list[str]
     confidence: Literal["low", "medium", "high"]
     limitations: list[str]
     prediction_basis: str
+
+
+def normalize_explanation(value: object) -> list[str]:
+    """Bullet-point explanation, one item per aspect -- direct user request,
+    replacing the old single-paragraph string. Accepts a plain string too
+    (a pre-this-change cached row, or a model that ignores the updated
+    prompt) and degrades it to a single-item list rather than failing
+    validation over a formatting difference; empty/blank items are dropped."""
+    if isinstance(value, list):
+        return [str(item).strip() for item in value if str(item).strip()]
+    if isinstance(value, str) and value.strip():
+        return [value.strip()]
+    return []
 
 
 def _downgrade_direct_bet_with_null_odds(data: dict) -> dict:
@@ -315,6 +333,11 @@ def extract_recommendation(
         if missing:
             last_error = f"missing fields: {sorted(missing)}"
             continue
+
+        # Normalize before the structural (list[str]) validation below, not
+        # after -- a plain-string explanation would otherwise fail
+        # MatchRecommendationModel.model_validate() before this ever runs.
+        data["explanation"] = normalize_explanation(data.get("explanation"))
 
         # BUG-020: `not in` on a set requires hashing the LHS -- a malformed
         # response with a dict/list `overall` (observed live from

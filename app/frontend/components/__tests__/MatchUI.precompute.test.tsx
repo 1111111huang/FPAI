@@ -42,7 +42,7 @@ function makeRecommendation(overrides: Partial<MatchRecommendationOut> = {}): Ma
     match: { home: "Arsenal", away: "Everton", date: "2026-08-22", league: "E0" },
     overall: "direct_bet",
     markets: [],
-    explanation: "test explanation",
+    explanation: ["test explanation"],
     confidence: "medium",
     limitations: [],
     prediction_basis: "team_history_and_market",
@@ -70,7 +70,7 @@ describe("Dashboard initial-list precompute visibility (W53)", () => {
     const today = new Date().toISOString().slice(0, 10);
     const f = fixture("precomputed-match", `${today}T15:00:00Z`, "Arsenal", "Everton");
     vi.mocked(getFixtures).mockImplementation(async (from, to) => (from === today ? [f] : []));
-    const cachedRec = makeRecommendation({ explanation: "precomputed explanation" });
+    const cachedRec = makeRecommendation({ explanation: ["precomputed explanation"] });
     vi.mocked(getCachedRecommendation).mockResolvedValue(cachedRec);
 
     render(<DashboardPage />);
@@ -92,7 +92,7 @@ describe("Dashboard initial-list precompute visibility (W53)", () => {
     const f = fixture("uncached-match", `${today}T15:00:00Z`, "Arsenal", "Everton");
     vi.mocked(getFixtures).mockImplementation(async (from, to) => (from === today ? [f] : []));
     vi.mocked(getCachedRecommendation).mockResolvedValue(null);
-    const liveRec = makeRecommendation({ explanation: "live explanation" });
+    const liveRec = makeRecommendation({ explanation: ["live explanation"] });
     vi.mocked(generateRecommendation).mockResolvedValue(liveRec);
 
     render(<DashboardPage />);
@@ -206,7 +206,7 @@ describe("Match Explorer initial render is not blocked by the bulk cache check (
 
     // Now resolve the cache hit -- the recommendation must be patched into
     // the already-rendered list, not require a click.
-    const cachedRec = makeRecommendation({ explanation: "patched in after first paint" });
+    const cachedRec = makeRecommendation({ explanation: ["patched in after first paint"] });
     resolveCache(cachedRec);
 
     expect(await screen.findByText("Direct Bet")).toBeInTheDocument();

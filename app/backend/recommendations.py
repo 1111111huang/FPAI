@@ -18,7 +18,7 @@ from app.backend.recommendation_cache import RecommendationCache
 from app.backend.sandbox_clock import is_sandbox_mode, sandbox_scoped_path
 from src.agent import tools as agent_tools
 from src.agent.graph import run_agent as _real_run_agent
-from src.agent.schema import reported_teams, teams_match
+from src.agent.schema import normalize_explanation, reported_teams, teams_match
 from src.agent.snapshot_store import league_base_dir, SnapshotMissingError
 from src.ingestion.common.team_mapping import TeamNameMapper
 from src.utils.db_manager import DuckDBManager
@@ -270,7 +270,8 @@ class MatchRecommendationOut(BaseModel):
     match: dict
     overall: str
     markets: list[MarketRecommendationOut]
-    explanation: str
+    # One bullet per aspect, mirroring src/agent/schema.py's MatchRecommendationModel.
+    explanation: list[str]
     confidence: str
     limitations: list[str]
     prediction_basis: str
@@ -325,7 +326,7 @@ def validate_and_degrade(
             match={"home_team": home_team, "away_team": away_team},
             overall="insufficient_data",
             markets=[],
-            explanation="The agent's analysis referenced a different match than requested and was discarded.",
+            explanation=["The agent's analysis referenced a different match than requested and was discarded."],
             confidence="low",
             limitations=[
                 f"Agent output was for {reported[0]} v {reported[1]}, not the requested "
@@ -351,7 +352,7 @@ def validate_and_degrade(
         match=raw.get("match") or {},
         overall=raw.get("overall") or "insufficient_data",
         markets=valid_markets,
-        explanation=raw.get("explanation") or "",
+        explanation=normalize_explanation(raw.get("explanation")),
         confidence=raw.get("confidence") or "low",
         limitations=limitations,
         prediction_basis=raw.get("prediction_basis") or "unknown",

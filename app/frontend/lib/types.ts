@@ -39,7 +39,9 @@ export type MatchRecommendationOut = {
   match: Record<string, unknown>;
   overall: "direct_bet" | "conditional" | "no_bet" | "insufficient_data";
   markets: MarketRecommendationOut[];
-  explanation: string;
+  // One bullet per aspect (value edge, team news, form, market caveats, ...)
+  // instead of one narrative paragraph -- direct user request.
+  explanation: string[];
   confidence: "low" | "medium" | "high" | string;
   limitations: string[];
   prediction_basis: string;
