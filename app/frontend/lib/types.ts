@@ -27,6 +27,12 @@ export type MarketRecommendationOut = {
   ml_probability: number;
   implied_probability: number;
   value_edge: number;
+  // W84 (app_user_stories.md), agent-side A52 (agent_user_stories.md): the
+  // price a "conditional" market would need to reach to clear
+  // min_value_edge, code-computed server-side -- null when not applicable
+  // (not conditional, no current_odds, or no such target exists) or absent
+  // entirely on a pre-A52 cached row, so optional rather than required.
+  target_odds?: number | null;
 };
 
 export type MatchRecommendationOut = {
@@ -67,11 +73,18 @@ export type Bet = {
 // W17: mirrors app/backend/main.py's GET /api/status response, itself a
 // thin pass-through of src/tools/data_tools.get_data_freshness() and
 // src/tools/model_tools.get_model_status().
-export type DataFreshness = {
+export type LeagueFreshness = {
   latest_match_date: string | null;
   days_since_update: number | null;
   match_count: number;
   is_stale: boolean;
+};
+
+// W74: by_league (US#136, engine-side) was already passed through
+// unmodified by GET /api/status -- optional here so an older mock/response
+// without it still type-checks the same way it always ran.
+export type DataFreshness = LeagueFreshness & {
+  by_league?: Record<string, LeagueFreshness>;
 };
 
 export type ModelStatusEntry = {
@@ -81,10 +94,10 @@ export type ModelStatusEntry = {
   selected_at: string | null;
 };
 
-export type ModelStatus = {
-  league: Record<string, ModelStatusEntry>;
-  international: Record<string, ModelStatusEntry>;
-};
+// US#110 (engine-side): keyed dynamically by competition_id (e.g. "E0",
+// "SWE") for competition_specific competitions, plus a shared
+// "international" bucket -- no more fixed "league" key.
+export type ModelStatus = Record<string, Record<string, ModelStatusEntry>>;
 
 export type StatusResponse = {
   data_freshness: DataFreshness;

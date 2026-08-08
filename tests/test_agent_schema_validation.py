@@ -51,6 +51,29 @@ def test_fully_valid_output_with_a_real_market_still_parses_unchanged():
     assert rec["limitations"] == []
 
 
+def test_missing_min_odds_no_longer_sinks_the_whole_recommendation():
+    """BUG-032: confirmed live -- real DeepSeek output regularly omits
+    min_odds on some markets within an otherwise-valid recommendation. Before
+    this default, one missing field failed validation for the *entire*
+    candidate, discarding every other market's real data along with it.
+    min_odds is also effectively vestigial now that A52's target_odds is the
+    verified, code-computed field the UI actually shows (W84/W87)."""
+    # extract_recommendation validates against the Pydantic model but
+    # returns the original parsed dict, not the model's own filled-in
+    # defaults -- a market missing min_odds simply stays absent here (the
+    # default only guarantees this candidate isn't rejected outright); the
+    # app-layer MarketRecommendationOut (app/backend/recommendations.py)
+    # supplies the same 0.0 default when it reads this dict downstream.
+    market_missing_min_odds = {k: v for k, v in _VALID_MARKET.items() if k != "min_odds"}
+    data = {**_VALID, "markets": [market_missing_min_odds]}
+
+    rec = extract_recommendation(_wrap_json(data))
+
+    assert rec["markets"][0]["recommendation_type"] == "direct_bet"
+    assert rec["markets"][0]["current_odds"] == 2.1
+    assert "min_odds" not in rec["markets"][0]
+
+
 def test_value_edge_as_string_raises():
     bad_market = {**_VALID_MARKET, "value_edge": "high"}
     bad = {**_VALID, "markets": [bad_market]}
@@ -87,8 +110,12 @@ def test_direct_bet_with_null_odds_downgraded_to_no_bet():
 
 def test_conditional_market_with_null_odds_is_not_touched():
     """The downgrade rule is specific to direct_bet -- a conditional market
-    with null current_odds (a legitimate state) must be left alone."""
-    market = {**_VALID_MARKET, "recommendation_type": "conditional", "current_odds": None}
+    with null current_odds (a legitimate state) must be left alone. A54:
+    market/selection overridden to an eligible pair (btts/yes) -- result_3way
+    (the shared _VALID_MARKET default) is no longer eligible to stay
+    conditional at all, tested separately in
+    test_agent_conditional_market_eligibility.py."""
+    market = {**_VALID_MARKET, "market": "btts", "selection": "yes", "recommendation_type": "conditional", "current_odds": None}
     data = {**_VALID, "overall": "conditional", "markets": [market]}
 
     rec = extract_recommendation(_wrap_json(data))

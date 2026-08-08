@@ -250,10 +250,20 @@ class MarketRecommendationOut(BaseModel):
     selection: Literal["home", "draw", "away", "yes", "no", "over_2.5", "under_2.5"]
     recommendation_type: str
     current_odds: float | None
-    min_odds: float
+    # BUG-032: defaulted for the same reason as src/agent/schema.py's
+    # MarketRecommendationModel -- a cached/replayed row missing this key
+    # (e.g. any generation predating this fix) must still validate here,
+    # not just at the agent layer.
+    min_odds: float = 0.0
     ml_probability: float
     implied_probability: float
     value_edge: float
+    # W83: agent-side A52 computes this (src/agent/schema.py) for a
+    # 'conditional' market -- the price it'd need to reach to clear
+    # min_value_edge, or None when not applicable/computable. Defaulted so a
+    # pre-A52 cached row (no such key at all) still validates, same
+    # W15-established convention as feature_completeness below.
+    target_odds: float | None = None
 
 
 class MatchRecommendationOut(BaseModel):

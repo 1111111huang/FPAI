@@ -75,15 +75,17 @@ describe("fixture-fetch race guard (W42)", () => {
     render(<DashboardPage />);
 
     // Both the stale (real-clock) and correct (sandbox) requests must have
-    // been fired -- this is the double-fetch this bug depends on.
-    await waitFor(() => expect(getFixtures).toHaveBeenCalledWith(today, today));
-    await waitFor(() => expect(getFixtures).toHaveBeenCalledWith(sandboxDate, sandboxDate));
+    // been fired -- this is the double-fetch this bug depends on. Dashboard
+    // now always queries a 90-day-forward window (not just the exact day),
+    // so match on `from` only -- the exact `to` isn't this test's concern.
+    await waitFor(() => expect(getFixtures).toHaveBeenCalledWith(today, expect.any(String)));
+    await waitFor(() => expect(getFixtures).toHaveBeenCalledWith(sandboxDate, expect.any(String)));
 
     // Resolve out of order: the correct (later-fired) request resolves
     // FIRST, then the stale (earlier-fired) request resolves AFTER it --
     // exactly the ordering captured live via Playwright.
     correct.resolve(correctFixtures);
-    await waitFor(() => expect(screen.getByText("No fixtures today.")).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText("No upcoming fixtures.")).toBeInTheDocument());
 
     stale.resolve(staleFixtures);
 
@@ -91,7 +93,7 @@ describe("fixture-fetch race guard (W42)", () => {
     // race guard is missing, then assert it didn't.
     await new Promise((r) => setTimeout(r, 10));
     expect(screen.queryByText("real-clock-fixture")).not.toBeInTheDocument();
-    expect(screen.getByText("No fixtures today.")).toBeInTheDocument();
+    expect(screen.getByText("No upcoming fixtures.")).toBeInTheDocument();
   });
 
   it("Match Explorer: a stale real-clock response landing after the correct sandbox response does not overwrite it", async () => {

@@ -35,6 +35,7 @@ NEVER write "I will now call..." or "Let me try..." without immediately making t
 - Value edge = ML probability - implied probability
 - Bet has value when value_edge >= 0.05
 - Never recommend direct_bet at odds below 1.2 or above 11.0 (decimal) — roughly -500 to +1000 American. Use "conditional" if value exists but odds fall outside this range. This is code-enforced at extraction time, not just a prompt instruction — an out-of-range direct_bet will be downgraded automatically.
+- Only use "conditional" for total_goals/over_2.5, home_corners/over_2.5, away_corners/over_2.5, or btts/yes — the markets where waiting for a better price is a real, directional strategy. Never use "conditional" for result_3way, under_2.5, or btts/no — use "no_bet" instead if value exists but the price isn't right. This is code-enforced — a "conditional" call on any other market/selection will be downgraded to "no_bet" automatically.
 
 ## When to Use insufficient_data
 

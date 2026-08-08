@@ -142,7 +142,7 @@ def test_odds_fetch_uses_the_epl_sport_key_for_an_e0_request():
                     json={"home_team": "Arsenal", "away_team": "Everton", "date": "2026-08-22", "league": "E0"},
                 )
 
-    odds_client.get_odds.assert_called_once_with(sport_key="soccer_epl")
+    odds_client.get_odds.assert_called_once_with(sport_key="soccer_epl", date="2026-08-22")
 
 
 def test_odds_fetch_uses_the_swedish_sport_key_for_a_swe_request():
@@ -162,7 +162,34 @@ def test_odds_fetch_uses_the_swedish_sport_key_for_a_swe_request():
                     json={"home_team": "Malmo FF", "away_team": "AIK", "date": "2026-07-25", "league": "SWE"},
                 )
 
-    odds_client.get_odds.assert_called_once_with(sport_key="soccer_sweden_allsvenskan")
+    odds_client.get_odds.assert_called_once_with(sport_key="soccer_sweden_allsvenskan", date="2026-07-25")
+
+
+def test_odds_fetch_uses_the_fixtures_own_date_not_the_client_default():
+    """BUG-031: without an explicit `date`, HistoricalOddsClient.get_odds()
+    (sandbox mode) falls back to the sandbox's own as_of date, not the
+    requested fixture's -- silently querying the wrong day's odds events for
+    any fixture not dated exactly on as_of (most of what the Dashboard shows
+    since W86's "next 10 matches" window). Confirmed live: a real fixture 6
+    days out from as_of degraded to "no odds available" despite real odds
+    genuinely existing for its actual date. This asserts the fix directly --
+    `date` must be the fixture's own date, not omitted."""
+    fetched_event = NormalizedOdds(
+        home_team="Brighton", away_team="Liverpool", commence_time="2026-03-21T00:00:00Z",
+        home_odds=3.1, draw_odds=3.5, away_odds=2.2,
+    )
+    odds_client = _odds_client_returning(fetched_event)
+    with patch("app.backend.recommendations.run_agent", return_value=_VALID_RECOMMENDATION) as mock_run:
+        with patch("app.backend.main.build_odds_client", return_value=odds_client):
+            with TestClient(app) as client:
+                client.post(
+                    "/api/recommendations",
+                    json={"home_team": "Brighton Hove", "away_team": "Liverpool", "date": "2026-03-21", "league": "E0"},
+                )
+
+    odds_client.get_odds.assert_called_once_with(sport_key="soccer_epl", date="2026-03-21")
+    match_info = mock_run.call_args.args[0]
+    assert match_info["odds"] == {"home": 3.1, "draw": 3.5, "away": 2.2}
 
 
 def test_explicit_odds_take_precedence_over_fetched_odds():

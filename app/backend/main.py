@@ -426,7 +426,18 @@ def _fetch_odds_for_manual_request(request: RecommendationRequest, league: str |
         if odds_client is None:
             return None
         sport_key = ODDS_SPORT_KEY_BY_COMPETITION.get(league, DEFAULT_SPORT_KEY)
-        odds_events = odds_client.get_odds(sport_key=sport_key)
+        # BUG-031: date=request.date, not the client's own default -- without
+        # it, HistoricalOddsClient.get_odds() (sandbox mode) falls back to
+        # the sandbox's own as_of date, silently querying *today's* odds
+        # events instead of the requested fixture's, for any match not dated
+        # exactly on as_of (i.e. most of what the Dashboard shows since W86's
+        # "next 10 matches" window). odds_lookup/match_odds then correctly
+        # find no matching pair among the wrong day's fixtures and this
+        # degrades to no-odds -- not a crash, but a silent, wrong "no odds
+        # available" for a fixture that genuinely has real odds recorded.
+        # OddsAPIClient (live) accepts and ignores `date` -- interface parity
+        # only, same as eod_batch.py's own per-fixture-date odds fetch.
+        odds_events = odds_client.get_odds(sport_key=sport_key, date=request.date)
         odds_by_teams = eod_batch.odds_lookup(odds_events or [])
         fixture = NormalizedMatch(
             match_id=request.effective_match_id(), utc_date="", status="",

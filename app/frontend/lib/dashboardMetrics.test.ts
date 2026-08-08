@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { countByOverall, groupByLeague, rankTopEdges, sortMatches } from "./dashboardMetrics";
+import { countByOverall, groupByDate, groupByLeague, rankTopEdges, sortMatches } from "./dashboardMetrics";
 import type { Match } from "@/components/MatchUI";
 
 function match(overrides: Partial<Match> = {}): Match {
@@ -93,6 +93,35 @@ describe("groupByLeague", () => {
   it("falls back to the raw league code for an unrecognized value", () => {
     const groups = groupByLeague([match({ league: "XYZ" })]);
     expect(groups[0].label).toBe("XYZ");
+  });
+});
+
+describe("groupByDate", () => {
+  const asOf = new Date("2026-03-01T00:00:00Z");
+
+  it("labels asOf's own day 'Today' and groups other days under a real calendar date", () => {
+    const matches = [
+      match({ id: "today-1", kickoffIso: "2026-03-01T15:00:00Z" }),
+      match({ id: "tomorrow-1", kickoffIso: "2026-03-02T15:00:00Z" }),
+      match({ id: "today-2", kickoffIso: "2026-03-01T18:00:00Z" }),
+    ];
+    const groups = groupByDate(matches, asOf, true);
+    expect(groups.map((g) => g.label)).toEqual(["Today", "Mon, Mar 2"]);
+    expect(groups[0].matches.map((m) => m.id)).toEqual(["today-1", "today-2"]);
+    expect(groups[1].matches.map((m) => m.id)).toEqual(["tomorrow-1"]);
+  });
+
+  it("preserves first-seen day order, not chronological order, for out-of-order input", () => {
+    const matches = [
+      match({ id: "later", kickoffIso: "2026-03-05T15:00:00Z" }),
+      match({ id: "earlier", kickoffIso: "2026-03-01T15:00:00Z" }),
+    ];
+    const groups = groupByDate(matches, asOf, true);
+    expect(groups.map((g) => g.matches[0].id)).toEqual(["later", "earlier"]);
+  });
+
+  it("returns an empty array for an empty match list", () => {
+    expect(groupByDate([], asOf, true)).toEqual([]);
   });
 });
 

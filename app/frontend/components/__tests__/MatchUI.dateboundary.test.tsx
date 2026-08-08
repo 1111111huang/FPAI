@@ -23,7 +23,9 @@ describe("date-boundary correctness via the sandbox clock (W38)", () => {
 
     render(<DashboardPage />);
 
-    await waitFor(() => expect(getFixtures).toHaveBeenCalledWith("2026-03-01", "2026-03-01"));
+    // Dashboard always queries the 90-day-forward window from as_of (not
+    // just the exact day) -- 2026-03-01 + 90 days = 2026-05-30.
+    await waitFor(() => expect(getFixtures).toHaveBeenCalledWith("2026-03-01", "2026-05-30"));
   });
 
   it("Dashboard's fixture query shifts to the next simulated day at midnight", async () => {
@@ -32,13 +34,13 @@ describe("date-boundary correctness via the sandbox clock (W38)", () => {
     // page reload) is how a new simulated day is actually observed.
     vi.mocked(getSandboxStatus).mockResolvedValue({ sandbox_mode: true, as_of: "2026-03-01" });
     const { unmount } = render(<DashboardPage />);
-    await waitFor(() => expect(getFixtures).toHaveBeenCalledWith("2026-03-01", "2026-03-01"));
+    await waitFor(() => expect(getFixtures).toHaveBeenCalledWith("2026-03-01", "2026-05-30"));
     unmount();
 
     vi.mocked(getSandboxStatus).mockResolvedValue({ sandbox_mode: true, as_of: "2026-03-02" });
     render(<DashboardPage />);
 
-    await waitFor(() => expect(getFixtures).toHaveBeenCalledWith("2026-03-02", "2026-03-02"));
+    await waitFor(() => expect(getFixtures).toHaveBeenCalledWith("2026-03-02", "2026-05-31"));
   });
 
   it("Match Explorer's 90-day window is anchored to the sandbox as_of date, not the real browser date", async () => {

@@ -945,10 +945,52 @@ class FeatureFactory:
             "ah_line": ah_line, "ah_home_odds": ah_home_odds, "ah_away_odds": ah_away_odds,
         }
 
-        raw_df["date"] = pd.to_datetime(raw_df["date"], errors="coerce")
-        raw_df = raw_df.dropna(subset=["date"])
         synthetic_df = pd.DataFrame([synthetic_row])
-        combined = pd.concat([raw_df, synthetic_df], ignore_index=True)
+        # over25_odds/ah_line/ah_home_odds/ah_away_odds default to Python
+        # None (not np.nan) when the caller doesn't supply them -- a column
+        # built from a dict literal containing None infers `object` dtype,
+        # not float64, which is the other half of the dtype mismatch this
+        # function's pd.concat calls trigger pandas' "empty or all-NA
+        # entries" FutureWarning for (the raw_df-side half, int32/float32
+        # vs float64, is upcast in the `else` branch below). Confirmed via
+        # direct column-by-column bisection against real data -- every
+        # numeric synthetic column triggers it, always at a dtype mismatch,
+        # never merely from being all-NaN at matching dtypes.
+        _numeric_synthetic_cols = [
+            "fthg", "ftag", "hs", "as", "hst", "ast", "hc", "ac", "hy", "ay", "hr", "ar",
+            "odds_h", "odds_d", "odds_a", "avgh", "avgd", "avga",
+            "xg_h", "xg_a", "xga_h", "xga_a",
+            "over25_odds", "under25_odds", "ah_line", "ah_home_odds", "ah_away_odds",
+        ]
+        synthetic_df[_numeric_synthetic_cols] = synthetic_df[_numeric_synthetic_cols].astype("float64")
+        if raw_df.empty:
+            # A cold-start team (raw_df was just replaced with an empty,
+            # explicitly-columned frame above) has no real dtypes of its
+            # own to concat with -- pd.concat([empty_df, synthetic_df])
+            # triggers pandas' "concatenation with empty or all-NA entries
+            # is deprecated" FutureWarning every single time, since the
+            # empty frame's per-column dtype is ambiguous. Nothing is lost
+            # by skipping the concat entirely here: synthetic_row already
+            # carries every column raw_df's manufactured empty frame would
+            # have had.
+            combined = synthetic_df.copy()
+        else:
+            raw_df["date"] = pd.to_datetime(raw_df["date"], errors="coerce")
+            raw_df = raw_df.dropna(subset=["date"])
+            # DuckDB returns fthg/ftag as int32 and most other stat columns
+            # as float32, while synthetic_row's np.nan literals force
+            # float64 -- concatenating a real int32/float32 column against a
+            # same-named column that's entirely NaN (the synthetic row) at a
+            # different numeric dtype is pandas' other trigger for the
+            # "empty or all-NA entries" FutureWarning, distinct from (and
+            # not covered by) the raw_df.empty branch above. Upcast raw_df's
+            # numeric columns to float64 up front -- harmless, since
+            # everything downstream already goes through
+            # pd.to_numeric(..., errors="coerce") and cold-start imputation
+            # regardless -- so both sides agree on dtype before concat.
+            numeric_cols = raw_df.select_dtypes(include=["number"]).columns
+            raw_df[numeric_cols] = raw_df[numeric_cols].astype("float64")
+            combined = pd.concat([raw_df, synthetic_df], ignore_index=True)
         combined = combined.sort_values(["date", "match_id"]).reset_index(drop=True)
         combined["home_team"] = combined["home_team"].astype(str).map(standardize_team_name)
         combined["away_team"] = combined["away_team"].astype(str).map(standardize_team_name)

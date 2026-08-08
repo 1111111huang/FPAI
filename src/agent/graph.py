@@ -214,6 +214,7 @@ def _build_recommendation(
             text,
             min_odds_threshold=config.min_odds_threshold,
             max_odds_threshold=config.max_odds_threshold,
+            min_value_edge=config.min_value_edge,
             home_team=match_info.get("home_team"),
             away_team=match_info.get("away_team"),
         )

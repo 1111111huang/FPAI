@@ -61,6 +61,26 @@ def test_web_search_replay_missing_raises():
         agent_tools.web_search.invoke({"query": "anything"})
 
 
+def test_web_search_tavily_failure_degrades_instead_of_raising():
+    """A53: a real API-side failure (quota exceeded, rate limit, network
+    error, ...) previously propagated uncaught all the way to a raw 500 --
+    crashing the whole recommendation for a single research call. Must
+    degrade to the same TOOL_PERMANENTLY_UNAVAILABLE-style sentinel the
+    missing-key case already returns, not raise."""
+    from src.agent.tools import _web_search_impl
+
+    with patch("src.agent.tools.os.environ.get", return_value="fake-key"), \
+         patch("tavily.TavilyClient") as MockClient:
+        instance = MagicMock()
+        MockClient.return_value = instance
+        instance.search.side_effect = RuntimeError("This request exceeds your plan's set usage limit.")
+
+        result = _web_search_impl("Arsenal Chelsea injury news")
+
+    assert "TOOL_PERMANENTLY_UNAVAILABLE" in result
+    assert "usage limit" in result
+
+
 def test_web_search_unavailable_message_bypasses_snapshot_key_consistently():
     # No TAVILY_API_KEY in this process env by default in CI; record mode without
     # a key returns the fixed unavailable message both times — proves wrap() doesn't

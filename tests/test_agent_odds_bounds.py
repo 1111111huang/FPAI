@@ -37,7 +37,11 @@ def _wrap_json(data: dict) -> str:
 
 
 def test_direct_bet_below_floor_downgraded_to_conditional():
-    market = {**_VALID_MARKET, "current_odds": 1.05}
+    # A54: 'conditional' only stays conditional for an eligible (over/yes)
+    # market -- result_3way (the shared _VALID_MARKET default) would be
+    # further downgraded to no_bet by that pass, which isn't this test's
+    # concern.
+    market = {**_VALID_MARKET, "market": "total_goals", "selection": "over_2.5", "current_odds": 1.05}
     data = {**_VALID, "markets": [market]}
 
     rec = extract_recommendation(_wrap_json(data))
@@ -47,7 +51,8 @@ def test_direct_bet_below_floor_downgraded_to_conditional():
 
 
 def test_direct_bet_above_ceiling_downgraded_to_conditional():
-    market = {**_VALID_MARKET, "current_odds": 15.0}
+    # A54: see test_direct_bet_below_floor_downgraded_to_conditional's comment.
+    market = {**_VALID_MARKET, "market": "total_goals", "selection": "over_2.5", "current_odds": 15.0}
     data = {**_VALID, "markets": [market]}
 
     rec = extract_recommendation(_wrap_json(data))
@@ -88,7 +93,8 @@ def test_old_2_0_only_floor_behavior_is_gone():
 
 
 def test_custom_thresholds_are_respected_not_hardcoded():
-    market = {**_VALID_MARKET, "current_odds": 3.0}
+    # A54: see test_direct_bet_below_floor_downgraded_to_conditional's comment.
+    market = {**_VALID_MARKET, "market": "total_goals", "selection": "over_2.5", "current_odds": 3.0}
     data = {**_VALID, "markets": [market]}
 
     rec = extract_recommendation(_wrap_json(data), min_odds_threshold=3.5, max_odds_threshold=11.0)
@@ -98,8 +104,10 @@ def test_custom_thresholds_are_respected_not_hardcoded():
 
 def test_conditional_market_outside_bounds_is_not_touched():
     """The bounds rule only governs direct_bet -- a conditional market's own
-    odds are none of this rule's business."""
-    market = {**_VALID_MARKET, "recommendation_type": "conditional", "current_odds": 50.0}
+    odds are none of this rule's business. A54: market/selection overridden
+    to an eligible pair so A54's own restriction pass doesn't also fire here
+    -- that's tested separately in test_agent_conditional_market_eligibility.py."""
+    market = {**_VALID_MARKET, "market": "btts", "selection": "yes", "recommendation_type": "conditional", "current_odds": 50.0}
     data = {**_VALID, "overall": "conditional", "markets": [market]}
 
     rec = extract_recommendation(_wrap_json(data))

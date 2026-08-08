@@ -22,6 +22,10 @@ class MarketRecommendation(TypedDict):
     ml_probability: float
     implied_probability: float
     value_edge: float
+    # A52: populated by extract_recommendation() itself (_compute_target_odds),
+    # never by the LLM -- the price a 'conditional' market would need to reach
+    # to clear min_value_edge, or None when not applicable/computable.
+    target_odds: float | None
 
 
 class MatchRecommendation(TypedDict):
@@ -67,10 +71,24 @@ class MarketRecommendationModel(BaseModel):
     selection: Literal["home", "draw", "away", "yes", "no", "over_2.5", "under_2.5"]
     recommendation_type: Literal["direct_bet", "conditional", "no_bet"]
     current_odds: float | None
-    min_odds: float
+    # BUG-032: defaulted, not required -- confirmed live, DeepSeek output
+    # regularly omits this field on some markets within an otherwise-valid
+    # recommendation (real example: a btts market missing min_odds entirely).
+    # Before this default, that single missing field failed
+    # MatchRecommendationModel validation for the *whole* candidate,
+    # discarding every other market's real data along with it. min_odds is
+    # also effectively vestigial now that A52's target_odds is the verified,
+    # code-computed replacement the UI actually shows (W84/W87) -- there's
+    # no remaining reason a missing value here should sink an entire
+    # recommendation.
+    min_odds: float = 0.0
     ml_probability: float
     implied_probability: float
     value_edge: float
+    # A52: optional/defaulted so a pre-A52 candidate dict (the LLM never
+    # writes this field itself) still validates -- _compute_target_odds()
+    # populates the real value after this structural pass runs.
+    target_odds: float | None = None
 
 
 class MatchRecommendationModel(BaseModel):
@@ -133,6 +151,77 @@ def _downgrade_direct_bet_outside_odds_bounds(
     return data
 
 
+_CONDITIONAL_ELIGIBLE_MARKETS = frozenset({
+    ("total_goals", "over_2.5"),
+    ("home_corners", "over_2.5"),
+    ("away_corners", "over_2.5"),
+    ("btts", "yes"),
+})
+
+
+def _restrict_conditional_to_eligible_markets(data: dict) -> dict:
+    """A54: 'conditional' is only a coherent recommendation for "over"/"yes"
+    -type markets (total_goals over, corners over, BTTS yes) -- these are the
+    markets where waiting for a better price is a real, directional strategy,
+    not a coin flip on which way the market moves. The complement markets
+    (under, BTTS no) and outcome markets (result_3way) have no such reliable
+    one-directional drift, so labeling them 'conditional' -- a state whose
+    entire premise is "waiting predictably helps" -- is structurally
+    misleading regardless of how correctly A52 computes a target_odds for
+    it. Downgrades to 'no_bet', not 'conditional' -- same BUG-013 precedent
+    (no coherent actionable state left -> the safe non-bet default). Run
+    after A29's own downgrade pass, so both its algorithmic conditional
+    calls and the LLM's own organic ones are covered by one check; before
+    A52's target_odds computation, so an ineligible market never gets one
+    (it's no longer 'conditional' by the time that pass runs)."""
+    limitations = list(data.get("limitations") or [])
+    for market in data.get("markets", []):
+        if market["recommendation_type"] != "conditional":
+            continue
+        if (market["market"], market["selection"]) in _CONDITIONAL_ELIGIBLE_MARKETS:
+            continue
+        market["recommendation_type"] = "no_bet"
+        limitations.append(
+            f"Downgraded {market['market']!r}/{market['selection']!r} from conditional to no_bet: "
+            "'conditional' only applies to over/yes-type markets (total_goals over, corners over, "
+            "btts yes), where waiting for a better price is a directional strategy, not a coin flip."
+        )
+    data["limitations"] = limitations
+    return data
+
+
+def _compute_target_odds(data: dict, min_value_edge: float) -> dict:
+    """A52: for each 'conditional' market with real current_odds, compute the
+    price it would need to reach to actually clear the value-edge bar --
+    code-computed since ml_probability/current_odds are deterministic inputs
+    and min_value_edge is config, unlike the LLM's own min_odds field (never
+    verified against anything). Run last, after both downgrade passes above,
+    since a market's final recommendation_type (in particular A29's
+    direct_bet -> conditional bounds downgrade) must already be settled
+    before this decides which markets it applies to.
+
+    needed_prob = ml_probability - min_value_edge is the ML-probability floor
+    this market would still need at whatever price we solve for; its
+    break-even price is candidate = 1 / needed_prob. That's only a genuine
+    forward target when it's strictly above current_odds -- candidate <=
+    current_odds means the current price already clears the bar (nothing to
+    wait for) or sits on the wrong side of it entirely (A29's ceiling-
+    downgrade case: current_odds already too high, so 'wait for it to rise'
+    would be backwards). Both degrade to None, same as needed_prob <= 0
+    (no price fixes an ml_probability that's already below the edge floor)."""
+    for market in data.get("markets", []):
+        if market["recommendation_type"] != "conditional" or market["current_odds"] is None:
+            market["target_odds"] = None
+            continue
+        needed_prob = market["ml_probability"] - min_value_edge
+        if needed_prob <= 0:
+            market["target_odds"] = None
+            continue
+        candidate = 1 / needed_prob
+        market["target_odds"] = candidate if candidate > market["current_odds"] else None
+    return data
+
+
 def reported_teams(match_field: dict) -> tuple[str, str] | None:
     """The two team names the agent's own `match` field claims this
     recommendation is about, tolerating the `home`/`away` key spelling the
@@ -168,6 +257,7 @@ def extract_recommendation(
     text: str,
     min_odds_threshold: float = 1.2,
     max_odds_threshold: float = 11.0,
+    min_value_edge: float = 0.05,
     home_team: str | None = None,
     away_team: str | None = None,
 ) -> MatchRecommendation:
@@ -256,6 +346,8 @@ def extract_recommendation(
 
         data = _downgrade_direct_bet_with_null_odds(data)
         data = _downgrade_direct_bet_outside_odds_bounds(data, min_odds_threshold, max_odds_threshold)
+        data = _restrict_conditional_to_eligible_markets(data)
+        data = _compute_target_odds(data, min_value_edge)
         return data  # type: ignore[return-value]
 
     raise RecommendationParseError(text, f"no valid MatchRecommendation found ({last_error})")
