@@ -120,7 +120,25 @@ def _web_search_impl(query: str) -> str:
         )
 
     client = TavilyClient(api_key=api_key)
-    response = client.search(query=query, max_results=5)
+    try:
+        response = client.search(query=query, max_results=5)
+    except Exception as exc:
+        # A53: any Tavily-side failure (quota exhausted, rate limit, network
+        # error, ...) previously raised uncaught all the way to a raw 500 at
+        # the FastAPI endpoint -- crashing the *entire* recommendation for a
+        # single research call, including research_node's own deterministic
+        # baseline searches (pipeline.py), which have no try/except of their
+        # own around this. Degrades exactly like the missing-key case above:
+        # the prompt already has a first-class stop rule for this sentinel
+        # ("do NOT call it again"), so a real API failure gets the same
+        # safe, resumable behavior as a missing key instead of a distinct
+        # failure mode every caller would need to special-case.
+        _LOG.warning("web_search | tavily_request_failed | query=%r | %s", query, exc)
+        return (
+            f"TOOL_PERMANENTLY_UNAVAILABLE: web_search failed ({exc}). "
+            "Do NOT call web_search again — it will keep failing this run. "
+            "Output your final JSON recommendation now using only the forecast data already retrieved."
+        )
     snippets = []
     for r in response.get("results", []):
         title = r.get("title", "")
@@ -156,8 +174,19 @@ def web_search(query: str) -> str:
 def _resolve_competition_impl(competition_or_league: str) -> str:
     from src.logic.competition_registry import get_competition_definition
 
+    # A50: "competition" echoes back the registry's own competition_id (e.g.
+    # "SP1"), not necessarily the caller's raw input -- get_competition_definition's
+    # COMPETITION_NAME_ALIASES table (competition_registry.py) resolves a
+    # well-known free-text name (e.g. "La Liga") to its real code first, so a
+    # caller that reuses this field for a subsequent forecast_league(league=...)
+    # call gets a code that field actually accepts, not the free-text name it
+    # started with (forecast_league's own `league` parameter has always
+    # required a code, never a free-text name).
+    competition = competition_or_league
     try:
-        tier = get_competition_definition(competition_or_league).tier
+        definition = get_competition_definition(competition_or_league)
+        tier = definition.tier
+        competition = definition.competition_id
     except (ValueError, FileNotFoundError):
         # Unregistered, or the registry file itself is missing -- either way,
         # there's no confirmed competition_specific coverage, so default to
@@ -165,7 +194,7 @@ def _resolve_competition_impl(competition_or_league: str) -> str:
         tier = "general_purpose"
     recommended_tool = "forecast_league" if tier == "competition_specific" else "forecast_international"
     return json.dumps({
-        "competition": competition_or_league,
+        "competition": competition,
         "tier": tier,
         "recommended_tool": recommended_tool,
     })
@@ -179,8 +208,12 @@ def resolve_competition(competition_or_league: str) -> str:
     forecast_international for a domestic-looking fixture — do not guess
     based on how well-known the league is. A well-known league (e.g. La Liga)
     can still have zero historical-data coverage in this system. Returns JSON
-    with 'tier' ('competition_specific' or 'general_purpose') and
-    'recommended_tool' ('forecast_league' or 'forecast_international') —
+    with 'competition' (the resolved competition code — pass THIS, not your
+    original input, as forecast_league's own `league` argument, since a
+    handful of well-known free-text names like 'La Liga' resolve here to
+    their real code, e.g. 'SP1', but forecast_league itself only ever
+    accepts the code), 'tier' ('competition_specific' or 'general_purpose'),
+    and 'recommended_tool' ('forecast_league' or 'forecast_international') —
     follow recommended_tool exactly.
 
     Args:

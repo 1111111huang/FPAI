@@ -110,6 +110,33 @@ describe("TeamBadge -- Allsvenskan club colors (W61)", () => {
   });
 });
 
+describe("TeamBadge -- La Liga club colors (W80)", () => {
+  // Keys are the exact `shortName` football-data.org returns for these
+  // fixtures (confirmed live, W74/W76) -- not the ML engine's internal
+  // canonical short name, since that's only used for odds/corpus
+  // matching, never rendered.
+  it.each([
+    ["Real Madrid", "#FFFFFF"],
+    ["Barça", "#A50044"],
+    ["Atleti", "#CB3524"],
+    ["Sevilla FC", "#D00027"],
+  ])("renders %s with its real club color, not the generic hash-based fallback", (name, primary) => {
+    const { container } = render(<TeamBadge name={name} />);
+    const badge = container.querySelector("span");
+    expect(badge).toHaveStyle({ background: primary });
+  });
+
+  it("still falls back to the generic hash-based badge for an unmapped La Liga club", () => {
+    // No regression: a club not explicitly added (e.g. Santander, W78's
+    // documented cold-start case) must keep rendering via the existing
+    // fallback, not crash or render blank.
+    const { container } = render(<TeamBadge name="Santander" />);
+    const badge = container.querySelector("span");
+    expect(badge).toHaveAttribute("style");
+    expect(badge?.getAttribute("style")).not.toBe("");
+  });
+});
+
 describe("StatusBadge", () => {
   it.each(ALL_OVERALL_STATES)("renders the correct label for overall=$overall", ({ overall, label }) => {
     render(<StatusBadge status={overall} />);
@@ -137,6 +164,82 @@ describe("MatchCard", () => {
     render(<MatchCard match={match} onUpdate={vi.fn()} />);
     expect(screen.getByText("Modeled")).toBeInTheDocument();
     expect(screen.queryByText("EPL")).not.toBeInTheDocument();
+  });
+
+  // A "Conditional" verdict names a state ("wait") but previously never said
+  // what it's waiting for -- W84/A52: targetOdds (code-computed server-side,
+  // src/agent/schema.py _compute_target_odds) is the price this market
+  // would need to reach to clear min_value_edge. Shown in the ODDS box
+  // itself (replacing the current price with "Wait ≥"/target_odds, warning-
+  // colored) rather than as plain text, so it's visually distinct from a
+  // normal live price.
+  it("shows the wait-condition threshold (target_odds), warning-colored, for a conditional market", () => {
+    const match = baseMatch({
+      overall: "conditional",
+      markets: [
+        {
+          market: "result_3way", selection: "home", recommendationType: "conditional",
+          currentOdds: 1.15, minOdds: 0, mlProbability: 0.6, impliedProbability: 0.87, valueEdge: -0.27,
+          targetOdds: 1.85,
+        },
+      ],
+    });
+    render(<MatchCard match={match} onUpdate={vi.fn()} />);
+    expect(screen.getByText("Wait ≥")).toBeInTheDocument();
+    const value = screen.getByText("1.85");
+    expect(value).toBeInTheDocument();
+    expect(value).toHaveClass("text-warning");
+    // The current (insufficient) price is not shown once a real target
+    // takes over the box -- showing both would be confusing, not clearer.
+    expect(screen.queryByText("Odds")).not.toBeInTheDocument();
+  });
+
+  it("shows the plain Odds box (no Wait ≥) for a direct_bet market -- there's nothing to wait for", () => {
+    const match = baseMatch({
+      overall: "direct_bet",
+      markets: [
+        {
+          market: "result_3way", selection: "home", recommendationType: "direct_bet",
+          currentOdds: 1.8, minOdds: 0, mlProbability: 0.6, impliedProbability: 0.56, valueEdge: 0.04,
+          targetOdds: null,
+        },
+      ],
+    });
+    render(<MatchCard match={match} onUpdate={vi.fn()} />);
+    expect(screen.queryByText("Wait ≥")).not.toBeInTheDocument();
+    expect(screen.getByText("Odds")).toBeInTheDocument();
+    expect(screen.getByText("1.80")).toBeInTheDocument();
+  });
+
+  it("shows the plain Odds box when target_odds is null (not applicable, or no such target exists)", () => {
+    const match = baseMatch({
+      overall: "conditional",
+      markets: [
+        {
+          market: "result_3way", selection: "home", recommendationType: "conditional",
+          currentOdds: 1.8, minOdds: 0, mlProbability: 0.55, impliedProbability: 0.56, valueEdge: -0.01,
+          targetOdds: null,
+        },
+      ],
+    });
+    render(<MatchCard match={match} onUpdate={vi.fn()} />);
+    expect(screen.queryByText("Wait ≥")).not.toBeInTheDocument();
+    expect(screen.getByText("Odds")).toBeInTheDocument();
+  });
+
+  it("shows the plain Odds box when target_odds is absent (pre-A52 cached data)", () => {
+    const match = baseMatch({
+      overall: "conditional",
+      markets: [
+        {
+          market: "result_3way", selection: "home", recommendationType: "conditional",
+          currentOdds: 1.8, minOdds: 0, mlProbability: 0.55, impliedProbability: 0.56, valueEdge: -0.01,
+        },
+      ],
+    });
+    render(<MatchCard match={match} onUpdate={vi.fn()} />);
+    expect(screen.queryByText("Wait ≥")).not.toBeInTheDocument();
+    expect(screen.getByText("Odds")).toBeInTheDocument();
   });
 });
 
@@ -305,6 +408,67 @@ describe("MatchAnalysisPage -- cache-first load (W47)", () => {
 
     await waitFor(() => expect(generateRecommendation).toHaveBeenCalled());
     expect(generateRecommendation).toHaveBeenCalledWith(expect.objectContaining({ league: "SWE" }));
+  });
+
+  it("W84: shows the wait-condition (target_odds) on a conditional market's own row", async () => {
+    vi.mocked(getCachedRecommendation).mockResolvedValue(
+      makeRecommendation({
+        overall: "conditional",
+        markets: [
+          {
+            market: "result_3way", selection: "home", recommendation_type: "conditional",
+            current_odds: 1.15, min_odds: 0, ml_probability: 0.6, implied_probability: 0.87, value_edge: -0.27,
+            target_odds: 1.85,
+          },
+        ],
+      })
+    );
+
+    render(<MatchAnalysisPage id="m1" home="Arsenal" away="Everton" date="2026-08-22" />);
+
+    const condition = await screen.findByText(/Needs 1\.85\+ to clear edge/);
+    expect(condition).toBeInTheDocument();
+    expect(condition).toHaveClass("text-warning");
+  });
+
+  it("W84: shows no wait-condition line when target_odds is null", async () => {
+    vi.mocked(getCachedRecommendation).mockResolvedValue(
+      makeRecommendation({
+        overall: "conditional",
+        markets: [
+          {
+            market: "result_3way", selection: "home", recommendation_type: "conditional",
+            current_odds: 1.8, min_odds: 0, ml_probability: 0.55, implied_probability: 0.56, value_edge: -0.01,
+            target_odds: null,
+          },
+        ],
+      })
+    );
+
+    render(<MatchAnalysisPage id="m1" home="Arsenal" away="Everton" date="2026-08-22" />);
+
+    await screen.findByText("result_3way", { exact: false });
+    expect(screen.queryByText(/to clear edge/)).not.toBeInTheDocument();
+  });
+
+  it("W84: shows no wait-condition line for a direct_bet market", async () => {
+    vi.mocked(getCachedRecommendation).mockResolvedValue(
+      makeRecommendation({
+        overall: "direct_bet",
+        markets: [
+          {
+            market: "result_3way", selection: "home", recommendation_type: "direct_bet",
+            current_odds: 2.1, min_odds: 0, ml_probability: 0.6, implied_probability: 0.48, value_edge: 0.12,
+            target_odds: null,
+          },
+        ],
+      })
+    );
+
+    render(<MatchAnalysisPage id="m1" home="Arsenal" away="Everton" date="2026-08-22" />);
+
+    await screen.findByText("result_3way", { exact: false });
+    expect(screen.queryByText(/to clear edge/)).not.toBeInTheDocument();
   });
 });
 

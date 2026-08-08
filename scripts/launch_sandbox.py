@@ -43,6 +43,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.append(str(ROOT))
 
 from app.backend.football_data_client import FootballDataClient, NormalizedMatch  # noqa: E402
+from app.backend.football_data_competition_codes import FOOTBALL_DATA_CODE_BY_LEAGUE  # noqa: E402
 
 DB_PATH = ROOT / "data" / "fpai_core.db"
 SNAPSHOT_DIR = ROOT / "data" / "agent_snapshots" / "sandbox"
@@ -349,13 +350,17 @@ def fetch_sandbox_fixtures_swe(date_str: str) -> tuple[list[NormalizedMatch], bo
 def _fetch_sandbox_fixtures_for_league(
     league: str, fixtures_client: FootballDataClient, date_str: str,
 ) -> tuple[list[NormalizedMatch], bool]:
-    """W72: dispatches to the right per-league fetch function, mirroring
+    """W72/W76: dispatches to the right per-league fetch function, mirroring
     scheduler_wiring.py's _fetch_fixtures_for_league shape (same
     per-competition dispatch idea), adapted for precompute's need to also
-    track the used_fallback flag for its status-line reporting."""
+    track the used_fallback flag for its status-line reporting. Any league
+    other than SWE is football-data.org-sourced (E0, SP1) -- looked up via
+    FOOTBALL_DATA_CODE_BY_LEAGUE rather than fetch_sandbox_fixtures()'s own
+    "PL" default, or SP1 would silently fetch E0's fixtures instead."""
     if league == "SWE":
         return fetch_sandbox_fixtures_swe(date_str)
-    return fetch_sandbox_fixtures(fixtures_client, date_str)
+    competition_code = FOOTBALL_DATA_CODE_BY_LEAGUE.get(league, "PL")
+    return fetch_sandbox_fixtures(fixtures_client, date_str, competition_code=competition_code)
 
 
 def precompute_recommendations(date_str: str, config_path: str | None = None) -> None:

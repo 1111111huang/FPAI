@@ -70,6 +70,14 @@ def _build_parser() -> argparse.ArgumentParser:
     # scrape
     scrape_parser = subparsers.add_parser("scrape", help="Download latest multi-season CSV files to raw directory")
     scrape_parser.add_argument("--force", action="store_true", help="Re-download and overwrite all selected CSV files.")
+    scrape_parser.add_argument(
+        "--league-page-url", default=None,
+        help="Override config.yaml's scraper.league_page_url for this run (e.g. https://www.football-data.co.uk/spainm.php for La Liga).",
+    )
+    scrape_parser.add_argument(
+        "--league", action="append", default=None,
+        help="League code to scrape from --league-page-url (repeatable; overrides config.yaml's scraper.leagues, e.g. --league SP1).",
+    )
 
     # ingest
     ingest_parser = subparsers.add_parser("ingest", help="Ingest CSV data and pre-compute features")
@@ -384,15 +392,26 @@ def _get_latest_model_path(model_dir: Path) -> Path:
     return candidates[-1]
 
 
-def run_scrape(app_settings: AppSettings, force: bool = False) -> None:
+def run_scrape(
+    app_settings: AppSettings,
+    force: bool = False,
+    league_page_url: str | None = None,
+    leagues: list[str] | None = None,
+) -> None:
+    """US#144: league_page_url/leagues optionally override config.yaml's scraper
+    section for one run, so a second football-data.co.uk page (e.g. spainm.php
+    for La Liga's SP1, alongside englandm.php's E0) can be scraped without
+    editing config.yaml or adding a multi-page config schema -- run `scrape`
+    once per page instead. Omitting both preserves the exact pre-US#144 behavior.
+    """
     LOGGER.info("Executing command: scrape")
     scraper = FootballDataScraper(
-        league_page_url=app_settings.scraper.league_page_url,
+        league_page_url=league_page_url or app_settings.scraper.league_page_url,
         timeout_seconds=app_settings.scraper.timeout_seconds,
     )
     downloaded = scraper.download_all(
         limit_seasons=app_settings.scraper.limit_seasons,
-        leagues=app_settings.scraper.leagues,
+        leagues=leagues or app_settings.scraper.leagues,
         start_year=app_settings.scraper.start_year,
         force=force,
     )
@@ -570,6 +589,16 @@ def run_refresh_sweden_data(app_settings: AppSettings, db_manager: DuckDBManager
     LOGGER.info("refresh-data complete.")
 
 
+# US#150: football-data.co.uk hosts each "big five" league on its own scraper
+# page (US#144) -- config.yaml's scraper section only ever holds one page's
+# defaults (E0/englandm.php). A per-league override table keeps refresh-data
+# generic without turning config.yaml into a list-of-pages schema (same
+# lightest-option reasoning US#144 already applied to the scrape CLI itself).
+_SCRAPE_SOURCE_OVERRIDE_BY_LEAGUE: dict[str, dict[str, object]] = {
+    "SP1": {"league_page_url": "https://www.football-data.co.uk/spainm.php", "leagues": ["SP1"]},
+}
+
+
 def run_refresh_data(app_settings: AppSettings, db_manager: DuckDBManager, league: str = "E0", force: bool = False) -> None:
     """Run scrape → ingest → fetch-understat → fetch-fotmob → fetch-lineups in sequence (US#81, US#95, US#101).
 
@@ -581,7 +610,7 @@ def run_refresh_data(app_settings: AppSettings, db_manager: DuckDBManager, leagu
         run_refresh_sweden_data(app_settings, db_manager)
         return
     LOGGER.info("Executing command: refresh-data | league=%s | force=%s", league, force)
-    run_scrape(app_settings, force=force)
+    run_scrape(app_settings, force=force, **_SCRAPE_SOURCE_OVERRIDE_BY_LEAGUE.get(league, {}))
     run_ingest(app_settings, db_manager, force=force)
     run_fetch_understat(app_settings, db_manager, league=league, rebuild_features=True)
     run_fetch_fotmob(app_settings, db_manager, league=league)
@@ -1624,7 +1653,12 @@ def main() -> None:
     db_manager = DuckDBManager()
 
     if args.command == "scrape":
-        run_scrape(app_settings, force=getattr(args, "force", False))
+        run_scrape(
+            app_settings,
+            force=getattr(args, "force", False),
+            league_page_url=getattr(args, "league_page_url", None),
+            leagues=getattr(args, "league", None),
+        )
     elif args.command == "ingest":
         run_ingest(app_settings, db_manager, force=getattr(args, "force", False))
     elif args.command == "refresh-data":

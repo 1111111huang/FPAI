@@ -25,10 +25,36 @@ def test_resolve_competition_recommends_forecast_international_for_general_purpo
     assert result["recommended_tool"] == "forecast_international"
 
 
-def test_resolve_competition_recommends_forecast_international_for_unregistered_competition():
-    """La Liga has no entry in config/competitions.yaml at all -- must fall back
-    to general_purpose/forecast_international, not error or default to league."""
+def test_resolve_competition_recommends_forecast_league_for_sp1():
+    """A49: SP1 (La Liga) was registered competition_specific in the real
+    config/competitions.yaml (US#147) -- confirm resolve_competition routes
+    it correctly, distinguishable from an unregistered competition."""
+    result = json.loads(resolve_competition.invoke({"competition_or_league": "SP1"}))
+    assert result["tier"] == "competition_specific"
+    assert result["recommended_tool"] == "forecast_league"
+
+
+def test_resolve_competition_normalizes_la_liga_free_text_name_to_sp1():
+    """A50: resolve_competition's own docstring uses 'La Liga' as a valid
+    example input -- confirm it actually resolves to SP1's real
+    competition_specific tier (not general_purpose forever), and that the
+    returned 'competition' field is the resolved code ('SP1'), not the raw
+    free-text input, so a caller reusing it for forecast_league's own
+    `league` argument gets a value that argument actually accepts."""
     result = json.loads(resolve_competition.invoke({"competition_or_league": "La Liga"}))
+    assert result["tier"] == "competition_specific"
+    assert result["recommended_tool"] == "forecast_league"
+    assert result["competition"] == "SP1"
+
+
+def test_resolve_competition_recommends_forecast_international_for_unregistered_competition():
+    """A49: Bundesliga (D1) has no entry in config/competitions.yaml at all --
+    must fall back to general_purpose/forecast_international, not error or
+    default to league. Replaced "La Liga" as this test's stock unregistered-
+    competition example -- La Liga (SP1) is now genuinely registered
+    (US#147), so it no longer demonstrates the unregistered-competition
+    path; Bundesliga/D1 is confirmed to still have no registry entry."""
+    result = json.loads(resolve_competition.invoke({"competition_or_league": "Bundesliga"}))
     assert result["tier"] == "general_purpose"
     assert result["recommended_tool"] == "forecast_international"
 
@@ -39,7 +65,7 @@ def test_following_resolve_competitions_advice_for_unregistered_league_yields_ma
     cold-start team_history_and_market result."""
     from unittest.mock import MagicMock, patch
 
-    advice = json.loads(resolve_competition.invoke({"competition_or_league": "La Liga"}))
+    advice = json.loads(resolve_competition.invoke({"competition_or_league": "Bundesliga"}))
     assert advice["recommended_tool"] == "forecast_international"
 
     mock_result = {
@@ -52,7 +78,7 @@ def test_following_resolve_competitions_advice_for_unregistered_league_yields_ma
         instance.forecast_upcoming.return_value = mock_result
 
         result_str = forecast_international.invoke({
-            "home_team": "Real Madrid", "away_team": "Barcelona", "date": "2026-08-15",
+            "home_team": "Bayern Munich", "away_team": "Borussia Dortmund", "date": "2026-08-15",
             "odds_h": 2.1, "odds_d": 3.4, "odds_a": 3.3,
         })
 

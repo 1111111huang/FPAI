@@ -37,7 +37,7 @@ import {
 } from "@/lib/api";
 import type { Fixture, MatchRecommendationOut } from "@/lib/types";
 import { useSandboxAsOf } from "@/lib/useSandboxAsOf";
-import { groupByLeague, sortMatches, type MatchSort } from "@/lib/dashboardMetrics";
+import { groupByDate, sortMatches, type MatchSort } from "@/lib/dashboardMetrics";
 import { AppShell } from "./AppShell";
 import { DashboardRail } from "./DashboardRail";
 
@@ -59,6 +59,13 @@ export type MarketRec = {
   mlProbability: number;
   impliedProbability: number;
   valueEdge: number;
+  // W84/A52: code-computed price this market would need to reach to clear
+  // min_value_edge -- null/undefined when not applicable or on a pre-A52
+  // cached row. Optional (not required) so every existing hand-built
+  // MarketRec literal across the test suite, none of which set this field,
+  // keeps type-checking without modification -- same convention as
+  // Fixture.competition (lib/types.ts).
+  targetOdds?: number | null;
 };
 
 export type Match = {
@@ -160,6 +167,7 @@ function applyRecommendation(match: Match, rec: MatchRecommendationOut): Match {
       mlProbability: m.ml_probability,
       impliedProbability: m.implied_probability,
       valueEdge: m.value_edge,
+      targetOdds: m.target_odds ?? null,
     })),
   };
 }
@@ -326,6 +334,15 @@ const TEAM_COLORS: Record<string, { primary: string; secondary?: string }> = {
   "Hammarby IF": { primary: "#046A38", secondary: "#FFFFFF" },
   "BK Hacken": { primary: "#FFD700", secondary: "#000000" },
   "IFK Goteborg": { primary: "#0057A0", secondary: "#FFFFFF" },
+  // W80: La Liga (Spanish top flight). Keys are the exact `shortName`
+  // football-data.org returns for these fixtures (confirmed live, W74/W76)
+  // -- not the ML engine's internal canonical short name
+  // (config/team_mapping.json), which is only used for odds/corpus
+  // matching and never rendered directly. Mirrors W61's exact rationale.
+  "Real Madrid": { primary: "#FFFFFF", secondary: "#00529F" },
+  "Barça": { primary: "#A50044", secondary: "#004D98" },
+  Atleti: { primary: "#CB3524", secondary: "#272E61" },
+  "Sevilla FC": { primary: "#D00027", secondary: "#FFFFFF" },
 };
 
 const BADGE_FALLBACK_COLORS = ["#199e70", "#c98500", "#008300", "#9085e9", "#e66767", "#d55181", "#d95926"];
@@ -565,16 +582,37 @@ export function MatchCard({
           </span>
           <div className="flex shrink-0 items-end gap-4">
             <div className="text-right">
-              <div className="font-mono text-sm text-ink">
-                {isCompleted && match.result
-                  ? `${match.result.home}-${match.result.away}`
-                  : shown?.currentOdds
-                  ? shown.currentOdds.toFixed(2)
-                  : "—"}
-              </div>
-              <div className="text-[10px] uppercase tracking-wide text-muted">
-                {isCompleted ? "Result" : "Odds"}
-              </div>
+              {/* W84/A52: for a conditional market with a real targetOdds
+                  (code-computed, src/agent/schema.py _compute_target_odds --
+                  the price this market needs to reach to clear
+                  min_value_edge), that's the number worth surfacing here,
+                  not the current price the card already told the user isn't
+                  good enough -- shown in the same warning color as the
+                  Conditional badge so "this is a wait target, not a live
+                  price" reads at a glance, same convention as the
+                  Result/Odds label swap below it. null covers "not
+                  applicable" and "no such target exists" (e.g. A29's
+                  ceiling-downgrade case) identically -- both fall back to
+                  the plain current-odds display. */}
+              {!isCompleted && shown?.recommendationType === "conditional" && shown.targetOdds != null ? (
+                <>
+                  <div className="font-mono text-sm text-warning">{shown.targetOdds.toFixed(2)}</div>
+                  <div className="text-[10px] uppercase tracking-wide text-warning">Wait ≥</div>
+                </>
+              ) : (
+                <>
+                  <div className="font-mono text-sm text-ink">
+                    {isCompleted && match.result
+                      ? `${match.result.home}-${match.result.away}`
+                      : shown?.currentOdds
+                      ? shown.currentOdds.toFixed(2)
+                      : "—"}
+                  </div>
+                  <div className="text-[10px] uppercase tracking-wide text-muted">
+                    {isCompleted ? "Result" : "Odds"}
+                  </div>
+                </>
+              )}
             </div>
             <div className="text-right">
               <div
@@ -635,11 +673,6 @@ export function DashboardPage() {
   // comment. Known duplicate fetch, not shared/cached; accepted for now.
   const { asOf, sandboxMode } = useSandboxAsOf();
   const [matches, setMatches] = useState<Match[] | null>(null);
-  // W46: populated only when the same-day query above comes back empty --
-  // null means "not attempted yet / still loading", [] means "attempted,
-  // genuinely nothing found in the forward window either" (still a
-  // non-crashing empty state, just without a fallback list to show).
-  const [nextMatches, setNextMatches] = useState<Match[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   // W42: bumped by the retry button to force a fresh load() run through the
   // same cancellation guard below, rather than calling load() imperatively
@@ -654,70 +687,49 @@ export function DashboardPage() {
     async function load() {
       setError(null);
       setMatches(null);
-      setNextMatches(null);
       try {
+        // Always the next 10 matches going forward from asOf, regardless of
+        // how many (if any) fall on asOf's own date -- a 90-day forward
+        // window, the same convention MatchExplorerPage's search already
+        // uses (this codebase's established precedent for "how far to look
+        // for the next real fixtures"). W51: scripts/launch_sandbox.py's
+        // fetch_sandbox_fixtures() mirrors this exact window/sort/cap (90
+        // days forward, sorted kickoff-ascending, capped at 10) so
+        // --precompute actually covers what the Dashboard shows -- if this
+        // window, sort, or cap ever changes, update that Python copy too,
+        // there is no shared implementation.
         const today = asOf.toISOString().slice(0, 10);
-        const fixtures = await getFixtures(today, today);
+        const to = new Date(asOf);
+        to.setUTCDate(to.getUTCDate() + 90);
+        const fixtures = await getFixtures(today, to.toISOString().slice(0, 10));
         if (cancelled) return;
-        const initialMatches = fixtures.map((f) => fixtureToMatch(f, asOf, sandboxMode));
-        // W53: resolve the precomputed cache for the whole initial list
-        // before rendering -- an additional await in this same guarded run,
-        // so re-check `cancelled` again before touching state.
-        const resolvedMatches = await resolveCachedRecommendations(initialMatches);
+        const nearest = fixtures
+          .map((f) => fixtureToMatch(f, asOf, sandboxMode))
+          // The Dashboard is a pre-match recommendation surface, not a
+          // results view -- a match whose real outcome is already decided
+          // (status: "completed") has nothing left to recommend and, worse,
+          // would show its final score right on the card. This isn't only a
+          // sandbox concern: W48's own same-day carve-out (fixtureToMatch,
+          // needed so BetTracker can still auto-settle today's bets) means a
+          // FINISHED fixture dated on asOf's own date renders "completed" in
+          // both live and sandbox mode. Filtering here, not in
+          // fixtureToMatch itself, keeps that carve-out intact for
+          // MatchExplorerPage/BetTracker, which still need real
+          // completed-match data for search and settlement.
+          .filter((m) => m.status === "upcoming")
+          // API ordering isn't guaranteed -- sort so "next 10" is actually
+          // nearest-first before trimming. ISO 8601 strings sort correctly
+          // as strings.
+          .sort((a, b) => a.kickoffIso.localeCompare(b.kickoffIso))
+          .slice(0, 10);
+        // W53: resolve the precomputed cache for the (already-capped-to-10)
+        // list before rendering -- an additional await in this same guarded
+        // run, so re-check `cancelled` again before touching state.
+        const resolvedMatches = await resolveCachedRecommendations(nearest);
         if (cancelled) return;
         setMatches(resolvedMatches);
-
-        if (fixtures.length === 0) {
-          // W46: same-day window empty (real off-season, or a past sandbox
-          // date before W45 fixed the underlying data source) -- fall back
-          // to the nearest matches going forward instead of leaving the
-          // Dashboard blank. Reuses the same 90-day forward window
-          // MatchExplorerPage already searches below (this codebase's
-          // established precedent for "how far to look for the next real
-          // fixtures"), sourced through the same W45-fixed /api/fixtures.
-          //
-          // This fetch has its own try/catch, deliberately separate from
-          // the outer one: today's fixtures query already succeeded (0
-          // results, correctly recorded above) by the time this runs, so a
-          // failure here must not replace that already-correct "no
-          // fixtures today" state with a misleading top-level error --
-          // degrade to the plain empty message instead (code review
-          // finding on the first version of this fix).
-          //
-          // W51: scripts/launch_sandbox.py's fetch_sandbox_fixtures()
-          // mirrors this exact window/sort/cap (90 days forward, sorted
-          // kickoff-ascending, capped at 10) so --precompute actually
-          // covers what a sandbox session's Dashboard falls back to
-          // showing. If this window, sort, or cap ever changes, update
-          // that Python copy too -- there is no shared implementation.
-          try {
-            const to = new Date(asOf);
-            to.setUTCDate(to.getUTCDate() + 90);
-            const upcoming = await getFixtures(today, to.toISOString().slice(0, 10));
-            // Second await in this same guarded run -- re-check `cancelled`
-            // (it may have flipped while this fetch was in flight, e.g.
-            // asOf/retryTick changed again) before touching state, same as
-            // the primary fetch above.
-            if (cancelled) return;
-            const sorted = upcoming
-              .map((f) => fixtureToMatch(f, asOf, sandboxMode))
-              // API ordering isn't guaranteed -- sort so "next" is actually
-              // nearest-first. ISO 8601 strings sort correctly as strings.
-              .sort((a, b) => a.kickoffIso.localeCompare(b.kickoffIso))
-              .slice(0, 10);
-            // W53: resolve the precomputed cache for this (already-capped-
-            // to-10) fallback list too -- another await in this same
-            // guarded run, so re-check `cancelled` again before touching
-            // state.
-            const resolvedNext = await resolveCachedRecommendations(sorted);
-            if (cancelled) return;
-            setNextMatches(resolvedNext);
-          } catch {
-            if (!cancelled) setNextMatches([]);
-          }
-        }
       } catch (err) {
-        if (!cancelled) setError(err instanceof ApiError ? err.message : "Could not load today's fixtures.");
+        if (!cancelled) setError(err instanceof ApiError ? err.message : "Could not load fixtures.");
       }
     }
 
@@ -732,17 +744,18 @@ export function DashboardPage() {
     setMatches((prev) => prev?.map((m) => (m.id === updated.id ? updated : m)) ?? null);
   }
 
-  function updateNextMatch(updated: Match) {
-    setNextMatches((prev) => prev?.map((m) => (m.id === updated.id ? updated : m)) ?? null);
-  }
-
-  const usingFallback = matches !== null && matches.length === 0 && nextMatches !== null && nextMatches.length > 0;
-  const shownMatches = usingFallback ? nextMatches! : matches ?? [];
-  const updateShown = usingFallback ? updateNextMatch : updateMatch;
+  const shownMatches = matches ?? [];
   const activeEdgesCount = shownMatches.filter(
     (m) => m.hasRecommendation && (m.overall === "direct_bet" || m.overall === "conditional")
   ).length;
-  const leagueGroups = groupByLeague(sortMatches(shownMatches, sort));
+  // Date-group order always follows kickoff order, regardless of the
+  // Kickoff/Edge % toggle below -- an edge-sorted list would scramble which
+  // day each group appears under. The toggle still reorders matches within
+  // each date group.
+  const dateGroups = groupByDate(sortMatches(shownMatches, "kickoff"), asOf, sandboxMode).map((group) => ({
+    ...group,
+    matches: sort === "edge" ? sortMatches(group.matches, "edge") : group.matches,
+  }));
 
   return (
     <AppShell active="dashboard" activeEdgesCount={matches !== null ? activeEdgesCount : undefined}>
@@ -752,7 +765,7 @@ export function DashboardPage() {
             <div>
               <h1 className="text-xl font-semibold tracking-tight text-ink">Today&apos;s Edges</h1>
               <p className="mt-1 text-sm text-ink-secondary">
-                Real E0 &amp; Allsvenskan fixtures for today. Expand a card to generate its recommendation.
+                Next 10 real E0, La Liga &amp; Allsvenskan fixtures. Expand a card to generate its recommendation.
               </p>
             </div>
             {shownMatches.length > 0 && (
@@ -770,22 +783,13 @@ export function DashboardPage() {
           <div className="mt-6">
             {error && <ErrorState message={error} onRetry={() => setRetryTick((t) => t + 1)} />}
             {!error && matches === null && <LoadingRows />}
-            {!error && matches !== null && matches.length === 0 && nextMatches === null && (
-              <>
-                <p className="py-4 text-center text-sm text-ink-secondary">No fixtures today.</p>
-                <LoadingRows />
-              </>
-            )}
-            {!error && matches !== null && matches.length === 0 && nextMatches !== null && nextMatches.length === 0 && (
-              <p className="py-8 text-center text-sm text-ink-secondary">No fixtures today.</p>
+            {!error && matches !== null && matches.length === 0 && (
+              <p className="py-8 text-center text-sm text-ink-secondary">No upcoming fixtures.</p>
             )}
             {!error && shownMatches.length > 0 && (
               <div className="flex flex-col gap-6">
-                {usingFallback && (
-                  <p className="text-sm text-ink-secondary">No fixtures today — next matches:</p>
-                )}
-                {leagueGroups.map((group) => (
-                  <div key={group.league}>
+                {dateGroups.map((group) => (
+                  <div key={group.dateKey}>
                     <div className="mb-2 flex items-center gap-2">
                       <h2 className="text-xs font-semibold uppercase tracking-wide text-muted">{group.label}</h2>
                       <span className="rounded-full border border-border px-1.5 py-0.5 text-[10px] text-ink-secondary">
@@ -794,7 +798,7 @@ export function DashboardPage() {
                     </div>
                     <div className="flex flex-col gap-2.5">
                       {group.matches.map((m) => (
-                        <MatchCard key={m.id} match={m} onUpdate={updateShown} asOf={asOf} sandboxMode={sandboxMode} />
+                        <MatchCard key={m.id} match={m} onUpdate={updateMatch} asOf={asOf} sandboxMode={sandboxMode} />
                       ))}
                     </div>
                   </div>
@@ -1025,6 +1029,19 @@ function ProbabilityRow({
         <span className="truncate">
           {m.market} · {m.selection}
         </span>
+        {/* W84/A52: targetOdds is code-computed (src/agent/schema.py
+            _compute_target_odds) -- the price this market would need to
+            reach to clear min_value_edge. null covers both "not applicable"
+            (not conditional, no current_odds) and "no such target exists"
+            (e.g. A29's ceiling-downgrade case) -- neither has a coherent
+            condition to state. Same warning color as the Conditional badge
+            itself (STATUS_META.conditional.text), so the two visually read
+            as one signal. */}
+        {m.recommendationType === "conditional" && m.targetOdds != null && (
+          <span className={`font-mono text-xs ${STATUS_META.conditional.text}`}>
+            Needs {m.targetOdds.toFixed(2)}+ to clear edge
+          </span>
+        )}
         {matchId && recommendation && !anomalous && (
           <LogBetButton matchId={matchId} recommendation={recommendation} market={m.market} selection={m.selection} />
         )}

@@ -171,3 +171,35 @@ def test_missing_match_field_is_not_treated_as_a_mismatch():
     result = validate_and_degrade({"markets": [_VALID_MARKET]}, "Arsenal", "Everton")
     assert result.overall == "insufficient_data"  # from the existing "no overall" default
     assert len(result.markets) == 1  # markets themselves are untouched by the mismatch check
+
+
+def test_target_odds_passes_through_unchanged_w83():
+    """W83: the agent-side A52 target_odds field reaches the API response
+    on a conditional market exactly as computed, no re-derivation here."""
+    market = {**_VALID_MARKET, "recommendation_type": "conditional", "target_odds": 2.35}
+    raw = {**_VALID_RAW, "overall": "conditional", "markets": [market]}
+
+    result = validate_and_degrade(raw, "Arsenal", "Everton")
+
+    assert result.markets[0].target_odds == 2.35
+
+
+def test_missing_target_odds_defaults_to_none_for_pre_a52_cached_data_w83():
+    """A recommendation cached before A52 shipped won't have this key at
+    all -- must default, not raise, same convention as feature_completeness."""
+    result = validate_and_degrade(_VALID_RAW, "Arsenal", "Everton")
+    assert result.markets[0].target_odds is None
+
+
+def test_missing_min_odds_defaults_instead_of_dropping_the_market_bug032():
+    """BUG-032: real DeepSeek output regularly omits min_odds on some
+    markets -- must default to 0.0 (matching src/agent/schema.py's own
+    default), not drop the market as malformed."""
+    market = {k: v for k, v in _VALID_MARKET.items() if k != "min_odds"}
+    raw = {**_VALID_RAW, "markets": [market]}
+
+    result = validate_and_degrade(raw, "Arsenal", "Everton")
+
+    assert len(result.markets) == 1
+    assert result.markets[0].min_odds == 0.0
+    assert result.invalid_market_count == 0

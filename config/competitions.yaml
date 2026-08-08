@@ -85,6 +85,46 @@ competitions:
       - home_goals
       - away_goals
       - total_goals
+  SP1:
+    competition_id: SP1
+    tier: competition_specific
+    league_code: SP1
+    # US#143/US#147: live-verified 2026-08-06 that football-data.co.uk publishes
+    # SP1 (La Liga) via spainm.php in the same rich per-season CSV format as E0
+    # (englandm.php) -- identical column set (HS/AS/HST/AST/HC/AC/HY/AY/HR/AR,
+    # Avg>2.5/Avg<2.5, AHh/AvgAHH/AvgAHA), scraped/loaded by the exact same
+    # FootballDataScraper/CSVLoader.process_v1_csv with zero code changes. Real
+    # ingested SP1 rows (10 seasons, 2015/16-2025/26, 3,800 matches) confirm
+    # 100% non-null shots/corners/discipline/over-under/Asian-handicap columns
+    # and 100% non-null B365-based odds -- full column parity with E0, unlike
+    # Sweden's goals-only source. enabled_feature_groups therefore mirrors E0's
+    # list exactly, MINUS SQUAD: FotMob's La Liga league id (87) is confirmed
+    # live (US#146), but the actual `fetch-fotmob --league SP1` player-level
+    # backfill (a slow, per-match job) has not been run yet -- flagged as a
+    # fast-follow, not a data-availability gap like Sweden's. available_targets
+    # is left unset (all 8 targets trainable), matching E0's convention, since
+    # every raw column every target's labels depend on is fully populated.
+    enabled_feature_groups:
+      - OFF_GOALS
+      - OFF_SHOTS
+      - OFF_CORNERS
+      - DEF_GOALS
+      - DEF_SHOTS
+      - DEF_CORNERS
+      - OPP_ADJ_GOALS
+      - OPP_ADJ_SHOTS
+      - OPP_ADJ_CORNERS
+      - STRENGTH_GOALS
+      - STRENGTH_SHOTS
+      - INTERACTION_GOALS
+      - INTERACTION_SHOTS
+      - DIS
+      - CTX
+      - CTX_CORNERS
+      - H2H_CORNERS
+      - MKT
+      - EFFICIENCY
+    player_data_sources: []
   international:
     competition_id: international
     tier: general_purpose

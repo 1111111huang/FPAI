@@ -13,6 +13,7 @@ import pytest
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
 from src.ingestion.fotmob.fetcher import (
+    LEAGUE_IDS,
     fetch_finished_match_ids,
     fetch_match_player_stats,
     fetch_player_match_stats,
@@ -186,3 +187,9 @@ def test_fetch_player_match_stats_combines_match_and_player_rows():
 def test_fetch_player_match_stats_rejects_unsupported_league():
     with pytest.raises(ValueError, match="Unsupported league"):
         fetch_player_match_stats("XX", date(2024, 5, 19), date(2024, 5, 19), delay=0)
+
+
+def test_league_ids_maps_sp1_to_the_real_fotmob_league_id():
+    """US#146: La Liga's real FotMob league id is 87 (live-verified 2026-08-06
+    against /api/data/matches, entry name 'LaLiga', ccode 'ESP')."""
+    assert LEAGUE_IDS["SP1"] == 87

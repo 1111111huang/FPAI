@@ -24,6 +24,26 @@ from src.logic.target_registry import TargetDefinition, get_target_definition, l
 from src.utils.config_loader import AppSettings, load_settings
 from src.utils.db_manager import DuckDBManager
 
+def _load_xgboost_native(model: Any, model_path: Path) -> Any:
+    """Loads a native-XGBoost-format artifact (UBJSON/JSON) by content, not
+    by path. These files are saved via XGBoost's own save_model(), not
+    joblib, despite several living under a `.joblib` filename (a
+    training-pipeline naming convention, not a format claim) -- confirmed
+    live: `metadata.model_type` is spelled "XGBoostModel"/
+    "XGBoostRegressorModel" for some contexts/targets and lowercase
+    "xgboost" for others (both real, both in config/model_selection.yaml),
+    and either path can end in `.joblib`. Passing a path string makes
+    XGBoost's C++ loader guess the format from the file extension, which it
+    can't recognize for `.joblib`, logging "Unknown file format... Using
+    UBJSON as a guess" on every single load. Passing the raw bytes instead
+    skips extension-based guessing entirely -- XGBoost infers the format
+    directly from the buffer's own content, silencing the noise without
+    renaming any artifact on disk."""
+    with open(model_path, "rb") as fh:
+        model.load_model(bytearray(fh.read()))
+    return model
+
+
 # MKT_* features used for international-context inference (US#85/US#86)
 _MKT_FEATURES = [
     "MKT_IMPLIED_HOME", "MKT_IMPLIED_DRAW", "MKT_IMPLIED_AWAY",
@@ -116,13 +136,9 @@ class ForecastService:
     def _load_model(model_path: Path, metadata: dict[str, Any]) -> Any:
         model_type = metadata.get("model_type", "")
         if model_type == "XGBoostModel":
-            model = XGBClassifier()
-            model.load_model(str(model_path))
-            return model
+            return _load_xgboost_native(XGBClassifier(), model_path)
         if model_type == "XGBoostRegressorModel":
-            model = XGBRegressor()
-            model.load_model(str(model_path))
-            return model
+            return _load_xgboost_native(XGBRegressor(), model_path)
         # Sniff file format: XGBoost native UBJSON starts with b'{'
         with open(model_path, "rb") as _f:
             _magic = _f.read(1)
@@ -130,12 +146,8 @@ class ForecastService:
             # Regressor targets have "_regressor" or "_goals"/"_corners" in name
             _name = model_path.stem.lower()
             _regressor_hints = ("corner", "goal", "regressor", "xgb_regressor")
-            if any(h in _name for h in _regressor_hints):
-                _m = XGBRegressor()
-            else:
-                _m = XGBClassifier()
-            _m.load_model(str(model_path))
-            return _m
+            _m = XGBRegressor() if any(h in _name for h in _regressor_hints) else XGBClassifier()
+            return _load_xgboost_native(_m, model_path)
         return joblib.load(model_path)
 
     @staticmethod

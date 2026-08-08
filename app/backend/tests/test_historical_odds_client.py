@@ -39,7 +39,9 @@ def _seed_db(tmp_path: Path):
         "INSERT INTO raw_matches VALUES "
         "('1', 'E0', '2026-03-01', 'Arsenal', 'Everton', 1.80, 3.60, 4.20), "
         "('2', 'E0', '2026-03-01', 'Chelsea', 'Fulham', 1.50, 4.00, 6.50), "
-        "('3', 'E0', '2026-03-02', 'Liverpool', 'Burnley', 1.30, 5.50, 9.00)"  # different date -- must be excluded
+        "('3', 'E0', '2026-03-02', 'Liverpool', 'Burnley', 1.30, 5.50, 9.00), "  # different date -- must be excluded
+        # BUG-034: same date, different league -- must not leak into an E0 query.
+        "('4', 'SP1', '2026-03-01', 'Barcelona', 'Sevilla', 1.40, 4.50, 7.00)"
     )
     conn.close()
     return DuckDBManager(config_path=str(config_path))
@@ -107,6 +109,47 @@ def test_get_odds_without_date_param_falls_back_to_constructor_sandbox_date(tmp_
     client = HistoricalOddsClient(sandbox_date="2026-03-01", db_manager=manager)
 
     result = client.get_odds()
+
+    assert result is not None
+    assert {odds.home_team for odds in result} == {"Arsenal", "Chelsea"}
+
+
+def test_get_odds_scopes_to_the_requested_sport_keys_league_bug034(tmp_path: Path) -> None:
+    """BUG-034: sport_key was previously accepted but silently ignored --
+    this always queried league=E0 regardless of what was requested. A
+    sport_key mapping to a different competition (La Liga) must return that
+    competition's own odds, not E0's same-date rows."""
+    manager = _seed_db(tmp_path)
+    client = HistoricalOddsClient(sandbox_date="2026-03-01", db_manager=manager)
+
+    result = client.get_odds(sport_key="soccer_spain_la_liga")
+
+    assert result is not None
+    assert len(result) == 1
+    assert result[0].home_team == "Barcelona"
+    assert result[0].home_odds == 1.40
+
+
+def test_get_odds_default_sport_key_still_scopes_to_e0(tmp_path: Path) -> None:
+    """Regression guard: the pre-BUG-034 default behavior (no sport_key
+    passed, or the explicit "soccer_epl" default) must be byte-identical --
+    E0 only, SP1's same-date row excluded."""
+    manager = _seed_db(tmp_path)
+    client = HistoricalOddsClient(sandbox_date="2026-03-01", db_manager=manager)
+
+    result = client.get_odds(sport_key="soccer_epl")
+
+    assert result is not None
+    assert {odds.home_team for odds in result} == {"Arsenal", "Chelsea"}
+
+
+def test_get_odds_unrecognized_sport_key_falls_back_to_e0(tmp_path: Path) -> None:
+    """An unmapped/unexpected sport_key degrades to the same E0 default as
+    before, rather than returning nothing or raising."""
+    manager = _seed_db(tmp_path)
+    client = HistoricalOddsClient(sandbox_date="2026-03-01", db_manager=manager)
+
+    result = client.get_odds(sport_key="soccer_some_unknown_league")
 
     assert result is not None
     assert {odds.home_team for odds in result} == {"Arsenal", "Chelsea"}

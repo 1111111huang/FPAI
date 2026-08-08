@@ -119,16 +119,39 @@ def _load_registry(registry_path: str | Path = DEFAULT_REGISTRY_PATH) -> dict[st
     return registry
 
 
+# A50: a few registered competitions have a well-known free-text name that
+# differs from their own registry code (e.g. "La Liga" -> "SP1") --
+# resolve_competition's own docstring tells the calling LLM "La Liga" is a
+# valid example input, but a raw dict-key lookup never matched it, even
+# after SP1 was fully registered and trained (the gap this phase's scoping
+# note found). Tried only as a case-insensitive fallback after the exact
+# competition_id lookup misses, so passing the real code always wins and
+# this can never mask a genuine unregistered/typo'd code. Placed at this one
+# choke point (not duplicated per caller) since every real caller --
+# resolve_competition (src/agent/tools.py) and
+# ForecastService.forecast_upcoming (src/forecast/forecast_service.py) --
+# already routes its own tier/competition lookup through this function.
+COMPETITION_NAME_ALIASES: dict[str, str] = {
+    "la liga": "SP1",
+    "premier league": "E0",
+    "english premier league": "E0",
+    "epl": "E0",
+    "allsvenskan": "SWE",
+}
+
+
 def get_competition_definition(
     competition_id: str, registry_path: str | Path = DEFAULT_REGISTRY_PATH
 ) -> CompetitionDefinition:
     """Return the competition definition or raise a helpful error."""
     registry = _load_registry(registry_path)
-    try:
+    if competition_id in registry:
         return registry[competition_id]
-    except KeyError as exc:
-        valid = ", ".join(sorted(registry))
-        raise ValueError(f"Unknown competition '{competition_id}'. Registered competitions: {valid}") from exc
+    alias = COMPETITION_NAME_ALIASES.get(competition_id.strip().lower())
+    if alias is not None and alias in registry:
+        return registry[alias]
+    valid = ", ".join(sorted(registry))
+    raise ValueError(f"Unknown competition '{competition_id}'. Registered competitions: {valid}")
 
 
 def list_competition_definitions(

@@ -14,6 +14,7 @@ LOGGER = get_logger(__name__)
 LEAGUE_MAP: dict[str, str] = {
     "E0": "EPL",
     "EPL": "EPL",
+    "SP1": "La_liga",  # US#146, live-verified 2026-08-06 against getLeagueData
 }
 
 _API_URL = "https://understat.com/getLeagueData/{league}/{season}"

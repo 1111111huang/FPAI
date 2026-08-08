@@ -39,6 +39,7 @@ from app.backend import recommendations
 from app.backend.agent_config_hash import compute_agent_config_hash
 from app.backend.football_data_client import FootballDataClient, NormalizedMatch
 from app.backend.odds_api_client import NormalizedOdds, OddsAPIClient
+from app.backend.football_data_competition_codes import FOOTBALL_DATA_CODE_BY_LEAGUE
 from app.backend.odds_sport_keys import ODDS_SPORT_KEY_BY_COMPETITION
 from app.backend.recommendation_cache import RecommendationCache
 from app.backend.recommendations import validate_and_degrade
@@ -123,7 +124,13 @@ async def run_eod_batch(
     "generated"/"skipped". A CLI progress hook for W50's sandbox precompute
     step; the real scheduler path never passes it."""
     if fixtures is None:
-        fixtures = fixtures_client.get_fixtures(competition_code=COMPETITION_CODE, date_from=date_str, date_to=date_str)
+        # W76: keyed off `league` (already accepted below), not the E0-only
+        # COMPETITION_CODE constant -- this fallback is dead in practice for
+        # every real caller today (both the scheduler and sandbox precompute
+        # always supply `fixtures` explicitly), but shouldn't silently fetch
+        # the wrong competition's data if that ever changes.
+        competition_code = FOOTBALL_DATA_CODE_BY_LEAGUE.get(league, COMPETITION_CODE)
+        fixtures = fixtures_client.get_fixtures(competition_code=competition_code, date_from=date_str, date_to=date_str)
 
     # W58: explicit sport_key from the competition-id mapping, rather than
     # relying on get_odds()'s own "soccer_epl" default parameter.

@@ -97,8 +97,16 @@ export function AppShell({
           .slice(0, 8);
 
   const dataFreshness = status?.data_freshness;
-  const leagueModelCount = Object.keys(status?.model_status.league ?? {}).length;
+  // US#110: model_status is keyed dynamically by competition_id (e.g. "E0",
+  // "SWE"), not a fixed "league" key -- sum every non-international bucket.
+  const leagueModelCount = Object.entries(status?.model_status ?? {})
+    .filter(([ctx]) => ctx !== "international")
+    .reduce((sum, [, models]) => sum + Object.keys(models).length, 0);
   const internationalModelCount = Object.keys(status?.model_status.international ?? {}).length;
+  // W74: only worth a breakdown once a second competition actually exists --
+  // a single-entry by_league is by definition identical to the blended line
+  // above it, so showing both would just be noise.
+  const byLeagueEntries = Object.entries(dataFreshness?.by_league ?? {}).sort(([a], [b]) => a.localeCompare(b));
 
   return (
     <div className="min-h-screen lg:flex">
@@ -142,6 +150,17 @@ export function AppShell({
                   }${dataFreshness.is_stale ? " -- stale" : ""}`
                 : "—"}
             </div>
+            {byLeagueEntries.length > 1 && (
+              <div className="mt-1 flex flex-col gap-0.5">
+                {byLeagueEntries.map(([league, freshness]) => (
+                  <div key={league} className={freshness.is_stale ? "text-warning" : "text-ink-secondary"}>
+                    <span className="font-medium">{league}</span>:{" "}
+                    {freshness.days_since_update !== null ? `${freshness.days_since_update}d ago` : "unknown"}
+                    {freshness.is_stale ? " -- stale" : ""}
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         </div>
       </aside>

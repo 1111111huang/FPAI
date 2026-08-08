@@ -57,7 +57,7 @@ describe("AppShell", () => {
   it("renders real model status and last-updated once the status fetch resolves", async () => {
     vi.mocked(getStatus).mockResolvedValue({
       data_freshness: { latest_match_date: "2026-07-20", days_since_update: 3, match_count: 100, is_stale: false },
-      model_status: { league: { result_3way: { model_type: "x", primary_metric_value: 0.6, metric_name: "m", selected_at: "now" } }, international: {} },
+      model_status: { E0: { result_3way: { model_type: "x", primary_metric_value: 0.6, metric_name: "m", selected_at: "now" } }, international: {} },
     });
     render(
       <AppShell active="dashboard">
@@ -67,6 +67,26 @@ describe("AppShell", () => {
     expect(await screen.findByText(/league 1/)).toBeInTheDocument();
     expect(screen.getByText(/2026-07-20/)).toBeInTheDocument();
     expect(screen.queryByText(/-- stale/)).not.toBeInTheDocument();
+  });
+
+  // US#110: model_status has no fixed "league" key -- it's keyed dynamically
+  // per competition_id, so a second competition-specific league (SWE) must
+  // still add to the combined league model count.
+  it("sums model counts across every non-international context key", async () => {
+    vi.mocked(getStatus).mockResolvedValue({
+      data_freshness: { latest_match_date: "2026-07-20", days_since_update: 3, match_count: 100, is_stale: false },
+      model_status: {
+        E0: { result_3way: { model_type: "x", primary_metric_value: 0.6, metric_name: "m", selected_at: "now" } },
+        SWE: { result_3way: { model_type: "x", primary_metric_value: 0.6, metric_name: "m", selected_at: "now" } },
+        international: { result_3way: { model_type: "x", primary_metric_value: 0.5, metric_name: "m", selected_at: "now" } },
+      },
+    });
+    render(
+      <AppShell active="dashboard">
+        <p>content</p>
+      </AppShell>
+    );
+    expect(await screen.findByText(/league 2 · international 1/)).toBeInTheDocument();
   });
 
   it("shows a textual '-- stale' suffix (not just a color change) when data_freshness.is_stale is true", async () => {
@@ -81,6 +101,58 @@ describe("AppShell", () => {
     );
     expect(await screen.findByText(/2026-05-24/)).toBeInTheDocument();
     expect(screen.getByText(/-- stale/)).toBeInTheDocument();
+  });
+
+  it("does not show a per-league breakdown when by_league has 0 or 1 entries (single-competition, unchanged)", async () => {
+    vi.mocked(getStatus).mockResolvedValue({
+      data_freshness: {
+        latest_match_date: "2026-07-20",
+        days_since_update: 3,
+        match_count: 100,
+        is_stale: false,
+        by_league: { E0: { latest_match_date: "2026-07-20", days_since_update: 3, match_count: 100, is_stale: false } },
+      },
+      model_status: { league: {}, international: {} },
+    });
+    render(
+      <AppShell active="dashboard">
+        <p>content</p>
+      </AppShell>
+    );
+    await screen.findByText(/2026-07-20/);
+    expect(screen.queryByText("E0")).not.toBeInTheDocument();
+  });
+
+  // W74: US#136 (engine-side) added a by_league breakdown to
+  // get_data_freshness() precisely because a blended is_stale can mask one
+  // competition going stale behind another staying fresh. This proves that
+  // masking no longer happens in the UI once a second competition exists.
+  it("shows a per-league staleness breakdown when by_league has more than one entry, even though the blended figure reads fresh", async () => {
+    vi.mocked(getStatus).mockResolvedValue({
+      data_freshness: {
+        latest_match_date: "2026-07-20",
+        days_since_update: 1,
+        match_count: 3824,
+        is_stale: false,
+        by_league: {
+          E0: { latest_match_date: "2026-05-24", days_since_update: 58, match_count: 3800, is_stale: true },
+          SWE: { latest_match_date: "2026-07-20", days_since_update: 1, match_count: 24, is_stale: false },
+        },
+      },
+      model_status: { league: {}, international: {} },
+    });
+    render(
+      <AppShell active="dashboard">
+        <p>content</p>
+      </AppShell>
+    );
+    expect(await screen.findByText("E0")).toBeInTheDocument();
+    expect(screen.getByText("SWE")).toBeInTheDocument();
+    // The blended top line reads fresh, but E0's own row must still say stale.
+    const e0Row = screen.getByText("E0").closest("div");
+    expect(e0Row?.textContent).toMatch(/58d ago -- stale/);
+    const sweRow = screen.getByText("SWE").closest("div");
+    expect(sweRow?.textContent).not.toMatch(/stale/);
   });
 
   it("shows Active Edges only when the prop is provided", () => {

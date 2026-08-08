@@ -69,7 +69,7 @@ describe("Dashboard initial-list precompute visibility (W53)", () => {
   it("a precomputed (cache-hit) fixture in the initial list renders its recommendation with no click", async () => {
     const today = new Date().toISOString().slice(0, 10);
     const f = fixture("precomputed-match", `${today}T15:00:00Z`, "Arsenal", "Everton");
-    vi.mocked(getFixtures).mockImplementation(async (from, to) => (from === today && to === today ? [f] : []));
+    vi.mocked(getFixtures).mockImplementation(async (from, to) => (from === today ? [f] : []));
     const cachedRec = makeRecommendation({ explanation: "precomputed explanation" });
     vi.mocked(getCachedRecommendation).mockResolvedValue(cachedRec);
 
@@ -90,7 +90,7 @@ describe("Dashboard initial-list precompute visibility (W53)", () => {
   it("a cache-miss fixture in the initial list still renders 'Not yet generated', and clicking it still triggers the existing generateRecommendation fallback", async () => {
     const today = new Date().toISOString().slice(0, 10);
     const f = fixture("uncached-match", `${today}T15:00:00Z`, "Arsenal", "Everton");
-    vi.mocked(getFixtures).mockImplementation(async (from, to) => (from === today && to === today ? [f] : []));
+    vi.mocked(getFixtures).mockImplementation(async (from, to) => (from === today ? [f] : []));
     vi.mocked(getCachedRecommendation).mockResolvedValue(null);
     const liveRec = makeRecommendation({ explanation: "live explanation" });
     vi.mocked(generateRecommendation).mockResolvedValue(liveRec);
@@ -133,7 +133,7 @@ describe("Dashboard initial-list precompute visibility (W53)", () => {
       fixture("match-a", `${today}T15:00:00Z`, "Arsenal", "Everton"),
       fixture("match-b", `${today}T17:00:00Z`, "Chelsea", "Fulham"),
     ];
-    vi.mocked(getFixtures).mockImplementation(async (from, to) => (from === today && to === today ? fixtures : []));
+    vi.mocked(getFixtures).mockImplementation(async (from, to) => (from === today ? fixtures : []));
 
     const resolvers: Array<() => void> = [];
     vi.mocked(getCachedRecommendation).mockImplementation(

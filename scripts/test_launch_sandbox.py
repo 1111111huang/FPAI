@@ -347,7 +347,11 @@ class TestPrecomputeRecommendationsOrdering:
                 f"{name} was called before SANDBOX_MODE/SANDBOX_DATE were correctly set "
                 f"(observed {env_snapshots[name]!r})"
             )
-        mock_run_batch.assert_awaited_once()
+        # W81: E0 and SP1 both go through the same mocked FootballDataClient
+        # (get_results blanket-returns [fixture] regardless of
+        # competition_code) -- SWE finds nothing (historical_results_from_raw_matches
+        # mocked to []), so run_eod_batch fires twice, not once.
+        assert mock_run_batch.await_count == 2
 
 
 class TestPrecomputeRecommendationsConfigSelection:
@@ -428,8 +432,14 @@ class TestPrecomputeRecommendationsFallbackReporting:
                 os.environ.pop("SANDBOX_MODE", None)
                 os.environ.pop("SANDBOX_DATE", None)
 
-        mock_run_batch.assert_awaited_once()
-        assert mock_run_batch.await_args.kwargs["fixtures"] == [fallback_fixture]
+        # W81: E0 and SP1 both go through the same mocked FootballDataClient/
+        # _get_results side_effect (keyed only on date, not competition_code),
+        # so both fall back identically -- run_eod_batch fires twice, not
+        # once. SWE finds nothing (historical_results_from_raw_matches
+        # mocked to []) so contributes no call.
+        assert mock_run_batch.await_count == 2
+        for call in mock_run_batch.await_args_list:
+            assert call.kwargs["fixtures"] == [fallback_fixture]
 
         output = capsys.readouterr().out
         assert f"no real fixtures on {date_str}" in output
@@ -445,9 +455,12 @@ class TestPrecomputeRecommendationsBothLeagues:
     recommendations for both leagues, not just E0 -- before this fix,
     precompute_recommendations() only ever looked at football-data.org (E0),
     so a sandbox session's SWE fixtures were silently never precomputed
-    regardless of real data availability."""
+    regardless of real data availability. W81 extended this to a third
+    competition, SP1 -- sharing E0's football-data.org client/mock but
+    distinguished by competition_code, so the mock's side_effect keys off
+    that kwarg rather than a blanket return_value."""
 
-    def test_precomputes_both_leagues_with_correct_league_tags(self):
+    def test_precomputes_all_three_leagues_with_correct_league_tags(self):
         date_str = "2025-03-08"
         e0_fixture = NormalizedMatch(
             match_id="1", utc_date="2025-03-08T15:00:00Z", status="FINISHED",
@@ -457,6 +470,13 @@ class TestPrecomputeRecommendationsBothLeagues:
             match_id="2", utc_date="2025-03-08T17:00:00Z", status="FINISHED",
             home_team="Malmo FF", away_team="AIK", home_goals=1, away_goals=0,
         )
+        sp1_fixture = NormalizedMatch(
+            match_id="3", utc_date="2025-03-08T19:00:00Z", status="FINISHED",
+            home_team="Real Madrid", away_team="Sevilla FC", home_goals=3, away_goals=1,
+        )
+
+        def _get_results(**kwargs):
+            return [sp1_fixture] if kwargs.get("competition_code") == "PD" else [e0_fixture]
 
         with patch("scripts.launch_sandbox.FootballDataClient") as mock_client_cls, \
              patch("app.backend.scheduler_wiring.build_odds_client", return_value=None), \
@@ -466,8 +486,12 @@ class TestPrecomputeRecommendationsBothLeagues:
                  return_value=[swe_fixture],
              ), \
              patch("app.backend.eod_batch.run_eod_batch", new_callable=AsyncMock) as mock_run_batch:
-            mock_client_cls.return_value.get_results.return_value = [e0_fixture]
-            mock_run_batch.return_value = EodBatchResult(fixtures=[e0_fixture], generated=1, skipped=0)
+            mock_client_cls.return_value.get_results.side_effect = _get_results
+
+            def _run_batch(**kwargs):
+                return EodBatchResult(fixtures=kwargs["fixtures"], generated=1, skipped=0)
+
+            mock_run_batch.side_effect = _run_batch
 
             try:
                 precompute_recommendations(date_str)
@@ -475,12 +499,13 @@ class TestPrecomputeRecommendationsBothLeagues:
                 os.environ.pop("SANDBOX_MODE", None)
                 os.environ.pop("SANDBOX_DATE", None)
 
-        assert mock_run_batch.await_count == 2
+        assert mock_run_batch.await_count == 3
         leagues_called = {call.kwargs["league"] for call in mock_run_batch.await_args_list}
-        assert leagues_called == {"E0", "SWE"}
+        assert leagues_called == {"E0", "SWE", "SP1"}
 
         fixtures_by_league = {
             call.kwargs["league"]: call.kwargs["fixtures"] for call in mock_run_batch.await_args_list
         }
         assert fixtures_by_league["E0"] == [e0_fixture]
         assert fixtures_by_league["SWE"] == [swe_fixture]
+        assert fixtures_by_league["SP1"] == [sp1_fixture]
