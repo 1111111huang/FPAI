@@ -98,6 +98,50 @@ def test_one_erroring_match_is_skipped_not_fatal(tmp_path: Path) -> None:
     assert len(scheduled) == 2
 
 
+def test_a_locked_database_mid_batch_skips_only_that_match_not_the_whole_batch(tmp_path: Path) -> None:
+    """W94 (documents/app_user_stories.md Phase 21): confirms, rather than
+    assumes, that this file's existing generic except Exception (proven
+    above only against a plain RuntimeError) also genuinely covers
+    duckdb.IOException specifically -- the real exception DuckDB raises
+    when a second process (this batch) tries to open a connection to
+    data/fpai_core.db while the ML-engine's own scheduled data refresh
+    holds a read-write connection open elsewhere (confirmed live,
+    documents/user_stories.md Phase 23). Unlike the live manual-regenerate
+    endpoint (W93, which had zero protection and needed a real fix), this
+    batch path turns out to already be safe by construction -- no code
+    change needed here, just proof the assumption holds for this specific
+    exception type too."""
+    import duckdb
+
+    fixtures_client = MagicMock()
+    fixtures_client.get_fixtures.return_value = [
+        _fixture("m1", "Arsenal", "Everton"),
+        _fixture("m2", "Chelsea", "Fulham"),
+    ]
+    odds_client = MagicMock()
+    odds_client.get_odds.return_value = []
+    cache = RecommendationCache(db_path=tmp_path / "cache.db")
+    config = AgentConfig.default()
+    scheduled: list[NormalizedMatch] = []
+
+    def _run_agent_side_effect(match_info, config):
+        if match_info["home_team"] == "Chelsea":
+            raise duckdb.IOException('Could not set lock on file "data/fpai_core.db": Conflicting lock is held')
+        return _RECOMMENDATION
+
+    with patch("app.backend.recommendations.run_agent", side_effect=_run_agent_side_effect):
+        result = asyncio.run(
+            run_eod_batch(
+                fixtures_client=fixtures_client, odds_client=odds_client, cache=cache, config=config,
+                schedule_t30=scheduled.append, date_str="2026-08-22",
+            )
+        )
+
+    assert result.generated == 1
+    assert result.skipped == 1
+    assert len(scheduled) == 2  # T-30 still scheduled for both, including the locked-out one
+
+
 def test_odds_matched_to_fixture_by_team_name(tmp_path: Path) -> None:
     fixtures_client = MagicMock()
     fixtures_client.get_fixtures.return_value = [_fixture("m1", "Arsenal", "Everton")]

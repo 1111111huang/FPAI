@@ -14,6 +14,7 @@ import os
 import time
 from typing import Callable
 
+import duckdb
 from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -475,13 +476,38 @@ async def create_recommendation(
         # build_odds_client()/get_odds() make a real synchronous HTTP or DB
         # call (HistoricalOddsClient/OddsAPIClient) -- off the event loop,
         # same convention as the run_agent call directly below.
+        # _fetch_odds_for_manual_request already has its own broad
+        # except-and-degrade-to-None (including a hypothetical
+        # duckdb.IOException from HistoricalOddsClient's sandbox-mode DB
+        # read, W93 -- confirmed live, not assumed) -- nothing further
+        # needed here for that side.
         fetched_odds = await run_in_threadpool(_fetch_odds_for_manual_request, request, match_info.get("league"))
         if fetched_odds is not None:
             match_info["odds"] = fetched_odds
 
-    # run_agent is a real ~10-30s synchronous call (LLM + Tavily) -- must run
-    # off the event loop or it blocks every other request.
-    raw = await run_in_threadpool(recommendations.run_agent, match_info)
+    # W93: unlike the odds fetch above, run_agent (via ForecastService,
+    # reading data/fpai_core.db) had no protection against DuckDB's real
+    # exclusive file lock -- confirmed live that a second process opening
+    # *any* connection (even read-only) while a read-write connection is
+    # open elsewhere (e.g. the ML-engine's own scheduled data refresh,
+    # documents/user_stories.md Phase 23, mid-write) fails immediately with
+    # duckdb.IOException rather than blocking or corrupting data. Was
+    # previously unhandled here, surfacing as a raw 500 unlike every other
+    # transient-external-condition path in this app
+    # (_fetch_and_cache_fixtures's own HTTPError-to-503 precedent, above).
+    try:
+        # run_agent is a real ~10-30s synchronous call (LLM + Tavily) --
+        # must run off the event loop or it blocks every other request.
+        raw = await run_in_threadpool(recommendations.run_agent, match_info)
+    except duckdb.IOException as exc:
+        LOGGER.warning("Recommendation generation hit a locked database (%s): %s", request.effective_match_id(), exc)
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "The match database is temporarily locked by a scheduled data refresh. "
+                "Please try again in a minute."
+            ),
+        ) from exc
     result = validate_and_degrade(raw, request.home_team, request.away_team)
 
     cache.record_generation(

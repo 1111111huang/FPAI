@@ -73,6 +73,32 @@ def test_malformed_market_degrades_gracefully_not_a_500():
     assert body["invalid_market_count"] == 1
 
 
+def test_run_agent_hitting_a_locked_database_degrades_to_a_clean_503_not_a_raw_500():
+    """W93 (documents/app_user_stories.md Phase 21): DuckDB enforces a real
+    exclusive file lock on data/fpai_core.db -- confirmed live that a
+    second process opening any connection while the ML-engine's own
+    scheduled data refresh holds a read-write connection open fails
+    immediately with duckdb.IOException. Before this fix, run_agent
+    (reaching into that file via ForecastService) had no protection at
+    all, unlike every other transient-external-condition path in this app
+    (the odds-client-raising precedent right above, and
+    _fetch_and_cache_fixtures's own HTTPError-to-503 handling)."""
+    import duckdb
+
+    with patch(
+        "app.backend.recommendations.run_agent",
+        side_effect=duckdb.IOException('Could not set lock on file "data/fpai_core.db": Conflicting lock is held'),
+    ):
+        with TestClient(app) as client:
+            response = client.post(
+                "/api/recommendations",
+                json={"home_team": "Arsenal", "away_team": "Everton", "date": "2026-08-22", "league": "E0"},
+            )
+
+    assert response.status_code == 503
+    assert "temporarily locked" in response.json()["detail"]
+
+
 def test_odds_are_passed_through_to_match_info():
     with patch("app.backend.recommendations.run_agent", return_value=_VALID_RECOMMENDATION) as mock_run:
         with TestClient(app) as client:
