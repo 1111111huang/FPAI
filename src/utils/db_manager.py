@@ -16,6 +16,11 @@ class DuckDBManager:
 
     def __init__(self, config_path: str = "config.yaml") -> None:
         """Initialize manager using the database path in config.yaml."""
+        # US#155: stored so callers holding only a DuckDBManager instance
+        # (e.g. run_ingest, main.py) can still re-derive the exact config it
+        # was built from -- see this field's own usage there for why that
+        # matters.
+        self.config_path = config_path
         self.settings = load_settings(config_path)
         self.db_path: Path = Path(self.settings.paths.database_path)
         self.db_path.parent.mkdir(parents=True, exist_ok=True)

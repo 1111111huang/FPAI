@@ -448,7 +448,7 @@ def run_fetch_understat(
     LOGGER.info("xG update | matched=%d | updated=%d | unmatched=%d", result["matched"], result["updated"], result["unmatched"])
     if rebuild_features:
         LOGGER.info("Rebuilding feature store with xG data...")
-        factory = FeatureFactory()
+        factory = FeatureFactory(config_path=db_manager.config_path)  # US#155
         features_df = factory.compute_rolling_stats(window=app_settings.settings.rolling_window)
         factory.save_features(features_df)
         LOGGER.info("Feature store rebuilt with xG features.")
@@ -507,9 +507,16 @@ def run_ingest(app_settings: AppSettings, db_manager: DuckDBManager, force: bool
             conn.execute("DELETE FROM feature_store")
             conn.execute("DELETE FROM raw_matches")
         LOGGER.info("Force enabled: cleared processed_files, feature_store, and raw_matches.")
-    loader = CSVLoader()
+    # US#155: both CSVLoader() and FeatureFactory() used to default to
+    # config.yaml unconditionally, silently ignoring the db_manager/
+    # app_settings this function was actually called with -- harmless in
+    # every real CLI invocation (both are always built from the same
+    # default config there), but a real isolation gap for anything that
+    # legitimately points run_ingest at a non-default config (e.g. a test).
+    # Found live while writing exactly such a test (US#155).
+    loader = CSVLoader(config_path=db_manager.config_path)
     loader.process_directory(pattern="*.csv", force=force)
-    factory = FeatureFactory()
+    factory = FeatureFactory(config_path=db_manager.config_path)
     features_df = factory.compute_rolling_stats(window=app_settings.settings.rolling_window)
     factory.save_features(features_df)
     with db_manager.connection() as conn:
@@ -582,7 +589,7 @@ def run_refresh_sweden_data(app_settings: AppSettings, db_manager: DuckDBManager
         "Sweden CSV upsert | rows_in=%d | skipped=%d | upserted=%d",
         result["rows_in"], result["skipped"], result["upserted"],
     )
-    factory = FeatureFactory()
+    factory = FeatureFactory(config_path=db_manager.config_path)  # US#155
     features_df = factory.compute_rolling_stats(window=app_settings.settings.rolling_window)
     factory.save_features(features_df)
     LOGGER.info("refresh-data (SWE): feature store rebuilt.")

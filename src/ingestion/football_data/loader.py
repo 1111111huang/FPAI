@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime
 import hashlib
+import json
 from pathlib import Path
 
 import duckdb
@@ -34,6 +35,18 @@ class CSVLoader:
         except Exception as exc:
             LOGGER.warning("Skipping unreadable CSV file %s (%s)", file_path, exc)
             return 0
+
+        # US#156: distinguishes a column that's always been absent for this
+        # league (never flagged -- tolerated as known-optional, e.g. an
+        # Asian-handicap column a smaller league's CSV has simply never
+        # had) from one that *used to be present and just vanished* -- a
+        # real signal the upstream source's format changed, worth a human
+        # looking at, not silently absorbed the same way as an
+        # always-optional column. Runs before the required-columns check
+        # below so a HARD-required column disappearing (the more severe
+        # case) is flagged too, not just optional ones.
+        with self.db_manager.connection() as conn:
+            self._check_and_update_schema_baseline(conn, league_code, file_path, set(df.columns))
 
         renamed = df.rename(
             columns={
@@ -412,6 +425,56 @@ class CSVLoader:
                 processed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
             """
+        )
+
+    @staticmethod
+    def _create_schema_baseline_table(conn: duckdb.DuckDBPyConnection) -> None:
+        """US#156: a separate table, keyed by league rather than file_path
+        (deliberately -- a brand-new season file for an already-established
+        league, e.g. E0_2627.csv appearing fresh each August, should still
+        be compared against that league's last known-good columns, not
+        start with no baseline just because this exact file is new).
+        Independent of processed_files' own file_hash-keyed row so this
+        never risks being clobbered by _mark_file_processed's own
+        INSERT OR REPLACE (which only ever names file_path/file_hash/
+        processed_at)."""
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS schema_baselines (
+                league TEXT PRIMARY KEY,
+                columns TEXT NOT NULL,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+
+    def _check_and_update_schema_baseline(
+        self, conn: duckdb.DuckDBPyConnection, league_code: str, file_path: str, current_columns: set[str]
+    ) -> None:
+        """US#156: logs a distinguishable warning (not the same generic
+        wording as an always-tolerated missing-optional-column case) when a
+        column present in this league's last successful ingestion has
+        vanished from the current file -- a real signal of upstream format
+        drift, not routine season-to-season variation. No baseline yet
+        (this league's first-ever ingestion) means nothing to compare
+        against, so it's silently established rather than flagged."""
+        self._create_schema_baseline_table(conn)
+        row = conn.execute("SELECT columns FROM schema_baselines WHERE league = ?", [league_code]).fetchone()
+        if row is not None:
+            previous_columns = set(json.loads(row[0]))
+            missing = previous_columns - current_columns
+            if missing:
+                LOGGER.warning(
+                    "SCHEMA DRIFT DETECTED | league=%s | file=%s | columns present in a prior "
+                    "successful ingestion for this league but now missing: %s",
+                    league_code, file_path, sorted(missing),
+                )
+        conn.execute(
+            """
+            INSERT OR REPLACE INTO schema_baselines (league, columns, updated_at)
+            VALUES (?, ?, CURRENT_TIMESTAMP)
+            """,
+            [league_code, json.dumps(sorted(current_columns))],
         )
 
     def _is_file_unchanged(self, file_path: Path, file_hash: str) -> bool:
