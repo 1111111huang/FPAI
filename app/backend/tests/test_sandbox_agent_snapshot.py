@@ -8,6 +8,7 @@ run_agent, unchanged from before this story."""
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 import sys
 import threading
@@ -20,6 +21,8 @@ sys.path.append(str(Path(__file__).resolve().parents[3]))
 
 from app.backend import recommendations
 from src.agent.snapshot_store import league_base_dir, SnapshotMissingError
+
+_FIXED_MODEL_SELECTION_HASH = "test-hash-abc123"
 
 
 _MATCH_INFO = {"home_team": "Arsenal", "away_team": "Everton", "date": "2026-03-01", "league": "E0"}
@@ -148,14 +151,21 @@ def _sandbox_snapshot_tmp_dirs(tmp_path, monkeypatch):
     corpus_dir.mkdir()
     monkeypatch.setattr(recommendations, "_SANDBOX_SNAPSHOT_BASE_DIR", sandbox_dir)
     monkeypatch.setattr(recommendations, "_CORPUS_BASE_DIR", corpus_dir)
+    # BUG-036: pinned to a fixed value instead of the real config file's
+    # content, so these tests don't depend on (or break when someone edits)
+    # the real config/model_selection.yaml.
+    monkeypatch.setattr(recommendations, "_current_model_selection_hash", lambda: _FIXED_MODEL_SELECTION_HASH)
     with patch("app.backend.recommendations._lookup_corpus_match_id", return_value=None):
         yield sandbox_dir, corpus_dir
 
 
-def _mark_complete(base_dir: Path, match_id: str) -> None:
+def _mark_complete(base_dir: Path, match_id: str, model_selection_hash: str = _FIXED_MODEL_SELECTION_HASH) -> None:
+    """Writes a marker in the current (BUG-036-fixed) shape -- fresh under
+    _FIXED_MODEL_SELECTION_HASH by default, matching what _sandbox_snapshot_tmp_dirs
+    patches _current_model_selection_hash() to return."""
     match_dir = base_dir / match_id
     match_dir.mkdir(parents=True, exist_ok=True)
-    (match_dir / "_complete.json").write_text("{}")
+    (match_dir / "_complete.json").write_text(json.dumps({"model_selection_hash": model_selection_hash}))
 
 
 def test_passes_through_to_the_real_run_agent_when_sandbox_mode_is_off(monkeypatch):
@@ -226,6 +236,59 @@ def test_a_prior_sandbox_recording_on_disk_is_replayed_even_from_a_fresh_process
     replay_call = mock_configure.call_args_list[0]
     assert replay_call.kwargs["base_dir"] == sandbox_dir
     assert replay_call.kwargs["match_id"] == _MATCH_KEY
+
+
+def test_a_stale_sandbox_recording_falls_through_to_a_fresh_record_pass(monkeypatch, _sandbox_snapshot_tmp_dirs):
+    """BUG-036: a recording made under a *different* model_selection.yaml
+    than the one currently on disk (e.g. a model path landed inconsistent,
+    then got fixed) must not be trusted for replay -- it's treated the same
+    as no recording at all, so this match gets one fresh live re-record
+    instead of silently serving whatever the stale recording captured
+    forever."""
+    monkeypatch.setenv("SANDBOX_MODE", "1")
+    monkeypatch.setenv("SANDBOX_DATE", "2026-03-01")
+    sandbox_dir, _ = _sandbox_snapshot_tmp_dirs
+    _mark_complete(sandbox_dir, _MATCH_KEY, model_selection_hash="some-older-hash")
+
+    with patch("app.backend.recommendations._real_run_agent", return_value=_RECOMMENDATION), \
+         patch("app.backend.recommendations.agent_tools.configure_snapshot_store") as mock_configure:
+        recommendations.run_agent(_MATCH_INFO)
+
+    modes_used = [call.args[0] for call in mock_configure.call_args_list]
+    assert modes_used == ["record", "live"]  # not replay -- the stale marker didn't count
+
+
+def test_a_marker_with_no_hash_field_at_all_is_also_treated_as_stale(monkeypatch, _sandbox_snapshot_tmp_dirs):
+    """Every marker recorded before this fix landed is shaped exactly like
+    this (bare "{}") -- must self-heal via one fresh re-record, not error
+    or (worse) silently keep replaying forever, which is the exact
+    structural gap BUG-036 documents as unfixed."""
+    monkeypatch.setenv("SANDBOX_MODE", "1")
+    monkeypatch.setenv("SANDBOX_DATE", "2026-03-01")
+    sandbox_dir, _ = _sandbox_snapshot_tmp_dirs
+    match_dir = sandbox_dir / _MATCH_KEY
+    match_dir.mkdir(parents=True, exist_ok=True)
+    (match_dir / "_complete.json").write_text("{}")  # pre-fix marker shape
+
+    with patch("app.backend.recommendations._real_run_agent", return_value=_RECOMMENDATION), \
+         patch("app.backend.recommendations.agent_tools.configure_snapshot_store") as mock_configure:
+        recommendations.run_agent(_MATCH_INFO)
+
+    modes_used = [call.args[0] for call in mock_configure.call_args_list]
+    assert modes_used == ["record", "live"]
+
+
+def test_a_fresh_record_pass_writes_the_current_model_selection_hash_into_the_marker(monkeypatch, _sandbox_snapshot_tmp_dirs):
+    monkeypatch.setenv("SANDBOX_MODE", "1")
+    monkeypatch.setenv("SANDBOX_DATE", "2026-03-01")
+    sandbox_dir, _ = _sandbox_snapshot_tmp_dirs
+
+    with patch("app.backend.recommendations._real_run_agent", return_value=_RECOMMENDATION):
+        recommendations.run_agent(_MATCH_INFO)
+
+    marker = json.loads((sandbox_dir / _MATCH_KEY / "_complete.json").read_text())
+    assert marker["model_selection_hash"] == _FIXED_MODEL_SELECTION_HASH
+    assert "recorded_at" in marker
 
 
 def test_a_matching_corpus_entry_is_replayed_when_no_sandbox_recording_exists(monkeypatch, _sandbox_snapshot_tmp_dirs):

@@ -7,6 +7,9 @@ that predate A28/A29 (e.g. from a future cache)."""
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
+import hashlib
+import json
 from pathlib import Path
 import threading
 from typing import Literal
@@ -31,6 +34,47 @@ _SANDBOX_CACHE_DB_PATH = sandbox_scoped_path("recommendation_cache.db")
 _SANDBOX_SNAPSHOT_BASE_DIR = Path(__file__).parent.parent.parent / "data" / "agent_snapshots" / "sandbox"
 _CORPUS_BASE_DIR = Path(__file__).parent.parent.parent / "data" / "agent_snapshots"
 _TEAM_MAPPING_PATH = Path(__file__).parent.parent.parent / "config" / "team_mapping.json"
+_MODEL_SELECTION_PATH = Path(__file__).parent.parent.parent / "config" / "model_selection.yaml"
+
+
+def _current_model_selection_hash() -> str:
+    """Fingerprint of config/model_selection.yaml's content. BUG-036: both
+    known sandbox-snapshot staleness incidents (a stuck cold-start SP1 card,
+    43 E0 cards stuck on a disproven 1-target forecast) were caused by this
+    exact file changing -- model paths landing in a consistent state, a
+    target's model_path getting fixed -- *after* a snapshot had already been
+    recorded, with nothing to detect the recording now predates the fix.
+    This is the concrete signal both real incidents traced back to, not a
+    general "did anything change" check.
+    # ponytail: scoped to this one file, the only one either incident
+    # implicated. Extend to other config/pipeline inputs only if a future
+    # staleness incident actually traces back to one -- not speculative
+    # work today."""
+    try:
+        return hashlib.sha256(_MODEL_SELECTION_PATH.read_bytes()).hexdigest()[:16]
+    except FileNotFoundError:
+        return "missing"
+
+
+def _sandbox_marker_is_fresh(marker_path: Path) -> bool:
+    """A sandbox-recorded snapshot is only trusted for replay if it was
+    recorded under the current model_selection.yaml -- an older recording
+    (or one from before this fix, which never wrote a hash at all) can't
+    prove that, so it's treated the same as "not recorded yet" and falls
+    through to a fresh live record instead of silently replaying
+    indefinitely (BUG-036). Deliberately scoped to the sandbox's own
+    directory only -- the separate agent-snapshot CLI corpus (main.py's
+    run_agent_snapshot, A11) is a historical training/backtest corpus that
+    *should* stay pinned to what it recorded regardless of later model
+    changes (A09's determinism guarantee), so its own "_complete.json"
+    markers and skip logic are untouched by this."""
+    if not marker_path.exists():
+        return False
+    try:
+        marker = json.loads(marker_path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return False
+    return marker.get("model_selection_hash") == _current_model_selection_hash()
 
 
 def _composite_match_key(home_team: str, away_team: str, date: str) -> str:
@@ -115,7 +159,14 @@ def _run_agent_in_mode(mode: str, match_info: dict, config, match_id: str, base_
             # checking disk instead of in-memory state.
             marker = base_dir / match_id / "_complete.json"
             marker.parent.mkdir(parents=True, exist_ok=True)
-            marker.write_text("{}")
+            # BUG-036: records the model_selection.yaml fingerprint this
+            # recording was made under, so a later change can be detected
+            # and this recording stops being trusted for replay -- see
+            # _sandbox_marker_is_fresh().
+            marker.write_text(json.dumps({
+                "model_selection_hash": _current_model_selection_hash(),
+                "recorded_at": datetime.now(timezone.utc).isoformat(),
+            }))
         return result
     finally:
         agent_tools.configure_snapshot_store("live")
@@ -127,17 +178,22 @@ def _select_sandbox_snapshot_source(match_info: dict) -> tuple[str, str, Path]:
     recording for this exact match (fixes recordings not surviving a
     backend restart -- previously tracked in an in-memory set that started
     empty every process, so a fresh process always re-recorded and silently
-    overwrote whatever was already there); (2) a matching complete entry in
-    the standalone agent-snapshot corpus, resolved via
-    _lookup_corpus_match_id; (3) otherwise, record fresh into the sandbox's
-    own partition, unchanged from before this story. Returns
-    (mode, match_id, base_dir)."""
+    overwrote whatever was already there) -- BUG-036: only trusted if it's
+    still *fresh* (recorded under the current model_selection.yaml, see
+    _sandbox_marker_is_fresh); a stale one falls through exactly like a
+    missing one, forcing one fresh live re-record instead of replaying
+    disproven data forever; (2) a matching complete entry in the standalone
+    agent-snapshot corpus, resolved via _lookup_corpus_match_id (no
+    freshness check -- that corpus is a separate, deliberately-pinned
+    historical/backtest store, see _sandbox_marker_is_fresh's docstring);
+    (3) otherwise, record fresh into the sandbox's own partition, unchanged
+    from before this story. Returns (mode, match_id, base_dir)."""
     home_team = match_info.get("home_team")
     away_team = match_info.get("away_team")
     date = match_info.get("date")
     sandbox_match_id = _composite_match_key(home_team, away_team, date)
 
-    if (_SANDBOX_SNAPSHOT_BASE_DIR / sandbox_match_id / "_complete.json").exists():
+    if _sandbox_marker_is_fresh(_SANDBOX_SNAPSHOT_BASE_DIR / sandbox_match_id / "_complete.json"):
         return "replay", sandbox_match_id, _SANDBOX_SNAPSHOT_BASE_DIR
 
     league = match_info.get("league")
