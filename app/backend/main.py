@@ -20,6 +20,8 @@ from fastapi import Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 import requests
 from starlette.concurrency import run_in_threadpool
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.responses import JSONResponse
 
 load_dotenv()
 
@@ -230,11 +232,57 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="FPAI Web App Backend", lifespan=lifespan)
 
+
+class RequireAppTokenMiddleware(BaseHTTPMiddleware):
+    """W97: gates every request behind a shared-secret header once the app
+    is reachable from the public internet, not just localhost. Off by
+    default (APP_ACCESS_TOKEN unset) so every existing test and local-dev
+    run is completely unaffected -- same "off unless explicitly opted in"
+    pattern already used for ENABLE_SCHEDULER. /api/health is exempt so a
+    hosting platform's own health check (which never sends this header)
+    doesn't get treated as a deploy failure.
+
+    Deliberately added to the middleware stack *before* CORSMiddleware --
+    Starlette wraps middleware in the reverse of add_middleware() call
+    order (confirmed empirically, not assumed: the *last*-added one ends
+    up outermost), so CORSMiddleware being added after this one makes it
+    the outermost layer. That matters twice: (1) a real browser's CORS
+    preflight (OPTIONS) request never reaches this check at all -- it's
+    intercepted and answered by CORSMiddleware first; (2) a 401 this
+    middleware returns still gets proper CORS headers attached on the way
+    back out, so a browser reports the real 401 instead of a confusing,
+    header-less CORS error masking it."""
+
+    async def dispatch(self, request, call_next):
+        token = os.environ.get("APP_ACCESS_TOKEN")
+        if not token or request.method == "OPTIONS" or request.url.path == "/api/health":
+            return await call_next(request)
+        if request.headers.get("x-app-token") != token:
+            return JSONResponse({"detail": "Unauthorized"}, status_code=401)
+        return await call_next(request)
+
+
+app.add_middleware(RequireAppTokenMiddleware)
+
+
+def _parse_cors_origins(raw: str) -> list[str]:
+    """Comma-separated env value -> allow_origins list, dropping blanks (a
+    trailing comma or empty value shouldn't silently become a "" origin,
+    which CORSMiddleware would never match anyway but is still worth not
+    emitting)."""
+    return [origin.strip() for origin in raw.split(",") if origin.strip()]
+
+
 # D7: standard two-process local dev -- Next.js dev server + uvicorn, talking
-# over HTTP with CORS rather than a shared process.
+# over HTTP with CORS rather than a shared process. W97: origins now
+# env-driven (CORS_ALLOWED_ORIGINS, comma-separated) so a deployed frontend's
+# real origin can be allowed without a code change -- defaults to the
+# original localhost-only value, unchanged behavior for local dev. Read once
+# at import time (like any other env-driven app config) -- not re-read
+# per-request, unlike RequireAppTokenMiddleware's token check above.
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"],
+    allow_origins=_parse_cors_origins(os.environ.get("CORS_ALLOWED_ORIGINS", "http://localhost:3000")),
     allow_methods=["*"],
     allow_headers=["*"],
 )

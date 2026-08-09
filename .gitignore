@@ -26,6 +26,7 @@ CLAUDE.md
 # Environment / secrets
 .env
 .env.*
+!.env.example
 
 # Local git worktrees (scratch space, never committed)
 .claude/worktrees/
