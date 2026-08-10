@@ -12,7 +12,7 @@ import dataclasses
 from datetime import date, datetime, timezone
 import os
 import time
-from typing import Callable
+from typing import Callable, Literal
 
 import duckdb
 from dotenv import load_dotenv
@@ -36,7 +36,7 @@ from app.backend.sweden_fixtures_client import (
     historical_results_from_raw_matches,
 )
 from app.backend.llm_check import check_llm_reachable
-from app.backend.recommendation_cache import RecommendationCache
+from app.backend.recommendation_cache import DEFAULT_DB_PATH as RECOMMENDATION_CACHE_DB_PATH, RecommendationCache
 from app.backend.bet_stats import compute_bet_stats
 from app.backend.recommendations import MatchRecommendationOut, RecommendationRequest, validate_and_degrade
 from app.backend.scheduler import JobRunLog, RecoverableScheduler
@@ -45,6 +45,7 @@ from app.backend.settlement import settle_open_bets
 from src.agent.agent_config import AgentConfig
 from src.tools.data_tools import get_data_freshness
 from src.tools.model_tools import get_model_status
+from src.utils.db_manager import DuckDBManager
 from src.utils.logger import get_logger
 
 LOGGER = get_logger(__name__)
@@ -291,6 +292,49 @@ app.add_middleware(
 @app.get("/api/health")
 def health() -> dict:
     return {"status": "ok"}
+
+
+_RESTORE_TARGET_NAMES = Literal["fpai_core", "recommendation_cache"]
+
+
+def _restore_target_path(target: _RESTORE_TARGET_NAMES) -> Path:
+    """Lazy, not module-level -- DuckDBManager() reads config.yaml at
+    construction time, and this keeps that (and any failure from a missing/
+    invalid config) scoped to an actual call of this endpoint, not import
+    time for every other route."""
+    if target == "fpai_core":
+        return DuckDBManager().db_path
+    return RECOMMENDATION_CACHE_DB_PATH
+
+
+@app.post("/api/admin/restore-database")
+async def restore_database(target: _RESTORE_TARGET_NAMES, source_url: str) -> dict:
+    """W100: first deployment has no reliable way to push a large local
+    file directly onto a hosting platform's remote persistent volume, so
+    this instead has the already-running, already-deployed app pull one
+    itself from a URL you control (e.g. a GitHub Release asset -- handles
+    large files, unlike a git commit, which data/fpai_core.db is
+    deliberately excluded from, see .gitignore). Already protected by
+    RequireAppTokenMiddleware like every other non-health route -- no
+    separate auth needed. `target` is a fixed allowlist, not an arbitrary
+    path, and `source_url` must be https -- this can't be pointed at an
+    unintended file or source."""
+    if not source_url.startswith("https://"):
+        raise HTTPException(status_code=400, detail="source_url must start with https://")
+
+    target_path = _restore_target_path(target)
+    target_path.parent.mkdir(parents=True, exist_ok=True)
+
+    def _download() -> int:
+        with requests.get(source_url, stream=True, timeout=600) as response:
+            response.raise_for_status()
+            with open(target_path, "wb") as f:
+                for chunk in response.iter_content(chunk_size=8 * 1024 * 1024):
+                    f.write(chunk)
+        return target_path.stat().st_size
+
+    bytes_written = await run_in_threadpool(_download)
+    return {"target": target, "path": str(target_path), "bytes_written": bytes_written}
 
 
 @app.get("/api/sandbox/status")
