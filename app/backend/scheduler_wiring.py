@@ -57,8 +57,17 @@ class PersistingOddsClient:
         self._counter = counter
         self._store = store
 
-    def get_odds(self, sport_key: str = "soccer_epl"):
-        result = self._client.get_odds(sport_key=sport_key)
+    def get_odds(self, sport_key: str = "soccer_epl", date: str | None = None):
+        # W99: found live -- the wrapped OddsAPIClient/HistoricalOddsClient
+        # both accept `date` (BUG-031/W54), but this wrapper never did,
+        # never forwarded it, and had no test exercising it -- so every
+        # caller that passes date=... (main.py's manual regenerate path,
+        # eod_batch.py's per-fixture-date fetch) crashed with a real
+        # TypeError the very first time this exact production (non-sandbox)
+        # code path ever ran, on this app's first live deployment. Local/
+        # sandbox testing structurally never exercises this class at all --
+        # build_odds_client() only returns it when SANDBOX_MODE is off.
+        result = self._client.get_odds(sport_key=sport_key, date=date)
         self._store.save(self._counter)
         return result
 

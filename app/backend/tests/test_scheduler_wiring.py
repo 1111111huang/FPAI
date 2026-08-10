@@ -74,6 +74,24 @@ def test_persisting_odds_client_saves_counter_even_when_call_returns_none(tmp_pa
     assert (tmp_path / "counter.json").exists()
 
 
+def test_persisting_odds_client_forwards_date_to_the_inner_client(tmp_path: Path) -> None:
+    """W99: found live on the first real (non-sandbox) production deploy --
+    main.py's manual regenerate path and eod_batch.py's per-fixture-date
+    fetch both call get_odds(sport_key=..., date=...); this wrapper must
+    accept and forward it exactly like the two real client classes it
+    wraps (OddsAPIClient/HistoricalOddsClient) already do, not silently
+    drop it or blow up with a TypeError."""
+    store = FileCreditCounterStore(tmp_path / "counter.json")
+    counter = CreditCounter()
+    inner_client = MagicMock()
+    inner_client.get_odds.return_value = []
+
+    client = PersistingOddsClient(client=inner_client, counter=counter, store=store)
+    client.get_odds(sport_key="soccer_sweden_allsvenskan", date="2026-08-10")
+
+    inner_client.get_odds.assert_called_once_with(sport_key="soccer_sweden_allsvenskan", date="2026-08-10")
+
+
 def test_register_eod_job_generates_recommendations_and_schedules_t30(tmp_path: Path) -> None:
     """End-to-end wiring check (no real network/LLM): a fixture for
     tomorrow gets a cached recommendation from the EOD job, and its T-30
