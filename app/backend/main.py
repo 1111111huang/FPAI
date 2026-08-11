@@ -11,6 +11,9 @@ from contextlib import asynccontextmanager
 import dataclasses
 from datetime import date, datetime, timezone
 import os
+from pathlib import Path
+import subprocess
+import sys
 import time
 from typing import Callable, Literal
 
@@ -335,6 +338,42 @@ async def restore_database(target: _RESTORE_TARGET_NAMES, source_url: str) -> di
 
     bytes_written = await run_in_threadpool(_download)
     return {"target": target, "path": str(target_path), "bytes_written": bytes_written}
+
+
+_REFRESH_LEAGUE_NAMES = Literal["E0", "SP1", "SWE"]
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+
+
+@app.post("/api/admin/trigger-data-refresh")
+def trigger_data_refresh(league: _REFRESH_LEAGUE_NAMES) -> dict:
+    """W101: manually triggers the ML-engine's own standalone refresh-data
+    chain (scrape -> ingest -> fetch-understat -> fetch-fotmob ->
+    lineup-backfill -- main.py's run_refresh_data) for one league, from
+    the deployed app itself. There's no cron/scheduler wired up for this
+    yet on this deployment (main.py's own schedule-refresh is a separate
+    standalone process, never deployed here) -- this is a manual trigger
+    for now, not a replacement for setting that up properly later.
+
+    Launched as a genuinely separate OS process (subprocess), deliberately
+    NOT an in-process function call: main.py's own top-level imports
+    (mlflow, Optuna, and other training-only machinery needed for its
+    other subcommands) would otherwise get pulled into this always-running
+    web server process just by importing the file -- exactly the class of
+    avoidable memory bloat W100's OOM investigation just confirmed isn't
+    currently present in this server's own import graph. The subprocess
+    gets that memory and releases all of it back on exit; the server's own
+    footprint never grows. Returns immediately (refresh-data itself can
+    take several minutes of real scraping/xG-matching/lineup-fetching --
+    too long for one HTTP request/response); check GET /api/status
+    afterward to see when data_freshness reflects the update. Already
+    protected by RequireAppTokenMiddleware."""
+    process = subprocess.Popen(
+        [sys.executable, "main.py", "refresh-data", "--league", league],
+        cwd=_REPO_ROOT,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+    )
+    return {"league": league, "pid": process.pid, "status": "started"}
 
 
 @app.get("/api/sandbox/status")
