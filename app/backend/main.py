@@ -366,12 +366,21 @@ def trigger_data_refresh(league: _REFRESH_LEAGUE_NAMES) -> dict:
     take several minutes of real scraping/xG-matching/lineup-fetching --
     too long for one HTTP request/response); check GET /api/status
     afterward to see when data_freshness reflects the update. Already
-    protected by RequireAppTokenMiddleware."""
+    protected by RequireAppTokenMiddleware.
+
+    Deliberately does NOT pass stdout=/stderr=PIPE: found live (2026-08-10)
+    that doing so silently redirects the subprocess's output away from
+    Railway's own log capture (nothing ever reads that pipe, so nothing
+    shows up in Deploy Logs), and worse, is a classic subprocess deadlock
+    risk -- once the child writes enough output to fill the OS pipe buffer
+    (commonly ~64KB) with nobody draining it, its next write() call blocks
+    forever, silently hanging the refresh indefinitely. Leaving stdout/
+    stderr unset makes the subprocess inherit this process's own file
+    descriptors instead, so its output flows straight into the same
+    stream Railway already captures, with no pipe to fill."""
     process = subprocess.Popen(
         [sys.executable, "main.py", "refresh-data", "--league", league],
         cwd=_REPO_ROOT,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
     )
     return {"league": league, "pid": process.pid, "status": "started"}
 

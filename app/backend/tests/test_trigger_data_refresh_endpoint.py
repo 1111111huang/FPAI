@@ -46,6 +46,25 @@ def test_rejects_a_league_outside_the_fixed_allowlist(monkeypatch):
     mock_popen.assert_not_called()
 
 
+def test_does_not_redirect_subprocess_output_into_an_unread_pipe(monkeypatch):
+    """Found live 2026-08-10: stdout=/stderr=PIPE with nobody ever reading
+    it (a) silently hides the refresh's own output from Railway's log
+    capture, and (b) risks the classic subprocess deadlock -- the child
+    blocks forever once it writes enough output to fill the OS pipe
+    buffer. Must inherit this process's own stdout/stderr instead (no
+    stdout=/stderr= kwarg at all)."""
+    monkeypatch.delenv("APP_ACCESS_TOKEN", raising=False)
+    mock_process = MagicMock()
+    mock_process.pid = 1
+    with patch("app.backend.main.subprocess.Popen", return_value=mock_process) as mock_popen:
+        with TestClient(app) as client:
+            client.post("/api/admin/trigger-data-refresh", params={"league": "E0"})
+
+    _, kwargs = mock_popen.call_args
+    assert "stdout" not in kwargs
+    assert "stderr" not in kwargs
+
+
 def test_returns_immediately_without_waiting_for_the_subprocess(monkeypatch):
     """Popen (not run/check_call) must be used -- this must never block on
     the refresh actually finishing, which can take several minutes."""
