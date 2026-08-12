@@ -29,6 +29,7 @@ xgboost==3.2.0
 mlflow==3.10.1
 matplotlib==3.10.8
 scipy==1.17.1
+optuna==4.9.0
 
 # Testing & Quality
 pytest==9.0.2

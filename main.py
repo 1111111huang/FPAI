@@ -9,7 +9,6 @@ from pathlib import Path
 from typing import Any
 
 from dotenv import load_dotenv
-import mlflow
 import pandas as pd
 import yaml
 
@@ -17,9 +16,6 @@ load_dotenv()
 
 from src.agent.snapshot_store import DEFAULT_BASE_DIR, league_base_dir
 from src.features.feature_factory import FeatureFactory
-from src.evaluation import run_diagnostics
-from src.evaluation.mlflow_cleanup import MLflowStoreCleanup, save_cleanup_report
-from src.forecast import ForecastService
 from src.ingestion import CSVLoader, FootballDataScraper
 from src.logic.target_registry import get_target_definition, list_target_definitions
 from src.logic.competition_registry import (
@@ -39,12 +35,26 @@ from src.models import (
 )
 from src.utils import DuckDBManager, configure_logger, get_logger
 from src.utils.config_loader import AppSettings, settings
-from src.utils.feature_importance import PermutationImportanceAnalyzer
-from src.utils.learning_curve import LearningCurveAnalyzer, run_all_targets, summarise_findings
-from src.utils.model_comparison import ModelComparison
-from src.utils.sweep_runner import OptunaRunner, StagedOptunaRunner, SweepRunner
-from src.models.dixon_coles import DixonColesModel
-from src.models.mlp_model import MLPModel, MLPRegressorModel
+
+# W102: mlflow, run_diagnostics, MLflowStoreCleanup/save_cleanup_report,
+# ForecastService, PermutationImportanceAnalyzer, LearningCurveAnalyzer/
+# run_all_targets/summarise_findings, ModelComparison, OptunaRunner/
+# StagedOptunaRunner/SweepRunner, and DixonColesModel are all deliberately
+# NOT imported here anymore -- each is training/evaluation-only, used by
+# exactly one CLI subcommand, and moved to a lazy, function-local import
+# inside that subcommand's own handler instead (see each function below).
+# Found live (BUG-040): main.py's old module-level "import everything for
+# every subcommand" shape meant running e.g. `refresh-data` unconditionally
+# required `optuna` (via sweep_runner) even though refresh-data's own logic
+# never touches it -- invisible locally (the dev venv already had optuna
+# installed, just never declared in requirements.txt) but fatal on a
+# genuinely fresh install (Railway's, running refresh-data as a lean
+# subprocess from the deployed app, W101). This also trims real, avoidable
+# weight (mlflow, matplotlib via learning_curve, scipy via dixon_coles)
+# from every subcommand that doesn't need it, not just refresh-data.
+# `MLPModel`/`MLPRegressorModel` (formerly imported here, unused) are
+# dropped entirely -- zero call sites in this file, and `src.models`'s own
+# __init__ already imports them regardless for MODEL_REGISTRY below.
 
 LOGGER = get_logger(__name__)
 MODEL_REGISTRY = {
@@ -790,6 +800,8 @@ def run_forecast(
     match_type: str = "league",
 ) -> None:
     """Emit forecast JSON for requested matches or a spot-inference match."""
+    from src.forecast import ForecastService
+
     if home is not None:
         # Spot inference path (US#84 / US#86)
         if odds_h is None or odds_d is None or odds_a is None:
@@ -821,6 +833,8 @@ def run_experiment_target(
     max_runs: int | None = None,
     sweep_stage: str | None = None,
 ) -> None:
+    from src.utils.sweep_runner import SweepRunner
+
     SweepRunner(
         target_name=target_name,
         config_path=config_path,
@@ -836,6 +850,8 @@ def run_permutation_importance(
     n_repeats: int = 10,
     output_dir: str = "reports",
 ) -> Path:
+    from src.utils.feature_importance import PermutationImportanceAnalyzer
+
     LOGGER.info("Analyzing permutation importance for %s", target_name)
     analyzer = PermutationImportanceAnalyzer(model_path=model_path, target_name=target_name, output_dir=output_dir)
     manager = ModelManager(model=analyzer.model, target_config={"target": target_name})
@@ -851,6 +867,8 @@ def run_permutation_importance(
 
 
 def run_learning_curve(target: str | None, all_targets: bool, output_dir: str) -> None:
+    from src.utils.learning_curve import LearningCurveAnalyzer, run_all_targets, summarise_findings
+
     if all_targets:
         LOGGER.info("Running learning curve analysis for all targets...")
         all_results = run_all_targets(output_dir=output_dir)
@@ -880,6 +898,8 @@ def run_optuna_sweep(
     experiment_name: str | None,
     sweep_stage: str | None,
 ) -> None:
+    from src.utils.sweep_runner import OptunaRunner, StagedOptunaRunner
+
     with open(config_path, "r") as fh:
         probe = yaml.safe_load(fh) or {}
     if "stages" in probe:
@@ -909,6 +929,9 @@ def run_dixon_coles_baseline(
 ) -> None:
     from sklearn.metrics import accuracy_score, log_loss, mean_absolute_error
     import numpy as np
+    import mlflow
+
+    from src.models.dixon_coles import DixonColesModel
 
     db_manager_local = DuckDBManager(config_path=config_path)
     LOGGER.info("Loading match data for Dixon-Coles baseline...")
@@ -1011,6 +1034,8 @@ def run_mlflow_cleanup(
     mlruns_dir: str = "mlruns",
     report_only: bool = False,
 ) -> None:
+    from src.evaluation.mlflow_cleanup import MLflowStoreCleanup, save_cleanup_report
+
     LOGGER.info("MLflow store cleanup initiated")
     cleanup = MLflowStoreCleanup(mlruns_dir=mlruns_dir)
     summary = cleanup.get_cleanup_summary()
@@ -1618,6 +1643,8 @@ def run_status(db_manager: DuckDBManager) -> None:
 
     # MLflow experiment count
     try:
+        import mlflow
+
         experiments = mlflow.search_experiments()
         print(f"  mlflow_experiments: {len(experiments)}")
     except Exception:
@@ -1696,6 +1723,8 @@ def main() -> None:
             match_type=str(args.match_type),
         )
     elif args.command == "compare-models":
+        from src.utils.model_comparison import ModelComparison
+
         comparer = ModelComparison(experiment_name=args.experiment_name)
         output_path = args.output_path or f"reports/model_comparison/{args.target}_comparison.{args.format}"
         report_path = comparer.export_comparison_report(
@@ -1714,6 +1743,8 @@ def main() -> None:
             sweep_stage=args.sweep_stage,
         )
     elif args.command == "diagnose-model":
+        from src.evaluation import run_diagnostics
+
         report_path = run_diagnostics(
             target_name=str(args.target),
             model_path=str(args.model_path),
