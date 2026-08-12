@@ -57,6 +57,13 @@ from src.utils.config_loader import AppSettings, settings
 # __init__ already imports them regardless for MODEL_REGISTRY below.
 
 LOGGER = get_logger(__name__)
+
+# BUG-042: default season lookback for run_fetch_fotmob when from_season
+# isn't given explicitly -- see that function's own comment for why this
+# exists (was previously unbounded, defaulting to a league's entire
+# ingested history).
+FOTMOB_DEFAULT_SEASON_LOOKBACK = 2
+
 MODEL_REGISTRY = {
     "lr": LRModel,
     "random_forest": RandomForestModel,
@@ -487,8 +494,25 @@ def run_fetch_fotmob(
     if bounds is None or bounds[0] is None:
         LOGGER.error("raw_matches is empty — run ingest first.")
         return
-    detected_from = (from_season or bounds[0]) - 1
     detected_to = to_season or (bounds[1] - 1)
+    # BUG-042: found live -- with no explicit from_season, this used to
+    # default all the way back to raw_matches' earliest ever season
+    # (bounds[0] - 1), meaning refresh-data's default fetch-fotmob call
+    # (which never passes from_season/to_season) iterated one real HTTP
+    # request *per calendar day* across a league's *entire* history -- for
+    # a league with a decade+ of ingested data, that's realistically hours
+    # per refresh, for enrichment data that isn't even required for a
+    # forecast to work at all (live serving only needs recent history to
+    # compute rolling/H2H features, confirmed separately -- FotMob
+    # player-stats specifically is pure quality enrichment on top of
+    # that). Defaults now to the last FOTMOB_DEFAULT_SEASON_LOOKBACK
+    # seasons instead of the full historical depth; an explicit
+    # from_season (still supported, e.g. a deliberate one-off deep
+    # backfill via the CLI) is unaffected.
+    detected_from = (
+        from_season if from_season is not None
+        else max(bounds[0] - 1, detected_to - FOTMOB_DEFAULT_SEASON_LOOKBACK + 1)
+    )
     LOGGER.info("Fetching FotMob player stats | seasons %d-%d | league=%s", detected_from, detected_to, league)
 
     season_frames = []
