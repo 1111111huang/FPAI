@@ -105,6 +105,65 @@ def test_max_retries_zero_preserves_the_original_fail_immediately_behavior(
     assert slept == []  # never slept at all
 
 
+def test_bare_construction_preserves_the_original_5_and_1_0_defaults(tmp_path: Path) -> None:
+    """US#159: DuckDBManager() with no retry params given must behave
+    byte-identically to before this story -- every existing caller that
+    doesn't know about default_max_retries/default_retry_delay_seconds."""
+    manager = _make_manager(tmp_path)
+    assert manager.default_max_retries == 5
+    assert manager.default_retry_delay_seconds == 1.0
+
+
+def test_connection_falls_back_to_the_instance_default_retry_window_when_not_overridden(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """US#159: a manager built with its own default_max_retries/
+    default_retry_delay_seconds (e.g. main.py's CLI, given a much longer
+    window than the app's live-request default) must actually use that
+    window on a plain .connection() call with neither kwarg passed --
+    not the hardcoded 5/1.0 from before this story."""
+    db_path = tmp_path / "test.db"
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(yaml.safe_dump({"paths": {"database_path": str(db_path)}}), encoding="utf-8")
+    manager = DuckDBManager(config_path=str(config_path), default_max_retries=2, default_retry_delay_seconds=0.25)
+    calls: list[float] = []
+
+    def _always_locked(path, read_only=False):
+        raise duckdb.IOException("Conflicting lock is held")
+
+    monkeypatch.setattr(duckdb, "connect", _always_locked)
+
+    with pytest.raises(duckdb.IOException):
+        with manager.connection(sleep_fn=calls.append):  # no max_retries/retry_delay_seconds passed
+            pass  # pragma: no cover -- never reached
+
+    assert calls == [0.25, 0.25]  # 2 retries (the instance default), at 0.25s (the instance default)
+
+
+def test_an_explicit_per_call_value_still_overrides_the_instance_default(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The instance default is only a fallback -- a caller that still wants
+    to override it for one specific call (as every existing test in this
+    file already does) must still be able to."""
+    db_path = tmp_path / "test.db"
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(yaml.safe_dump({"paths": {"database_path": str(db_path)}}), encoding="utf-8")
+    manager = DuckDBManager(config_path=str(config_path), default_max_retries=60, default_retry_delay_seconds=10.0)
+    calls: list[float] = []
+
+    def _always_locked(path, read_only=False):
+        raise duckdb.IOException("Conflicting lock is held")
+
+    monkeypatch.setattr(duckdb, "connect", _always_locked)
+
+    with pytest.raises(duckdb.IOException):
+        with manager.connection(max_retries=1, retry_delay_seconds=0.1, sleep_fn=calls.append):
+            pass  # pragma: no cover -- never reached
+
+    assert calls == [0.1]  # the per-call override (1 retry, 0.1s), not the instance default (60/10.0)
+
+
 def test_a_real_cross_process_lock_conflict_resolves_via_retry(tmp_path: Path) -> None:
     """The genuine end-to-end proof: a real second OS process holds a
     read-write connection open for ~2s; DuckDBManager.connection()'s

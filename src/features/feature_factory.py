@@ -38,9 +38,22 @@ def remove_margin(
 class FeatureFactory:
     """Compute and persist engineered football features in DuckDB."""
 
-    def __init__(self, config_path: str = "config.yaml") -> None:
-        """Initialize the feature factory with database config from YAML."""
-        self.db_manager = DuckDBManager(config_path=config_path)
+    def __init__(
+        self,
+        config_path: str = "config.yaml",
+        default_max_retries: int = 5,
+        default_retry_delay_seconds: float = 1.0,
+    ) -> None:
+        """Initialize the feature factory with database config from YAML.
+
+        US#159: default_max_retries/default_retry_delay_seconds forwarded
+        straight to the DuckDBManager this factory builds internally -- see
+        CSVLoader.__init__'s identical parameter for the same reasoning."""
+        self.db_manager = DuckDBManager(
+            config_path=config_path,
+            default_max_retries=default_max_retries,
+            default_retry_delay_seconds=default_retry_delay_seconds,
+        )
 
     def compute_rolling_stats(self, window: int = 5) -> pd.DataFrame:
         """Compute leakage-safe rolling features with 3- and 5-match windows."""

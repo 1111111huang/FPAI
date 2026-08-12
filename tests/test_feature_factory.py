@@ -620,3 +620,33 @@ def test_build_for_match_includes_squad_and_luck_columns(tmp_path: Path) -> None
     ]
     for col in expected_new_columns:
         assert col in row.columns, f"build_for_match() missing column: {col}"
+
+
+def test_feature_factory_forwards_retry_window_to_its_internal_db_manager(tmp_path: Path) -> None:
+    """US#159: FeatureFactory builds its own DuckDBManager internally
+    rather than reusing a passed-in one -- see CSVLoader's identical test
+    for the same reasoning (this was the actual gap that let a real
+    cross-process DuckDB lock collision crash refresh-data)."""
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        yaml.safe_dump({"paths": {"database_path": str(tmp_path / "test.db")}}),
+        encoding="utf-8",
+    )
+
+    factory = FeatureFactory(config_path=str(config_path), default_max_retries=60, default_retry_delay_seconds=10.0)
+
+    assert factory.db_manager.default_max_retries == 60
+    assert factory.db_manager.default_retry_delay_seconds == 10.0
+
+
+def test_feature_factory_default_retry_window_is_unchanged_when_not_given(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        yaml.safe_dump({"paths": {"database_path": str(tmp_path / "test.db")}}),
+        encoding="utf-8",
+    )
+
+    factory = FeatureFactory(config_path=str(config_path))
+
+    assert factory.db_manager.default_max_retries == 5
+    assert factory.db_manager.default_retry_delay_seconds == 1.0

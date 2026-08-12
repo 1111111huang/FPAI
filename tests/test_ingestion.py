@@ -92,3 +92,35 @@ def test_process_v1_csv_tolerates_missing_over25_columns(tmp_path: Path) -> None
     assert row[0] is None  # over25_odds absent → NULL
     assert row[1] is None  # under25_odds absent → NULL
     assert row[2] is None  # ah_line absent → NULL
+
+
+def test_csv_loader_forwards_retry_window_to_its_internal_db_manager(tmp_path: Path) -> None:
+    """US#159: CSVLoader builds its own DuckDBManager internally rather
+    than reusing a passed-in one, so a caller wanting a longer lock-retry
+    window (main.py's CLI) needs it threaded through the constructor here
+    too -- confirmed live: this was the actual gap that let a real
+    cross-process DuckDB lock collision crash refresh-data even after
+    main.py's own db_manager was given a longer default."""
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        yaml.safe_dump({"paths": {"database_path": str(tmp_path / "test.db")}}),
+        encoding="utf-8",
+    )
+
+    loader = CSVLoader(config_path=str(config_path), default_max_retries=60, default_retry_delay_seconds=10.0)
+
+    assert loader.db_manager.default_max_retries == 60
+    assert loader.db_manager.default_retry_delay_seconds == 10.0
+
+
+def test_csv_loader_default_retry_window_is_unchanged_when_not_given(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        yaml.safe_dump({"paths": {"database_path": str(tmp_path / "test.db")}}),
+        encoding="utf-8",
+    )
+
+    loader = CSVLoader(config_path=str(config_path))
+
+    assert loader.db_manager.default_max_retries == 5
+    assert loader.db_manager.default_retry_delay_seconds == 1.0

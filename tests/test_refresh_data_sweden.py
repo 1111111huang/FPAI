@@ -39,9 +39,13 @@ class _UnusedDBManager:
     open their own), so any real use of `.connection()` here is a test
     failure. US#155: `.config_path` *is* legitimately read (threaded into
     FeatureFactory so it respects the caller's config instead of silently
-    defaulting to config.yaml) -- not a connection, so it's provided here."""
+    defaulting to config.yaml) -- not a connection, so it's provided here.
+    US#159: `.default_max_retries`/`.default_retry_delay_seconds` are read
+    the same way, threaded into FeatureFactory's own retry-window config."""
 
     config_path = "config.yaml"
+    default_max_retries = 5
+    default_retry_delay_seconds = 1.0
 
     def connection(self):
         raise AssertionError("Sweden refresh path should not open a connection via the passed-in db_manager")
@@ -78,8 +82,13 @@ def test_run_refresh_data_sweden_skips_epl_pipeline_steps(monkeypatch: pytest.Mo
     monkeypatch.setattr("src.ingestion.football_data.sweden_loader.upsert_sweden_matches", _fake_upsert)
 
     class _FakeFactory:
-        def __init__(self, config_path: str = "config.yaml") -> None:
-            pass  # US#155: real FeatureFactory now takes this; accept and ignore it here.
+        def __init__(
+            self,
+            config_path: str = "config.yaml",
+            default_max_retries: int = 5,
+            default_retry_delay_seconds: float = 1.0,
+        ) -> None:
+            pass  # US#155/US#159: real FeatureFactory now takes these; accept and ignore them here.
 
         def compute_rolling_stats(self, window: int = 5):
             feature_calls.append(window)

@@ -458,7 +458,11 @@ def run_fetch_understat(
     LOGGER.info("xG update | matched=%d | updated=%d | unmatched=%d", result["matched"], result["updated"], result["unmatched"])
     if rebuild_features:
         LOGGER.info("Rebuilding feature store with xG data...")
-        factory = FeatureFactory(config_path=db_manager.config_path)  # US#155
+        factory = FeatureFactory(  # US#155/US#159
+            config_path=db_manager.config_path,
+            default_max_retries=db_manager.default_max_retries,
+            default_retry_delay_seconds=db_manager.default_retry_delay_seconds,
+        )
         features_df = factory.compute_rolling_stats(window=app_settings.settings.rolling_window)
         factory.save_features(features_df)
         LOGGER.info("Feature store rebuilt with xG features.")
@@ -524,9 +528,17 @@ def run_ingest(app_settings: AppSettings, db_manager: DuckDBManager, force: bool
     # default config there), but a real isolation gap for anything that
     # legitimately points run_ingest at a non-default config (e.g. a test).
     # Found live while writing exactly such a test (US#155).
-    loader = CSVLoader(config_path=db_manager.config_path)
+    loader = CSVLoader(  # US#159
+        config_path=db_manager.config_path,
+        default_max_retries=db_manager.default_max_retries,
+        default_retry_delay_seconds=db_manager.default_retry_delay_seconds,
+    )
     loader.process_directory(pattern="*.csv", force=force)
-    factory = FeatureFactory(config_path=db_manager.config_path)
+    factory = FeatureFactory(  # US#159
+        config_path=db_manager.config_path,
+        default_max_retries=db_manager.default_max_retries,
+        default_retry_delay_seconds=db_manager.default_retry_delay_seconds,
+    )
     features_df = factory.compute_rolling_stats(window=app_settings.settings.rolling_window)
     factory.save_features(features_df)
     with db_manager.connection() as conn:
@@ -599,7 +611,11 @@ def run_refresh_sweden_data(app_settings: AppSettings, db_manager: DuckDBManager
         "Sweden CSV upsert | rows_in=%d | skipped=%d | upserted=%d",
         result["rows_in"], result["skipped"], result["upserted"],
     )
-    factory = FeatureFactory(config_path=db_manager.config_path)  # US#155
+    factory = FeatureFactory(  # US#155/US#159
+        config_path=db_manager.config_path,
+        default_max_retries=db_manager.default_max_retries,
+        default_retry_delay_seconds=db_manager.default_retry_delay_seconds,
+    )
     features_df = factory.compute_rolling_stats(window=app_settings.settings.rolling_window)
     factory.save_features(features_df)
     LOGGER.info("refresh-data (SWE): feature store rebuilt.")
@@ -1684,7 +1700,15 @@ def main() -> None:
     parser = _build_parser()
     args = parser.parse_args()
     app_settings = settings
-    db_manager = DuckDBManager()
+    # US#159: a much longer DuckDB lock-retry window than the app's own
+    # live-request default (W95, 5 attempts/1s) -- a CLI invocation is
+    # deliberate and unattended (e.g. refresh-data), so it should tolerate
+    # waiting out another long-running CLI operation's lock (confirmed
+    # live: two refresh-data runs for different leagues genuinely
+    # overlapped for several minutes) rather than crash outright, unlike a
+    # live HTTP request where a long wait would just hang a browser tab.
+    # 60 attempts x 10s = up to 10 minutes of retry tolerance.
+    db_manager = DuckDBManager(default_max_retries=60, default_retry_delay_seconds=10.0)
 
     if args.command == "scrape":
         run_scrape(

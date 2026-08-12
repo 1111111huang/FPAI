@@ -22,9 +22,25 @@ LOGGER = get_logger(__name__)
 class CSVLoader:
     """Load, validate, and persist football CSV data into DuckDB."""
 
-    def __init__(self, config_path: str = "config.yaml") -> None:
-        """Initialize loader using database settings from YAML config."""
-        self.db_manager = DuckDBManager(config_path=config_path)
+    def __init__(
+        self,
+        config_path: str = "config.yaml",
+        default_max_retries: int = 5,
+        default_retry_delay_seconds: float = 1.0,
+    ) -> None:
+        """Initialize loader using database settings from YAML config.
+
+        US#159: default_max_retries/default_retry_delay_seconds forwarded
+        straight to the DuckDBManager this loader builds internally -- a
+        caller that wants a longer lock-retry window (main.py's CLI, see
+        DuckDBManager.__init__'s own docstring) needs it applied here too,
+        not just on its own separate db_manager instance, since this class
+        builds its own rather than reusing one passed in."""
+        self.db_manager = DuckDBManager(
+            config_path=config_path,
+            default_max_retries=default_max_retries,
+            default_retry_delay_seconds=default_retry_delay_seconds,
+        )
         self.raw_data_dir = Path(self.db_manager.settings.paths.raw_data_dir) / "football_data"
         self.raw_data_dir.mkdir(parents=True, exist_ok=True)
 
