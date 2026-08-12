@@ -104,6 +104,27 @@ def test_fetch_finished_match_ids_excludes_unfinished_matches():
     assert matches == []
 
 
+def test_fetch_finished_match_ids_treats_a_null_payload_as_no_matches():
+    """BUG-041: found live -- a real 200 OK response with a literal `null`
+    body (observed for a date FotMob's matches endpoint has no data for)
+    must degrade to an empty list, not crash with an uncaught
+    AttributeError on the .get() calls that assume a dict."""
+    with patch("src.ingestion.fotmob.fetcher.requests.get", return_value=_mock_resp(None)), \
+         patch("src.ingestion.fotmob.fetcher.time.sleep"):
+        matches = fetch_finished_match_ids(date(2011, 8, 1), league_id=47, delay=0)
+
+    assert matches == []
+
+
+def test_fetch_finished_match_ids_treats_a_list_payload_as_no_matches():
+    """Same defensive contract for any other unexpected non-dict shape."""
+    with patch("src.ingestion.fotmob.fetcher.requests.get", return_value=_mock_resp([])), \
+         patch("src.ingestion.fotmob.fetcher.time.sleep"):
+        matches = fetch_finished_match_ids(date(2011, 8, 1), league_id=47, delay=0)
+
+    assert matches == []
+
+
 def test_fetch_finished_match_ids_filters_to_requested_league():
     payload = {
         "leagues": [

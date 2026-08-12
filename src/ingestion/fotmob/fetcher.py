@@ -71,6 +71,22 @@ def fetch_finished_match_ids(day: date, league_id: int, delay: float = 1.0) -> l
     time.sleep(delay)
 
     payload = resp.json()
+    if not isinstance(payload, dict):
+        # BUG-041: found live -- a 200 OK response with a non-dict body
+        # (observed: literal `null`, for a date FotMob's matches endpoint
+        # doesn't have data for, e.g. one far enough in the past) crashed
+        # with an uncaught AttributeError on the .get() calls below. The
+        # caller's own per-day try/except (fetch_player_match_stats) only
+        # catches requests.RequestException, not this -- so this must
+        # degrade gracefully itself, the same way a malformed individual
+        # match entry already does a few lines down, not raise and take
+        # out the whole multi-day/multi-season loop over one date with no
+        # data.
+        LOGGER.warning(
+            "FotMob matches endpoint returned an unexpected payload shape (%s) for date=%s -- treating as no matches.",
+            type(payload).__name__, day,
+        )
+        return []
     leagues = [entry for entry in payload.get("leagues", []) if entry.get("id") == league_id]
 
     matches: list[dict] = []
