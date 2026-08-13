@@ -59,6 +59,33 @@ def test_groups_fixtures_by_league_and_runs_one_batch_per_league(monkeypatch):
     assert results["SWE"] == {"generated": 1, "skipped": 0}
 
 
+def test_bug_045_defaults_to_a_lower_concurrency_than_eod_batchs_own_default(monkeypatch):
+    """Confirmed live (2026-08-13): boot-time pregenerate stacking
+    eod_batch's own default concurrency=5 directly on top of a freshly
+    booted process's import-time memory OOM-crashed the deployed instance
+    (Railway: "Deploy Ran Out Of Memory", 4GB limit) -- and since pregenerate
+    re-fires on every boot, one OOM became an infinite crash loop. Asserts
+    the safer default actually reaches run_eod_batch, not just that a
+    `_PREGENERATE_DEFAULT_CONCURRENCY` constant exists somewhere unused."""
+    monkeypatch.delenv("APP_ACCESS_TOKEN", raising=False)
+    fixtures = [_fixture("m1", "E0")]
+    captured = {}
+
+    async def _fake_run_eod_batch(**kwargs):
+        captured["concurrency"] = kwargs["concurrency"]
+        return EodBatchResult(fixtures=kwargs["fixtures"], generated=1, skipped=0)
+
+    with patch("app.backend.main.get_fixtures", new=AsyncMock(return_value=fixtures)), \
+         patch("app.backend.main.build_odds_client", return_value=None), \
+         patch("app.backend.main.recommendations.get_cache", return_value=MagicMock()), \
+         patch("app.backend.eod_batch.run_eod_batch", side_effect=_fake_run_eod_batch):
+        import asyncio
+        asyncio.run(main._pregenerate_recommendations(days_ahead=5, scheduler=None))
+
+    assert captured["concurrency"] == main._PREGENERATE_DEFAULT_CONCURRENCY
+    assert captured["concurrency"] < 5  # eod_batch.run_eod_batch()'s own default
+
+
 def test_degrades_to_a_no_op_schedule_t30_when_no_scheduler_is_running(monkeypatch):
     """scheduler=None (ENABLE_SCHEDULER off, or a manual trigger before
     it's ever been turned on) must still generate and cache -- just
