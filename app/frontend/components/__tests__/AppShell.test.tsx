@@ -37,8 +37,11 @@ describe("AppShell", () => {
         <p>page content</p>
       </AppShell>
     );
-    expect(screen.getByText("Dashboard")).toBeInTheDocument();
-    expect(screen.getByText("All Matches")).toBeInTheDocument();
+    // W114: each nav label now renders twice by design -- once in the
+    // desktop sidebar, once in the mobile bottom tab bar (CSS decides which
+    // is visible; jsdom renders both regardless of viewport).
+    expect(screen.getAllByText("Dashboard")).toHaveLength(2);
+    expect(screen.getAllByText("All Matches")).toHaveLength(2);
     expect(screen.getByText("page content")).toBeInTheDocument();
   });
 
@@ -50,6 +53,18 @@ describe("AppShell", () => {
       </AppShell>
     );
     expect(screen.queryByText("Bets")).not.toBeInTheDocument();
+  });
+
+  it("W114: renders a bottom tab bar with the same nav items, for small screens", () => {
+    vi.mocked(getStatus).mockRejectedValue(new Error("no backend"));
+    const { container } = render(
+      <AppShell active="dashboard">
+        <p>page content</p>
+      </AppShell>
+    );
+    const bottomNav = container.querySelector("nav.fixed");
+    expect(bottomNav).not.toBeNull();
+    expect(bottomNav?.querySelectorAll("a")).toHaveLength(2);
   });
 
   it("does not crash when the status fetch fails, and shows a placeholder instead of a real value", async () => {
