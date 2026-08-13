@@ -39,8 +39,17 @@ describe("AppShell", () => {
     );
     expect(screen.getByText("Dashboard")).toBeInTheDocument();
     expect(screen.getByText("All Matches")).toBeInTheDocument();
-    expect(screen.getByText("Bets")).toBeInTheDocument();
     expect(screen.getByText("page content")).toBeInTheDocument();
+  });
+
+  it("does not render a Bets nav link -- feature not ready yet (hidden 2026-08-13)", () => {
+    vi.mocked(getStatus).mockRejectedValue(new Error("no backend"));
+    render(
+      <AppShell active="dashboard">
+        <p>page content</p>
+      </AppShell>
+    );
+    expect(screen.queryByText("Bets")).not.toBeInTheDocument();
   });
 
   it("does not crash when the status fetch fails, and shows a placeholder instead of a real value", async () => {

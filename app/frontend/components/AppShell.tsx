@@ -14,10 +14,13 @@ function matchAnalysisHref(f: Fixture) {
   )}&date=${f.utc_date.slice(0, 10)}&league=${encodeURIComponent(f.competition ?? "E0")}`;
 }
 
+// Bets tab hidden from nav (2026-08-13) -- feature not ready yet. The route
+// (/bets, BetTracker.tsx) and its active="bets" AppShell state are left
+// intact, just unlinked -- flip this back to re-surface it, no other change
+// needed.
 const NAV_ITEMS: { href: string; label: string; key: "dashboard" | "matches" | "bets" }[] = [
   { href: "/", label: "Dashboard", key: "dashboard" },
   { href: "/matches", label: "All Matches", key: "matches" },
-  { href: "/bets", label: "Bets", key: "bets" },
 ];
 
 export function AppShell({
