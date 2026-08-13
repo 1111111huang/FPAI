@@ -47,7 +47,9 @@ export function rankTopEdges(matches: Match[], limit: number): TopEdge[] {
   return priced.sort((a, b) => b.edge - a.edge).slice(0, limit);
 }
 
-const LEAGUE_LABEL: Record<string, string> = { E0: "Premier League", SWE: "Allsvenskan", SP1: "La Liga" };
+// W110: exported so MatchAnalysisPage (MatchUI.tsx) can show the same full
+// competition name instead of the raw code -- one label map, not two.
+export const LEAGUE_LABEL: Record<string, string> = { E0: "Premier League", SWE: "Allsvenskan", SP1: "La Liga" };
 
 export type LeagueGroup = { league: string; label: string; matches: Match[] };
 

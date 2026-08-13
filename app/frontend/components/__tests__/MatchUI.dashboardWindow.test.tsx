@@ -10,9 +10,10 @@
  */
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { DashboardPage } from "../MatchUI";
-import { getFixtures, getSandboxStatus } from "@/lib/api";
-import type { Fixture } from "@/lib/types";
+import { getCachedRecommendation, getFixtures, getSandboxStatus } from "@/lib/api";
+import type { Fixture, MatchRecommendationOut } from "@/lib/types";
 
 vi.mock("@/lib/api");
 
@@ -134,5 +135,33 @@ describe("Dashboard always shows the next 10 matches (date-grouped, not today-on
     render(<DashboardPage />);
 
     expect(await screen.findByText(/could not load/i)).toBeInTheDocument();
+  });
+
+  it("W108: 'Actionable only' hides non-actionable matches, and unchecking restores them", async () => {
+    vi.mocked(getFixtures).mockResolvedValue([
+      fixture("actionable-match", "2026-09-01T15:00:00Z"),
+      fixture("not-yet-generated-match", "2026-09-01T18:00:00Z"),
+    ]);
+    const rec: MatchRecommendationOut = {
+      match: {}, overall: "direct_bet", markets: [], explanation: [], confidence: "high",
+      limitations: [], prediction_basis: "team_history_and_market", invalid_market_count: 0,
+      cold_start_risk: false, feature_completeness: 0.9, unknown_team: false,
+    };
+    vi.mocked(getCachedRecommendation).mockImplementation(async (matchId: string) =>
+      matchId === "actionable-match" ? rec : null
+    );
+
+    const user = userEvent.setup();
+    render(<DashboardPage />);
+
+    await screen.findByText("actionable-match");
+    expect(screen.getByText("not-yet-generated-match")).toBeInTheDocument();
+
+    await user.click(screen.getByText("Actionable only"));
+    expect(screen.getByText("actionable-match")).toBeInTheDocument();
+    expect(screen.queryByText("not-yet-generated-match")).not.toBeInTheDocument();
+
+    await user.click(screen.getByText("Actionable only"));
+    expect(screen.getByText("not-yet-generated-match")).toBeInTheDocument();
   });
 });

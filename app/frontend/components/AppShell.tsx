@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useState, useEffect } from "react";
-import { MagnifyingGlass } from "@phosphor-icons/react";
+import { House, ListBullets, MagnifyingGlass, type Icon } from "@phosphor-icons/react";
 
 import { getFixtures, getStatus } from "@/lib/api";
 import type { Fixture, StatusResponse } from "@/lib/types";
@@ -18,9 +18,14 @@ function matchAnalysisHref(f: Fixture) {
 // (/bets, BetTracker.tsx) and its active="bets" AppShell state are left
 // intact, just unlinked -- flip this back to re-surface it, no other change
 // needed.
-const NAV_ITEMS: { href: string; label: string; key: "dashboard" | "matches" | "bets" }[] = [
-  { href: "/", label: "Dashboard", key: "dashboard" },
-  { href: "/matches", label: "All Matches", key: "matches" },
+const NAV_ITEMS: {
+  href: string;
+  label: string;
+  key: "dashboard" | "matches" | "bets";
+  icon: Icon;
+}[] = [
+  { href: "/", label: "Dashboard", key: "dashboard", icon: House },
+  { href: "/matches", label: "All Matches", key: "matches", icon: ListBullets },
 ];
 
 export function AppShell({
@@ -116,7 +121,9 @@ export function AppShell({
       <aside className="flex shrink-0 flex-col justify-between border-b border-border px-4 py-5 lg:h-screen lg:w-56 lg:border-b-0 lg:border-r lg:px-5 lg:py-6">
         <div>
           <span className="text-sm font-semibold tracking-tight text-ink">FPAI</span>
-          <nav className="mt-6 flex flex-col gap-1 text-sm">
+          {/* W114: desktop-only -- below `lg` this list is replaced by the
+              fixed bottom tab bar, not shown alongside it. */}
+          <nav className="mt-6 hidden flex-col gap-1 text-sm lg:flex">
             {NAV_ITEMS.map((item) => (
               <Link
                 key={item.key}
@@ -197,8 +204,33 @@ export function AppShell({
           </div>
         </div>
 
-        <main className="flex-1 px-4 py-8 sm:px-6">{children}</main>
+        {/* W114: pb-20 clears the fixed bottom tab bar below `lg`; back to
+            the original py-8 at `lg` and up, where that bar doesn't render. */}
+        <main className="flex-1 px-4 pb-20 pt-8 sm:px-6 lg:pb-8">{children}</main>
       </div>
+
+      {/* W114: bottom-tab-bar nav for small screens -- the sidebar-nav
+          metaphor above is unfamiliar to a bottom-tab/vertical-feed mental
+          model (Instagram/TikTok/X). Hidden at `lg` and up, where the
+          desktop sidebar nav (above) is the only nav shown. */}
+      <nav className="fixed inset-x-0 bottom-0 z-20 flex items-center justify-around border-t border-border bg-page px-2 py-1.5 lg:hidden">
+        {NAV_ITEMS.map((item) => {
+          const Icon = item.icon;
+          const isActive = active === item.key;
+          return (
+            <Link
+              key={item.key}
+              href={item.href}
+              className={`flex flex-col items-center gap-0.5 rounded-md px-4 py-1.5 text-[11px] font-medium transition-colors duration-150 ${
+                isActive ? "text-ink" : "text-ink-secondary"
+              }`}
+            >
+              <Icon size={20} weight={isActive ? "fill" : "regular"} />
+              {item.label}
+            </Link>
+          );
+        })}
+      </nav>
     </div>
   );
 }

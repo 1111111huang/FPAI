@@ -1,5 +1,6 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { DashboardPage, MatchExplorerPage, MatchCard, dayDiff, type Match } from "../MatchUI";
 import { generateRecommendation, getCachedRecommendation, getFixtures, getSandboxStatus } from "@/lib/api";
 import type { Fixture, MatchRecommendationOut } from "@/lib/types";
@@ -249,6 +250,38 @@ describe("sandbox mode does not leak real results for fixtures still-future rela
     expect(await screen.findByText("Direct Bet")).toBeInTheDocument();
     expect(screen.queryByText("Not yet generated")).not.toBeInTheDocument();
     expect(generateRecommendation).not.toHaveBeenCalled();
+  });
+});
+
+describe("MatchExplorerPage -- actionable-only filter (W108)", () => {
+  beforeEach(() => {
+    vi.mocked(getFixtures).mockReset();
+    vi.mocked(getSandboxStatus).mockReset();
+    vi.mocked(getCachedRecommendation).mockReset();
+    vi.mocked(getSandboxStatus).mockResolvedValue({ sandbox_mode: false, as_of: null });
+  });
+
+  it("hides non-actionable matches once checked, combined with the existing team-name search", async () => {
+    vi.mocked(getFixtures).mockResolvedValue([
+      { match_id: "1", utc_date: "2026-08-22T15:00:00Z", status: "SCHEDULED", home_team: "Arsenal", away_team: "Everton", home_goals: null, away_goals: null },
+      { match_id: "2", utc_date: "2026-08-23T15:00:00Z", status: "SCHEDULED", home_team: "Chelsea", away_team: "Brighton", home_goals: null, away_goals: null },
+    ]);
+    const rec: MatchRecommendationOut = {
+      match: {}, overall: "direct_bet", markets: [], explanation: [], confidence: "high",
+      limitations: [], prediction_basis: "team_history_and_market", invalid_market_count: 0,
+      cold_start_risk: false, feature_completeness: 0.9, unknown_team: false,
+    };
+    vi.mocked(getCachedRecommendation).mockImplementation(async (matchId: string) => (matchId === "1" ? rec : null));
+
+    const user = userEvent.setup();
+    render(<MatchExplorerPage />);
+
+    await waitFor(() => expect(screen.getByText("Direct Bet")).toBeInTheDocument());
+    expect(screen.getByText("Chelsea")).toBeInTheDocument();
+
+    await user.click(screen.getByText("Actionable only"));
+    expect(screen.getByText("Arsenal")).toBeInTheDocument();
+    expect(screen.queryByText("Chelsea")).not.toBeInTheDocument();
   });
 });
 

@@ -142,6 +142,12 @@ describe("StatusBadge", () => {
     render(<StatusBadge status={overall} />);
     expect(screen.getByText(label)).toBeInTheDocument();
   });
+
+  it.each(ALL_OVERALL_STATES)("W107: has a plain-language explanation for overall=$overall", ({ overall, label }) => {
+    render(<StatusBadge status={overall} />);
+    expect(screen.getByText(label)).toHaveAttribute("title");
+    expect(screen.getByText(label).getAttribute("title")?.length).toBeGreaterThan(10);
+  });
 });
 
 describe("MatchCard", () => {
@@ -243,6 +249,48 @@ describe("MatchCard", () => {
   });
 });
 
+describe("MatchCard -- visual hierarchy (W117): Team -> Market+Odds (each direction) -> Selection+Edge -> Days", () => {
+  it("shows all three result_3way directions with their own odds when more than one is present", () => {
+    const match = baseMatch({
+      overall: "direct_bet",
+      markets: [
+        { market: "result_3way", selection: "home", recommendationType: "direct_bet", currentOdds: 1.8, minOdds: 0, mlProbability: 0.6, impliedProbability: 0.56, valueEdge: 0.04 },
+        { market: "result_3way", selection: "draw", recommendationType: "no_bet", currentOdds: 3.4, minOdds: 0, mlProbability: 0.25, impliedProbability: 0.29, valueEdge: -0.04 },
+        { market: "result_3way", selection: "away", recommendationType: "no_bet", currentOdds: 4.2, minOdds: 0, mlProbability: 0.15, impliedProbability: 0.24, valueEdge: -0.09 },
+      ],
+    });
+    render(<MatchCard match={match} onUpdate={vi.fn()} />);
+    expect(screen.getByText("draw")).toBeInTheDocument();
+    expect(screen.getByText("3.40")).toBeInTheDocument();
+    expect(screen.getByText("4.20")).toBeInTheDocument();
+  });
+
+  it("does not render a per-direction board for a single-selection market -- nothing to compare, would just repeat the Selection + Edge row", () => {
+    const match = baseMatch({
+      overall: "direct_bet",
+      markets: [
+        { market: "result_3way", selection: "home", recommendationType: "direct_bet", currentOdds: 1.8, minOdds: 0, mlProbability: 0.6, impliedProbability: 0.56, valueEdge: 0.04 },
+      ],
+    });
+    render(<MatchCard match={match} onUpdate={vi.fn()} />);
+    // "home" as its own isolated label (the board's pill) never renders --
+    // only the combined "result_3way · home" text of the summary row below.
+    expect(screen.queryByText("home")).not.toBeInTheDocument();
+    expect(screen.getByText("result_3way · home")).toBeInTheDocument();
+  });
+
+  it("keeps the days-until-kickoff label independently findable when it shares a badge with the kickoff time", () => {
+    // UTC noon kickoff + sandboxMode, matching this file's own
+    // matchWithKickoff/dateboundary convention -- sidesteps the local-vs-UTC
+    // getter distinction dayDiff/formatDay deliberately branch on.
+    const match = baseMatch({ kickoffIso: "2026-08-25T12:00:00Z" });
+    render(
+      <MatchCard match={match} onUpdate={vi.fn()} asOf={new Date("2026-08-22T00:00:00Z")} sandboxMode={true} />
+    );
+    expect(screen.getByText("in 3 days")).toBeInTheDocument();
+  });
+});
+
 // ---------------------------------------------------------------------------
 // Direct user report (2026-08-08): a "No Bet" card showed a prominent
 // positive "+3.2% EDGE" -- a real, positive-but-below-threshold edge on a
@@ -272,10 +320,18 @@ describe("MatchCard -- bestMarket prefers an actionable market over a higher-edg
       ],
     });
     render(<MatchCard match={match} onUpdate={vi.fn()} />);
-    expect(screen.getByText("1.80")).toBeInTheDocument();
+    // W117: the recommended (home) price now appears twice by design --
+    // once highlighted in the per-direction Market + Odds board, once in
+    // the Selection + Edge summary below it.
+    expect(screen.getAllByText("1.80")).toHaveLength(2);
     expect(screen.getByText("+4.0%")).toBeInTheDocument();
-    expect(screen.queryByText("5.00")).not.toBeInTheDocument();
+    // The higher-edge no_bet direction's raw price is now shown too (W117:
+    // every direction renders, for transparency) -- but never its edge, and
+    // never with the recommended direction's highlighted styling.
+    expect(screen.getByText("5.00")).toBeInTheDocument();
     expect(screen.queryByText("+8.0%")).not.toBeInTheDocument();
+    expect(screen.getByText("home").parentElement).toHaveClass("border-accent/60");
+    expect(screen.getByText("away").parentElement).not.toHaveClass("border-accent/60");
   });
 
   it("does not color a no_bet market's positive edge as 'good' when nothing is actionable", () => {
@@ -461,6 +517,57 @@ describe("MatchAnalysisPage -- cache-first load (W47)", () => {
 
     await waitFor(() => expect(generateRecommendation).toHaveBeenCalled());
     expect(generateRecommendation).toHaveBeenCalledWith(expect.objectContaining({ league: "SWE" }));
+    // W110: the header shows the full competition name, not the raw code.
+    expect(screen.getByText("Allsvenskan")).toBeInTheDocument();
+    expect(screen.queryByText("SWE")).not.toBeInTheDocument();
+  });
+
+  it("W110: falls back to the raw code for a competition with no known full name", async () => {
+    vi.mocked(getCachedRecommendation).mockResolvedValue(makeRecommendation());
+
+    render(<MatchAnalysisPage id="m1" home="Arsenal" away="Everton" date="2026-08-22" league="XYZ" />);
+
+    expect(await screen.findByText("XYZ")).toBeInTheDocument();
+  });
+
+  it("W112: does not render the Squad Intelligence stub", async () => {
+    vi.mocked(getCachedRecommendation).mockResolvedValue(makeRecommendation());
+
+    render(<MatchAnalysisPage id="m1" home="Arsenal" away="Everton" date="2026-08-22" />);
+
+    await screen.findByText("Agent Reasoning");
+    expect(screen.queryByText("Squad Intelligence")).not.toBeInTheDocument();
+  });
+
+  it("W111: shows a plain-language summary sentence naming the actual team, not just 'home'", async () => {
+    vi.mocked(getCachedRecommendation).mockResolvedValue(
+      makeRecommendation({
+        overall: "direct_bet",
+        confidence: "high",
+        markets: [
+          {
+            market: "result_3way", selection: "home", recommendation_type: "direct_bet",
+            current_odds: 1.8, min_odds: 0, ml_probability: 0.6, implied_probability: 0.56, value_edge: 0.04,
+          },
+        ],
+      })
+    );
+
+    render(<MatchAnalysisPage id="m1" home="Arsenal" away="Everton" date="2026-08-22" />);
+
+    expect(
+      await screen.findByText("FPAI recommends betting on Arsenal (result_3way), with high confidence.")
+    ).toBeInTheDocument();
+  });
+
+  it("W111: falls back to a plain no-data sentence when overall is insufficient_data", async () => {
+    vi.mocked(getCachedRecommendation).mockResolvedValue(makeRecommendation({ overall: "insufficient_data" }));
+
+    render(<MatchAnalysisPage id="m1" home="Arsenal" away="Everton" date="2026-08-22" />);
+
+    expect(
+      await screen.findByText("FPAI doesn't have enough data yet for a confident read on this match.")
+    ).toBeInTheDocument();
   });
 
   it("W84: shows the wait-condition (target_odds) on a conditional market's own row", async () => {
@@ -500,7 +607,10 @@ describe("MatchAnalysisPage -- cache-first load (W47)", () => {
 
     render(<MatchAnalysisPage id="m1" home="Arsenal" away="Everton" date="2026-08-22" />);
 
-    await screen.findByText("result_3way", { exact: false });
+    // W111: a substring match on "result_3way" is now ambiguous -- the new
+    // plain-language summary sentence also mentions the market name -- so
+    // wait on the ProbabilityRow's own unique combined text instead.
+    await screen.findByText("result_3way · home");
     expect(screen.queryByText(/to clear edge/)).not.toBeInTheDocument();
   });
 
@@ -520,8 +630,33 @@ describe("MatchAnalysisPage -- cache-first load (W47)", () => {
 
     render(<MatchAnalysisPage id="m1" home="Arsenal" away="Everton" date="2026-08-22" />);
 
-    await screen.findByText("result_3way", { exact: false });
+    // W111: a substring match on "result_3way" is now ambiguous -- the new
+    // plain-language summary sentence also mentions the market name -- so
+    // wait on the ProbabilityRow's own unique combined text instead.
+    await screen.findByText("result_3way · home");
     expect(screen.queryByText(/to clear edge/)).not.toBeInTheDocument();
+  });
+
+  it("W115: does not render a Log bet control -- bet tracking hidden for now", async () => {
+    vi.mocked(getCachedRecommendation).mockResolvedValue(
+      makeRecommendation({
+        overall: "direct_bet",
+        markets: [
+          {
+            market: "result_3way", selection: "home", recommendation_type: "direct_bet",
+            current_odds: 2.1, min_odds: 0, ml_probability: 0.6, implied_probability: 0.48, value_edge: 0.12,
+          },
+        ],
+      })
+    );
+
+    render(<MatchAnalysisPage id="m1" home="Arsenal" away="Everton" date="2026-08-22" />);
+
+    // W111: a substring match on "result_3way" is now ambiguous -- the new
+    // plain-language summary sentence also mentions the market name -- so
+    // wait on the ProbabilityRow's own unique combined text instead.
+    await screen.findByText("result_3way · home");
+    expect(screen.queryByText("Log bet")).not.toBeInTheDocument();
   });
 });
 

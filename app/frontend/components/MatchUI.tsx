@@ -37,7 +37,7 @@ import {
 } from "@/lib/api";
 import type { Fixture, MatchRecommendationOut } from "@/lib/types";
 import { useSandboxAsOf } from "@/lib/useSandboxAsOf";
-import { groupByDate, sortMatches, type MatchSort } from "@/lib/dashboardMetrics";
+import { groupByDate, sortMatches, LEAGUE_LABEL, type MatchSort } from "@/lib/dashboardMetrics";
 import { AppShell } from "./AppShell";
 import { DashboardRail } from "./DashboardRail";
 
@@ -262,9 +262,18 @@ const TIER_LABEL: Record<Tier, string> = {
   general_purpose: "General",
 };
 
+// W110/W107: one-line, hover/tap-discoverable explanation of the
+// Modeled/General distinction -- previously only the two-word tag itself,
+// meaningless to anyone without prior context on how the engine's per-
+// competition models work.
+const TIER_EXPLANATION: Record<Tier, string> = {
+  competition_specific: "This competition has its own trained model, built on real historical team data.",
+  general_purpose: "No dedicated model for this competition yet -- a general-purpose fallback model instead.",
+};
+
 const STATUS_META: Record<
   Overall,
-  { text: string; ring: string; icon: React.ReactNode; label: string; verdict: string }
+  { text: string; ring: string; icon: React.ReactNode; label: string; verdict: string; explain: string }
 > = {
   direct_bet: {
     text: "text-good",
@@ -272,6 +281,10 @@ const STATUS_META: Record<
     icon: <CheckCircle weight="fill" size={13} />,
     label: "Direct Bet",
     verdict: "BET",
+    // W107: plain-language, hover/tap-discoverable explanation of each
+    // verdict -- previously only the label/badge itself, no context for a
+    // reader without prior betting vocabulary.
+    explain: "The model found a strong enough edge to recommend betting now.",
   },
   conditional: {
     text: "text-warning",
@@ -279,6 +292,7 @@ const STATUS_META: Record<
     icon: <Clock weight="fill" size={13} />,
     label: "Conditional",
     verdict: "WAIT",
+    explain: "There's a real edge here, but the current price isn't good enough yet -- wait for it to improve.",
   },
   no_bet: {
     text: "text-muted",
@@ -286,6 +300,7 @@ const STATUS_META: Record<
     icon: <MinusCircle weight="fill" size={13} />,
     label: "No Bet",
     verdict: "PASS",
+    explain: "No sufficient edge found -- not worth betting on this market.",
   },
   insufficient_data: {
     text: "text-serious",
@@ -293,6 +308,7 @@ const STATUS_META: Record<
     icon: <Question weight="fill" size={13} />,
     label: "Insufficient Data",
     verdict: "NO READ",
+    explain: "Not enough reliable data to make a confident prediction.",
   },
 };
 
@@ -307,6 +323,20 @@ export function formatEdge(v: number) {
   const pct = (v * 100).toFixed(1);
   return v >= 0 ? `+${pct}%` : `${pct}%`;
 }
+
+// W107: plain-language explanations for jargon labels, reused everywhere
+// each label renders (via a native `title` tooltip -- no tooltip library).
+const EDGE_EXPLAIN = "How much better the model's estimate is than the market price. Positive means the price looks better than it should be.";
+const MODEL_PROBABILITY_EXPLAIN = "The model's own estimated probability of this outcome, independent of the market's price.";
+const CONFIDENCE_EXPLAIN = "How reliable the model considers this particular prediction, based on the strength and consistency of the signal.";
+/** W108: a match with a generated, actually-actionable recommendation --
+ * the same predicate Dashboard/Match Explorer's own "Active Edges" sidebar
+ * count already computed inline in two places (now shared, not duplicated
+ * a third time for the new actionable-only filter). */
+export function isActionable(match: Match): boolean {
+  return match.hasRecommendation && (match.overall === "direct_bet" || match.overall === "conditional");
+}
+
 export function bestMarket(match: Match): MarketRec | undefined {
   // Prefer an actually-recommended market (direct_bet/conditional) over a
   // no_bet one, even if a no_bet market happens to have a numerically
@@ -320,6 +350,17 @@ export function bestMarket(match: Match): MarketRec | undefined {
   const actionable = match.markets.filter((m) => m.recommendationType !== "no_bet");
   const pool = actionable.length > 0 ? actionable : match.markets;
   return [...pool].sort((a, b) => b.valueEdge - a.valueEdge)[0];
+}
+
+/** W117: every row sharing bestMarket()'s own `market` name -- e.g. all
+ * three of a result_3way's home/draw/away rows -- so MatchCard can show a
+ * full "market + odds per direction" board instead of only the single
+ * highest-edge selection. Deliberately shows every direction's raw price
+ * (transparency), never a per-direction edge -- edge stays reserved for the
+ * one actually-recommended selection (Selection + Edge row) so a plain,
+ * unactioned price never reads as a second recommendation. */
+export function marketDirections(match: Match, marketName: string): MarketRec[] {
+  return match.markets.filter((m) => m.market === marketName);
 }
 
 const TEAM_COLORS: Record<string, { primary: string; secondary?: string }> = {
@@ -392,7 +433,10 @@ export function StatusBadge({ status, size = "sm" }: { status: Overall; size?: "
   const s = STATUS_META[status];
   const pad = size === "lg" ? "px-3 py-1.5 text-sm" : "px-2 py-0.5 text-[11px]";
   return (
-    <span className={`inline-flex items-center gap-1.5 rounded-md border ${s.ring} ${s.text} ${pad} font-medium`}>
+    <span
+      title={s.explain}
+      className={`inline-flex items-center gap-1.5 rounded-md border ${s.ring} ${s.text} ${pad} font-medium`}
+    >
       {s.icon}
       {s.label}
     </span>
@@ -410,8 +454,13 @@ function TrustSignal({ match, size = "sm" }: { match: Match; size?: "sm" | "lg" 
     <span
       className={`inline-flex items-center gap-1.5 rounded-md border border-warning/40 text-warning ${pad} font-medium`}
       title={
+        // W107: plain-language first, raw figure second -- previously just
+        // the bare `feature_completeness=0.71` figure with no explanation
+        // of what it means.
         match.featureCompleteness !== null
-          ? `feature_completeness=${match.featureCompleteness.toFixed(2)}`
+          ? `How much real historical data this prediction is based on (feature_completeness=${match.featureCompleteness.toFixed(
+              2
+            )}, out of 1.00).`
           : undefined
       }
     >
@@ -440,7 +489,10 @@ export function TeamBadge({ name }: { name: string }) {
 
 function TierTag({ tier }: { tier: Tier }) {
   return (
-    <span className="rounded border border-border px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-ink-secondary">
+    <span
+      title={TIER_EXPLANATION[tier]}
+      className="rounded border border-border px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-ink-secondary"
+    >
       {TIER_LABEL[tier]}
     </span>
   );
@@ -560,14 +612,29 @@ export function MatchCard({
     }
   }
 
+  // W117: every direction sharing the shown market's own name, e.g. a
+  // result_3way's home/draw/away rows -- the "Market + Odds (for each
+  // direction)" board. Empty when there's no shown market at all (no
+  // recommendation yet, or a fixture with no markets).
+  const directions = shown ? marketDirections(match, shown.market) : [];
+
   return (
     <div className="rounded-xl border border-border transition-all duration-150 hover:-translate-y-px hover:border-border-strong">
       <button type="button" onClick={handleExpand} className="w-full p-3.5 text-left">
-        <div className="flex items-center justify-between">
-          <span className="flex items-center gap-2 font-mono text-xs text-muted">
-            {formatKickoff(match.kickoffIso)}
-            <TierTag tier={match.tier} />
-          </span>
+        {/* 1. TEAM -- top visual priority (W117). */}
+        <div className="flex items-center gap-2">
+          <TeamBadge name={match.home} />
+          <span className="truncate text-sm font-medium text-ink">{match.home}</span>
+          <span className="text-xs text-ink-secondary">v</span>
+          <span className="truncate text-sm font-medium text-ink">{match.away}</span>
+          <TeamBadge name={match.away} />
+        </div>
+
+        {/* Supplementary metadata (tier + verdict) -- not one of W117's four
+            ordered priorities, kept as a compact sub-header under the team
+            row rather than competing with it for top billing. */}
+        <div className="mt-1.5 flex items-center justify-between">
+          <TierTag tier={match.tier} />
           {match.hasRecommendation ? (
             <span className="flex items-center gap-1.5">
               <TrustSignal match={match} />
@@ -580,18 +647,39 @@ export function MatchCard({
           )}
         </div>
 
-        <div className="mt-2.5 flex items-center gap-2">
-          <TeamBadge name={match.home} />
-          <span className="truncate text-sm font-medium text-ink">{match.home}</span>
-          <span className="text-xs text-ink-secondary">v</span>
-          <span className="truncate text-sm font-medium text-ink">{match.away}</span>
-          <TeamBadge name={match.away} />
-        </div>
+        {/* 2. MARKET + ODDS, for each direction (W117) -- every selection
+            under the shown market, not just the recommended one, so the
+            card reads as a small odds board rather than a single number.
+            The recommended direction gets an explicit visual cue (accent
+            border, bolder text); the rest stay muted -- raw price only,
+            deliberately no edge value here (W113/W117: showing another
+            direction's price is transparency, not a second recommendation). */}
+        {/* Only worth its own board when there's actually more than one
+            direction to compare -- a single-selection market would just
+            repeat the exact same number the Selection + Edge row already
+            shows right below it. */}
+        {directions.length > 1 && (
+          <div className="mt-3 flex flex-wrap items-center gap-1.5 border-t border-border pt-2.5">
+            {directions.map((dir) => (
+              <span
+                key={dir.selection}
+                className={`inline-flex items-center gap-1.5 rounded-md border px-2 py-1 font-mono text-xs ${
+                  dir.selection === shown?.selection
+                    ? "border-accent/60 font-semibold text-ink"
+                    : "border-border text-ink-secondary"
+                }`}
+              >
+                <span className="uppercase tracking-wide">{dir.selection}</span>
+                <span>{dir.currentOdds != null ? dir.currentOdds.toFixed(2) : "—"}</span>
+              </span>
+            ))}
+          </div>
+        )}
 
+        {/* 3. SELECTION + EDGE (W117) -- the actual recommendation: which
+            selection, and its price/edge. */}
         <div className="mt-3 flex items-end justify-between gap-3 border-t border-border pt-2.5">
-          <span className="truncate text-xs text-ink-secondary">
-            {shown ? `${shown.market} · ${shown.selection} · ${day}` : day}
-          </span>
+          <span className="truncate text-xs text-ink-secondary">{shown ? `${shown.market} · ${shown.selection}` : ""}</span>
           <div className="flex shrink-0 items-end gap-4">
             <div className="text-right">
               {/* W84/A52: for a conditional market with a real targetOdds
@@ -638,13 +726,34 @@ export function MatchCard({
               >
                 {shown?.currentOdds ? formatEdge(shown.valueEdge) : "—"}
               </div>
-              <div className="text-[10px] uppercase tracking-wide text-muted">Edge</div>
+              <div title={EDGE_EXPLAIN} className="text-[10px] uppercase tracking-wide text-muted">Edge</div>
             </div>
+          </div>
+        </div>
+
+        {/* 4. DAYS UNTIL KICKOFF (W117) -- its own explicit visual cue (a
+            badge, not text folded into another line) rather than the old
+            plain "market · selection · day" string. Kickoff time moves
+            here too, alongside the day it belongs to. W113: a source
+            caption for the odds shown above sits on this same closing row. */}
+        <div className="mt-2.5 flex items-center justify-between gap-2">
+          {/* day/time are separate text nodes (not one interpolated string)
+              so "today"/"tomorrow" etc. stay independently matchable -- a
+              single combined node isn't findable by an exact-text query
+              once other text shares the node (RTL matches per-node, not
+              substrings). */}
+          <span className="inline-flex items-center gap-1 rounded-full border border-border-strong bg-surface px-2 py-0.5 font-mono text-[11px] font-medium text-ink-secondary">
+            <span>{day}</span>
+            <span className="text-muted">·</span>
+            <span>{formatKickoff(match.kickoffIso)}</span>
+          </span>
+          <span className="flex items-center gap-2">
+            {shown?.currentOdds != null && <span className="text-[10px] text-muted">via The Odds API</span>}
             <CaretDown
               size={14}
-              className={`mb-1 text-ink-secondary transition-transform duration-150 ${open ? "rotate-180" : ""}`}
+              className={`text-ink-secondary transition-transform duration-150 ${open ? "rotate-180" : ""}`}
             />
-          </div>
+          </span>
         </div>
       </button>
 
@@ -703,6 +812,10 @@ export function DashboardPage() {
   // in-flight request from a *previous* run if the two race).
   const [retryTick, setRetryTick] = useState(0);
   const [sort, setSort] = useState<MatchSort>("kickoff");
+  // W108: hide No Bet / Insufficient Data matches, showing only actionable
+  // (Direct Bet / Conditional) ones -- direct feedback that non-actionable
+  // rows can't be filtered out today, only reordered.
+  const [actionableOnly, setActionableOnly] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -768,14 +881,17 @@ export function DashboardPage() {
   }
 
   const shownMatches = matches ?? [];
-  const activeEdgesCount = shownMatches.filter(
-    (m) => m.hasRecommendation && (m.overall === "direct_bet" || m.overall === "conditional")
-  ).length;
+  const activeEdgesCount = shownMatches.filter(isActionable).length;
+  // W108: the rail (Edge Distribution/Top Edges) and the Active Edges count
+  // above both stay computed over the full loaded set regardless of this
+  // filter -- it's a display concern for the list only, not a re-scoping of
+  // what "loaded" means.
+  const visibleMatches = actionableOnly ? shownMatches.filter(isActionable) : shownMatches;
   // Date-group order always follows kickoff order, regardless of the
   // Kickoff/Edge % toggle below -- an edge-sorted list would scramble which
   // day each group appears under. The toggle still reorders matches within
   // each date group.
-  const dateGroups = groupByDate(sortMatches(shownMatches, "kickoff"), asOf, sandboxMode).map((group) => ({
+  const dateGroups = groupByDate(sortMatches(visibleMatches, "kickoff"), asOf, sandboxMode).map((group) => ({
     ...group,
     matches: sort === "edge" ? sortMatches(group.matches, "edge") : group.matches,
   }));
@@ -791,15 +907,22 @@ export function DashboardPage() {
                 Next 10 real E0, La Liga &amp; Allsvenskan fixtures. Expand a card to generate its recommendation.
               </p>
             </div>
+            {/* Edge % sort hidden (2026-08-13, W118) -- flagged as misleading
+                by direct user feedback. Kickoff is the only sort left, so the
+                toggle itself (nothing left to toggle between) is hidden too,
+                not just the option -- `sort` state and `sortMatches`'s
+                "edge" case (dashboardMetrics.ts) are untouched, so restoring
+                the SegmentedControl below is a one-line revert. */}
             {shownMatches.length > 0 && (
-              <SegmentedControl
-                options={[
-                  { value: "kickoff", label: "Kickoff" },
-                  { value: "edge", label: "Edge %" },
-                ]}
-                value={sort}
-                onChange={setSort}
-              />
+              <label className="flex select-none items-center gap-2 text-sm text-ink-secondary">
+                <input
+                  type="checkbox"
+                  checked={actionableOnly}
+                  onChange={(e) => setActionableOnly(e.target.checked)}
+                  className="h-3.5 w-3.5 accent-accent"
+                />
+                Actionable only
+              </label>
             )}
           </div>
 
@@ -809,12 +932,21 @@ export function DashboardPage() {
             {!error && matches !== null && matches.length === 0 && (
               <p className="py-8 text-center text-sm text-ink-secondary">No upcoming fixtures.</p>
             )}
-            {!error && shownMatches.length > 0 && (
-              <div className="flex flex-col gap-6">
+            {!error && shownMatches.length > 0 && visibleMatches.length === 0 && (
+              <p className="py-8 text-center text-sm text-ink-secondary">
+                No actionable matches right now -- try turning off "Actionable only".
+              </p>
+            )}
+            {!error && visibleMatches.length > 0 && (
+              // W116: gap-8 (was gap-6) + each header's own border-b give every
+              // date group a real, unambiguous boundary from the next one --
+              // direct feedback that it wasn't clear which date a match
+              // belonged to, scrolling a list of same-looking cards.
+              <div className="flex flex-col gap-8">
                 {dateGroups.map((group) => (
                   <div key={group.dateKey}>
-                    <div className="mb-2 flex items-center gap-2">
-                      <h2 className="text-xs font-semibold uppercase tracking-wide text-muted">{group.label}</h2>
+                    <div className="mb-3 flex items-center gap-2 border-b border-border-strong pb-2">
+                      <h2 className="text-sm font-bold tracking-tight text-ink">{group.label}</h2>
                       <span className="rounded-full border border-border px-1.5 py-0.5 text-[10px] text-ink-secondary">
                         {group.matches.length} match{group.matches.length === 1 ? "" : "es"}
                       </span>
@@ -855,6 +987,8 @@ export function MatchExplorerPage() {
   // from outside the effect (which would have no way to invalidate an
   // in-flight request from a *previous* run if the two race).
   const [retryTick, setRetryTick] = useState(0);
+  // W108: same actionable-only filter as Dashboard, same shared predicate.
+  const [actionableOnly, setActionableOnly] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -910,17 +1044,23 @@ export function MatchExplorerPage() {
 
   const rows = useMemo(() => {
     const q = query.trim().toLowerCase();
-    if (!matches) return null;
-    if (q.length === 0) return matches;
-    return matches.filter((m) => m.home.toLowerCase().includes(q) || m.away.toLowerCase().includes(q));
-  }, [matches, query]);
+    let result = matches;
+    if (!result) return null;
+    if (q.length > 0) {
+      result = result.filter((m) => m.home.toLowerCase().includes(q) || m.away.toLowerCase().includes(q));
+    }
+    // W108: applied after the team-name search, same "narrow what's shown"
+    // relationship the search itself already has to the loaded window.
+    if (actionableOnly) {
+      result = result.filter(isActionable);
+    }
+    return result;
+  }, [matches, query, actionableOnly]);
 
-  // Counted over the full loaded window (matches), not the search-filtered
-  // `rows` -- mirrors DashboardPage's semantics ("edges among what's
+  // Counted over the full loaded window (matches), not the search/actionable-
+  // filtered `rows` -- mirrors DashboardPage's semantics ("edges among what's
   // loaded", not "edges among what's currently visible after filtering").
-  const activeEdgesCount = (matches ?? []).filter(
-    (m) => m.hasRecommendation && (m.overall === "direct_bet" || m.overall === "conditional")
-  ).length;
+  const activeEdgesCount = (matches ?? []).filter(isActionable).length;
 
   return (
     <AppShell active="matches" activeEdgesCount={matches !== null ? activeEdgesCount : undefined}>
@@ -937,11 +1077,23 @@ export function MatchExplorerPage() {
         />
       </div>
 
+      <label className="mt-3 flex select-none items-center gap-2 text-sm text-ink-secondary">
+        <input
+          type="checkbox"
+          checked={actionableOnly}
+          onChange={(e) => setActionableOnly(e.target.checked)}
+          className="h-3.5 w-3.5 accent-accent"
+        />
+        Actionable only
+      </label>
+
       <div className="mt-6">
         {error && <ErrorState message={error} onRetry={() => setRetryTick((t) => t + 1)} />}
         {!error && rows === null && <LoadingRows />}
         {!error && rows !== null && rows.length === 0 && (
-          <p className="py-8 text-center text-sm text-ink-secondary">No matches found.</p>
+          <p className="py-8 text-center text-sm text-ink-secondary">
+            {actionableOnly ? 'No actionable matches right now -- try turning off "Actionable only".' : "No matches found."}
+          </p>
         )}
         {!error && rows && rows.length > 0 && (
           <div className="flex flex-col gap-2.5">
@@ -1065,9 +1217,14 @@ function ProbabilityRow({
             Needs {m.targetOdds.toFixed(2)}+ to clear edge
           </span>
         )}
+        {/* Log-bet UI hidden (2026-08-13, W115) -- bet tracking isn't built
+            out enough to surface yet, same call as W106 hiding the Bets nav
+            tab. LogBetButton itself and its backend path are untouched;
+            uncomment below to re-enable once ready.
         {matchId && recommendation && !anomalous && (
           <LogBetButton matchId={matchId} recommendation={recommendation} market={m.market} selection={m.selection} />
         )}
+        */}
       </span>
       <span className="text-right font-mono text-ink">{formatPct(m.mlProbability)}</span>
       <span className={`text-right font-mono ${anomalous ? "text-serious" : "text-ink-secondary"}`}>
@@ -1089,6 +1246,43 @@ function ProbabilityRow({
       )}
     </div>
   );
+}
+
+/** W117-adjacent naming convention, W111 itself: "home"/"away"/"draw" alone
+ * are readable but naming the actual team is clearer for a reader with no
+ * prior betting vocabulary -- the whole point of this sentence. Any other
+ * market's selection (e.g. "over_2.5") falls back to its raw string with
+ * underscores turned into spaces, rather than a hand-maintained label for
+ * every possible market. */
+function selectionLabel(match: Match, selection: string): string {
+  if (selection === "home") return match.home;
+  if (selection === "away") return match.away;
+  if (selection === "draw") return "a draw";
+  return selection.replace(/_/g, " ");
+}
+
+/** W111: one plain-English sentence, composed entirely from fields already
+ * on the recommendation (overall/confidence/bestMarket) -- no new backend
+ * field, no LLM call. Sits ahead of the jargon-dense Model Probabilities
+ * table so a reader with zero betting vocabulary has something to read
+ * before the numbers. */
+function summarySentence(match: Match): string {
+  const shown = bestMarket(match);
+  switch (match.overall) {
+    case "direct_bet":
+      return shown
+        ? `FPAI recommends betting on ${selectionLabel(match, shown.selection)} (${shown.market}), with ${match.confidence} confidence.`
+        : "FPAI recommends a bet on this match.";
+    case "conditional":
+      return shown
+        ? `FPAI says wait on ${selectionLabel(match, shown.selection)} (${shown.market}) -- the price isn't good enough yet.`
+        : "FPAI says wait -- no price here clears its bar yet.";
+    case "no_bet":
+      return "FPAI does not recommend a bet on this match right now.";
+    case "insufficient_data":
+    default:
+      return "FPAI doesn't have enough data yet for a confident read on this match.";
+  }
 }
 
 export function MatchAnalysisPage({
@@ -1189,7 +1383,10 @@ export function MatchAnalysisPage({
       <div className="mt-4 flex items-start justify-between gap-4">
         <div>
           <div className="flex items-center gap-2 text-xs text-ink-secondary">
-            <span>{league}</span>
+            {/* W110: full competition name, not the raw football-data.org
+                code -- direct feedback that "E0"/"SWE" mean nothing to a
+                reader who isn't already familiar with them. */}
+            <span>{LEAGUE_LABEL[league] ?? league}</span>
             <TierTag tier="competition_specific" />
             <span>{date}</span>
           </div>
@@ -1199,10 +1396,13 @@ export function MatchAnalysisPage({
         </div>
         {match && (
           <div className="text-right">
-            <div className={`text-2xl font-bold tracking-tight ${STATUS_META[match.overall].text}`}>
+            <div
+              title={STATUS_META[match.overall].explain}
+              className={`text-2xl font-bold tracking-tight ${STATUS_META[match.overall].text}`}
+            >
               {STATUS_META[match.overall].verdict}
             </div>
-            <div className="mt-1 text-xs text-ink-secondary">
+            <div title={CONFIDENCE_EXPLAIN} className="mt-1 text-xs text-ink-secondary">
               Confidence: <span className="font-medium text-ink">{match.confidence}</span>
             </div>
             <div className="mt-2 flex justify-end">
@@ -1225,13 +1425,18 @@ export function MatchAnalysisPage({
 
       {!loading && !error && match && (
         <>
+          {/* W111: plain-language on-ramp, ahead of the jargon-dense table
+              below it -- direct feedback that a reader with no betting
+              vocabulary has nothing to read before the numbers today. */}
+          <p className="mt-6 text-sm leading-relaxed text-ink">{summarySentence(match)}</p>
+
           <section className="mt-8">
             <h2 className="text-sm font-semibold uppercase tracking-wide text-muted">Model Probabilities</h2>
             <div className="mt-2 grid grid-cols-[1fr_auto_auto_auto_auto] gap-4 text-[11px] uppercase tracking-wide text-muted">
               <span />
-              <span className="text-right">Model</span>
+              <span title={MODEL_PROBABILITY_EXPLAIN} className="text-right">Model</span>
               <span className="text-right">Market</span>
-              <span className="text-right">Edge</span>
+              <span title={EDGE_EXPLAIN} className="text-right">Edge</span>
               <span className="justify-self-end">Status</span>
             </div>
             {match.markets.length === 0 ? (
@@ -1257,12 +1462,13 @@ export function MatchAnalysisPage({
             )}
           </section>
 
-          <section className="mt-8">
-            <h2 className="text-sm font-semibold uppercase tracking-wide text-muted">Squad Intelligence</h2>
-            <p className="mt-2 rounded-lg border border-border bg-surface p-3.5 text-sm text-ink-secondary">
-              Not yet exposed by the API for this view.
-            </p>
-          </section>
+          {/* Squad Intelligence section removed (2026-08-13, W112) -- it
+              always read "Not yet exposed by the API for this view" (no
+              conditional, ForecastService's squad/player data was never
+              plumbed through W02's endpoint), which reads as broken rather
+              than as an honest "unavailable" note, unlike this page's other
+              data-honesty patterns. Re-add once that data actually exists:
+              a permanent stub is worse than no section at all. */}
 
           <section className="mt-8">
             <h2 className="text-sm font-semibold uppercase tracking-wide text-muted">Agent Reasoning</h2>
