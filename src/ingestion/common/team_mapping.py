@@ -36,6 +36,7 @@ scoped-candidate-pool fix above doesn't cover.
 from __future__ import annotations
 
 import json
+import unicodedata
 from pathlib import Path
 from typing import Iterable
 
@@ -43,6 +44,28 @@ from src.utils.helpers import standardize_team_name
 from src.utils.logger import get_logger
 
 LOGGER = get_logger(__name__)
+
+
+def _fold_accents(value: str) -> str:
+    """Strip diacritics via stdlib NFKD decomposition (e.g. 'Atlético' ->
+    'Atletico', 'Coruña' -> 'Coruna') -- an accented letter decomposes into
+    its base letter plus a separate combining-mark codepoint, which this
+    then drops. Case/punctuation/everything else is untouched, so this adds
+    accent-insensitivity on top of map_team()'s existing exact-match
+    semantics without changing anything else about it.
+
+    Root cause for BUG-043-adjacent live warnings (2026-08-13): SP1's Odds-
+    API-sourced full club names ("Atlético Madrid", "Deportivo La Coruña")
+    carry diacritics that config/team_mapping.json's existing entries
+    ("Atletico Madrid", "Deportivo La Coruna", added by earlier
+    football-data.org-shortName-only audits, W78) don't -- a plain exact
+    match can never bridge that, no matter how many accented variants get
+    manually enumerated one club/source at a time (already done twice: W59
+    for Sweden's Odds-API names, W78 for La Liga's football-data.org
+    shortNames). Folding both sides once, here, closes the whole class for
+    every existing and future competition instead of a third manual audit."""
+    decomposed = unicodedata.normalize("NFKD", value)
+    return "".join(ch for ch in decomposed if not unicodedata.combining(ch))
 
 
 def _levenshtein_distance(left: str, right: str) -> int:
@@ -88,6 +111,14 @@ class TeamNameMapper:
         self.mapping_path = Path(mapping_path)
         self.min_similarity = min_similarity
         self.mapping = self._load_mapping()
+        # setdefault: first-listed key wins on a fold collision (stable,
+        # deterministic on the file's own order) -- not expected in
+        # practice (two distinct real club names folding to the same
+        # string would already be a data problem), just a defined tie-break
+        # rather than silent last-wins.
+        self._folded_mapping: dict[str, str] = {}
+        for key, value in self.mapping.items():
+            self._folded_mapping.setdefault(_fold_accents(key), value)
 
     def _load_mapping(self) -> dict[str, str]:
         if not self.mapping_path.exists():
@@ -111,6 +142,10 @@ class TeamNameMapper:
             return normalized
         if normalized in self.mapping:
             return self.mapping[normalized]
+
+        folded = _fold_accents(normalized)
+        if folded in self._folded_mapping:
+            return self._folded_mapping[folded]
 
         if candidates is None:
             LOGGER.warning(

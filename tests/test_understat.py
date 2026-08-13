@@ -148,6 +148,42 @@ def test_team_name_mapper_fuzzy_fallback(tmp_path):
     assert result == "Arsenal"
 
 
+def test_team_name_mapper_ignores_accents_on_the_input_side(tmp_path):
+    """Root-cause fix (2026-08-13): a mapping entry stored without
+    diacritics ('Atletico Madrid') still resolves an accented incoming name
+    ('Atlético Madrid') -- no manual accented-variant entry needed."""
+    mapping = {"Atletico Madrid": "Ath Madrid"}
+    mapping_file = tmp_path / "team_mapping.json"
+    mapping_file.write_text(json.dumps(mapping))
+
+    mapper = TeamNameMapper(mapping_path=str(mapping_file))
+    assert mapper.map_team("Atlético Madrid") == "Ath Madrid"
+
+
+def test_team_name_mapper_ignores_accents_on_the_mapping_side(tmp_path):
+    """Same fold applies the other way -- an accented key still resolves a
+    plain-ASCII incoming name."""
+    mapping = {"Deportivo La Coruña": "La Coruna"}
+    mapping_file = tmp_path / "team_mapping.json"
+    mapping_file.write_text(json.dumps(mapping, ensure_ascii=False), encoding="utf-8")
+
+    mapper = TeamNameMapper(mapping_path=str(mapping_file))
+    assert mapper.map_team("Deportivo La Coruna") == "La Coruna"
+
+
+def test_team_name_mapper_still_reports_a_genuinely_unmapped_accented_name(tmp_path):
+    """Folding accents must not paper over a real gap -- an accented name
+    with no ASCII-or-accented counterpart anywhere in the mapping still
+    returns unchanged (the existing cold-start signal), not silently
+    matched to something unrelated."""
+    mapping = {"Atletico Madrid": "Ath Madrid"}
+    mapping_file = tmp_path / "team_mapping.json"
+    mapping_file.write_text(json.dumps(mapping))
+
+    mapper = TeamNameMapper(mapping_path=str(mapping_file))
+    assert mapper.map_team("Málaga") == "Málaga"
+
+
 def test_team_name_mapper_missing_file_returns_name(tmp_path):
     mapper = TeamNameMapper(mapping_path=str(tmp_path / "nonexistent.json"))
     assert mapper.map_team("Arsenal") == "Arsenal"
