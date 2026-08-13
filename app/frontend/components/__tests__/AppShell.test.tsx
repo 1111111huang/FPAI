@@ -40,7 +40,7 @@ describe("AppShell", () => {
     // W114: each nav label now renders twice by design -- once in the
     // desktop sidebar, once in the mobile bottom tab bar (CSS decides which
     // is visible; jsdom renders both regardless of viewport).
-    expect(screen.getAllByText("Dashboard")).toHaveLength(2);
+    expect(screen.getAllByText("Daily Edges")).toHaveLength(2);
     expect(screen.getAllByText("All Matches")).toHaveLength(2);
     expect(screen.getByText("page content")).toBeInTheDocument();
   });

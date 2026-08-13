@@ -24,7 +24,7 @@ const NAV_ITEMS: {
   key: "dashboard" | "matches" | "bets";
   icon: Icon;
 }[] = [
-  { href: "/", label: "Dashboard", key: "dashboard", icon: House },
+  { href: "/", label: "Daily Edges", key: "dashboard", icon: House },
   { href: "/matches", label: "All Matches", key: "matches", icon: ListBullets },
 ];
 

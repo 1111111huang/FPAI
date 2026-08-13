@@ -525,6 +525,33 @@ function SegmentedControl<T extends string>({
   );
 }
 
+/** W108 follow-up: a real switch matching the app's own atom conventions
+ * (accent/border/surface tokens, 150ms transitions -- same as
+ * SegmentedControl above), not a bare browser checkbox. Shared by Dashboard
+ * and Match Explorer's "Actionable only" filter rather than duplicated. */
+function Toggle({ checked, onChange, label }: { checked: boolean; onChange: (v: boolean) => void; label: string }) {
+  return (
+    <label className="flex select-none items-center gap-2 text-sm text-ink-secondary">
+      <button
+        type="button"
+        role="switch"
+        aria-checked={checked}
+        onClick={() => onChange(!checked)}
+        className={`relative h-5 w-9 shrink-0 rounded-full transition-colors duration-150 ${
+          checked ? "bg-accent" : "border border-border-strong bg-surface"
+        }`}
+      >
+        <span
+          className={`absolute top-0.5 left-0.5 h-4 w-4 rounded-full bg-ink transition-transform duration-150 ${
+            checked ? "translate-x-4" : "translate-x-0"
+          }`}
+        />
+      </button>
+      {label}
+    </label>
+  );
+}
+
 export function ErrorState({ message, onRetry }: { message: string; onRetry?: () => void }) {
   return (
     <div className="flex items-center gap-2 rounded-lg border border-serious/40 p-3.5 text-sm text-serious">
@@ -901,12 +928,7 @@ export function DashboardPage() {
       <div className="lg:flex lg:items-start lg:gap-8">
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center justify-between gap-4">
-            <div>
-              <h1 className="text-xl font-semibold tracking-tight text-ink">Daily Edges</h1>
-              <p className="mt-1 text-sm text-ink-secondary">
-                Next 10 real E0, La Liga &amp; Allsvenskan fixtures. Expand a card to generate its recommendation.
-              </p>
-            </div>
+            <h1 className="text-xl font-semibold tracking-tight text-ink">Daily Edges</h1>
             {/* Edge % sort hidden (2026-08-13, W118) -- flagged as misleading
                 by direct user feedback. Kickoff is the only sort left, so the
                 toggle itself (nothing left to toggle between) is hidden too,
@@ -914,15 +936,7 @@ export function DashboardPage() {
                 "edge" case (dashboardMetrics.ts) are untouched, so restoring
                 the SegmentedControl below is a one-line revert. */}
             {shownMatches.length > 0 && (
-              <label className="flex select-none items-center gap-2 text-sm text-ink-secondary">
-                <input
-                  type="checkbox"
-                  checked={actionableOnly}
-                  onChange={(e) => setActionableOnly(e.target.checked)}
-                  className="h-3.5 w-3.5 accent-accent"
-                />
-                Actionable only
-              </label>
+              <Toggle checked={actionableOnly} onChange={setActionableOnly} label="Actionable only" />
             )}
           </div>
 
@@ -938,14 +952,15 @@ export function DashboardPage() {
               </p>
             )}
             {!error && visibleMatches.length > 0 && (
-              // W116: gap-8 (was gap-6) + each header's own border-b give every
-              // date group a real, unambiguous boundary from the next one --
-              // direct feedback that it wasn't clear which date a match
-              // belonged to, scrolling a list of same-looking cards.
-              <div className="flex flex-col gap-8">
+              // W116 follow-up: a filled panel per date group (not just a
+              // border line) so the group's own colored area visually
+              // contains its cards -- direct feedback that a hairline
+              // divider still wasn't clear enough scrolling a list of
+              // same-looking cards.
+              <div className="flex flex-col gap-5">
                 {dateGroups.map((group) => (
-                  <div key={group.dateKey}>
-                    <div className="mb-3 flex items-center gap-2 border-b border-border-strong pb-2">
+                  <div key={group.dateKey} className="rounded-xl bg-surface/60 p-4">
+                    <div className="mb-3 flex items-center gap-2">
                       <h2 className="text-sm font-bold tracking-tight text-ink">{group.label}</h2>
                       <span className="rounded-full border border-border px-1.5 py-0.5 text-[10px] text-ink-secondary">
                         {group.matches.length} match{group.matches.length === 1 ? "" : "es"}
@@ -1077,15 +1092,9 @@ export function MatchExplorerPage() {
         />
       </div>
 
-      <label className="mt-3 flex select-none items-center gap-2 text-sm text-ink-secondary">
-        <input
-          type="checkbox"
-          checked={actionableOnly}
-          onChange={(e) => setActionableOnly(e.target.checked)}
-          className="h-3.5 w-3.5 accent-accent"
-        />
-        Actionable only
-      </label>
+      <div className="mt-3">
+        <Toggle checked={actionableOnly} onChange={setActionableOnly} label="Actionable only" />
+      </div>
 
       <div className="mt-6">
         {error && <ErrorState message={error} onRetry={() => setRetryTick((t) => t + 1)} />}

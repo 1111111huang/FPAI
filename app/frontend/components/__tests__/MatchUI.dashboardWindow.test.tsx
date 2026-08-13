@@ -157,7 +157,13 @@ describe("Dashboard always shows the next 10 matches (date-grouped, not today-on
     await screen.findByText("actionable-match");
     expect(screen.getByText("not-yet-generated-match")).toBeInTheDocument();
 
+    // Real switch (role="switch"), not a bare checkbox -- direct feedback
+    // that the old <input type="checkbox"> didn't match the app's style.
+    const toggle = screen.getByRole("switch", { name: "Actionable only" });
+    expect(toggle).toHaveAttribute("aria-checked", "false");
+
     await user.click(screen.getByText("Actionable only"));
+    expect(toggle).toHaveAttribute("aria-checked", "true");
     expect(screen.getByText("actionable-match")).toBeInTheDocument();
     expect(screen.queryByText("not-yet-generated-match")).not.toBeInTheDocument();
 
