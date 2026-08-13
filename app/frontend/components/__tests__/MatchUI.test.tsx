@@ -249,37 +249,65 @@ describe("MatchCard", () => {
   });
 });
 
-describe("MatchCard -- visual hierarchy (W117): Team -> Market+Odds (each direction) -> Selection+Edge -> Days", () => {
-  it("shows all three result_3way directions with their own odds when more than one is present", () => {
+describe("MatchCard -- Market/Pick/Odds/Edge grid redesign (2026-08-13, direct mockup)", () => {
+  it("renders Market/Pick/Odds/Edge with a real team name and direction caption for a home pick", () => {
     const match = baseMatch({
-      overall: "direct_bet",
-      markets: [
-        { market: "result_3way", selection: "home", recommendationType: "direct_bet", currentOdds: 1.8, minOdds: 0, mlProbability: 0.6, impliedProbability: 0.56, valueEdge: 0.04 },
-        { market: "result_3way", selection: "draw", recommendationType: "no_bet", currentOdds: 3.4, minOdds: 0, mlProbability: 0.25, impliedProbability: 0.29, valueEdge: -0.04 },
-        { market: "result_3way", selection: "away", recommendationType: "no_bet", currentOdds: 4.2, minOdds: 0, mlProbability: 0.15, impliedProbability: 0.24, valueEdge: -0.09 },
-      ],
-    });
-    render(<MatchCard match={match} onUpdate={vi.fn()} />);
-    expect(screen.getByText("draw")).toBeInTheDocument();
-    expect(screen.getByText("3.40")).toBeInTheDocument();
-    expect(screen.getByText("4.20")).toBeInTheDocument();
-  });
-
-  it("does not render a per-direction board for a single-selection market -- nothing to compare, would just repeat the Selection + Edge row", () => {
-    const match = baseMatch({
+      home: "Arsenal", away: "Everton",
       overall: "direct_bet",
       markets: [
         { market: "result_3way", selection: "home", recommendationType: "direct_bet", currentOdds: 1.8, minOdds: 0, mlProbability: 0.6, impliedProbability: 0.56, valueEdge: 0.04 },
       ],
     });
     render(<MatchCard match={match} onUpdate={vi.fn()} />);
-    // "home" as its own isolated label (the board's pill) never renders --
-    // only the combined "result_3way · home" text of the summary row below.
-    expect(screen.queryByText("home")).not.toBeInTheDocument();
-    expect(screen.getByText("result_3way · home")).toBeInTheDocument();
+    expect(screen.getByText("result_3way")).toBeInTheDocument();
+    // "Arsenal" renders twice by design -- once as the home team, once as
+    // the pick's team-named label (pickLabel reuses selectionLabel).
+    expect(screen.getAllByText("Arsenal")).toHaveLength(2);
+    expect(screen.getByText("To Win")).toBeInTheDocument();
+    expect(screen.getByText("1.80")).toBeInTheDocument();
+    expect(screen.getByText("Decimal")).toBeInTheDocument();
+    expect(screen.getByText("+4.0%")).toBeInTheDocument();
+    expect(screen.getByText("Positive Edge")).toBeInTheDocument();
   });
 
-  it("keeps the days-until-kickoff label independently findable when it shares a badge with the kickoff time", () => {
+  it("shows an 'Over'-captioned pick for a totals-market selection, and no caption/arrow for a draw pick", () => {
+    const overUnder = baseMatch({
+      markets: [
+        { market: "over_under_2.5", selection: "over_2.5", recommendationType: "direct_bet", currentOdds: 1.85, minOdds: 0, mlProbability: 0.55, impliedProbability: 0.54, valueEdge: 0.01 },
+      ],
+    });
+    render(<MatchCard match={overUnder} onUpdate={vi.fn()} />);
+    expect(screen.getByText("Over 2.5")).toBeInTheDocument();
+    expect(screen.getByText("Over")).toBeInTheDocument();
+
+    const draw = baseMatch({
+      markets: [
+        { market: "result_3way", selection: "draw", recommendationType: "direct_bet", currentOdds: 3.2, minOdds: 0, mlProbability: 0.35, impliedProbability: 0.31, valueEdge: 0.04 },
+      ],
+    });
+    render(<MatchCard match={draw} onUpdate={vi.fn()} />);
+    expect(screen.getByText("Draw")).toBeInTheDocument();
+    expect(screen.queryByText("To Win")).not.toBeInTheDocument();
+  });
+
+  it("shows dashes for Market/Pick/Odds/Edge when there's no recommendation yet", () => {
+    const match = baseMatch({ hasRecommendation: false, markets: [] });
+    render(<MatchCard match={match} onUpdate={vi.fn()} />);
+    expect(screen.getAllByText("—").length).toBeGreaterThanOrEqual(3); // Market, Pick, Odds, Edge
+  });
+
+  it("does not show the Positive Edge tag for a no_bet market with a numerically positive edge", () => {
+    const match = baseMatch({
+      overall: "no_bet",
+      markets: [
+        { market: "result_3way", selection: "away", recommendationType: "no_bet", currentOdds: 5.0, minOdds: 0, mlProbability: 0.23, impliedProbability: 0.2, valueEdge: 0.032 },
+      ],
+    });
+    render(<MatchCard match={match} onUpdate={vi.fn()} />);
+    expect(screen.queryByText("Positive Edge")).not.toBeInTheDocument();
+  });
+
+  it("keeps the days-until-kickoff label independently findable", () => {
     // UTC noon kickoff + sandboxMode, matching this file's own
     // matchWithKickoff/dateboundary convention -- sidesteps the local-vs-UTC
     // getter distinction dayDiff/formatDay deliberately branch on.
@@ -320,18 +348,10 @@ describe("MatchCard -- bestMarket prefers an actionable market over a higher-edg
       ],
     });
     render(<MatchCard match={match} onUpdate={vi.fn()} />);
-    // W117: the recommended (home) price now appears twice by design --
-    // once highlighted in the per-direction Market + Odds board, once in
-    // the Selection + Edge summary below it.
-    expect(screen.getAllByText("1.80")).toHaveLength(2);
+    expect(screen.getByText("1.80")).toBeInTheDocument();
     expect(screen.getByText("+4.0%")).toBeInTheDocument();
-    // The higher-edge no_bet direction's raw price is now shown too (W117:
-    // every direction renders, for transparency) -- but never its edge, and
-    // never with the recommended direction's highlighted styling.
-    expect(screen.getByText("5.00")).toBeInTheDocument();
+    expect(screen.queryByText("5.00")).not.toBeInTheDocument();
     expect(screen.queryByText("+8.0%")).not.toBeInTheDocument();
-    expect(screen.getByText("home").parentElement).toHaveClass("border-accent/60");
-    expect(screen.getByText("away").parentElement).not.toHaveClass("border-accent/60");
   });
 
   it("does not color a no_bet market's positive edge as 'good' when nothing is actionable", () => {
