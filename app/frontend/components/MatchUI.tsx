@@ -18,6 +18,8 @@ import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import {
   ArrowLeft,
+  ArrowUp,
+  CalendarBlank,
   CaretDown,
   CaretRight,
   CheckCircle,
@@ -273,11 +275,12 @@ const TIER_EXPLANATION: Record<Tier, string> = {
 
 const STATUS_META: Record<
   Overall,
-  { text: string; ring: string; icon: React.ReactNode; label: string; verdict: string; explain: string }
+  { text: string; ring: string; fill: string; icon: React.ReactNode; label: string; verdict: string; explain: string }
 > = {
   direct_bet: {
     text: "text-good",
     ring: "border-good/40",
+    fill: "bg-good/15",
     icon: <CheckCircle weight="fill" size={13} />,
     label: "Direct Bet",
     verdict: "BET",
@@ -289,6 +292,7 @@ const STATUS_META: Record<
   conditional: {
     text: "text-warning",
     ring: "border-warning/40",
+    fill: "bg-warning/15",
     icon: <Clock weight="fill" size={13} />,
     label: "Conditional",
     verdict: "WAIT",
@@ -297,6 +301,7 @@ const STATUS_META: Record<
   no_bet: {
     text: "text-muted",
     ring: "border-border-strong",
+    fill: "bg-surface",
     icon: <MinusCircle weight="fill" size={13} />,
     label: "No Bet",
     verdict: "PASS",
@@ -305,6 +310,7 @@ const STATUS_META: Record<
   insufficient_data: {
     text: "text-serious",
     ring: "border-serious/40",
+    fill: "bg-serious/15",
     icon: <Question weight="fill" size={13} />,
     label: "Insufficient Data",
     verdict: "NO READ",
@@ -435,7 +441,7 @@ export function StatusBadge({ status, size = "sm" }: { status: Overall; size?: "
   return (
     <span
       title={s.explain}
-      className={`inline-flex items-center gap-1.5 rounded-md border ${s.ring} ${s.text} ${pad} font-medium`}
+      className={`inline-flex items-center gap-1.5 rounded-md border ${s.ring} ${s.fill} ${s.text} ${pad} font-medium`}
     >
       {s.icon}
       {s.label}
@@ -445,14 +451,17 @@ export function StatusBadge({ status, size = "sm" }: { status: Overall; size?: "
 
 /** W15: a first-class trust signal, independent of predictionBasis/overall --
  * renders whenever cold_start_risk or unknown_team is true, even if
- * predictionBasis itself claims full team_history_and_market coverage. */
+ * predictionBasis itself claims full team_history_and_market coverage.
+ * Label shortened to match the filled-badge redesign -- the fuller
+ * "-- no history"/"-- thin history" detail lives in the title tooltip
+ * (below) instead of the visible label. */
 function TrustSignal({ match, size = "sm" }: { match: Match; size?: "sm" | "lg" }) {
   if (!match.coldStartRisk && !match.unknownTeam) return null;
-  const label = match.unknownTeam ? "Unseen team — no history" : "Cold start — thin history";
+  const label = match.unknownTeam ? "Unseen team" : "Cold start";
   const pad = size === "lg" ? "px-3 py-1.5 text-sm" : "px-2 py-0.5 text-[11px]";
   return (
     <span
-      className={`inline-flex items-center gap-1.5 rounded-md border border-warning/40 text-warning ${pad} font-medium`}
+      className={`inline-flex items-center gap-1.5 rounded-md border border-warning/40 bg-warning/15 text-warning ${pad} font-medium`}
       title={
         // W107: plain-language first, raw figure second -- previously just
         // the bare `feature_completeness=0.71` figure with no explanation
@@ -470,11 +479,12 @@ function TrustSignal({ match, size = "sm" }: { match: Match; size?: "sm" | "lg" 
   );
 }
 
-export function TeamBadge({ name }: { name: string }) {
+export function TeamBadge({ name, size = "sm" }: { name: string; size?: "sm" | "lg" }) {
   const { primary, secondary } = teamColor(name);
+  const dims = size === "lg" ? "h-9 w-9 text-xs" : "h-6 w-6 text-[9px]";
   return (
     <span
-      className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-[9px] font-bold"
+      className={`flex shrink-0 items-center justify-center rounded-full font-bold ${dims}`}
       style={{
         background: primary,
         color: textColorFor(primary),
@@ -522,6 +532,33 @@ function SegmentedControl<T extends string>({
         </button>
       ))}
     </div>
+  );
+}
+
+/** W108 follow-up: a real switch matching the app's own atom conventions
+ * (accent/border/surface tokens, 150ms transitions -- same as
+ * SegmentedControl above), not a bare browser checkbox. Shared by Dashboard
+ * and Match Explorer's "Actionable only" filter rather than duplicated. */
+function Toggle({ checked, onChange, label }: { checked: boolean; onChange: (v: boolean) => void; label: string }) {
+  return (
+    <label className="flex select-none items-center gap-2 text-sm text-ink-secondary">
+      <button
+        type="button"
+        role="switch"
+        aria-checked={checked}
+        onClick={() => onChange(!checked)}
+        className={`relative h-5 w-9 shrink-0 rounded-full transition-colors duration-150 ${
+          checked ? "bg-accent" : "border border-border-strong bg-surface"
+        }`}
+      >
+        <span
+          className={`absolute top-0.5 left-0.5 h-4 w-4 rounded-full bg-ink transition-transform duration-150 ${
+            checked ? "translate-x-4" : "translate-x-0"
+          }`}
+        />
+      </button>
+      {label}
+    </label>
   );
 }
 
@@ -612,148 +649,154 @@ export function MatchCard({
     }
   }
 
-  // W117: every direction sharing the shown market's own name, e.g. a
-  // result_3way's home/draw/away rows -- the "Market + Odds (for each
-  // direction)" board. Empty when there's no shown market at all (no
-  // recommendation yet, or a fixture with no markets).
-  const directions = shown ? marketDirections(match, shown.market) : [];
-
   return (
-    <div className="rounded-xl border border-border transition-all duration-150 hover:-translate-y-px hover:border-border-strong">
-      <button type="button" onClick={handleExpand} className="w-full p-3.5 text-left">
-        {/* 1. TEAM -- top visual priority (W117). */}
-        <div className="flex items-center gap-2">
-          <TeamBadge name={match.home} />
-          <span className="truncate text-sm font-medium text-ink">{match.home}</span>
-          <span className="text-xs text-ink-secondary">v</span>
-          <span className="truncate text-sm font-medium text-ink">{match.away}</span>
-          <TeamBadge name={match.away} />
-        </div>
-
-        {/* Supplementary metadata (tier + verdict) -- not one of W117's four
-            ordered priorities, kept as a compact sub-header under the team
-            row rather than competing with it for top billing. */}
-        <div className="mt-1.5 flex items-center justify-between">
-          <TierTag tier={match.tier} />
+    <div className="rounded-xl border border-border bg-surface/40 transition-all duration-150 hover:-translate-y-px hover:border-border-strong">
+      <button type="button" onClick={handleExpand} className="w-full p-4 text-left">
+        {/* Status badge(s) -- top-right corner, independent of the team/
+            market body below rather than sharing a row with the tier tag
+            (previous layout). Filled pills (STATUS_META.fill/TrustSignal's
+            own bg-warning/15) match this redesign's visual language. */}
+        <div className="flex items-center justify-end gap-1.5">
           {match.hasRecommendation ? (
-            <span className="flex items-center gap-1.5">
+            <>
               <TrustSignal match={match} />
               <StatusBadge status={match.overall} />
-            </span>
+            </>
           ) : (
-            <span className="text-[11px] uppercase tracking-wide text-muted">
+            <span className="rounded-md border border-border-strong bg-surface px-2 py-0.5 text-[11px] font-medium uppercase tracking-wide text-muted">
               {isCompleted ? "Settled" : "Not yet generated"}
             </span>
           )}
         </div>
 
-        {/* 2. MARKET + ODDS, for each direction (W117) -- every selection
-            under the shown market, not just the recommended one, so the
-            card reads as a small odds board rather than a single number.
-            The recommended direction gets an explicit visual cue (accent
-            border, bolder text); the rest stay muted -- raw price only,
-            deliberately no edge value here (W113/W117: showing another
-            direction's price is transparency, not a second recommendation). */}
-        {/* Only worth its own board when there's actually more than one
-            direction to compare -- a single-selection market would just
-            repeat the exact same number the Selection + Edge row already
-            shows right below it. */}
-        {directions.length > 1 && (
-          <div className="mt-3 flex flex-wrap items-center gap-1.5 border-t border-border pt-2.5">
-            {directions.map((dir) => (
-              <span
-                key={dir.selection}
-                className={`inline-flex items-center gap-1.5 rounded-md border px-2 py-1 font-mono text-xs ${
-                  dir.selection === shown?.selection
-                    ? "border-accent/60 font-semibold text-ink"
-                    : "border-border text-ink-secondary"
-                }`}
-              >
-                <span className="uppercase tracking-wide">{dir.selection}</span>
-                <span>{dir.currentOdds != null ? dir.currentOdds.toFixed(2) : "—"}</span>
-              </span>
-            ))}
-          </div>
-        )}
-
-        {/* 3. SELECTION + EDGE (W117) -- the actual recommendation: which
-            selection, and its price/edge. */}
-        <div className="mt-3 flex items-end justify-between gap-3 border-t border-border pt-2.5">
-          <span className="truncate text-xs text-ink-secondary">{shown ? `${shown.market} · ${shown.selection}` : ""}</span>
-          <div className="flex shrink-0 items-end gap-4">
-            <div className="text-right">
-              {/* W84/A52: for a conditional market with a real targetOdds
-                  (code-computed, src/agent/schema.py _compute_target_odds --
-                  the price this market needs to reach to clear
-                  min_value_edge), that's the number worth surfacing here,
-                  not the current price the card already told the user isn't
-                  good enough -- shown in the same warning color as the
-                  Conditional badge so "this is a wait target, not a live
-                  price" reads at a glance, same convention as the
-                  Result/Odds label swap below it. null covers "not
-                  applicable" and "no such target exists" (e.g. A29's
-                  ceiling-downgrade case) identically -- both fall back to
-                  the plain current-odds display. */}
-              {!isCompleted && shown?.recommendationType === "conditional" && shown.targetOdds != null ? (
-                <>
-                  <div className="font-mono text-sm text-warning">{shown.targetOdds.toFixed(2)}</div>
-                  <div className="text-[10px] uppercase tracking-wide text-warning">Wait ≥</div>
-                </>
-              ) : (
-                <>
-                  <div className="font-mono text-sm text-ink">
-                    {isCompleted && match.result
-                      ? `${match.result.home}-${match.result.away}`
-                      : shown?.currentOdds
-                      ? shown.currentOdds.toFixed(2)
-                      : "—"}
-                  </div>
-                  <div className="text-[10px] uppercase tracking-wide text-muted">
-                    {isCompleted ? "Result" : "Odds"}
-                  </div>
-                </>
-              )}
+        {/* Body: 1. TEAM (top visual priority, vertically stacked home/away
+            with a "v" divider) + 2/3. MARKET/PICK/ODDS/EDGE, one
+            always-rendered grid (dashes when there's no recommendation
+            yet) -- replaces the previous separate per-direction board and
+            selection/edge row with a single unified box. */}
+        <div className="mt-2 flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+          <div className="min-w-0">
+            <div className="flex items-center gap-2">
+              <TeamBadge name={match.home} size="lg" />
+              <span className="truncate text-base font-semibold text-ink">{match.home}</span>
             </div>
-            <div className="text-right">
-              <div
-                className={`font-mono text-sm ${
-                  shown?.currentOdds
-                    ? shown.recommendationType !== "no_bet" && shown.valueEdge >= 0
-                      ? "text-good"
-                      : "text-ink-secondary"
-                    : "text-muted"
-                }`}
-              >
-                {shown?.currentOdds ? formatEdge(shown.valueEdge) : "—"}
+            <div className="py-0.5 pl-11 text-xs text-ink-secondary">v</div>
+            <div className="flex items-center gap-2">
+              <TeamBadge name={match.away} size="lg" />
+              <span className="truncate text-base font-semibold text-ink">{match.away}</span>
+            </div>
+
+            <div className="mt-2.5">
+              <TierTag tier={match.tier} />
+            </div>
+            {/* day/time are separate text nodes (not one interpolated
+                string) so "today"/"tomorrow" etc. stay independently
+                matchable -- a single combined node isn't findable by an
+                exact-text query once other text shares the node (RTL
+                matches per-node, not substrings). */}
+            <div className="mt-2 flex items-center gap-3 text-xs text-ink-secondary">
+              <span className="flex items-center gap-1">
+                <CalendarBlank size={12} />
+                <span>{day}</span>
+              </span>
+              <span className="flex items-center gap-1">
+                <Clock size={12} />
+                <span>{formatKickoff(match.kickoffIso)}</span>
+              </span>
+            </div>
+          </div>
+
+          <div className="w-full shrink-0 rounded-lg border border-border p-3 sm:w-[300px]">
+            <div className="flex items-start justify-between gap-3">
+              <div className="min-w-0 flex-1">
+                <div className="text-[10px] uppercase tracking-wide text-muted">Market</div>
+                <div className="truncate text-sm font-semibold text-ink">{shown ? shown.market : "—"}</div>
+                <div className="mt-2.5 text-[10px] uppercase tracking-wide text-muted">Pick</div>
+                <div className="flex items-center gap-1 text-sm font-semibold text-ink">
+                  {shown ? (
+                    <>
+                      {pickCaption(shown.selection) && (
+                        <ArrowUp size={11} weight="bold" className="shrink-0 text-good" />
+                      )}
+                      <span className="truncate">{pickLabel(match, shown.selection)}</span>
+                      {pickCaption(shown.selection) && (
+                        <span className="shrink-0 text-xs font-normal text-ink-secondary">
+                          {pickCaption(shown.selection)}
+                        </span>
+                      )}
+                    </>
+                  ) : (
+                    "—"
+                  )}
+                </div>
               </div>
-              <div title={EDGE_EXPLAIN} className="text-[10px] uppercase tracking-wide text-muted">Edge</div>
+
+              <div className="shrink-0 text-right">
+                {/* W84/A52: for a conditional market with a real targetOdds
+                    (code-computed, src/agent/schema.py _compute_target_odds --
+                    the price this market needs to reach to clear
+                    min_value_edge), that's the number worth surfacing here,
+                    not the current price the card already told the user isn't
+                    good enough -- shown in the same warning color as the
+                    Conditional badge. null covers "not applicable" and "no
+                    such target exists" (e.g. A29's ceiling-downgrade case)
+                    identically -- both fall back to the plain current-odds
+                    display. */}
+                {!isCompleted && shown?.recommendationType === "conditional" && shown.targetOdds != null ? (
+                  <>
+                    <div className="text-[10px] uppercase tracking-wide text-warning">Wait ≥</div>
+                    <div className="font-mono text-base font-bold text-warning">{shown.targetOdds.toFixed(2)}</div>
+                  </>
+                ) : (
+                  <>
+                    <div className="text-[10px] uppercase tracking-wide text-muted">
+                      {isCompleted ? "Result" : "Odds"}
+                    </div>
+                    <div className="font-mono text-base font-bold text-ink">
+                      {isCompleted && match.result
+                        ? `${match.result.home}-${match.result.away}`
+                        : shown?.currentOdds
+                        ? shown.currentOdds.toFixed(2)
+                        : "—"}
+                    </div>
+                    {!isCompleted && shown?.currentOdds != null && (
+                      <span className="mt-1 inline-block rounded border border-border px-1.5 py-0.5 text-[10px] text-ink-secondary">
+                        Decimal
+                      </span>
+                    )}
+                  </>
+                )}
+              </div>
+
+              <div className="shrink-0 text-right">
+                <div title={EDGE_EXPLAIN} className="text-[10px] uppercase tracking-wide text-muted">Edge</div>
+                <div
+                  className={`font-mono text-base font-bold ${
+                    shown?.currentOdds
+                      ? shown.recommendationType !== "no_bet" && shown.valueEdge >= 0
+                        ? "text-good"
+                        : "text-ink-secondary"
+                      : "text-muted"
+                  }`}
+                >
+                  {shown?.currentOdds ? formatEdge(shown.valueEdge) : "—"}
+                </div>
+                {shown?.currentOdds != null && shown.recommendationType !== "no_bet" && shown.valueEdge >= 0 && (
+                  <span className="mt-1 inline-block rounded-full border border-good/40 bg-good/10 px-1.5 py-0.5 text-[10px] text-good">
+                    Positive Edge
+                  </span>
+                )}
+              </div>
             </div>
           </div>
         </div>
 
-        {/* 4. DAYS UNTIL KICKOFF (W117) -- its own explicit visual cue (a
-            badge, not text folded into another line) rather than the old
-            plain "market · selection · day" string. Kickoff time moves
-            here too, alongside the day it belongs to. W113: a source
-            caption for the odds shown above sits on this same closing row. */}
-        <div className="mt-2.5 flex items-center justify-between gap-2">
-          {/* day/time are separate text nodes (not one interpolated string)
-              so "today"/"tomorrow" etc. stay independently matchable -- a
-              single combined node isn't findable by an exact-text query
-              once other text shares the node (RTL matches per-node, not
-              substrings). */}
-          <span className="inline-flex items-center gap-1 rounded-full border border-border-strong bg-surface px-2 py-0.5 font-mono text-[11px] font-medium text-ink-secondary">
-            <span>{day}</span>
-            <span className="text-muted">·</span>
-            <span>{formatKickoff(match.kickoffIso)}</span>
-          </span>
-          <span className="flex items-center gap-2">
-            {shown?.currentOdds != null && <span className="text-[10px] text-muted">via The Odds API</span>}
-            <CaretDown
-              size={14}
-              className={`text-ink-secondary transition-transform duration-150 ${open ? "rotate-180" : ""}`}
-            />
-          </span>
+        <div className="mt-3 flex items-center justify-end gap-2">
+          {shown?.currentOdds != null && <span className="text-[10px] text-muted">via The Odds API</span>}
+          <CaretDown
+            size={14}
+            className={`text-ink-secondary transition-transform duration-150 ${open ? "rotate-180" : ""}`}
+          />
         </div>
       </button>
 
@@ -901,12 +944,7 @@ export function DashboardPage() {
       <div className="lg:flex lg:items-start lg:gap-8">
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center justify-between gap-4">
-            <div>
-              <h1 className="text-xl font-semibold tracking-tight text-ink">Daily Edges</h1>
-              <p className="mt-1 text-sm text-ink-secondary">
-                Next 10 real E0, La Liga &amp; Allsvenskan fixtures. Expand a card to generate its recommendation.
-              </p>
-            </div>
+            <h1 className="text-xl font-semibold tracking-tight text-ink">Daily Edges</h1>
             {/* Edge % sort hidden (2026-08-13, W118) -- flagged as misleading
                 by direct user feedback. Kickoff is the only sort left, so the
                 toggle itself (nothing left to toggle between) is hidden too,
@@ -914,15 +952,7 @@ export function DashboardPage() {
                 "edge" case (dashboardMetrics.ts) are untouched, so restoring
                 the SegmentedControl below is a one-line revert. */}
             {shownMatches.length > 0 && (
-              <label className="flex select-none items-center gap-2 text-sm text-ink-secondary">
-                <input
-                  type="checkbox"
-                  checked={actionableOnly}
-                  onChange={(e) => setActionableOnly(e.target.checked)}
-                  className="h-3.5 w-3.5 accent-accent"
-                />
-                Actionable only
-              </label>
+              <Toggle checked={actionableOnly} onChange={setActionableOnly} label="Actionable only" />
             )}
           </div>
 
@@ -938,18 +968,20 @@ export function DashboardPage() {
               </p>
             )}
             {!error && visibleMatches.length > 0 && (
-              // W116: gap-8 (was gap-6) + each header's own border-b give every
-              // date group a real, unambiguous boundary from the next one --
-              // direct feedback that it wasn't clear which date a match
-              // belonged to, scrolling a list of same-looking cards.
-              <div className="flex flex-col gap-8">
+              // W116 second follow-up: each date's cards (MatchCard now
+              // carries its own bg-surface/40 fill + border, redesign) sit
+              // directly on the page; the group boundary is now a dashed
+              // rule filling the rest of the header's width instead of a
+              // wrapping panel -- lighter-weight, still unambiguous.
+              <div className="flex flex-col gap-6">
                 {dateGroups.map((group) => (
                   <div key={group.dateKey}>
-                    <div className="mb-3 flex items-center gap-2 border-b border-border-strong pb-2">
-                      <h2 className="text-sm font-bold tracking-tight text-ink">{group.label}</h2>
-                      <span className="rounded-full border border-border px-1.5 py-0.5 text-[10px] text-ink-secondary">
+                    <div className="mb-3 flex items-center gap-3">
+                      <h2 className="shrink-0 text-lg font-bold tracking-tight text-ink">{group.label}</h2>
+                      <span className="shrink-0 rounded-full border border-border-strong px-2 py-0.5 text-xs text-ink-secondary">
                         {group.matches.length} match{group.matches.length === 1 ? "" : "es"}
                       </span>
+                      <div className="h-0 flex-1 border-t border-dashed border-border" aria-hidden="true" />
                     </div>
                     <div className="flex flex-col gap-2.5">
                       {group.matches.map((m) => (
@@ -1077,15 +1109,9 @@ export function MatchExplorerPage() {
         />
       </div>
 
-      <label className="mt-3 flex select-none items-center gap-2 text-sm text-ink-secondary">
-        <input
-          type="checkbox"
-          checked={actionableOnly}
-          onChange={(e) => setActionableOnly(e.target.checked)}
-          className="h-3.5 w-3.5 accent-accent"
-        />
-        Actionable only
-      </label>
+      <div className="mt-3">
+        <Toggle checked={actionableOnly} onChange={setActionableOnly} label="Actionable only" />
+      </div>
 
       <div className="mt-6">
         {error && <ErrorState message={error} onRetry={() => setRetryTick((t) => t + 1)} />}
@@ -1259,6 +1285,27 @@ function selectionLabel(match: Match, selection: string): string {
   if (selection === "away") return match.away;
   if (selection === "draw") return "a draw";
   return selection.replace(/_/g, " ");
+}
+
+/** MatchCard's Market/Pick/Odds/Edge grid needs a standalone, capitalized
+ * label ("Draw", "Over 2.5") rather than selectionLabel()'s sentence-
+ * embedded phrasing ("a draw") -- same underlying mapping, different
+ * display context, so kept as its own small formatter instead of adding a
+ * mode flag to the other one. */
+function pickLabel(match: Match, selection: string): string {
+  if (selection === "draw") return "Draw";
+  const label = selectionLabel(match, selection);
+  return label.charAt(0).toUpperCase() + label.slice(1);
+}
+
+/** A short direction word shown next to the pick -- "To Win" for a team
+ * selection, "Over"/"Under" for a totals line. Draw has no direction to
+ * name, so returns null (also gates whether the up-arrow icon renders). */
+function pickCaption(selection: string): string | null {
+  if (selection === "home" || selection === "away") return "To Win";
+  if (selection.startsWith("over")) return "Over";
+  if (selection.startsWith("under")) return "Under";
+  return null;
 }
 
 /** W111: one plain-English sentence, composed entirely from fields already
