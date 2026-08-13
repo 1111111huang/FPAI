@@ -159,7 +159,9 @@ def test_register_eod_job_processes_both_e0_and_swe_when_sweden_client_configure
         "overall": "no_bet", "markets": [], "explanation": "test", "confidence": "low",
         "limitations": [], "prediction_basis": "market_odds_only",
     }
-    with patch("app.backend.recommendations.run_agent", return_value=recommendation) as mock_run_agent:
+    with patch("app.backend.recommendations.run_agent", return_value=recommendation) as mock_run_agent, patch(
+        "app.backend.scheduler_wiring.list_display_enabled_competition_ids", return_value=["E0", "SWE", "SP1"]
+    ):
         register_eod_job(
             scheduler, fixtures_client=fixtures_client, odds_client=None,
             cache=cache, config=config, now_fn=lambda: now,
@@ -200,6 +202,50 @@ def test_register_eod_job_skips_sweden_gracefully_when_no_sweden_client_configur
 
     assert mock_run_agent.call_count == 1
     assert mock_run_agent.call_args.kwargs["match_info"]["league"] == "E0"
+
+
+def test_register_eod_job_skips_a_display_disabled_competition_even_with_its_client_configured(
+    tmp_path: Path,
+) -> None:
+    """A competition flipped to display_enabled=False (config/competitions.yaml)
+    must be skipped even when its fixtures client *is* supplied -- the flag
+    wins over client wiring, so turning a competition off doesn't require
+    also ripping out its client registration."""
+    e0_fixture = NormalizedMatch(
+        match_id="m1", utc_date="2026-08-22T15:00:00Z", status="SCHEDULED",
+        home_team="Arsenal", away_team="Everton", home_goals=None, away_goals=None,
+    )
+    swe_fixture = NormalizedMatch(
+        match_id="sw1", utc_date="2026-08-22T17:00:00Z", status="SCHEDULED",
+        home_team="Malmo FF", away_team="AIK", home_goals=None, away_goals=None,
+    )
+    fixtures_client = MagicMock()
+    fixtures_client.get_fixtures.return_value = [e0_fixture]
+    sweden_fixtures_client = MagicMock()
+    sweden_fixtures_client.get_fixtures.return_value = [swe_fixture]
+    cache = RecommendationCache(db_path=tmp_path / "cache.db")
+    config = AgentConfig.default()
+    run_log = JobRunLog(db_path=tmp_path / "job_runs.db")
+    now = datetime(2026, 8, 22, 23, 30, tzinfo=NY_TZ)
+    scheduler = RecoverableScheduler(run_log=run_log, now_fn=lambda: now)
+
+    recommendation = {
+        "match": {"home": "A", "away": "B", "date": "2026-08-22", "league": "E0"},
+        "overall": "no_bet", "markets": [], "explanation": "test", "confidence": "low",
+        "limitations": [], "prediction_basis": "market_odds_only",
+    }
+    with patch("app.backend.recommendations.run_agent", return_value=recommendation) as mock_run_agent, patch(
+        "app.backend.scheduler_wiring.list_display_enabled_competition_ids", return_value=["E0"]
+    ):
+        register_eod_job(
+            scheduler, fixtures_client=fixtures_client, odds_client=None,
+            cache=cache, config=config, now_fn=lambda: now,
+            sweden_fixtures_client=sweden_fixtures_client,
+        )
+
+    assert mock_run_agent.call_count == 1
+    assert mock_run_agent.call_args.kwargs["match_info"]["league"] == "E0"
+    sweden_fixtures_client.get_fixtures.assert_not_called()
 
 
 def test_register_eod_job_one_competitions_fixture_fetch_failure_does_not_block_the_other(tmp_path: Path) -> None:
@@ -271,7 +317,9 @@ def test_register_eod_job_processes_e0_swe_and_sp1_when_all_clients_configured(t
         "overall": "no_bet", "markets": [], "explanation": "test", "confidence": "low",
         "limitations": [], "prediction_basis": "market_odds_only",
     }
-    with patch("app.backend.recommendations.run_agent", return_value=recommendation) as mock_run_agent:
+    with patch("app.backend.recommendations.run_agent", return_value=recommendation) as mock_run_agent, patch(
+        "app.backend.scheduler_wiring.list_display_enabled_competition_ids", return_value=["E0", "SWE", "SP1"]
+    ):
         register_eod_job(
             scheduler, fixtures_client=fixtures_client, odds_client=None,
             cache=cache, config=config, now_fn=lambda: now,

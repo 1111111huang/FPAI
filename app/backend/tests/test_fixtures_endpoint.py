@@ -67,6 +67,37 @@ def la_liga_client_mock():
         yield client_mock
 
 
+@pytest.fixture(autouse=True)
+def _all_competitions_display_enabled():
+    """SWE was flipped to display_enabled=False in the real
+    config/competitions.yaml (not a major league, big-5 season starting) --
+    this file's tests exercise the merge/tag/cache mechanics for all three
+    competitions regardless of that live toggle, so default it back to "all
+    on" here (mirrors sweden_client_mock/la_liga_client_mock's own
+    autouse-default-then-override pattern). The toggle's own skip-when-off
+    behavior is covered separately, by
+    test_fixtures_endpoint_skips_a_display_disabled_competition_entirely."""
+    with patch("app.backend.main.list_display_enabled_competition_ids", return_value=["E0", "SWE", "SP1"]):
+        yield
+
+
+def test_fixtures_endpoint_skips_a_display_disabled_competition_entirely(sweden_client_mock):
+    """A competition with display_enabled=False must be skipped before its
+    client is even called -- not merely filtered out of the response --
+    since the whole point is to stop spending its fetch/API-quota cost too."""
+    sweden_client_mock.get_fixtures.return_value = [_SWEDISH_FIXTURE]
+    with patch("app.backend.main.list_display_enabled_competition_ids", return_value=["E0"]):
+        with patch("app.backend.main.get_fixtures_client") as mock_get_client:
+            mock_get_client.return_value.get_fixtures.return_value = [_REAL_FIXTURE]
+            with TestClient(app) as client:
+                response = client.get(
+                    "/api/fixtures", params={"date_from": "2027-07-01", "date_to": "2027-07-05"}
+                )
+    body = response.json()
+    assert {m["home_team"] for m in body} == {"Chelsea"}
+    sweden_client_mock.get_fixtures.assert_not_called()
+
+
 def test_fixtures_endpoint_returns_normalized_matches():
     fake_fixtures = [
         NormalizedMatch(

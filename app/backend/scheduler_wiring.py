@@ -22,6 +22,7 @@ from app.backend.sandbox_clock import sandbox_date, sandbox_now
 from app.backend.sweden_fixtures_client import SwedenFixturesClient
 from app.backend.t30_refresh import refresh_match_at_t30
 from src.agent.agent_config import AgentConfig
+from src.logic.competition_registry import list_display_enabled_competition_ids
 from src.utils.logger import get_logger
 
 LOGGER = get_logger(__name__)
@@ -32,11 +33,13 @@ EOD_HOUR = 23
 EOD_MINUTE = 0
 
 # W62/W81: every competition_specific league (match_info.py's
-# COMPETITION_ALLOWLIST) the nightly EOD batch/T-30 refresh should attempt.
-# "SWE" is only actually processed when the caller supplies a
-# sweden_fixtures_client; "SP1" only when the caller supplies a
+# COMPETITION_ALLOWLIST) the nightly EOD batch/T-30 refresh knows how to
+# process at all. "SWE" is only actually processed when the caller supplies
+# a sweden_fixtures_client; "SP1" only when the caller supplies a
 # la_liga_fixtures_client -- omitting either (the default) preserves the
-# exact pre-W62/pre-W81 behavior for that competition.
+# exact pre-W62/pre-W81 behavior for that competition. A competition also
+# flipped off via config/competitions.yaml's display_enabled is skipped
+# regardless of client wiring -- see _eod_job below.
 COMPETITIONS: tuple[str, ...] = (LEAGUE_CODE, "SWE", "SP1")
 
 # W81: football-data.org's La Liga competition code (W74/W76 -- confirmed
@@ -173,7 +176,10 @@ def register_eod_job(
 
     def _eod_job() -> None:
         date_str = next_day_date_str(now_fn)
+        enabled = set(list_display_enabled_competition_ids())
         for league in COMPETITIONS:
+            if league not in enabled:
+                continue
             try:
                 fixtures = _fetch_fixtures_for_league(
                     league, fixtures_client, sweden_fixtures_client, date_str,

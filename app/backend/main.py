@@ -46,6 +46,7 @@ from app.backend.scheduler import JobRunLog, RecoverableScheduler
 from app.backend.scheduler_wiring import build_odds_client, build_schedule_t30, register_eod_job
 from app.backend.settlement import settle_open_bets
 from src.agent.agent_config import AgentConfig
+from src.logic.competition_registry import list_display_enabled_competition_ids
 from src.tools.data_tools import get_data_freshness
 from src.tools.model_tools import get_model_status
 from src.utils.db_manager import DuckDBManager
@@ -498,8 +499,23 @@ def get_sandbox_status() -> dict:
 def get_status() -> dict:
     """W17: system status surface (data staleness + current model
     selections) -- pure reuse of already-exposed src/tools functions, no
-    new engine work."""
-    return {"data_freshness": get_data_freshness(), "model_status": get_model_status()}
+    new engine work.
+
+    W104 follow-up: get_data_freshness()'s by_league breakdown is
+    engine-side and league-complete by design (src/tools/ is also consumed
+    by the agent/CLI, which must see every competition regardless of the
+    app's own display toggle) -- so a display-disabled competition (e.g.
+    SWE) is filtered out here, at the app boundary, the same "app keeps its
+    own view independent of the engine's registry" split this app already
+    uses elsewhere (Section 4, app_techspec.md). Only by_league is touched
+    -- the only field that renders a literal competition label in the UI
+    (AppShell's sidebar); the blended top-level freshness numbers are left
+    as engine-wide, matching the existing "top-level = whole table" contract."""
+    freshness = get_data_freshness()
+    if "by_league" in freshness:
+        enabled = set(list_display_enabled_competition_ids())
+        freshness = {**freshness, "by_league": {k: v for k, v in freshness["by_league"].items() if k in enabled}}
+    return {"data_freshness": freshness, "model_status": get_model_status()}
 
 
 def _current_real_date() -> date:
@@ -572,6 +588,13 @@ async def get_fixtures(date_from: str | None = None, date_to: str | None = None)
     sweden_client = get_sweden_fixtures_client()
     la_liga_client = get_la_liga_fixtures_client()
     results_range, fixtures_range = _split_fixture_date_range(date_from, date_to, _current_real_date())
+    # display_enabled gate (config/competitions.yaml): a competition flipped
+    # off there is skipped here entirely -- not just filtered out after the
+    # fact -- so a disabled competition's fixture/odds calls are never even
+    # made. Same registry flag also gates the nightly EOD/T-30 batch
+    # (scheduler_wiring.COMPETITIONS filtering), so one edit turns a
+    # competition off everywhere it's featured to users.
+    enabled = set(list_display_enabled_competition_ids())
 
     def _tag(matches: list[NormalizedMatch], competition: str) -> list[NormalizedMatch]:
         # W64: explicit tagging here (not inside each client's own
@@ -583,53 +606,59 @@ async def get_fixtures(date_from: str | None = None, date_to: str | None = None)
     matches: list[NormalizedMatch] = []
     if results_range is not None:
         past_from, past_to = results_range
-        matches += _tag(
-            await _cached_fixture_call(
-                ("results", past_from, past_to), client.get_results, date_from=past_from, date_to=past_to
-            ),
-            "E0",
-        )
-        # W71: sourced from raw_matches directly, not sweden_client.get_results()
-        # (The Odds API's /scores endpoint can only see the last few real
-        # days -- it has no arbitrary-historical-date capability at all,
-        # unlike football-data.org's get_results() for E0). Still
-        # cache-keyed as "results_swe" -- same TTL-cache slot as before,
-        # just backed by a different underlying source.
-        matches += _tag(
-            await _cached_fixture_call(
-                ("results_swe", past_from, past_to),
-                historical_results_from_raw_matches, date_from=past_from, date_to=past_to,
-            ),
-            "SWE",
-        )
-        matches += _tag(
-            await _cached_fixture_call(
-                ("results_sp1", past_from, past_to), la_liga_client.get_results,
-                competition_code=LA_LIGA_COMPETITION_CODE, date_from=past_from, date_to=past_to,
-            ),
-            "SP1",
-        )
+        if "E0" in enabled:
+            matches += _tag(
+                await _cached_fixture_call(
+                    ("results", past_from, past_to), client.get_results, date_from=past_from, date_to=past_to
+                ),
+                "E0",
+            )
+        if "SWE" in enabled:
+            # W71: sourced from raw_matches directly, not sweden_client.get_results()
+            # (The Odds API's /scores endpoint can only see the last few real
+            # days -- it has no arbitrary-historical-date capability at all,
+            # unlike football-data.org's get_results() for E0). Still
+            # cache-keyed as "results_swe" -- same TTL-cache slot as before,
+            # just backed by a different underlying source.
+            matches += _tag(
+                await _cached_fixture_call(
+                    ("results_swe", past_from, past_to),
+                    historical_results_from_raw_matches, date_from=past_from, date_to=past_to,
+                ),
+                "SWE",
+            )
+        if "SP1" in enabled:
+            matches += _tag(
+                await _cached_fixture_call(
+                    ("results_sp1", past_from, past_to), la_liga_client.get_results,
+                    competition_code=LA_LIGA_COMPETITION_CODE, date_from=past_from, date_to=past_to,
+                ),
+                "SP1",
+            )
     if fixtures_range is not None:
         future_from, future_to = fixtures_range
-        matches += _tag(
-            await _cached_fixture_call(
-                ("fixtures", future_from, future_to), client.get_fixtures, date_from=future_from, date_to=future_to
-            ),
-            "E0",
-        )
-        matches += _tag(
-            await _cached_fixture_call(
-                ("fixtures_swe", future_from, future_to), sweden_client.get_fixtures, date_from=future_from, date_to=future_to
-            ),
-            "SWE",
-        )
-        matches += _tag(
-            await _cached_fixture_call(
-                ("fixtures_sp1", future_from, future_to), la_liga_client.get_fixtures,
-                competition_code=LA_LIGA_COMPETITION_CODE, date_from=future_from, date_to=future_to,
-            ),
-            "SP1",
-        )
+        if "E0" in enabled:
+            matches += _tag(
+                await _cached_fixture_call(
+                    ("fixtures", future_from, future_to), client.get_fixtures, date_from=future_from, date_to=future_to
+                ),
+                "E0",
+            )
+        if "SWE" in enabled:
+            matches += _tag(
+                await _cached_fixture_call(
+                    ("fixtures_swe", future_from, future_to), sweden_client.get_fixtures, date_from=future_from, date_to=future_to
+                ),
+                "SWE",
+            )
+        if "SP1" in enabled:
+            matches += _tag(
+                await _cached_fixture_call(
+                    ("fixtures_sp1", future_from, future_to), la_liga_client.get_fixtures,
+                    competition_code=LA_LIGA_COMPETITION_CODE, date_from=future_from, date_to=future_to,
+                ),
+                "SP1",
+            )
     return matches
 
 

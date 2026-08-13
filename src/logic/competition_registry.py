@@ -61,6 +61,14 @@ class CompetitionDefinition:
     # excluded or every training row gets dropna()'d out, the same failure
     # shape as BUG-001).
     available_targets: tuple[str, ...] | None = None
+    # display_enabled: whether this competition is currently surfaced to
+    # users (fixtures endpoint, pregeneration, nightly EOD/T-30 batch) and
+    # spent compute/API quota on. Defaults to True (unset key = shown),
+    # matching available_targets' "no key = no restriction" convention.
+    # Training/backtesting/CLI tooling is unaffected -- this only gates the
+    # live app's "which competitions are we actively running for users"
+    # switch, e.g. flipping SWE off once the big-5 leagues' season starts.
+    display_enabled: bool = True
 
 
 def _load_registry(registry_path: str | Path = DEFAULT_REGISTRY_PATH) -> dict[str, CompetitionDefinition]:
@@ -115,6 +123,7 @@ def _load_registry(registry_path: str | Path = DEFAULT_REGISTRY_PATH) -> dict[st
             enabled_feature_groups=tuple(entry.get("enabled_feature_groups") or ()),
             player_data_sources=tuple(entry.get("player_data_sources") or ()),
             available_targets=available_targets,
+            display_enabled=bool(entry.get("display_enabled", True)),
         )
     return registry
 
@@ -160,6 +169,18 @@ def list_competition_definitions(
     """Return registered competition definitions in stable competition_id order."""
     registry = _load_registry(registry_path)
     return [registry[name] for name in sorted(registry)]
+
+
+def list_display_enabled_competition_ids(
+    registry_path: str | Path = DEFAULT_REGISTRY_PATH,
+) -> list[str]:
+    """Return competition_ids with display_enabled=True (the default), in
+    stable order. Single source of truth for "which competitions are we
+    currently showing/running for users" -- the live app's fixtures
+    endpoint and nightly EOD/T-30 scheduler both filter through this
+    instead of each hardcoding its own on/off list, so toggling a
+    competition in config/competitions.yaml is the one edit needed."""
+    return [d.competition_id for d in list_competition_definitions(registry_path) if d.display_enabled]
 
 
 def resolve_feature_subset_for_tier(tier: str) -> list[str] | None:

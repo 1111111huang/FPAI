@@ -63,6 +63,13 @@ competitions:
     competition_id: SWE
     tier: competition_specific
     league_code: SWE
+    # Turned off display 2026-08-13: not a major league, and the big-5
+    # leagues' season is starting -- fixtures endpoint, pregeneration, and
+    # the nightly EOD/T-30 batch all skip it now (competition_registry.py's
+    # display_enabled). Flip back to `true` (or delete the line) to
+    # re-feature it -- everything else (data ingestion, trained model,
+    # feature config) is untouched, so no data needs to be rebuilt.
+    display_enabled: false
     enabled_feature_groups:
       - OFF_GOALS
       - DEF_GOALS

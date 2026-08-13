@@ -13,6 +13,7 @@ from src.logic.competition_registry import (
     get_competition_definition,
     is_target_available,
     list_competition_definitions,
+    list_display_enabled_competition_ids,
     resolve_feature_subset_for_tier,
 )
 from src.models.model_manager import ModelManager
@@ -154,6 +155,47 @@ def test_null_league_code_in_yaml_is_allowed(tmp_path: Path) -> None:
     )
     definition = get_competition_definition("international", registry_path=registry)
     assert definition.league_code is None
+
+
+def test_display_enabled_defaults_true_when_key_omitted(tmp_path: Path) -> None:
+    registry = tmp_path / "competitions.yaml"
+    registry.write_text(
+        yaml.dump({"competitions": {"E0": {"competition_id": "E0", "tier": "general_purpose"}}})
+    )
+    assert get_competition_definition("E0", registry_path=registry).display_enabled is True
+
+
+def test_display_enabled_false_is_respected(tmp_path: Path) -> None:
+    registry = tmp_path / "competitions.yaml"
+    registry.write_text(
+        yaml.dump(
+            {"competitions": {"SWE": {"competition_id": "SWE", "tier": "general_purpose", "display_enabled": False}}}
+        )
+    )
+    assert get_competition_definition("SWE", registry_path=registry).display_enabled is False
+
+
+def test_list_display_enabled_competition_ids_excludes_false(tmp_path: Path) -> None:
+    registry = tmp_path / "competitions.yaml"
+    registry.write_text(
+        yaml.dump(
+            {
+                "competitions": {
+                    "E0": {"competition_id": "E0", "tier": "general_purpose"},
+                    "SWE": {"competition_id": "SWE", "tier": "general_purpose", "display_enabled": False},
+                }
+            }
+        )
+    )
+    assert list_display_enabled_competition_ids(registry_path=registry) == ["E0"]
+
+
+def test_sweden_display_disabled_in_real_registry() -> None:
+    # SWE was turned off 2026-08-13 (not a major league, big-5 season
+    # starting) -- guards against silently flipping it back on by accident.
+    assert get_competition_definition("SWE").display_enabled is False
+    assert "SWE" not in list_display_enabled_competition_ids()
+    assert "E0" in list_display_enabled_competition_ids()
 
 
 def test_general_purpose_features_are_subset_of_full_schema() -> None:
