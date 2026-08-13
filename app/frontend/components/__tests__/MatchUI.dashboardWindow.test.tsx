@@ -52,6 +52,20 @@ describe("Dashboard always shows the next 10 matches (date-grouped, not today-on
     expect(to).not.toBe(today);
   });
 
+  it("W120: each date panel gets a rotating gradient wash, distinct from its neighbors", async () => {
+    const fixtures = Array.from({ length: 3 }, (_, i) => fixture(`match-${i}`, `2026-09-0${i + 1}T15:00:00Z`));
+    vi.mocked(getFixtures).mockResolvedValue(fixtures);
+
+    const { container } = render(<DashboardPage />);
+    await waitFor(() => expect(screen.getByText("match-0")).toBeInTheDocument());
+
+    const panels = container.querySelectorAll(".rounded-2xl");
+    expect(panels).toHaveLength(3); // one 3-fixture-on-3-different-days -> 3 date groups
+    expect(panels[0].className).toContain("from-violet-500/10");
+    expect(panels[1].className).toContain("from-teal-500/10");
+    expect(panels[2].className).toContain("from-emerald-500/10");
+  });
+
   it("shows up to 10 matches sorted nearest-first, even when today itself has none", async () => {
     const today = new Date().toISOString().slice(0, 10);
 
