@@ -19,7 +19,7 @@ from typing import Callable, Literal
 
 import duckdb
 from dotenv import load_dotenv
-from fastapi import Depends, FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 import requests
 from starlette.concurrency import run_in_threadpool
@@ -43,7 +43,7 @@ from app.backend.recommendation_cache import DEFAULT_DB_PATH as RECOMMENDATION_C
 from app.backend.bet_stats import compute_bet_stats
 from app.backend.recommendations import MatchRecommendationOut, RecommendationRequest, validate_and_degrade
 from app.backend.scheduler import JobRunLog, RecoverableScheduler
-from app.backend.scheduler_wiring import build_odds_client, register_eod_job
+from app.backend.scheduler_wiring import build_odds_client, build_schedule_t30, register_eod_job
 from app.backend.settlement import settle_open_bets
 from src.agent.agent_config import AgentConfig
 from src.tools.data_tools import get_data_freshness
@@ -184,6 +184,76 @@ async def _cached_fixture_call(
             del _fixture_cache_pending[cache_key]
 
 
+_PREGENERATE_DEFAULT_DAYS_AHEAD = 5
+_background_tasks: set[asyncio.Task] = set()
+
+
+def _fire_and_forget(coro) -> None:
+    """W103: asyncio.create_task()'s own docs warn a task with no other
+    reference can be garbage-collected mid-execution -- this keeps one
+    (in a module-level set, discarded via the task's own done-callback)
+    so a fire-and-forget background job (pregenerate, below) can't
+    silently vanish partway through."""
+    task = asyncio.create_task(coro)
+    _background_tasks.add(task)
+    task.add_done_callback(_background_tasks.discard)
+
+
+async def _pregenerate_recommendations(
+    days_ahead: int = _PREGENERATE_DEFAULT_DAYS_AHEAD,
+    scheduler: RecoverableScheduler | None = None,
+) -> dict:
+    """W103: generates and caches recommendations for real upcoming
+    fixtures across every competition right now, reusing eod_batch.py's
+    own bounded-concurrency/per-match-error-isolation machinery (the exact
+    same code the real nightly EOD job uses, via run_eod_batch's own
+    `fixtures=` override -- W50's sandbox-precompute caller established
+    this same pattern) instead of a separate mechanism.
+
+    Two callers: the admin trigger endpoint (any time, independent of
+    whether the scheduler is on) and lifespan's own startup hook (every
+    boot -- i.e. every redeploy, direct user request, so a freshly
+    deployed instance is never left showing blank cards for fixtures
+    already close enough to matter). `scheduler=None` (the startup hook's
+    own case when ENABLE_SCHEDULER is off) degrades gracefully -- matches
+    are still generated and cached now, just without the later T-30
+    refresh safety net registered for them, rather than failing outright."""
+    from datetime import timedelta
+
+    today = _current_real_date()
+    date_from = today.isoformat()
+    date_to = (today + timedelta(days=days_ahead)).isoformat()
+    fixtures = await get_fixtures(date_from=date_from, date_to=date_to)
+
+    fixtures_by_league: dict[str, list] = {}
+    for fixture in fixtures:
+        fixtures_by_league.setdefault(fixture.competition or "E0", []).append(fixture)
+
+    odds_client = build_odds_client()
+    cache = recommendations.get_cache()
+    config = AgentConfig.default()
+    results: dict[str, dict] = {}
+    for league, league_fixtures in fixtures_by_league.items():
+        if not league_fixtures:
+            continue
+        schedule_t30 = (
+            build_schedule_t30(scheduler, odds_client, cache, config, date_from, league=league)
+            if scheduler is not None
+            else (lambda fixture: None)
+        )
+        try:
+            result = await eod_batch.run_eod_batch(
+                fixtures_client=get_fixtures_client(), odds_client=odds_client, cache=cache, config=config,
+                schedule_t30=schedule_t30, date_str=date_from, fixtures=league_fixtures, league=league,
+            )
+        except Exception:
+            LOGGER.warning("Pregenerate: batch failed for league=%s -- other leagues unaffected.", league, exc_info=True)
+            continue
+        results[league] = {"generated": result.generated, "skipped": result.skipped}
+    LOGGER.info("Pregenerate complete | days_ahead=%d | results=%s", days_ahead, results)
+    return results
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     config = AgentConfig.default()
@@ -225,8 +295,23 @@ async def lifespan(app: FastAPI):
         )
         scheduler.start()
         LOGGER.info("W08/W09/W10 scheduler started (ENABLE_SCHEDULER=1).")
+
+        # W103: direct user request -- every boot with the scheduler on
+        # (i.e. every future redeploy, since ENABLE_SCHEDULER persists as a
+        # Railway env var once set) pre-generates recommendations for the
+        # next few days' real fixtures immediately, rather than leaving a
+        # freshly deployed instance showing blank "not yet generated" cards
+        # until whichever fixture's own EOD/T-30 cycle happens to fire.
+        # Deliberately gated behind the same ENABLE_SCHEDULER check as the
+        # scheduler itself (not unconditional) -- an unconditional hook here
+        # would fire on every test file's `with TestClient(app)` too, the
+        # exact class of problem that made the scheduler registration above
+        # opt-in in the first place (W08/W09's own comment, unchanged).
+        _fire_and_forget(_pregenerate_recommendations(scheduler=scheduler))
     else:
         LOGGER.info("Scheduler disabled -- set ENABLE_SCHEDULER=1 to enable the EOD/T-30 pipeline.")
+
+    app.state.scheduler = scheduler
 
     yield
 
@@ -383,6 +468,23 @@ def trigger_data_refresh(league: _REFRESH_LEAGUE_NAMES) -> dict:
         cwd=_REPO_ROOT,
     )
     return {"league": league, "pid": process.pid, "status": "started"}
+
+
+@app.post("/api/admin/pregenerate-recommendations")
+async def pregenerate_recommendations_endpoint(
+    request: Request, days_ahead: int = _PREGENERATE_DEFAULT_DAYS_AHEAD
+) -> dict:
+    """W103: manual trigger for _pregenerate_recommendations (see its own
+    docstring) -- independent of whether the scheduler is on, and doesn't
+    wait for the (multi-minute, one real LLM+odds call per fixture) work
+    to finish before responding, same reasoning as the other admin
+    triggers. Reads the scheduler lifespan stored on app.state (None if
+    ENABLE_SCHEDULER is off) so a pregenerated match still gets its T-30
+    refresh scheduled when a scheduler is actually running. Already
+    protected by RequireAppTokenMiddleware."""
+    scheduler = getattr(request.app.state, "scheduler", None)
+    _fire_and_forget(_pregenerate_recommendations(days_ahead=days_ahead, scheduler=scheduler))
+    return {"days_ahead": days_ahead, "status": "started"}
 
 
 @app.get("/api/sandbox/status")
