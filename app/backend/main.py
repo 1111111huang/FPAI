@@ -186,6 +186,18 @@ async def _cached_fixture_call(
 
 
 _PREGENERATE_DEFAULT_DAYS_AHEAD = 5
+# BUG-045: eod_batch.run_eod_batch()'s own default (5) is fine for the
+# scheduled nightly EOD job, which runs hours into a long-stable process.
+# Pregenerate (below) instead runs immediately inside lifespan's startup
+# hook, stacking up to `concurrency` concurrent asyncio.to_thread() agent
+# calls -- each loading its own ForecastService models/feature frames --
+# directly on top of the process's own fresh, not-yet-settled import-time
+# memory. Confirmed live (2026-08-13, Railway "Deploy Ran Out Of Memory"
+# crash-loop, container memory limit 4GB): every boot re-fires pregenerate,
+# so a single OOM becomes an infinite crash loop, never completing one
+# pregenerate pass. Lower, not equal to eod_batch's default -- deliberately
+# narrower than the value already proven safe for the nightly path.
+_PREGENERATE_DEFAULT_CONCURRENCY = 2
 _background_tasks: set[asyncio.Task] = set()
 
 
@@ -203,6 +215,7 @@ def _fire_and_forget(coro) -> None:
 async def _pregenerate_recommendations(
     days_ahead: int = _PREGENERATE_DEFAULT_DAYS_AHEAD,
     scheduler: RecoverableScheduler | None = None,
+    concurrency: int = _PREGENERATE_DEFAULT_CONCURRENCY,
 ) -> dict:
     """W103: generates and caches recommendations for real upcoming
     fixtures across every competition right now, reusing eod_batch.py's
@@ -218,7 +231,14 @@ async def _pregenerate_recommendations(
     already close enough to matter). `scheduler=None` (the startup hook's
     own case when ENABLE_SCHEDULER is off) degrades gracefully -- matches
     are still generated and cached now, just without the later T-30
-    refresh safety net registered for them, rather than failing outright."""
+    refresh safety net registered for them, rather than failing outright.
+
+    BUG-045: `concurrency` defaults lower than eod_batch.run_eod_batch()'s
+    own default (5) -- see _PREGENERATE_DEFAULT_CONCURRENCY's comment.
+    Every league still runs sequentially (this loop `await`s one league's
+    whole batch before starting the next), so this bounds how many
+    concurrent agent calls stack on top of a freshly booted process at any
+    one instant, not how many run in total."""
     from datetime import timedelta
 
     today = _current_real_date()
@@ -246,12 +266,13 @@ async def _pregenerate_recommendations(
             result = await eod_batch.run_eod_batch(
                 fixtures_client=get_fixtures_client(), odds_client=odds_client, cache=cache, config=config,
                 schedule_t30=schedule_t30, date_str=date_from, fixtures=league_fixtures, league=league,
+                concurrency=concurrency,
             )
         except Exception:
             LOGGER.warning("Pregenerate: batch failed for league=%s -- other leagues unaffected.", league, exc_info=True)
             continue
         results[league] = {"generated": result.generated, "skipped": result.skipped}
-    LOGGER.info("Pregenerate complete | days_ahead=%d | results=%s", days_ahead, results)
+    LOGGER.info("Pregenerate complete | days_ahead=%d | concurrency=%d | results=%s", days_ahead, concurrency, results)
     return results
 
 
