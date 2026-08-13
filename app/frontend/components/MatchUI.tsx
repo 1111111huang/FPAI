@@ -273,6 +273,19 @@ const TIER_EXPLANATION: Record<Tier, string> = {
   general_purpose: "No dedicated model for this competition yet -- a general-purpose fallback model instead.",
 };
 
+// W120 follow-up: a small rotating background wash per date group -- purely
+// decorative sequencing (index-based, not tied to any specific calendar
+// date), matching the mockup's own purple/teal/green rotation. Tailwind's
+// built-in violet/teal/emerald palettes (no custom theme config needed),
+// faded via gradient-to-br toward transparent so it reads as a wash behind
+// the cards, not a flat color block -- direct feedback ("pay attention to
+// the gradient") after the first flat-panel attempt.
+const DATE_GROUP_WASHES = [
+  "from-violet-500/10 via-violet-500/5 to-transparent",
+  "from-teal-500/10 via-teal-500/5 to-transparent",
+  "from-emerald-500/10 via-emerald-500/5 to-transparent",
+];
+
 const STATUS_META: Record<
   Overall,
   { text: string; ring: string; fill: string; icon: React.ReactNode; label: string; verdict: string; explain: string }
@@ -650,7 +663,10 @@ export function MatchCard({
   }
 
   return (
-    <div className="rounded-xl border border-border bg-surface/40 transition-all duration-150 hover:-translate-y-px hover:border-border-strong">
+    // W120 follow-up: bg-page (near-opaque) instead of bg-surface/40 -- needs
+    // to read as its own distinct surface against the date panel's colored
+    // gradient wash behind it, not blend into it.
+    <div className="rounded-xl border border-border bg-page/80 transition-all duration-150 hover:-translate-y-px hover:border-border-strong">
       <button type="button" onClick={handleExpand} className="w-full p-4 text-left">
         {/* Status badge(s) -- top-right corner, independent of the team/
             market body below rather than sharing a row with the tier tag
@@ -706,7 +722,10 @@ export function MatchCard({
             </div>
           </div>
 
-          <div className="w-full shrink-0 rounded-lg border border-border p-3 sm:w-[300px]">
+          {/* W120 follow-up: its own bg-surface/60 -- a third, visually
+              distinct layer nested inside the card, above the date panel's
+              colored wash and the card's own bg-page. */}
+          <div className="w-full shrink-0 rounded-lg border border-border bg-surface/60 p-3 sm:w-[300px]">
             <div className="flex items-start justify-between gap-3">
               <div className="min-w-0 flex-1">
                 <div className="text-[10px] uppercase tracking-wide text-muted">Market</div>
@@ -968,20 +987,26 @@ export function DashboardPage() {
               </p>
             )}
             {!error && visibleMatches.length > 0 && (
-              // W116 second follow-up: each date's cards (MatchCard now
-              // carries its own bg-surface/40 fill + border, redesign) sit
-              // directly on the page; the group boundary is now a dashed
-              // rule filling the rest of the header's width instead of a
-              // wrapping panel -- lighter-weight, still unambiguous.
+              // W120 follow-up: back to a wrapping panel per date group
+              // (superseding the dashed-rule-only treatment), now with a
+              // rotating colored gradient wash distinguishing one date from
+              // the next, plus its own calendar icon -- direct mockup.
               <div className="flex flex-col gap-6">
-                {dateGroups.map((group) => (
-                  <div key={group.dateKey}>
-                    <div className="mb-3 flex items-center gap-3">
-                      <h2 className="shrink-0 text-lg font-bold tracking-tight text-ink">{group.label}</h2>
-                      <span className="shrink-0 rounded-full border border-border-strong px-2 py-0.5 text-xs text-ink-secondary">
-                        {group.matches.length} match{group.matches.length === 1 ? "" : "es"}
-                      </span>
-                      <div className="h-0 flex-1 border-t border-dashed border-border" aria-hidden="true" />
+                {dateGroups.map((group, i) => (
+                  <div
+                    key={group.dateKey}
+                    className={`rounded-2xl border border-white/5 bg-gradient-to-br p-4 ${
+                      DATE_GROUP_WASHES[i % DATE_GROUP_WASHES.length]
+                    }`}
+                  >
+                    <div className="mb-3 flex items-center justify-between gap-3">
+                      <div className="flex items-center gap-3">
+                        <h2 className="text-lg font-bold tracking-tight text-ink">{group.label}</h2>
+                        <span className="rounded-full border border-border-strong px-2 py-0.5 text-xs text-ink-secondary">
+                          {group.matches.length} match{group.matches.length === 1 ? "" : "es"}
+                        </span>
+                      </div>
+                      <CalendarBlank size={16} className="text-muted" aria-hidden="true" />
                     </div>
                     <div className="flex flex-col gap-2.5">
                       {group.matches.map((m) => (
