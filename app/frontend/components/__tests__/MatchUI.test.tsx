@@ -259,7 +259,10 @@ describe("MatchCard -- Market/Pick/Odds/Edge grid redesign (2026-08-13, direct m
       ],
     });
     render(<MatchCard match={match} onUpdate={vi.fn()} />);
-    expect(screen.getByText("result_3way")).toBeInTheDocument();
+    // W121 follow-up: market names are humanized ("3-Way Result" / "Full
+    // Time"), not the raw "result_3way" backend string.
+    expect(screen.getByText("3-Way Result")).toBeInTheDocument();
+    expect(screen.getByText("Full Time")).toBeInTheDocument();
     // "Arsenal" renders twice by design -- once as the home team, once as
     // the pick's team-named label (pickLabel reuses selectionLabel).
     expect(screen.getAllByText("Arsenal")).toHaveLength(2);
@@ -271,9 +274,12 @@ describe("MatchCard -- Market/Pick/Odds/Edge grid redesign (2026-08-13, direct m
   });
 
   it("shows an 'Over'-captioned pick for a totals-market selection, and no caption/arrow for a draw pick", () => {
+    // total_goals is the real backend market for an over/under line
+    // (src/agent/schema.py) -- "over_under_2.5" (this test's original
+    // market string) was never a real one.
     const overUnder = baseMatch({
       markets: [
-        { market: "over_under_2.5", selection: "over_2.5", recommendationType: "direct_bet", currentOdds: 1.85, minOdds: 0, mlProbability: 0.55, impliedProbability: 0.54, valueEdge: 0.01 },
+        { market: "total_goals", selection: "over_2.5", recommendationType: "direct_bet", currentOdds: 1.85, minOdds: 0, mlProbability: 0.55, impliedProbability: 0.54, valueEdge: 0.01 },
       ],
     });
     render(<MatchCard match={overUnder} onUpdate={vi.fn()} />);
@@ -294,6 +300,19 @@ describe("MatchCard -- Market/Pick/Odds/Edge grid redesign (2026-08-13, direct m
     const match = baseMatch({ hasRecommendation: false, markets: [] });
     render(<MatchCard match={match} onUpdate={vi.fn()} />);
     expect(screen.getAllByText("—").length).toBeGreaterThanOrEqual(3); // Market, Pick, Odds, Edge
+  });
+
+  it("mockup points 1/4: team row is one horizontal line, and day/time are bullet-separated", () => {
+    const match = baseMatch({ home: "Arsenal", away: "Everton" });
+    render(<MatchCard match={match} onUpdate={vi.fn()} />);
+    // Home and away sit in the same row -- both team names' closest
+    // ancestor <button> row (not stacked in separate divs) shares one
+    // parent flex container.
+    const homeEl = screen.getByText("Arsenal");
+    const awayEl = screen.getByText("Everton");
+    expect(homeEl.parentElement).toBe(awayEl.parentElement);
+    expect(screen.getByText("v")).toBeInTheDocument();
+    expect(screen.getByText("•")).toBeInTheDocument();
   });
 
   it("does not show the Positive Edge tag for a no_bet market with a numerically positive edge", () => {

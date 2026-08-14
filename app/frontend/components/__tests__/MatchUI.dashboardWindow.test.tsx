@@ -66,6 +66,20 @@ describe("Dashboard always shows the next 10 matches (date-grouped, not today-on
     expect(panels[2].className).toContain("from-emerald-500/10");
   });
 
+  it("mockup point 5: each card's MODELED tag is tinted to match its own date panel's wash", async () => {
+    const fixtures = Array.from({ length: 3 }, (_, i) => fixture(`match-${i}`, `2026-09-0${i + 1}T15:00:00Z`));
+    vi.mocked(getFixtures).mockResolvedValue(fixtures);
+
+    render(<DashboardPage />);
+    await waitFor(() => expect(screen.getByText("match-0")).toBeInTheDocument());
+
+    const tags = screen.getAllByText("Modeled");
+    expect(tags).toHaveLength(3);
+    expect(tags[0]).toHaveClass("border-violet-400/40");
+    expect(tags[1]).toHaveClass("border-teal-400/40");
+    expect(tags[2]).toHaveClass("border-emerald-400/40");
+  });
+
   it("shows up to 10 matches sorted nearest-first, even when today itself has none", async () => {
     const today = new Date().toISOString().slice(0, 10);
 
