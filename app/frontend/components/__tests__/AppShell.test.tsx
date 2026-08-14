@@ -94,14 +94,14 @@ describe("AppShell", () => {
     expect(screen.queryByText("FPAI")).not.toBeInTheDocument();
   });
 
-  it("mockup point 1: shows the 'Edge Engine' tagline under the FPAI logo", () => {
+  it("W133: no longer shows the 'Edge Engine' tagline under the logo -- direct feedback that it wasn't needed", () => {
     vi.mocked(getStatus).mockRejectedValue(new Error("no backend"));
     render(
       <AppShell active="dashboard">
         <p>page content</p>
       </AppShell>
     );
-    expect(screen.getByText("Edge Engine")).toBeInTheDocument();
+    expect(screen.queryByText("Edge Engine")).not.toBeInTheDocument();
   });
 
   it("collapses the whole left panel (menu/model info/footer) behind a mobile drawer, opening as an overlay", async () => {
