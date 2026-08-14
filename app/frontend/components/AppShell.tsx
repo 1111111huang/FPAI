@@ -142,11 +142,8 @@ export function AppShell({
   // -- same content, two different containers, rather than duplicated JSX.
   const brandBlock = (
     <div className="flex items-center gap-2.5">
-      <OddseyLogo size={32} />
-      <div className="leading-tight">
-        <div className="text-sm font-semibold tracking-tight text-ink">Oddsey</div>
-        <div className="text-[10px] uppercase tracking-wide text-muted">Edge Engine</div>
-      </div>
+      <OddseyLogo size={48} />
+      <div className="text-sm font-semibold tracking-tight text-ink">Oddsey</div>
     </div>
   );
 
@@ -239,7 +236,7 @@ export function AppShell({
           as an overlay on top of the main content, not inline above it. */}
       <div className="flex items-center justify-between border-b border-border bg-surface px-4 py-3 lg:hidden">
         <div className="flex items-center gap-2">
-          <OddseyLogo size={24} />
+          <OddseyLogo size={36} />
           <span className="text-sm font-semibold tracking-tight text-ink">Oddsey</span>
         </div>
         <button type="button" onClick={() => setMenuOpen(true)} aria-label="Open menu" className="text-ink-secondary">
