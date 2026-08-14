@@ -1,5 +1,6 @@
 "use client";
 
+import Image from "next/image";
 import Link from "next/link";
 import { useState, useEffect } from "react";
 import { House, List, ListBullets, MagnifyingGlass, X, type Icon } from "@phosphor-icons/react";
@@ -28,33 +29,14 @@ const NAV_ITEMS: {
   { href: "/matches", label: "All Matches", key: "matches", icon: ListBullets },
 ];
 
-/** Rebrand (2026-08-13): FPAI -> Oddsey. Hand-recreated as inline SVG (not
- * an embedded raster copy of the provided reference image) -- a double
- * gold ring, an upward price-chart zigzag with a gold node at its
- * midpoint and green nodes at each end, and two short arc "scan" brackets
- * -- matching this codebase's existing convention of every icon (Phosphor
- * set included) being an inline SVG component, not a separate asset file. */
+/** Rebrand (2026-08-13): FPAI -> Oddsey. Was a hand-recreated inline SVG
+ * (the original reference image's bytes weren't extractable through that
+ * session's tools); replaced 2026-08-14 with the real provided logo file
+ * once available (`public/oddsey-logo.png`), served via next/image for
+ * automatic sizing/optimization -- this codebase's one raster asset, the
+ * rest of its icons (Phosphor set included) are inline SVG. */
 function OddseyLogo({ size = 32 }: { size?: number }) {
-  return (
-    <svg width={size} height={size} viewBox="0 0 200 200" aria-hidden="true">
-      <circle cx="100" cy="100" r="96" fill="#0f1f3a" />
-      <circle cx="100" cy="100" r="88" fill="none" stroke="#d9a94f" strokeWidth="6" />
-      <circle cx="100" cy="100" r="76" fill="none" stroke="#d9a94f" strokeWidth="6" />
-      <path
-        d="M 45 118 L 62 100 L 78 112 L 100 90 L 118 100 L 132 82 L 152 62"
-        fill="none"
-        stroke="#d9a94f"
-        strokeWidth="7"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      />
-      <circle cx="100" cy="100" r="9" fill="#d9a94f" />
-      <circle cx="45" cy="118" r="7" fill="#1c8a4d" />
-      <circle cx="152" cy="62" r="7" fill="#1c8a4d" />
-      <path d="M 128 78 A 22 22 0 0 1 138 96" fill="none" stroke="#d9a94f" strokeWidth="4" strokeLinecap="round" />
-      <path d="M 72 104 A 22 22 0 0 0 62 122" fill="none" stroke="#d9a94f" strokeWidth="4" strokeLinecap="round" />
-    </svg>
-  );
+  return <Image src="/oddsey-logo.png" width={size} height={size} alt="Oddsey" priority />;
 }
 
 export function AppShell({
