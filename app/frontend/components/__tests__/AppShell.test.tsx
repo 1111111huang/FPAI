@@ -45,6 +45,20 @@ describe("AppShell", () => {
     expect(screen.getByText("page content")).toBeInTheDocument();
   });
 
+  it("rebrand: shows 'Oddsey' (not 'FPAI') in the sidebar", () => {
+    vi.mocked(getStatus).mockRejectedValue(new Error("no backend"));
+    render(
+      <AppShell active="dashboard">
+        <p>page content</p>
+      </AppShell>
+    );
+    // "Oddsey" now renders twice by design -- once in the desktop sidebar,
+    // once in the mobile collapsed header bar (CSS decides which is
+    // visible; jsdom renders both regardless of viewport).
+    expect(screen.getAllByText("Oddsey")).toHaveLength(2);
+    expect(screen.queryByText("FPAI")).not.toBeInTheDocument();
+  });
+
   it("mockup point 1: shows the 'Edge Engine' tagline under the FPAI logo", () => {
     vi.mocked(getStatus).mockRejectedValue(new Error("no backend"));
     render(
@@ -55,6 +69,34 @@ describe("AppShell", () => {
     expect(screen.getByText("Edge Engine")).toBeInTheDocument();
   });
 
+  it("collapses the whole left panel (menu/model info/footer) behind a mobile drawer, opening as an overlay", async () => {
+    // "Model Status" renders twice once open -- once in the always-in-DOM
+    // desktop <aside> (CSS-hidden on mobile, jsdom doesn't evaluate that),
+    // once in the drawer -- so this counts occurrences rather than using a
+    // plain (ambiguous) getByText/queryByText.
+    vi.mocked(getStatus).mockRejectedValue(new Error("no backend"));
+    const user = userEvent.setup();
+    render(
+      <AppShell active="dashboard">
+        <p>page content</p>
+      </AppShell>
+    );
+
+    // Collapsed by default -- drawer isn't rendered at all.
+    expect(screen.queryByRole("button", { name: "Close menu" })).not.toBeInTheDocument();
+    expect(screen.getAllByText("Model Status")).toHaveLength(1);
+
+    await user.click(screen.getByRole("button", { name: "Open menu" }));
+    expect(screen.getByRole("button", { name: "Close menu" })).toBeInTheDocument();
+    expect(screen.getAllByText("Model Status")).toHaveLength(2);
+    // Overlay, not a replacement -- page content stays mounted underneath.
+    expect(screen.getByText("page content")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Close menu" }));
+    expect(screen.queryByRole("button", { name: "Close menu" })).not.toBeInTheDocument();
+    expect(screen.getAllByText("Model Status")).toHaveLength(1);
+  });
+
   it("mockup point 2: each desktop nav link renders its own icon", () => {
     vi.mocked(getStatus).mockRejectedValue(new Error("no backend"));
     const { container } = render(
@@ -62,10 +104,11 @@ describe("AppShell", () => {
         <p>page content</p>
       </AppShell>
     );
-    // Desktop sidebar's <nav> is the "lg:flex" one (vs. the mobile
-    // bottom-tab-bar's "lg:hidden" nav, which already had icons before
-    // this change) -- scope the query so this doesn't pass by accident.
-    const desktopNav = container.querySelector("nav.lg\\:flex");
+    // Desktop sidebar's <nav> lives inside the (now hidden lg:flex) <aside>
+    // -- vs. the mobile bottom-tab-bar's <nav>, which already had icons
+    // before this change and isn't inside an <aside> -- scope the query so
+    // this doesn't pass by accident.
+    const desktopNav = container.querySelector("aside nav");
     expect(desktopNav?.querySelectorAll("svg").length).toBe(2);
   });
 

@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useState, useEffect } from "react";
-import { House, ListBullets, MagnifyingGlass, type Icon } from "@phosphor-icons/react";
+import { House, List, ListBullets, MagnifyingGlass, X, type Icon } from "@phosphor-icons/react";
 
 import { getFixtures, getStatus } from "@/lib/api";
 import type { Fixture, StatusResponse } from "@/lib/types";
@@ -28,6 +28,35 @@ const NAV_ITEMS: {
   { href: "/matches", label: "All Matches", key: "matches", icon: ListBullets },
 ];
 
+/** Rebrand (2026-08-13): FPAI -> Oddsey. Hand-recreated as inline SVG (not
+ * an embedded raster copy of the provided reference image) -- a double
+ * gold ring, an upward price-chart zigzag with a gold node at its
+ * midpoint and green nodes at each end, and two short arc "scan" brackets
+ * -- matching this codebase's existing convention of every icon (Phosphor
+ * set included) being an inline SVG component, not a separate asset file. */
+function OddseyLogo({ size = 32 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 200 200" aria-hidden="true">
+      <circle cx="100" cy="100" r="96" fill="#0f1f3a" />
+      <circle cx="100" cy="100" r="88" fill="none" stroke="#d9a94f" strokeWidth="6" />
+      <circle cx="100" cy="100" r="76" fill="none" stroke="#d9a94f" strokeWidth="6" />
+      <path
+        d="M 45 118 L 62 100 L 78 112 L 100 90 L 118 100 L 132 82 L 152 62"
+        fill="none"
+        stroke="#d9a94f"
+        strokeWidth="7"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+      <circle cx="100" cy="100" r="9" fill="#d9a94f" />
+      <circle cx="45" cy="118" r="7" fill="#1c8a4d" />
+      <circle cx="152" cy="62" r="7" fill="#1c8a4d" />
+      <path d="M 128 78 A 22 22 0 0 1 138 96" fill="none" stroke="#d9a94f" strokeWidth="4" strokeLinecap="round" />
+      <path d="M 72 104 A 22 22 0 0 0 62 122" fill="none" stroke="#d9a94f" strokeWidth="4" strokeLinecap="round" />
+    </svg>
+  );
+}
+
 export function AppShell({
   active,
   activeEdgesCount,
@@ -46,6 +75,10 @@ export function AppShell({
   const [query, setQuery] = useState("");
   const [searchFixtures, setSearchFixtures] = useState<Fixture[]>([]);
   const [hasFocused, setHasFocused] = useState(false);
+  // Direct feedback: the whole left panel (menu/model info/footer) should
+  // be collapsible on a phone, and the expanded state should overlay the
+  // main content rather than sit inline and push it down.
+  const [menuOpen, setMenuOpen] = useState(false);
 
   useEffect(() => {
     // Refetched on every mount -- AppShell is instantiated per-page like the
@@ -116,29 +149,72 @@ export function AppShell({
   // above it, so showing both would just be noise.
   const byLeagueEntries = Object.entries(dataFreshness?.by_league ?? {}).sort(([a], [b]) => a.localeCompare(b));
 
+  // Shared between the desktop <aside> and the mobile overlay drawer below
+  // -- same content, two different containers, rather than duplicated JSX.
+  const brandBlock = (
+    <div className="flex items-center gap-2.5">
+      <OddseyLogo size={32} />
+      <div className="leading-tight">
+        <div className="text-sm font-semibold tracking-tight text-ink">Oddsey</div>
+        <div className="text-[10px] uppercase tracking-wide text-muted">Edge Engine</div>
+      </div>
+    </div>
+  );
+
+  const infoBlock = (
+    <>
+      {activeEdgesCount !== undefined && (
+        <div>
+          <div className="text-muted uppercase tracking-wide">Active Edges</div>
+          <div className="mt-0.5 font-mono text-base text-ink">{activeEdgesCount}</div>
+        </div>
+      )}
+      <div>
+        <div className="text-muted uppercase tracking-wide">Model Status</div>
+        <div className="mt-0.5 text-ink-secondary">
+          {status ? `league ${leagueModelCount} · international ${internationalModelCount}` : "—"}
+        </div>
+      </div>
+      <div>
+        <div className="text-muted uppercase tracking-wide">Last Updated</div>
+        <div className={`mt-0.5 ${dataFreshness?.is_stale ? "text-warning" : "text-ink-secondary"}`}>
+          {dataFreshness
+            ? `${dataFreshness.latest_match_date ?? "unknown"}${
+                dataFreshness.days_since_update !== null ? ` (${dataFreshness.days_since_update}d ago)` : ""
+              }${dataFreshness.is_stale ? " -- stale" : ""}`
+            : "—"}
+        </div>
+        {byLeagueEntries.length > 1 && (
+          <div className="mt-1 flex flex-col gap-0.5">
+            {byLeagueEntries.map(([league, freshness]) => (
+              <div key={league} className={freshness.is_stale ? "text-warning" : "text-ink-secondary"}>
+                <span className="font-medium">{league}</span>:{" "}
+                {freshness.days_since_update !== null ? `${freshness.days_since_update}d ago` : "unknown"}
+                {freshness.is_stale ? " -- stale" : ""}
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </>
+  );
+
   return (
     <div className="min-h-screen lg:flex">
-      <aside className="flex shrink-0 flex-col justify-between border-b border-border px-4 py-5 lg:h-screen lg:w-56 lg:border-b-0 lg:border-r lg:px-5 lg:py-6">
+      {/* Desktop sidebar -- unchanged content, now hidden lg:flex instead of
+          always visible: below `lg` the whole panel (menu/model info/
+          footer) collapses behind the mobile header bar + overlay drawer
+          below instead of always rendering inline. Mockup: bg-surface is
+          the same "one step up from page" token every card/input already
+          uses, not a new color. */}
+      <aside className="hidden shrink-0 flex-col justify-between bg-surface px-5 py-6 lg:flex lg:h-screen lg:w-56 lg:border-r lg:border-border">
         <div>
-          {/* Mockup point 1: a small logo mark + "Edge Engine" tagline,
-              not just the bare "FPAI" text. */}
-          <div className="flex items-center gap-2.5">
-            <span
-              className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-gradient-to-br from-accent to-teal-400 text-xs font-bold text-page"
-              aria-hidden="true"
-            >
-              FP
-            </span>
-            <div className="leading-tight">
-              <div className="text-sm font-semibold tracking-tight text-ink">FPAI</div>
-              <div className="text-[10px] uppercase tracking-wide text-muted">Edge Engine</div>
-            </div>
-          </div>
+          {brandBlock}
           {/* W114: desktop-only -- below `lg` this list is replaced by the
               fixed bottom tab bar, not shown alongside it. Mockup point 2:
               each link gets its own icon, matching NAV_ITEMS' icon field
               (previously only used by the mobile bottom tab bar). */}
-          <nav className="mt-6 hidden flex-col gap-1 text-sm lg:flex">
+          <nav className="mt-6 flex flex-col gap-1 text-sm">
             {NAV_ITEMS.map((item) => {
               const Icon = item.icon;
               return (
@@ -157,42 +233,49 @@ export function AppShell({
           </nav>
         </div>
 
-        <div className="mt-6 flex flex-col gap-3 border-t border-border pt-4 text-xs lg:mt-0">
-          {activeEdgesCount !== undefined && (
-            <div>
-              <div className="text-muted uppercase tracking-wide">Active Edges</div>
-              <div className="mt-0.5 font-mono text-base text-ink">{activeEdgesCount}</div>
-            </div>
-          )}
-          <div>
-            <div className="text-muted uppercase tracking-wide">Model Status</div>
-            <div className="mt-0.5 text-ink-secondary">
-              {status ? `league ${leagueModelCount} · international ${internationalModelCount}` : "—"}
-            </div>
-          </div>
-          <div>
-            <div className="text-muted uppercase tracking-wide">Last Updated</div>
-            <div className={`mt-0.5 ${dataFreshness?.is_stale ? "text-warning" : "text-ink-secondary"}`}>
-              {dataFreshness
-                ? `${dataFreshness.latest_match_date ?? "unknown"}${
-                    dataFreshness.days_since_update !== null ? ` (${dataFreshness.days_since_update}d ago)` : ""
-                  }${dataFreshness.is_stale ? " -- stale" : ""}`
-                : "—"}
-            </div>
-            {byLeagueEntries.length > 1 && (
-              <div className="mt-1 flex flex-col gap-0.5">
-                {byLeagueEntries.map(([league, freshness]) => (
-                  <div key={league} className={freshness.is_stale ? "text-warning" : "text-ink-secondary"}>
-                    <span className="font-medium">{league}</span>:{" "}
-                    {freshness.days_since_update !== null ? `${freshness.days_since_update}d ago` : "unknown"}
-                    {freshness.is_stale ? " -- stale" : ""}
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-        </div>
+        <div className="flex flex-col gap-3 border-t border-border pt-4 text-xs">{infoBlock}</div>
       </aside>
+
+      {/* Mobile-only compact header: hamburger trigger + a small logo,
+          replacing the sidebar's content that used to always render inline
+          and push the page down. Direct feedback: the whole left panel
+          (menu/model info/footer) should collapse behind this, and expand
+          as an overlay on top of the main content, not inline above it. */}
+      <div className="flex items-center justify-between border-b border-border bg-surface px-4 py-3 lg:hidden">
+        <div className="flex items-center gap-2">
+          <OddseyLogo size={24} />
+          <span className="text-sm font-semibold tracking-tight text-ink">Oddsey</span>
+        </div>
+        <button type="button" onClick={() => setMenuOpen(true)} aria-label="Open menu" className="text-ink-secondary">
+          <List size={22} />
+        </button>
+      </div>
+
+      {/* Mobile overlay drawer -- backdrop + slide-in panel, above the
+          fixed bottom tab bar (z-20) and the search dropdown (z-10). */}
+      {menuOpen && (
+        <>
+          <div
+            className="fixed inset-0 z-40 bg-page/70 lg:hidden"
+            onClick={() => setMenuOpen(false)}
+            aria-hidden="true"
+          />
+          <div className="fixed inset-y-0 left-0 z-50 w-72 max-w-[85vw] overflow-y-auto bg-surface p-5 shadow-xl lg:hidden">
+            <div className="flex items-start justify-between">
+              {brandBlock}
+              <button
+                type="button"
+                onClick={() => setMenuOpen(false)}
+                aria-label="Close menu"
+                className="text-ink-secondary"
+              >
+                <X size={20} />
+              </button>
+            </div>
+            <div className="mt-6 flex flex-col gap-3 border-t border-border pt-4 text-xs">{infoBlock}</div>
+          </div>
+        </>
+      )}
 
       <div className="flex min-w-0 flex-1 flex-col">
         <div className="border-b border-border px-4 py-3 sm:px-6">
