@@ -45,6 +45,27 @@ describe("AppShell", () => {
     expect(screen.getByText("page content")).toBeInTheDocument();
   });
 
+  it("renders an optional railTrigger next to the search bar, mobile-only", () => {
+    vi.mocked(getStatus).mockRejectedValue(new Error("no backend"));
+    const { rerender } = render(
+      <AppShell active="dashboard">
+        <p>page content</p>
+      </AppShell>
+    );
+    expect(screen.queryByText("trigger")).not.toBeInTheDocument();
+
+    rerender(
+      <AppShell active="dashboard" railTrigger={<span>trigger</span>}>
+        <p>page content</p>
+      </AppShell>
+    );
+    const trigger = screen.getByText("trigger");
+    expect(trigger).toBeInTheDocument();
+    // lg:hidden -- only meant for the mobile top bar, not shown alongside
+    // the always-visible desktop sidebar/rail.
+    expect(trigger.closest(".lg\\:hidden")).not.toBeNull();
+  });
+
   it("rebrand: shows 'Oddsey' (not 'FPAI') in the sidebar", () => {
     vi.mocked(getStatus).mockRejectedValue(new Error("no backend"));
     render(

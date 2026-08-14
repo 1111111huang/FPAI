@@ -60,10 +60,17 @@ function OddseyLogo({ size = 32 }: { size?: number }) {
 export function AppShell({
   active,
   activeEdgesCount,
+  railTrigger,
   children,
 }: {
   active: "dashboard" | "matches" | "bets";
   activeEdgesCount?: number;
+  // Direct feedback: on small screens the right rail should "squish with
+  // the top part with the search bar" instead of being its own section --
+  // an optional slot next to the search input (mobile-only, lg:hidden) for
+  // a page-specific trigger (DashboardPage's own rail-drawer icon). AppShell
+  // doesn't know what DashboardRail is; it just reserves the spot.
+  railTrigger?: React.ReactNode;
   children: React.ReactNode;
 }) {
   // Independent of whatever page renders us, which may also call this hook
@@ -199,8 +206,13 @@ export function AppShell({
     </>
   );
 
+  // Direct feedback: only the middle (page) content should scroll on
+  // desktop -- sidebar, search bar, and (per-page) sticky chrome stay put.
+  // lg:h-screen + lg:overflow-hidden bounds the shell to the viewport so
+  // <main> below (lg:overflow-y-auto) becomes the one scrolling region,
+  // instead of the whole document scrolling.
   return (
-    <div className="min-h-screen lg:flex">
+    <div className="min-h-screen lg:flex lg:h-screen lg:overflow-hidden">
       {/* Desktop sidebar -- unchanged content, now hidden lg:flex instead of
           always visible: below `lg` the whole panel (menu/model info/
           footer) collapses behind the mobile header bar + overlay drawer
@@ -279,9 +291,9 @@ export function AppShell({
         </>
       )}
 
-      <div className="flex min-w-0 flex-1 flex-col">
-        <div className="border-b border-border px-4 py-3 sm:px-6">
-          <div className="relative max-w-md">
+      <div className="flex min-w-0 flex-1 flex-col lg:min-h-0">
+        <div className="flex shrink-0 items-center gap-2 border-b border-border px-4 py-3 sm:px-6">
+          <div className="relative min-w-0 max-w-md flex-1">
             <MagnifyingGlass size={16} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-muted" />
             <input
               value={query}
@@ -306,11 +318,17 @@ export function AppShell({
               </div>
             )}
           </div>
+          {railTrigger && <div className="shrink-0 lg:hidden">{railTrigger}</div>}
         </div>
 
-        {/* W114: pb-20 clears the fixed bottom tab bar below `lg`; back to
+        {/* Direct feedback: <main> is now the one scrolling region on
+            desktop (lg:min-h-0 + lg:overflow-y-auto, paired with the shell's
+            own lg:h-screen above) -- sidebar and this search bar (shrink-0)
+            never move. A page can additionally pin its own chrome (e.g.
+            DashboardPage's title/rail) with sticky *within* this region.
+            W114: pb-20 clears the fixed bottom tab bar below `lg`; back to
             the original py-8 at `lg` and up, where that bar doesn't render. */}
-        <main className="flex-1 px-4 pb-20 pt-8 sm:px-6 lg:pb-8">{children}</main>
+        <main className="flex-1 px-4 pb-20 pt-8 sm:px-6 lg:min-h-0 lg:overflow-y-auto lg:pb-8">{children}</main>
       </div>
 
       {/* W114: bottom-tab-bar nav for small screens -- the sidebar-nav

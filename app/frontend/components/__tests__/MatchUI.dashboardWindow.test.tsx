@@ -52,25 +52,27 @@ describe("Dashboard always shows the next 10 matches (date-grouped, not today-on
     expect(to).not.toBe(today);
   });
 
-  it("collapses the rail behind an 'Insights' toggle by default, expanding on click", async () => {
-    // Direct feedback: on small screens the rail was overlapping the match
-    // list instead of stacking below it.
+  it("opens the rail as a right-side overlay drawer via the search-bar trigger, not an inline accordion", async () => {
+    // Direct feedback: the rail should "squish with the top part with the
+    // search bar" on small screens, not be its own section on the page.
     vi.mocked(getFixtures).mockResolvedValue([fixture("match-0", "2026-09-01T15:00:00Z")]);
     const user = userEvent.setup();
 
     render(<DashboardPage />);
     await screen.findByText("match-0");
 
-    const toggle = screen.getByRole("button", { name: /Insights/ });
-    expect(toggle).toHaveAttribute("aria-expanded", "false");
-    // Collapsed by default -- the rail's own "Edge Distribution" heading
-    // sits in a hidden container (still in the DOM, forced visible again
-    // at the `lg` breakpoint via CSS, not JS-conditional).
-    expect(screen.getByText("Edge Distribution").closest(".hidden")).not.toBeNull();
+    // Closed by default -- only the always-in-DOM (CSS-hidden on mobile)
+    // desktop rail's own "Edge Distribution" exists; the drawer's copy
+    // isn't rendered at all until opened.
+    expect(screen.getAllByText("Edge Distribution")).toHaveLength(1);
+    expect(screen.queryByRole("button", { name: "Close insights" })).not.toBeInTheDocument();
 
-    await user.click(toggle);
-    expect(toggle).toHaveAttribute("aria-expanded", "true");
-    expect(screen.getByText("Edge Distribution").closest(".hidden")).toBeNull();
+    await user.click(screen.getByRole("button", { name: "Open insights" }));
+    expect(screen.getAllByText("Edge Distribution")).toHaveLength(2);
+    expect(screen.getByRole("button", { name: "Close insights" })).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Close insights" }));
+    expect(screen.getAllByText("Edge Distribution")).toHaveLength(1);
   });
 
   it("mockup point 3: shows a 'N matches · N with positive edge' summary line", async () => {
