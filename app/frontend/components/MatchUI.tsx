@@ -22,12 +22,14 @@ import {
   CalendarBlank,
   CaretDown,
   CaretRight,
+  ChartBar,
   CheckCircle,
   Clock,
   MagnifyingGlass,
   MinusCircle,
   Question,
   WarningCircle,
+  X,
 } from "@phosphor-icons/react";
 
 import {
@@ -909,11 +911,10 @@ export function DashboardPage() {
   // (Direct Bet / Conditional) ones -- direct feedback that non-actionable
   // rows can't be filtered out today, only reordered.
   const [actionableOnly, setActionableOnly] = useState(false);
-  // Direct feedback: on small screens the rail (Edge Distribution/Top
-  // Edges) was overlapping the match list instead of stacking below it --
-  // collapsed behind a toggle by default on mobile rather than always
-  // rendered inline; unaffected at `lg` and up, where it stays the
-  // permanent side-by-side rail it always was.
+  // Whether the mobile-only rail overlay drawer (Edge Distribution/Top
+  // Edges) is open -- triggered from AppShell's search-bar row, not an
+  // inline section of the page itself. Unaffected at `lg` and up, where
+  // the rail is the permanent sticky side-by-side column it always was.
   const [railOpen, setRailOpen] = useState(false);
 
   useEffect(() => {
@@ -999,122 +1000,149 @@ export function DashboardPage() {
   }));
 
   return (
-    <AppShell active="dashboard" activeEdgesCount={matches !== null ? activeEdgesCount : undefined}>
-      <div className="lg:flex lg:items-start lg:gap-6">
-        <div className="min-w-0 flex-1">
-          <div className="flex flex-wrap items-center justify-between gap-4">
-            <div>
-              <h1 className="text-xl font-semibold tracking-tight text-ink">Daily Edges</h1>
-              {/* Mockup point 3: a live stat summary, not the old static
-                  subtitle W119 removed -- only once matches have actually
-                  loaded (nothing to summarize before then). */}
-              {shownMatches.length > 0 && (
-                <p className="mt-0.5 text-sm text-ink-secondary">
-                  {shownMatches.length} match{shownMatches.length === 1 ? "" : "es"} · {positiveEdgeCount} with
-                  positive edge
-                </p>
-              )}
-            </div>
-            {/* Edge % sort hidden (2026-08-13, W118) -- flagged as misleading
-                by direct user feedback. Kickoff is the only sort left, so the
-                toggle itself (nothing left to toggle between) is hidden too,
-                not just the option -- `sort` state and `sortMatches`'s
-                "edge" case (dashboardMetrics.ts) are untouched, so restoring
-                the SegmentedControl below is a one-line revert. */}
-            {shownMatches.length > 0 && (
-              <Toggle checked={actionableOnly} onChange={setActionableOnly} label="Actionable only" />
-            )}
-          </div>
-
-          <div className="mt-6">
-            {error && <ErrorState message={error} onRetry={() => setRetryTick((t) => t + 1)} />}
-            {!error && matches === null && <LoadingRows />}
-            {!error && matches !== null && matches.length === 0 && (
-              <p className="py-8 text-center text-sm text-ink-secondary">No upcoming fixtures.</p>
-            )}
-            {!error && shownMatches.length > 0 && visibleMatches.length === 0 && (
-              <p className="py-8 text-center text-sm text-ink-secondary">
-                No actionable matches right now -- try turning off "Actionable only".
-              </p>
-            )}
-            {!error && visibleMatches.length > 0 && (
-              // W120 follow-up: back to a wrapping panel per date group
-              // (superseding the dashed-rule-only treatment), now with a
-              // rotating colored gradient wash distinguishing one date from
-              // the next, plus its own calendar icon -- direct mockup.
-              <div className="flex flex-col gap-6">
-                {dateGroups.map((group, i) => (
-                  <div
-                    key={group.dateKey}
-                    className={`rounded-2xl border border-white/5 bg-gradient-to-br p-4 ${
-                      DATE_GROUP_WASHES[i % DATE_GROUP_WASHES.length]
-                    }`}
-                  >
-                    <div className="mb-3 flex items-center justify-between gap-3">
-                      <div className="flex items-center gap-3">
-                        <h2 className="text-lg font-bold tracking-tight text-ink">{group.label}</h2>
-                        <span className="rounded-full border border-border-strong px-2 py-0.5 text-xs text-ink-secondary">
-                          {group.matches.length} match{group.matches.length === 1 ? "" : "es"}
-                        </span>
-                      </div>
-                      <CalendarBlank size={16} className="text-muted" aria-hidden="true" />
-                    </div>
-                    <div className="flex flex-col gap-2.5">
-                      {group.matches.map((m) => (
-                        <MatchCard
-                          key={m.id}
-                          match={m}
-                          onUpdate={updateMatch}
-                          asOf={asOf}
-                          sandboxMode={sandboxMode}
-                          tintIndex={i}
-                        />
-                      ))}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-        </div>
-
-        {/* Mockup correction: the rail's own color comes from
-            DashboardRail's individual panels now (an accent tint), not one
-            flat bg-surface wrapper spanning the whole column -- matches the
-            reference more closely (its two boxes read distinctly blue-
-            tinted, the space around them doesn't). Divider still echoes the
-            sidebar|main border-r convention (AppShell.tsx) as lg:border-l.
-            Direct feedback: below `lg` the rail was overlapping the match
-            list instead of stacking below it -- collapsed behind a toggle
-            by default on mobile instead of always rendered inline;
-            unaffected at `lg` and up, where it keeps rendering as the
-            permanent side-by-side rail it always was (the div below is
-            forced back to `block` there regardless of `railOpen`). */}
-        {shownMatches.length > 0 && (
-          <div className="mt-8 lg:mt-0 lg:border-l lg:border-border lg:pl-6">
-            {/* bg-surface lives on the button itself (mobile-only, lg:hidden)
-                now, not the outer wrapper -- keeps the toggle's own panel
-                look without reintroducing a flat fill across the whole
-                desktop-visible column. */}
+    <>
+      <AppShell
+        active="dashboard"
+        activeEdgesCount={matches !== null ? activeEdgesCount : undefined}
+        // Direct feedback: on small screens the rail should "squish with
+        // the top part with the search bar", not be its own section --
+        // this trigger opens the mobile-only overlay drawer below instead
+        // of the old bottom "Insights" accordion.
+        railTrigger={
+          shownMatches.length > 0 && (
             <button
               type="button"
-              onClick={() => setRailOpen((o) => !o)}
-              aria-expanded={railOpen}
-              className="flex w-full items-center justify-between rounded-xl bg-surface p-4 text-sm font-medium text-ink lg:hidden"
+              onClick={() => setRailOpen(true)}
+              aria-label="Open insights"
+              className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-border bg-surface text-ink-secondary"
             >
-              Insights
-              <CaretDown
-                size={14}
-                className={`text-ink-secondary transition-transform duration-150 ${railOpen ? "rotate-180" : ""}`}
-              />
+              <ChartBar size={16} />
             </button>
-            <div className={`${railOpen ? "mt-3 block" : "hidden"} lg:mt-0 lg:block`}>
+          )
+        }
+      >
+        <div className="lg:flex lg:items-start lg:gap-6">
+          <div className="min-w-0 flex-1">
+            {/* Direct feedback: title/subtitle/toggle stay stationary while
+                only the match list below scrolls -- sticky within <main>'s
+                own scroll region (AppShell.tsx), not the whole page. */}
+            <div className="flex flex-wrap items-center justify-between gap-4 lg:sticky lg:top-0 lg:z-10 lg:bg-page lg:pb-4">
+              <div>
+                <h1 className="text-xl font-semibold tracking-tight text-ink">Daily Edges</h1>
+                {/* Mockup point 3: a live stat summary, not the old static
+                    subtitle W119 removed -- only once matches have actually
+                    loaded (nothing to summarize before then). */}
+                {shownMatches.length > 0 && (
+                  <p className="mt-0.5 text-sm text-ink-secondary">
+                    {shownMatches.length} match{shownMatches.length === 1 ? "" : "es"} · {positiveEdgeCount} with
+                    positive edge
+                  </p>
+                )}
+              </div>
+              {/* Edge % sort hidden (2026-08-13, W118) -- flagged as misleading
+                  by direct user feedback. Kickoff is the only sort left, so the
+                  toggle itself (nothing left to toggle between) is hidden too,
+                  not just the option -- `sort` state and `sortMatches`'s
+                  "edge" case (dashboardMetrics.ts) are untouched, so restoring
+                  the SegmentedControl below is a one-line revert. */}
+              {shownMatches.length > 0 && (
+                <Toggle checked={actionableOnly} onChange={setActionableOnly} label="Actionable only" />
+              )}
+            </div>
+
+            <div className="mt-6">
+              {error && <ErrorState message={error} onRetry={() => setRetryTick((t) => t + 1)} />}
+              {!error && matches === null && <LoadingRows />}
+              {!error && matches !== null && matches.length === 0 && (
+                <p className="py-8 text-center text-sm text-ink-secondary">No upcoming fixtures.</p>
+              )}
+              {!error && shownMatches.length > 0 && visibleMatches.length === 0 && (
+                <p className="py-8 text-center text-sm text-ink-secondary">
+                  No actionable matches right now -- try turning off "Actionable only".
+                </p>
+              )}
+              {!error && visibleMatches.length > 0 && (
+                // W120 follow-up: back to a wrapping panel per date group
+                // (superseding the dashed-rule-only treatment), now with a
+                // rotating colored gradient wash distinguishing one date from
+                // the next, plus its own calendar icon -- direct mockup.
+                <div className="flex flex-col gap-6">
+                  {dateGroups.map((group, i) => (
+                    <div
+                      key={group.dateKey}
+                      className={`rounded-2xl border border-white/5 bg-gradient-to-br p-4 ${
+                        DATE_GROUP_WASHES[i % DATE_GROUP_WASHES.length]
+                      }`}
+                    >
+                      <div className="mb-3 flex items-center justify-between gap-3">
+                        <div className="flex items-center gap-3">
+                          <h2 className="text-lg font-bold tracking-tight text-ink">{group.label}</h2>
+                          <span className="rounded-full border border-border-strong px-2 py-0.5 text-xs text-ink-secondary">
+                            {group.matches.length} match{group.matches.length === 1 ? "" : "es"}
+                          </span>
+                        </div>
+                        <CalendarBlank size={16} className="text-muted" aria-hidden="true" />
+                      </div>
+                      <div className="flex flex-col gap-2.5">
+                        {group.matches.map((m) => (
+                          <MatchCard
+                            key={m.id}
+                            match={m}
+                            onUpdate={updateMatch}
+                            asOf={asOf}
+                            sandboxMode={sandboxMode}
+                            tintIndex={i}
+                          />
+                        ))}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Desktop-only permanent rail, now sticky (stays put while the
+              match list scrolls past) instead of just side-by-side in
+              normal flow. Below `lg` it's not rendered at all here -- moved
+              entirely into the overlay drawer beneath, opened via
+              AppShell's railTrigger slot next to the search bar. */}
+          {shownMatches.length > 0 && (
+            <div className="hidden lg:sticky lg:top-0 lg:block lg:border-l lg:border-border lg:pl-6">
+              <DashboardRail matches={shownMatches} />
+            </div>
+          )}
+        </div>
+      </AppShell>
+
+      {/* Mobile-only overlay drawer for the rail -- mirrors AppShell's own
+          left-side menu drawer (W127), sliding from the right instead. */}
+      {railOpen && (
+        <>
+          <div
+            className="fixed inset-0 z-40 bg-page/70 lg:hidden"
+            onClick={() => setRailOpen(false)}
+            aria-hidden="true"
+          />
+          <div className="fixed inset-y-0 right-0 z-50 w-72 max-w-[85vw] overflow-y-auto bg-surface p-5 shadow-xl lg:hidden">
+            <div className="flex items-center justify-between">
+              <h2 className="text-sm font-semibold tracking-tight text-ink">Insights</h2>
+              <button
+                type="button"
+                onClick={() => setRailOpen(false)}
+                aria-label="Close insights"
+                className="text-ink-secondary"
+              >
+                <X size={20} />
+              </button>
+            </div>
+            <div className="mt-4">
               <DashboardRail matches={shownMatches} />
             </div>
           </div>
-        )}
-      </div>
-    </AppShell>
+        </>
+      )}
+    </>
   );
 }
 
