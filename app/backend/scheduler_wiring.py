@@ -29,7 +29,10 @@ LOGGER = get_logger(__name__)
 
 CREDIT_COUNTER_PATH = Path(__file__).parent.parent / "data" / "odds_api_credit_counter.json"
 EOD_JOB_ID = "eod_batch_generation"
-EOD_HOUR = 23
+# ponytail: temporary live-fire test (2026-08-14) -- was 23/0, moved to 9:00
+# ET to watch it fire in real time on Railway without waiting until tonight.
+# MUST be reverted to 23/0 right after the test window.
+EOD_HOUR = 9
 EOD_MINUTE = 0
 
 # W62/W81: every competition_specific league (match_info.py's
