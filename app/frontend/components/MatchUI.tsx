@@ -1021,12 +1021,22 @@ export function DashboardPage() {
           )
         }
       >
-        <div className="lg:flex lg:items-start lg:gap-6">
+        {/* BUG-047: lg:-mt-8 cancels out <main>'s own inner pt-8 wrapper
+            (AppShell.tsx) so this row's natural (unscrolled) position sits
+            flush with <main>'s true scrollport top -- otherwise the sticky
+            children below only reach their stuck position (top-0) after the
+            user has already scrolled past that 32px gap, reading as a
+            laggy "settles into place" jump instead of being stationary from
+            the first pixel of scroll. Each sticky child gets its own
+            lg:pt-8 back, both to restore that visual breathing room and so
+            its own opaque background covers the reclaimed space (the
+            BUG-046 fix this depends on). */}
+        <div className="lg:-mt-8 lg:flex lg:items-start lg:gap-6">
           <div className="min-w-0 flex-1">
             {/* Direct feedback: title/subtitle/toggle stay stationary while
                 only the match list below scrolls -- sticky within <main>'s
                 own scroll region (AppShell.tsx), not the whole page. */}
-            <div className="flex flex-wrap items-center justify-between gap-4 lg:sticky lg:top-0 lg:z-10 lg:bg-page lg:pb-4">
+            <div className="flex flex-wrap items-center justify-between gap-4 lg:sticky lg:top-0 lg:z-10 lg:bg-page lg:pb-4 lg:pt-8">
               <div>
                 <h1 className="text-xl font-semibold tracking-tight text-ink">Daily Edges</h1>
                 {/* Mockup point 3: a live stat summary, not the old static
@@ -1108,7 +1118,7 @@ export function DashboardPage() {
               entirely into the overlay drawer beneath, opened via
               AppShell's railTrigger slot next to the search bar. */}
           {shownMatches.length > 0 && (
-            <div className="hidden lg:sticky lg:top-0 lg:block lg:border-l lg:border-border lg:pl-6">
+            <div className="hidden lg:sticky lg:top-0 lg:block lg:border-l lg:border-border lg:pl-6 lg:pt-8">
               <DashboardRail matches={shownMatches} />
             </div>
           )}
