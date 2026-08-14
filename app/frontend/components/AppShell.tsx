@@ -328,7 +328,17 @@ export function AppShell({
             DashboardPage's title/rail) with sticky *within* this region.
             W114: pb-20 clears the fixed bottom tab bar below `lg`; back to
             the original py-8 at `lg` and up, where that bar doesn't render. */}
-        <main className="flex-1 px-4 pb-20 pt-8 sm:px-6 lg:min-h-0 lg:overflow-y-auto lg:pb-8">{children}</main>
+        {/* pt-8 lives on this inner div, not on <main> itself: <main> is the
+            scroll container (lg:overflow-y-auto), and padding on a scroll
+            container sits *inside* its scrollport, so scrolled content slides
+            up through it -- nothing covers that strip above a sticky child's
+            own box. A page's sticky title (e.g. DashboardPage's) then has a
+            gap above it that scrolled cards bleed through. Padding on a
+            non-scrolling descendant just scrolls away with the content, so a
+            sticky child's `top-0` lands flush with the true scrollport edge. */}
+        <main className="flex-1 px-4 pb-20 sm:px-6 lg:min-h-0 lg:overflow-y-auto lg:pb-8">
+          <div className="pt-8">{children}</div>
+        </main>
       </div>
 
       {/* W114: bottom-tab-bar nav for small screens -- the sidebar-nav

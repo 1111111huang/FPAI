@@ -45,6 +45,20 @@ describe("AppShell", () => {
     expect(screen.getByText("page content")).toBeInTheDocument();
   });
 
+  it("BUG-046: keeps top padding off <main> itself -- it's the lg:overflow-y-auto scroll container, so padding there sits inside the scrollport, letting scrolled content slide up through the gap above a page's sticky header instead of being hidden behind it", () => {
+    vi.mocked(getStatus).mockRejectedValue(new Error("no backend"));
+    render(
+      <AppShell active="dashboard">
+        <p>page content</p>
+      </AppShell>
+    );
+    const main = screen.getByText("page content").closest("main");
+    expect(main).not.toHaveClass("pt-8");
+    // The padding must still exist somewhere between <main> and the content,
+    // just on a non-scrolling wrapper instead.
+    expect(main?.firstElementChild).toHaveClass("pt-8");
+  });
+
   it("renders an optional railTrigger next to the search bar, mobile-only", () => {
     vi.mocked(getStatus).mockRejectedValue(new Error("no backend"));
     const { rerender } = render(
