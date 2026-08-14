@@ -52,6 +52,27 @@ describe("Dashboard always shows the next 10 matches (date-grouped, not today-on
     expect(to).not.toBe(today);
   });
 
+  it("collapses the rail behind an 'Insights' toggle by default, expanding on click", async () => {
+    // Direct feedback: on small screens the rail was overlapping the match
+    // list instead of stacking below it.
+    vi.mocked(getFixtures).mockResolvedValue([fixture("match-0", "2026-09-01T15:00:00Z")]);
+    const user = userEvent.setup();
+
+    render(<DashboardPage />);
+    await screen.findByText("match-0");
+
+    const toggle = screen.getByRole("button", { name: /Insights/ });
+    expect(toggle).toHaveAttribute("aria-expanded", "false");
+    // Collapsed by default -- the rail's own "Edge Distribution" heading
+    // sits in a hidden container (still in the DOM, forced visible again
+    // at the `lg` breakpoint via CSS, not JS-conditional).
+    expect(screen.getByText("Edge Distribution").closest(".hidden")).not.toBeNull();
+
+    await user.click(toggle);
+    expect(toggle).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByText("Edge Distribution").closest(".hidden")).toBeNull();
+  });
+
   it("mockup point 3: shows a 'N matches · N with positive edge' summary line", async () => {
     vi.mocked(getFixtures).mockResolvedValue([fixture("match-0", "2026-09-01T15:00:00Z")]);
 

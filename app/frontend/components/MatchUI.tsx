@@ -909,6 +909,12 @@ export function DashboardPage() {
   // (Direct Bet / Conditional) ones -- direct feedback that non-actionable
   // rows can't be filtered out today, only reordered.
   const [actionableOnly, setActionableOnly] = useState(false);
+  // Direct feedback: on small screens the rail (Edge Distribution/Top
+  // Edges) was overlapping the match list instead of stacking below it --
+  // collapsed behind a toggle by default on mobile rather than always
+  // rendered inline; unaffected at `lg` and up, where it stays the
+  // permanent side-by-side rail it always was.
+  const [railOpen, setRailOpen] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -1074,10 +1080,30 @@ export function DashboardPage() {
 
         {/* Mockup point 4: a real divider from the main content, matching
             the existing sidebar|main border-r convention (AppShell.tsx),
-            not just a margin gap. */}
+            not just a margin gap. Direct feedback: below `lg` the rail was
+            overlapping the match list instead of stacking below it --
+            collapsed behind a toggle by default on mobile instead of
+            always rendered inline; unaffected at `lg` and up, where it
+            keeps rendering as the permanent side-by-side rail it always
+            was (the div below is forced back to `block` there
+            regardless of `railOpen`). */}
         {shownMatches.length > 0 && (
           <div className="mt-8 border-t border-border pt-8 lg:mt-0 lg:border-l lg:border-t-0 lg:pl-6 lg:pt-0">
-            <DashboardRail matches={shownMatches} />
+            <button
+              type="button"
+              onClick={() => setRailOpen((o) => !o)}
+              aria-expanded={railOpen}
+              className="flex w-full items-center justify-between text-sm font-medium text-ink lg:hidden"
+            >
+              Insights
+              <CaretDown
+                size={14}
+                className={`text-ink-secondary transition-transform duration-150 ${railOpen ? "rotate-180" : ""}`}
+              />
+            </button>
+            <div className={`${railOpen ? "mt-3 block" : "hidden"} lg:mt-0 lg:block`}>
+              <DashboardRail matches={shownMatches} />
+            </div>
           </div>
         )}
       </div>
