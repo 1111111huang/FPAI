@@ -51,7 +51,12 @@ export function DashboardRail({ matches }: { matches: Match[] }) {
 
   return (
     <aside className="flex w-full flex-col gap-6 lg:w-72">
-      <section className="rounded-lg border border-border p-4">
+      {/* Mockup correction: the rail's own panels carry a distinct accent
+          tint (were plain border-border, no fill) -- direct feedback that
+          the left sidebar and this rail shouldn't read as the same color;
+          reuses the existing --accent token (no new color introduced) at
+          low opacity rather than a flat neutral fill. */}
+      <section className="rounded-lg border border-accent/25 bg-accent/10 p-4">
         <h2 className="text-xs font-bold uppercase tracking-wide text-muted">Edge Distribution</h2>
         {total === 0 ? (
           <p className="mt-3 text-sm text-ink-secondary">No matches loaded yet.</p>
@@ -98,7 +103,12 @@ export function DashboardRail({ matches }: { matches: Match[] }) {
         )}
       </section>
 
-      <section className="rounded-lg border border-border p-4">
+      {/* Mockup correction: the rail's own panels carry a distinct accent
+          tint (were plain border-border, no fill) -- direct feedback that
+          the left sidebar and this rail shouldn't read as the same color;
+          reuses the existing --accent token (no new color introduced) at
+          low opacity rather than a flat neutral fill. */}
+      <section className="rounded-lg border border-accent/25 bg-accent/10 p-4">
         <h2 className="text-xs font-bold uppercase tracking-wide text-muted">Top Edges</h2>
         {topEdges.length === 0 ? (
           <p className="mt-3 text-sm text-ink-secondary">No priced edges yet.</p>
