@@ -1078,17 +1078,18 @@ export function DashboardPage() {
           </div>
         </div>
 
-        {/* Mockup point 4: a real divider from the main content, matching
-            the existing sidebar|main border-r convention (AppShell.tsx),
-            not just a margin gap. Direct feedback: below `lg` the rail was
-            overlapping the match list instead of stacking below it --
-            collapsed behind a toggle by default on mobile instead of
-            always rendered inline; unaffected at `lg` and up, where it
-            keeps rendering as the permanent side-by-side rail it always
-            was (the div below is forced back to `block` there
-            regardless of `railOpen`). */}
+        {/* Mockup: the rail reads as its own panel (bg-surface, same token
+            the sidebar now uses), not just a margin gap from the main
+            content -- plus the existing sidebar|main border-r convention
+            (AppShell.tsx), now echoed here as lg:border-l. Direct feedback:
+            below `lg` the rail was overlapping the match list instead of
+            stacking below it -- collapsed behind a toggle by default on
+            mobile instead of always rendered inline; unaffected at `lg`
+            and up, where it keeps rendering as the permanent side-by-side
+            rail it always was (the div below is forced back to `block`
+            there regardless of `railOpen`). */}
         {shownMatches.length > 0 && (
-          <div className="mt-8 border-t border-border pt-8 lg:mt-0 lg:border-l lg:border-t-0 lg:pl-6 lg:pt-0">
+          <div className="mt-8 rounded-xl bg-surface p-4 lg:mt-0 lg:border-l lg:border-border lg:pl-6">
             <button
               type="button"
               onClick={() => setRailOpen((o) => !o)}

@@ -147,7 +147,11 @@ export function AppShell({
 
   return (
     <div className="min-h-screen lg:flex">
-      <aside className="flex shrink-0 flex-col justify-between border-b border-border px-4 py-5 lg:h-screen lg:w-56 lg:border-b-0 lg:border-r lg:px-5 lg:py-6">
+      {/* Mockup: the sidebar reads as its own panel, a shade lighter than
+          the plain page background the main content sits on -- bg-surface
+          is the same "one step up from page" token every card/input in
+          this app already uses, not a new color. */}
+      <aside className="flex shrink-0 flex-col justify-between border-b border-border bg-surface px-4 py-5 lg:h-screen lg:w-56 lg:border-b-0 lg:border-r lg:px-5 lg:py-6">
         <div>
           {/* Mockup point 1: a small logo mark + "Edge Engine" tagline,
               not just the bare product name. Rebrand: FPAI -> Oddsey. */}
