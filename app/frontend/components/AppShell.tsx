@@ -120,21 +120,40 @@ export function AppShell({
     <div className="min-h-screen lg:flex">
       <aside className="flex shrink-0 flex-col justify-between border-b border-border px-4 py-5 lg:h-screen lg:w-56 lg:border-b-0 lg:border-r lg:px-5 lg:py-6">
         <div>
-          <span className="text-sm font-semibold tracking-tight text-ink">FPAI</span>
+          {/* Mockup point 1: a small logo mark + "Edge Engine" tagline,
+              not just the bare "FPAI" text. */}
+          <div className="flex items-center gap-2.5">
+            <span
+              className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-gradient-to-br from-accent to-teal-400 text-xs font-bold text-page"
+              aria-hidden="true"
+            >
+              FP
+            </span>
+            <div className="leading-tight">
+              <div className="text-sm font-semibold tracking-tight text-ink">FPAI</div>
+              <div className="text-[10px] uppercase tracking-wide text-muted">Edge Engine</div>
+            </div>
+          </div>
           {/* W114: desktop-only -- below `lg` this list is replaced by the
-              fixed bottom tab bar, not shown alongside it. */}
+              fixed bottom tab bar, not shown alongside it. Mockup point 2:
+              each link gets its own icon, matching NAV_ITEMS' icon field
+              (previously only used by the mobile bottom tab bar). */}
           <nav className="mt-6 hidden flex-col gap-1 text-sm lg:flex">
-            {NAV_ITEMS.map((item) => (
-              <Link
-                key={item.key}
-                href={item.href}
-                className={`rounded-md px-2 py-1.5 transition-colors duration-150 ${
-                  active === item.key ? "bg-surface text-ink" : "text-ink-secondary hover:text-ink"
-                }`}
-              >
-                {item.label}
-              </Link>
-            ))}
+            {NAV_ITEMS.map((item) => {
+              const Icon = item.icon;
+              return (
+                <Link
+                  key={item.key}
+                  href={item.href}
+                  className={`flex items-center gap-2 rounded-md px-2 py-1.5 transition-colors duration-150 ${
+                    active === item.key ? "bg-surface text-ink" : "text-ink-secondary hover:text-ink"
+                  }`}
+                >
+                  <Icon size={16} weight={active === item.key ? "fill" : "regular"} />
+                  {item.label}
+                </Link>
+              );
+            })}
           </nav>
         </div>
 

@@ -383,6 +383,16 @@ export function bestMarket(match: Match): MarketRec | undefined {
   return [...pool].sort((a, b) => b.valueEdge - a.valueEdge)[0];
 }
 
+/** Mockup point 3: backs Daily Edges' "N with positive edge" summary line.
+ * Same predicate as the "Positive Edge" tag/green edge coloring on
+ * MatchCard itself (recommendationType !== "no_bet" && valueEdge >= 0) --
+ * kept as one shared function rather than a third inline copy of that
+ * condition. */
+export function hasPositiveEdge(match: Match): boolean {
+  const m = bestMarket(match);
+  return !!m && m.currentOdds != null && m.recommendationType !== "no_bet" && m.valueEdge >= 0;
+}
+
 /** W117: every row sharing bestMarket()'s own `market` name -- e.g. all
  * three of a result_3way's home/draw/away rows -- so MatchCard can show a
  * full "market + odds per direction" board instead of only the single
@@ -965,6 +975,9 @@ export function DashboardPage() {
 
   const shownMatches = matches ?? [];
   const activeEdgesCount = shownMatches.filter(isActionable).length;
+  // Mockup point 3: "N with positive edge" -- same predicate the
+  // "Positive Edge" tag on each card itself uses.
+  const positiveEdgeCount = shownMatches.filter(hasPositiveEdge).length;
   // W108: the rail (Edge Distribution/Top Edges) and the Active Edges count
   // above both stay computed over the full loaded set regardless of this
   // filter -- it's a display concern for the list only, not a re-scoping of
@@ -981,10 +994,21 @@ export function DashboardPage() {
 
   return (
     <AppShell active="dashboard" activeEdgesCount={matches !== null ? activeEdgesCount : undefined}>
-      <div className="lg:flex lg:items-start lg:gap-8">
+      <div className="lg:flex lg:items-start lg:gap-6">
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center justify-between gap-4">
-            <h1 className="text-xl font-semibold tracking-tight text-ink">Daily Edges</h1>
+            <div>
+              <h1 className="text-xl font-semibold tracking-tight text-ink">Daily Edges</h1>
+              {/* Mockup point 3: a live stat summary, not the old static
+                  subtitle W119 removed -- only once matches have actually
+                  loaded (nothing to summarize before then). */}
+              {shownMatches.length > 0 && (
+                <p className="mt-0.5 text-sm text-ink-secondary">
+                  {shownMatches.length} match{shownMatches.length === 1 ? "" : "es"} · {positiveEdgeCount} with
+                  positive edge
+                </p>
+              )}
+            </div>
             {/* Edge % sort hidden (2026-08-13, W118) -- flagged as misleading
                 by direct user feedback. Kickoff is the only sort left, so the
                 toggle itself (nothing left to toggle between) is hidden too,
@@ -1048,8 +1072,11 @@ export function DashboardPage() {
           </div>
         </div>
 
+        {/* Mockup point 4: a real divider from the main content, matching
+            the existing sidebar|main border-r convention (AppShell.tsx),
+            not just a margin gap. */}
         {shownMatches.length > 0 && (
-          <div className="mt-8 lg:mt-0">
+          <div className="mt-8 border-t border-border pt-8 lg:mt-0 lg:border-l lg:border-t-0 lg:pl-6 lg:pt-0">
             <DashboardRail matches={shownMatches} />
           </div>
         )}

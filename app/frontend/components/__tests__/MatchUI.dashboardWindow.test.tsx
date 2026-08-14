@@ -52,6 +52,17 @@ describe("Dashboard always shows the next 10 matches (date-grouped, not today-on
     expect(to).not.toBe(today);
   });
 
+  it("mockup point 3: shows a 'N matches · N with positive edge' summary line", async () => {
+    vi.mocked(getFixtures).mockResolvedValue([fixture("match-0", "2026-09-01T15:00:00Z")]);
+
+    render(<DashboardPage />);
+
+    // No recommendation generated for this match (getCachedRecommendation
+    // isn't mocked in this file's default vi.mock("@/lib/api") auto-mock)
+    // -- positive-edge count is correctly 0.
+    expect(await screen.findByText("1 match · 0 with positive edge")).toBeInTheDocument();
+  });
+
   it("W120: each date panel gets a rotating gradient wash, distinct from its neighbors", async () => {
     const fixtures = Array.from({ length: 3 }, (_, i) => fixture(`match-${i}`, `2026-09-0${i + 1}T15:00:00Z`));
     vi.mocked(getFixtures).mockResolvedValue(fixtures);
