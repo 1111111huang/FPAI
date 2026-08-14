@@ -45,6 +45,17 @@ describe("AppShell", () => {
     expect(screen.getByText("page content")).toBeInTheDocument();
   });
 
+  it("rebrand: shows 'Oddsey' (not 'FPAI') in the sidebar", () => {
+    vi.mocked(getStatus).mockRejectedValue(new Error("no backend"));
+    render(
+      <AppShell active="dashboard">
+        <p>page content</p>
+      </AppShell>
+    );
+    expect(screen.getByText("Oddsey")).toBeInTheDocument();
+    expect(screen.queryByText("FPAI")).not.toBeInTheDocument();
+  });
+
   it("mockup point 1: shows the 'Edge Engine' tagline under the FPAI logo", () => {
     vi.mocked(getStatus).mockRejectedValue(new Error("no backend"));
     render(

@@ -28,6 +28,35 @@ const NAV_ITEMS: {
   { href: "/matches", label: "All Matches", key: "matches", icon: ListBullets },
 ];
 
+/** Rebrand (2026-08-13): FPAI -> Oddsey. Hand-recreated as inline SVG (not
+ * an embedded raster copy of the provided reference image) -- a double
+ * gold ring, an upward price-chart zigzag with a gold node at its
+ * midpoint and green nodes at each end, and two short arc "scan" brackets
+ * -- matching this codebase's existing convention of every icon (Phosphor
+ * set included) being an inline SVG component, not a separate asset file. */
+function OddseyLogo({ size = 32 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 200 200" aria-hidden="true">
+      <circle cx="100" cy="100" r="96" fill="#0f1f3a" />
+      <circle cx="100" cy="100" r="88" fill="none" stroke="#d9a94f" strokeWidth="6" />
+      <circle cx="100" cy="100" r="76" fill="none" stroke="#d9a94f" strokeWidth="6" />
+      <path
+        d="M 45 118 L 62 100 L 78 112 L 100 90 L 118 100 L 132 82 L 152 62"
+        fill="none"
+        stroke="#d9a94f"
+        strokeWidth="7"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+      <circle cx="100" cy="100" r="9" fill="#d9a94f" />
+      <circle cx="45" cy="118" r="7" fill="#1c8a4d" />
+      <circle cx="152" cy="62" r="7" fill="#1c8a4d" />
+      <path d="M 128 78 A 22 22 0 0 1 138 96" fill="none" stroke="#d9a94f" strokeWidth="4" strokeLinecap="round" />
+      <path d="M 72 104 A 22 22 0 0 0 62 122" fill="none" stroke="#d9a94f" strokeWidth="4" strokeLinecap="round" />
+    </svg>
+  );
+}
+
 export function AppShell({
   active,
   activeEdgesCount,
@@ -121,16 +150,11 @@ export function AppShell({
       <aside className="flex shrink-0 flex-col justify-between border-b border-border px-4 py-5 lg:h-screen lg:w-56 lg:border-b-0 lg:border-r lg:px-5 lg:py-6">
         <div>
           {/* Mockup point 1: a small logo mark + "Edge Engine" tagline,
-              not just the bare "FPAI" text. */}
+              not just the bare product name. Rebrand: FPAI -> Oddsey. */}
           <div className="flex items-center gap-2.5">
-            <span
-              className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-gradient-to-br from-accent to-teal-400 text-xs font-bold text-page"
-              aria-hidden="true"
-            >
-              FP
-            </span>
+            <OddseyLogo size={32} />
             <div className="leading-tight">
-              <div className="text-sm font-semibold tracking-tight text-ink">FPAI</div>
+              <div className="text-sm font-semibold tracking-tight text-ink">Oddsey</div>
               <div className="text-[10px] uppercase tracking-wide text-muted">Edge Engine</div>
             </div>
           </div>

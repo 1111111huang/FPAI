@@ -1444,17 +1444,17 @@ function summarySentence(match: Match): string {
   switch (match.overall) {
     case "direct_bet":
       return shown
-        ? `FPAI recommends betting on ${selectionLabel(match, shown.selection)} (${shown.market}), with ${match.confidence} confidence.`
-        : "FPAI recommends a bet on this match.";
+        ? `Oddsey recommends betting on ${selectionLabel(match, shown.selection)} (${shown.market}), with ${match.confidence} confidence.`
+        : "Oddsey recommends a bet on this match.";
     case "conditional":
       return shown
-        ? `FPAI says wait on ${selectionLabel(match, shown.selection)} (${shown.market}) -- the price isn't good enough yet.`
-        : "FPAI says wait -- no price here clears its bar yet.";
+        ? `Oddsey says wait on ${selectionLabel(match, shown.selection)} (${shown.market}) -- the price isn't good enough yet.`
+        : "Oddsey says wait -- no price here clears its bar yet.";
     case "no_bet":
-      return "FPAI does not recommend a bet on this match right now.";
+      return "Oddsey does not recommend a bet on this match right now.";
     case "insufficient_data":
     default:
-      return "FPAI doesn't have enough data yet for a confident read on this match.";
+      return "Oddsey doesn't have enough data yet for a confident read on this match.";
   }
 }
 

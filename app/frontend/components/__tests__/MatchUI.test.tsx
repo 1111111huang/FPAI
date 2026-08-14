@@ -595,7 +595,8 @@ describe("MatchAnalysisPage -- cache-first load (W47)", () => {
     render(<MatchAnalysisPage id="m1" home="Arsenal" away="Everton" date="2026-08-22" />);
 
     expect(
-      await screen.findByText("FPAI recommends betting on Arsenal (result_3way), with high confidence.")
+      // Rebrand: FPAI -> Oddsey.
+      await screen.findByText("Oddsey recommends betting on Arsenal (result_3way), with high confidence.")
     ).toBeInTheDocument();
   });
 
@@ -605,7 +606,7 @@ describe("MatchAnalysisPage -- cache-first load (W47)", () => {
     render(<MatchAnalysisPage id="m1" home="Arsenal" away="Everton" date="2026-08-22" />);
 
     expect(
-      await screen.findByText("FPAI doesn't have enough data yet for a confident read on this match.")
+      await screen.findByText("Oddsey doesn't have enough data yet for a confident read on this match.")
     ).toBeInTheDocument();
   });
 
