@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useState, useEffect } from "react";
-import { House, ListBullets, MagnifyingGlass, type Icon } from "@phosphor-icons/react";
+import { House, List, ListBullets, MagnifyingGlass, X, type Icon } from "@phosphor-icons/react";
 
 import { getFixtures, getStatus } from "@/lib/api";
 import type { Fixture, StatusResponse } from "@/lib/types";
@@ -75,6 +75,10 @@ export function AppShell({
   const [query, setQuery] = useState("");
   const [searchFixtures, setSearchFixtures] = useState<Fixture[]>([]);
   const [hasFocused, setHasFocused] = useState(false);
+  // Direct feedback: the whole left panel (menu/model info/footer) should
+  // be collapsible on a phone, and the expanded state should overlay the
+  // main content rather than sit inline and push it down.
+  const [menuOpen, setMenuOpen] = useState(false);
 
   useEffect(() => {
     // Refetched on every mount -- AppShell is instantiated per-page like the
@@ -145,28 +149,72 @@ export function AppShell({
   // above it, so showing both would just be noise.
   const byLeagueEntries = Object.entries(dataFreshness?.by_league ?? {}).sort(([a], [b]) => a.localeCompare(b));
 
+  // Shared between the desktop <aside> and the mobile overlay drawer below
+  // -- same content, two different containers, rather than duplicated JSX.
+  const brandBlock = (
+    <div className="flex items-center gap-2.5">
+      <OddseyLogo size={32} />
+      <div className="leading-tight">
+        <div className="text-sm font-semibold tracking-tight text-ink">Oddsey</div>
+        <div className="text-[10px] uppercase tracking-wide text-muted">Edge Engine</div>
+      </div>
+    </div>
+  );
+
+  const infoBlock = (
+    <>
+      {activeEdgesCount !== undefined && (
+        <div>
+          <div className="text-muted uppercase tracking-wide">Active Edges</div>
+          <div className="mt-0.5 font-mono text-base text-ink">{activeEdgesCount}</div>
+        </div>
+      )}
+      <div>
+        <div className="text-muted uppercase tracking-wide">Model Status</div>
+        <div className="mt-0.5 text-ink-secondary">
+          {status ? `league ${leagueModelCount} · international ${internationalModelCount}` : "—"}
+        </div>
+      </div>
+      <div>
+        <div className="text-muted uppercase tracking-wide">Last Updated</div>
+        <div className={`mt-0.5 ${dataFreshness?.is_stale ? "text-warning" : "text-ink-secondary"}`}>
+          {dataFreshness
+            ? `${dataFreshness.latest_match_date ?? "unknown"}${
+                dataFreshness.days_since_update !== null ? ` (${dataFreshness.days_since_update}d ago)` : ""
+              }${dataFreshness.is_stale ? " -- stale" : ""}`
+            : "—"}
+        </div>
+        {byLeagueEntries.length > 1 && (
+          <div className="mt-1 flex flex-col gap-0.5">
+            {byLeagueEntries.map(([league, freshness]) => (
+              <div key={league} className={freshness.is_stale ? "text-warning" : "text-ink-secondary"}>
+                <span className="font-medium">{league}</span>:{" "}
+                {freshness.days_since_update !== null ? `${freshness.days_since_update}d ago` : "unknown"}
+                {freshness.is_stale ? " -- stale" : ""}
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </>
+  );
+
   return (
     <div className="min-h-screen lg:flex">
-      {/* Mockup: the sidebar reads as its own panel, a shade lighter than
-          the plain page background the main content sits on -- bg-surface
-          is the same "one step up from page" token every card/input in
-          this app already uses, not a new color. */}
-      <aside className="flex shrink-0 flex-col justify-between border-b border-border bg-surface px-4 py-5 lg:h-screen lg:w-56 lg:border-b-0 lg:border-r lg:px-5 lg:py-6">
+      {/* Desktop sidebar -- unchanged content, now hidden lg:flex instead of
+          always visible: below `lg` the whole panel (menu/model info/
+          footer) collapses behind the mobile header bar + overlay drawer
+          below instead of always rendering inline. Mockup: bg-surface is
+          the same "one step up from page" token every card/input already
+          uses, not a new color. */}
+      <aside className="hidden shrink-0 flex-col justify-between bg-surface px-5 py-6 lg:flex lg:h-screen lg:w-56 lg:border-r lg:border-border">
         <div>
-          {/* Mockup point 1: a small logo mark + "Edge Engine" tagline,
-              not just the bare product name. Rebrand: FPAI -> Oddsey. */}
-          <div className="flex items-center gap-2.5">
-            <OddseyLogo size={32} />
-            <div className="leading-tight">
-              <div className="text-sm font-semibold tracking-tight text-ink">Oddsey</div>
-              <div className="text-[10px] uppercase tracking-wide text-muted">Edge Engine</div>
-            </div>
-          </div>
+          {brandBlock}
           {/* W114: desktop-only -- below `lg` this list is replaced by the
               fixed bottom tab bar, not shown alongside it. Mockup point 2:
               each link gets its own icon, matching NAV_ITEMS' icon field
               (previously only used by the mobile bottom tab bar). */}
-          <nav className="mt-6 hidden flex-col gap-1 text-sm lg:flex">
+          <nav className="mt-6 flex flex-col gap-1 text-sm">
             {NAV_ITEMS.map((item) => {
               const Icon = item.icon;
               return (
@@ -185,42 +233,49 @@ export function AppShell({
           </nav>
         </div>
 
-        <div className="mt-6 flex flex-col gap-3 border-t border-border pt-4 text-xs lg:mt-0">
-          {activeEdgesCount !== undefined && (
-            <div>
-              <div className="text-muted uppercase tracking-wide">Active Edges</div>
-              <div className="mt-0.5 font-mono text-base text-ink">{activeEdgesCount}</div>
-            </div>
-          )}
-          <div>
-            <div className="text-muted uppercase tracking-wide">Model Status</div>
-            <div className="mt-0.5 text-ink-secondary">
-              {status ? `league ${leagueModelCount} · international ${internationalModelCount}` : "—"}
-            </div>
-          </div>
-          <div>
-            <div className="text-muted uppercase tracking-wide">Last Updated</div>
-            <div className={`mt-0.5 ${dataFreshness?.is_stale ? "text-warning" : "text-ink-secondary"}`}>
-              {dataFreshness
-                ? `${dataFreshness.latest_match_date ?? "unknown"}${
-                    dataFreshness.days_since_update !== null ? ` (${dataFreshness.days_since_update}d ago)` : ""
-                  }${dataFreshness.is_stale ? " -- stale" : ""}`
-                : "—"}
-            </div>
-            {byLeagueEntries.length > 1 && (
-              <div className="mt-1 flex flex-col gap-0.5">
-                {byLeagueEntries.map(([league, freshness]) => (
-                  <div key={league} className={freshness.is_stale ? "text-warning" : "text-ink-secondary"}>
-                    <span className="font-medium">{league}</span>:{" "}
-                    {freshness.days_since_update !== null ? `${freshness.days_since_update}d ago` : "unknown"}
-                    {freshness.is_stale ? " -- stale" : ""}
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-        </div>
+        <div className="flex flex-col gap-3 border-t border-border pt-4 text-xs">{infoBlock}</div>
       </aside>
+
+      {/* Mobile-only compact header: hamburger trigger + a small logo,
+          replacing the sidebar's content that used to always render inline
+          and push the page down. Direct feedback: the whole left panel
+          (menu/model info/footer) should collapse behind this, and expand
+          as an overlay on top of the main content, not inline above it. */}
+      <div className="flex items-center justify-between border-b border-border bg-surface px-4 py-3 lg:hidden">
+        <div className="flex items-center gap-2">
+          <OddseyLogo size={24} />
+          <span className="text-sm font-semibold tracking-tight text-ink">Oddsey</span>
+        </div>
+        <button type="button" onClick={() => setMenuOpen(true)} aria-label="Open menu" className="text-ink-secondary">
+          <List size={22} />
+        </button>
+      </div>
+
+      {/* Mobile overlay drawer -- backdrop + slide-in panel, above the
+          fixed bottom tab bar (z-20) and the search dropdown (z-10). */}
+      {menuOpen && (
+        <>
+          <div
+            className="fixed inset-0 z-40 bg-page/70 lg:hidden"
+            onClick={() => setMenuOpen(false)}
+            aria-hidden="true"
+          />
+          <div className="fixed inset-y-0 left-0 z-50 w-72 max-w-[85vw] overflow-y-auto bg-surface p-5 shadow-xl lg:hidden">
+            <div className="flex items-start justify-between">
+              {brandBlock}
+              <button
+                type="button"
+                onClick={() => setMenuOpen(false)}
+                aria-label="Close menu"
+                className="text-ink-secondary"
+              >
+                <X size={20} />
+              </button>
+            </div>
+            <div className="mt-6 flex flex-col gap-3 border-t border-border pt-4 text-xs">{infoBlock}</div>
+          </div>
+        </>
+      )}
 
       <div className="flex min-w-0 flex-1 flex-col">
         <div className="border-b border-border px-4 py-3 sm:px-6">
