@@ -204,10 +204,12 @@ export function AppShell({
       {/* Desktop sidebar -- unchanged content, now hidden lg:flex instead of
           always visible: below `lg` the whole panel (menu/model info/
           footer) collapses behind the mobile header bar + overlay drawer
-          below instead of always rendering inline. Mockup: bg-surface is
-          the same "one step up from page" token every card/input already
-          uses, not a new color. */}
-      <aside className="hidden shrink-0 flex-col justify-between bg-surface px-5 py-6 lg:flex lg:h-screen lg:w-56 lg:border-r lg:border-border">
+          below instead of always rendering inline. Mockup correction: the
+          sidebar reads as the *same* plain page background as the main
+          content (no fill of its own, just the border-r divider) -- the
+          bg-surface tried earlier made it match the rail, when the
+          reference actually has them looking different from each other. */}
+      <aside className="hidden shrink-0 flex-col justify-between px-5 py-6 lg:flex lg:h-screen lg:w-56 lg:border-r lg:border-border">
         <div>
           {brandBlock}
           {/* W114: desktop-only -- below `lg` this list is replaced by the

@@ -1078,23 +1078,29 @@ export function DashboardPage() {
           </div>
         </div>
 
-        {/* Mockup: the rail reads as its own panel (bg-surface, same token
-            the sidebar now uses), not just a margin gap from the main
-            content -- plus the existing sidebar|main border-r convention
-            (AppShell.tsx), now echoed here as lg:border-l. Direct feedback:
-            below `lg` the rail was overlapping the match list instead of
-            stacking below it -- collapsed behind a toggle by default on
-            mobile instead of always rendered inline; unaffected at `lg`
-            and up, where it keeps rendering as the permanent side-by-side
-            rail it always was (the div below is forced back to `block`
-            there regardless of `railOpen`). */}
+        {/* Mockup correction: the rail's own color comes from
+            DashboardRail's individual panels now (an accent tint), not one
+            flat bg-surface wrapper spanning the whole column -- matches the
+            reference more closely (its two boxes read distinctly blue-
+            tinted, the space around them doesn't). Divider still echoes the
+            sidebar|main border-r convention (AppShell.tsx) as lg:border-l.
+            Direct feedback: below `lg` the rail was overlapping the match
+            list instead of stacking below it -- collapsed behind a toggle
+            by default on mobile instead of always rendered inline;
+            unaffected at `lg` and up, where it keeps rendering as the
+            permanent side-by-side rail it always was (the div below is
+            forced back to `block` there regardless of `railOpen`). */}
         {shownMatches.length > 0 && (
-          <div className="mt-8 rounded-xl bg-surface p-4 lg:mt-0 lg:border-l lg:border-border lg:pl-6">
+          <div className="mt-8 lg:mt-0 lg:border-l lg:border-border lg:pl-6">
+            {/* bg-surface lives on the button itself (mobile-only, lg:hidden)
+                now, not the outer wrapper -- keeps the toggle's own panel
+                look without reintroducing a flat fill across the whole
+                desktop-visible column. */}
             <button
               type="button"
               onClick={() => setRailOpen((o) => !o)}
               aria-expanded={railOpen}
-              className="flex w-full items-center justify-between text-sm font-medium text-ink lg:hidden"
+              className="flex w-full items-center justify-between rounded-xl bg-surface p-4 text-sm font-medium text-ink lg:hidden"
             >
               Insights
               <CaretDown
