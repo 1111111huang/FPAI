@@ -93,7 +93,14 @@ class FootballDataClient:
     def get_fixtures(
         self, competition_code: str = "PL", date_from: str | None = None, date_to: str | None = None,
     ) -> list[NormalizedMatch]:
-        return self._get_matches(competition_code, "SCHEDULED", date_from, date_to)
+        # Found live (2026-08-14): a bare status=SCHEDULED filter is honored
+        # inconsistently per competition by football-data.org -- PL returned
+        # both TIMED and SCHEDULED matches under it, but PD strictly excluded
+        # every TIMED (confirmed-kickoff-time) match, silently dropping La
+        # Liga's entire next ~4 weeks of fixtures while EPL's identically-shaped
+        # near-term matches happened to survive. Comma-separated works
+        # reliably against the real API and doesn't depend on that quirk.
+        return self._get_matches(competition_code, "SCHEDULED,TIMED", date_from, date_to)
 
     def get_results(
         self, competition_code: str = "PL", date_from: str | None = None, date_to: str | None = None,

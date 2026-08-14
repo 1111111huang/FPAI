@@ -91,8 +91,46 @@ def test_get_fixtures_sends_auth_header_and_status_filter() -> None:
 
     call = session.get.call_args
     assert call.kwargs["headers"]["X-Auth-Token"] == "my-secret-key"
-    assert call.kwargs["params"]["status"] == "SCHEDULED"
+    assert call.kwargs["params"]["status"] == "SCHEDULED,TIMED"
     assert "PL" in call.args[0] or "PL" in call.kwargs.get("url", "")
+
+
+def test_get_fixtures_status_filter_includes_timed() -> None:
+    """Bug found live (2026-08-14): football-data.org marks near-term
+    fixtures with a confirmed kickoff time as status=TIMED, not SCHEDULED
+    -- and, verified against the real API, honors a bare status=SCHEDULED
+    filter inconsistently per competition: for PL it returned both TIMED
+    and SCHEDULED matches (not a strict filter), but for PD it strictly
+    excluded every TIMED match -- La Liga's entire next ~4 weeks of
+    fixtures silently vanished from the app while EPL's identical-shaped
+    near-term matches happened to survive. status=SCHEDULED,TIMED
+    (comma-separated, confirmed working against the real API) is
+    competition-agnostic instead of relying on that inconsistency."""
+    session = _mock_session([])
+    client = FootballDataClient(api_key="fake-key", session=session)
+
+    client.get_fixtures(competition_code="PD")
+
+    assert session.get.call_args.kwargs["params"]["status"] == "SCHEDULED,TIMED"
+
+
+def test_get_fixtures_normalizes_a_timed_match() -> None:
+    """A TIMED-status match returned by the upstream API (now that the
+    filter no longer excludes it) must normalize the same as a SCHEDULED
+    one -- NormalizedMatch.status is just whatever the API reports,
+    unrelated to which values were requested."""
+    timed_match = dict(_SCHEDULED_MATCH, status="TIMED")
+    session = _mock_session([timed_match])
+    client = FootballDataClient(api_key="fake-key", session=session)
+
+    fixtures = client.get_fixtures()
+
+    assert fixtures == [
+        NormalizedMatch(
+            match_id="560542", utc_date="2026-08-21T19:00:00Z", status="TIMED",
+            home_team="Arsenal", away_team="Coventry City", home_goals=None, away_goals=None,
+        )
+    ]
 
 
 def test_date_range_params_included_when_provided() -> None:
