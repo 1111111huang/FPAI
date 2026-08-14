@@ -123,7 +123,9 @@ describe("MatchCard's relative-day label respects the sandbox clock", () => {
       <MatchCard match={match} onUpdate={vi.fn()} asOf={new Date("2026-03-01T00:00:00Z")} sandboxMode={true} />
     );
 
-    expect(screen.getByText(/result_3way/)).toBeInTheDocument();
+    // W121 follow-up: market names are humanized now ("3-Way Result", not
+    // the raw "result_3way" backend string).
+    expect(screen.getByText("3-Way Result")).toBeInTheDocument();
     expect(screen.getByText(/tomorrow/)).toBeInTheDocument();
   });
 

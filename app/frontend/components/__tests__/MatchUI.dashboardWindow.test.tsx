@@ -52,6 +52,38 @@ describe("Dashboard always shows the next 10 matches (date-grouped, not today-on
     expect(to).not.toBe(today);
   });
 
+  it("collapses the rail behind an 'Insights' toggle by default, expanding on click", async () => {
+    // Direct feedback: on small screens the rail was overlapping the match
+    // list instead of stacking below it.
+    vi.mocked(getFixtures).mockResolvedValue([fixture("match-0", "2026-09-01T15:00:00Z")]);
+    const user = userEvent.setup();
+
+    render(<DashboardPage />);
+    await screen.findByText("match-0");
+
+    const toggle = screen.getByRole("button", { name: /Insights/ });
+    expect(toggle).toHaveAttribute("aria-expanded", "false");
+    // Collapsed by default -- the rail's own "Edge Distribution" heading
+    // sits in a hidden container (still in the DOM, forced visible again
+    // at the `lg` breakpoint via CSS, not JS-conditional).
+    expect(screen.getByText("Edge Distribution").closest(".hidden")).not.toBeNull();
+
+    await user.click(toggle);
+    expect(toggle).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByText("Edge Distribution").closest(".hidden")).toBeNull();
+  });
+
+  it("mockup point 3: shows a 'N matches · N with positive edge' summary line", async () => {
+    vi.mocked(getFixtures).mockResolvedValue([fixture("match-0", "2026-09-01T15:00:00Z")]);
+
+    render(<DashboardPage />);
+
+    // No recommendation generated for this match (getCachedRecommendation
+    // isn't mocked in this file's default vi.mock("@/lib/api") auto-mock)
+    // -- positive-edge count is correctly 0.
+    expect(await screen.findByText("1 match · 0 with positive edge")).toBeInTheDocument();
+  });
+
   it("W120: each date panel gets a rotating gradient wash, distinct from its neighbors", async () => {
     const fixtures = Array.from({ length: 3 }, (_, i) => fixture(`match-${i}`, `2026-09-0${i + 1}T15:00:00Z`));
     vi.mocked(getFixtures).mockResolvedValue(fixtures);
@@ -64,6 +96,20 @@ describe("Dashboard always shows the next 10 matches (date-grouped, not today-on
     expect(panels[0].className).toContain("from-violet-500/10");
     expect(panels[1].className).toContain("from-teal-500/10");
     expect(panels[2].className).toContain("from-emerald-500/10");
+  });
+
+  it("mockup point 5: each card's MODELED tag is tinted to match its own date panel's wash", async () => {
+    const fixtures = Array.from({ length: 3 }, (_, i) => fixture(`match-${i}`, `2026-09-0${i + 1}T15:00:00Z`));
+    vi.mocked(getFixtures).mockResolvedValue(fixtures);
+
+    render(<DashboardPage />);
+    await waitFor(() => expect(screen.getByText("match-0")).toBeInTheDocument());
+
+    const tags = screen.getAllByText("Modeled");
+    expect(tags).toHaveLength(3);
+    expect(tags[0]).toHaveClass("border-violet-400/40");
+    expect(tags[1]).toHaveClass("border-teal-400/40");
+    expect(tags[2]).toHaveClass("border-emerald-400/40");
   });
 
   it("shows up to 10 matches sorted nearest-first, even when today itself has none", async () => {

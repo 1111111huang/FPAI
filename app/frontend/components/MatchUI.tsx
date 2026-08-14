@@ -286,6 +286,18 @@ const DATE_GROUP_WASHES = [
   "from-emerald-500/10 via-emerald-500/5 to-transparent",
 ];
 
+// Same rotation, same three hues, as a TierTag tint instead of a
+// background wash -- so a card's MODELED tag echoes its own date panel's
+// color rather than a fixed neutral gray regardless of which group it's
+// in. Index-matched to DATE_GROUP_WASHES (both cycle by the same `i`), not
+// merged into one array, since the two need different Tailwind utilities
+// (bg-gradient-to-br stops vs a plain border/bg/text triple).
+const TIER_TAG_TINTS = [
+  "border-violet-400/40 bg-violet-500/15 text-violet-300",
+  "border-teal-400/40 bg-teal-500/15 text-teal-300",
+  "border-emerald-400/40 bg-emerald-500/15 text-emerald-300",
+];
+
 const STATUS_META: Record<
   Overall,
   { text: string; ring: string; fill: string; icon: React.ReactNode; label: string; verdict: string; explain: string }
@@ -369,6 +381,16 @@ export function bestMarket(match: Match): MarketRec | undefined {
   const actionable = match.markets.filter((m) => m.recommendationType !== "no_bet");
   const pool = actionable.length > 0 ? actionable : match.markets;
   return [...pool].sort((a, b) => b.valueEdge - a.valueEdge)[0];
+}
+
+/** Mockup point 3: backs Daily Edges' "N with positive edge" summary line.
+ * Same predicate as the "Positive Edge" tag/green edge coloring on
+ * MatchCard itself (recommendationType !== "no_bet" && valueEdge >= 0) --
+ * kept as one shared function rather than a third inline copy of that
+ * condition. */
+export function hasPositiveEdge(match: Match): boolean {
+  const m = bestMarket(match);
+  return !!m && m.currentOdds != null && m.recommendationType !== "no_bet" && m.valueEdge >= 0;
 }
 
 /** W117: every row sharing bestMarket()'s own `market` name -- e.g. all
@@ -510,11 +532,15 @@ export function TeamBadge({ name, size = "sm" }: { name: string; size?: "sm" | "
   );
 }
 
-function TierTag({ tier }: { tier: Tier }) {
+function TierTag({ tier, tintIndex }: { tier: Tier; tintIndex?: number }) {
+  // tintIndex is only ever passed by DashboardPage's date-grouped cards
+  // (matching that group's own DATE_GROUP_WASHES index) -- Match Explorer's
+  // ungrouped list omits it entirely, keeping the plain neutral style.
+  const tint = tintIndex !== undefined ? TIER_TAG_TINTS[tintIndex % TIER_TAG_TINTS.length] : "border-border text-ink-secondary";
   return (
     <span
       title={TIER_EXPLANATION[tier]}
-      className="rounded border border-border px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-ink-secondary"
+      className={`rounded border px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide ${tint}`}
     >
       {TIER_LABEL[tier]}
     </span>
@@ -609,11 +635,17 @@ export function MatchCard({
   onUpdate,
   asOf = new Date(),
   sandboxMode = false,
+  tintIndex,
 }: {
   match: Match;
   onUpdate: (m: Match) => void;
   asOf?: Date;
   sandboxMode?: boolean;
+  // Mockup point 5: the MODELED tag echoes its own date panel's wash color
+  // rather than a fixed neutral gray -- only DashboardPage's date-grouped
+  // cards pass this (matching that group's DATE_GROUP_WASHES index); Match
+  // Explorer's ungrouped list omits it, keeping the plain style.
+  tintIndex?: number;
 }) {
   const [open, setOpen] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -625,6 +657,7 @@ export function MatchCard({
   // to display -- previously `shown ? market/selection : day` hid it
   // entirely whenever a card had a recommendation.
   const day = formatDay(match.kickoffIso, asOf, sandboxMode);
+  const market = shown ? marketLabel(shown.market) : null;
 
   async function handleExpand() {
     const next = !open;
@@ -685,137 +718,135 @@ export function MatchCard({
           )}
         </div>
 
-        {/* Body: 1. TEAM (top visual priority, vertically stacked home/away
-            with a "v" divider) + 2/3. MARKET/PICK/ODDS/EDGE, one
-            always-rendered grid (dashes when there's no recommendation
-            yet) -- replaces the previous separate per-direction board and
-            selection/edge row with a single unified box. */}
-        <div className="mt-2 flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
-          <div className="min-w-0">
-            <div className="flex items-center gap-2">
-              <TeamBadge name={match.home} size="lg" />
-              <span className="truncate text-base font-semibold text-ink">{match.home}</span>
-            </div>
-            <div className="py-0.5 pl-11 text-xs text-ink-secondary">v</div>
-            <div className="flex items-center gap-2">
-              <TeamBadge name={match.away} size="lg" />
-              <span className="truncate text-base font-semibold text-ink">{match.away}</span>
+        {/* 1. TEAM -- one horizontal row (direct mockup correction: W120's
+            vertical home/"v"/away stack was a misread of the reference). */}
+        <div className="mt-2 flex items-center gap-2">
+          <TeamBadge name={match.home} size="lg" />
+          <span className="truncate text-base font-semibold text-ink">{match.home}</span>
+          <span className="shrink-0 text-sm text-ink-secondary">v</span>
+          <TeamBadge name={match.away} size="lg" />
+          <span className="truncate text-base font-semibold text-ink">{match.away}</span>
+        </div>
+
+        {/* MODELED tag + MARKET/PICK/ODDS/EDGE as one full-width row below
+            the team row (direct mockup correction: W120 boxed the grid as a
+            narrower side panel next to the team block instead). */}
+        <div className="mt-3 flex flex-wrap items-start justify-between gap-4">
+          <TierTag tier={match.tier} tintIndex={tintIndex} />
+
+          <div className="flex min-w-0 flex-1 flex-wrap items-start justify-between gap-x-4 gap-y-3">
+            <div className="min-w-0">
+              <div className="text-[10px] uppercase tracking-wide text-muted">Market</div>
+              <div className="truncate text-sm font-semibold text-ink">{market ? market.label : "—"}</div>
+              {market?.subtitle && <div className="text-[10px] text-muted">{market.subtitle}</div>}
             </div>
 
-            <div className="mt-2.5">
-              <TierTag tier={match.tier} />
-            </div>
-            {/* day/time are separate text nodes (not one interpolated
-                string) so "today"/"tomorrow" etc. stay independently
-                matchable -- a single combined node isn't findable by an
-                exact-text query once other text shares the node (RTL
-                matches per-node, not substrings). */}
-            <div className="mt-2 flex items-center gap-3 text-xs text-ink-secondary">
-              <span className="flex items-center gap-1">
-                <CalendarBlank size={12} />
-                <span>{day}</span>
-              </span>
-              <span className="flex items-center gap-1">
-                <Clock size={12} />
-                <span>{formatKickoff(match.kickoffIso)}</span>
-              </span>
-            </div>
-          </div>
-
-          {/* W120 follow-up: its own bg-surface/60 -- a third, visually
-              distinct layer nested inside the card, above the date panel's
-              colored wash and the card's own bg-page. */}
-          <div className="w-full shrink-0 rounded-lg border border-border bg-surface/60 p-3 sm:w-[300px]">
-            <div className="flex items-start justify-between gap-3">
-              <div className="min-w-0 flex-1">
-                <div className="text-[10px] uppercase tracking-wide text-muted">Market</div>
-                <div className="truncate text-sm font-semibold text-ink">{shown ? shown.market : "—"}</div>
-                <div className="mt-2.5 text-[10px] uppercase tracking-wide text-muted">Pick</div>
-                <div className="flex items-center gap-1 text-sm font-semibold text-ink">
-                  {shown ? (
-                    <>
-                      {pickCaption(shown.selection) && (
-                        <ArrowUp size={11} weight="bold" className="shrink-0 text-good" />
-                      )}
-                      <span className="truncate">{pickLabel(match, shown.selection)}</span>
-                      {pickCaption(shown.selection) && (
-                        <span className="shrink-0 text-xs font-normal text-ink-secondary">
-                          {pickCaption(shown.selection)}
-                        </span>
-                      )}
-                    </>
-                  ) : (
-                    "—"
-                  )}
-                </div>
-              </div>
-
-              <div className="shrink-0 text-right">
-                {/* W84/A52: for a conditional market with a real targetOdds
-                    (code-computed, src/agent/schema.py _compute_target_odds --
-                    the price this market needs to reach to clear
-                    min_value_edge), that's the number worth surfacing here,
-                    not the current price the card already told the user isn't
-                    good enough -- shown in the same warning color as the
-                    Conditional badge. null covers "not applicable" and "no
-                    such target exists" (e.g. A29's ceiling-downgrade case)
-                    identically -- both fall back to the plain current-odds
-                    display. */}
-                {!isCompleted && shown?.recommendationType === "conditional" && shown.targetOdds != null ? (
+            <div className="min-w-0">
+              <div className="text-[10px] uppercase tracking-wide text-muted">Pick</div>
+              <div className="flex items-center gap-1 text-sm font-semibold text-ink">
+                {shown ? (
                   <>
-                    <div className="text-[10px] uppercase tracking-wide text-warning">Wait ≥</div>
-                    <div className="font-mono text-base font-bold text-warning">{shown.targetOdds.toFixed(2)}</div>
-                  </>
-                ) : (
-                  <>
-                    <div className="text-[10px] uppercase tracking-wide text-muted">
-                      {isCompleted ? "Result" : "Odds"}
-                    </div>
-                    <div className="font-mono text-base font-bold text-ink">
-                      {isCompleted && match.result
-                        ? `${match.result.home}-${match.result.away}`
-                        : shown?.currentOdds
-                        ? shown.currentOdds.toFixed(2)
-                        : "—"}
-                    </div>
-                    {!isCompleted && shown?.currentOdds != null && (
-                      <span className="mt-1 inline-block rounded border border-border px-1.5 py-0.5 text-[10px] text-ink-secondary">
-                        Decimal
+                    {pickCaption(shown.selection) && (
+                      <ArrowUp size={11} weight="bold" className="shrink-0 text-good" />
+                    )}
+                    <span className="truncate">{pickLabel(match, shown.selection)}</span>
+                    {pickCaption(shown.selection) && (
+                      <span className="shrink-0 text-xs font-normal text-ink-secondary">
+                        {pickCaption(shown.selection)}
                       </span>
                     )}
                   </>
+                ) : (
+                  "—"
                 )}
               </div>
+            </div>
 
-              <div className="shrink-0 text-right">
-                <div title={EDGE_EXPLAIN} className="text-[10px] uppercase tracking-wide text-muted">Edge</div>
-                <div
-                  className={`font-mono text-base font-bold ${
-                    shown?.currentOdds
-                      ? shown.recommendationType !== "no_bet" && shown.valueEdge >= 0
-                        ? "text-good"
-                        : "text-ink-secondary"
-                      : "text-muted"
-                  }`}
-                >
-                  {shown?.currentOdds ? formatEdge(shown.valueEdge) : "—"}
-                </div>
-                {shown?.currentOdds != null && shown.recommendationType !== "no_bet" && shown.valueEdge >= 0 && (
-                  <span className="mt-1 inline-block rounded-full border border-good/40 bg-good/10 px-1.5 py-0.5 text-[10px] text-good">
-                    Positive Edge
-                  </span>
-                )}
+            <div className="shrink-0 text-right">
+              {/* W84/A52: for a conditional market with a real targetOdds
+                  (code-computed, src/agent/schema.py _compute_target_odds --
+                  the price this market needs to reach to clear
+                  min_value_edge), that's the number worth surfacing here,
+                  not the current price the card already told the user isn't
+                  good enough -- shown in the same warning color as the
+                  Conditional badge. null covers "not applicable" and "no
+                  such target exists" (e.g. A29's ceiling-downgrade case)
+                  identically -- both fall back to the plain current-odds
+                  display. */}
+              {!isCompleted && shown?.recommendationType === "conditional" && shown.targetOdds != null ? (
+                <>
+                  <div className="text-[10px] uppercase tracking-wide text-warning">Wait ≥</div>
+                  <div className="font-mono text-base font-bold text-warning">{shown.targetOdds.toFixed(2)}</div>
+                </>
+              ) : (
+                <>
+                  <div className="text-[10px] uppercase tracking-wide text-muted">
+                    {isCompleted ? "Result" : "Odds"}
+                  </div>
+                  <div className="font-mono text-base font-bold text-ink">
+                    {isCompleted && match.result
+                      ? `${match.result.home}-${match.result.away}`
+                      : shown?.currentOdds
+                      ? shown.currentOdds.toFixed(2)
+                      : "—"}
+                  </div>
+                  {!isCompleted && shown?.currentOdds != null && (
+                    <span className="mt-1 inline-block rounded border border-border px-1.5 py-0.5 text-[10px] text-ink-secondary">
+                      Decimal
+                    </span>
+                  )}
+                </>
+              )}
+            </div>
+
+            <div className="shrink-0 text-right">
+              <div title={EDGE_EXPLAIN} className="text-[10px] uppercase tracking-wide text-muted">Edge</div>
+              <div
+                className={`font-mono text-base font-bold ${
+                  shown?.currentOdds
+                    ? shown.recommendationType !== "no_bet" && shown.valueEdge >= 0
+                      ? "text-good"
+                      : "text-ink-secondary"
+                    : "text-muted"
+                }`}
+              >
+                {shown?.currentOdds ? formatEdge(shown.valueEdge) : "—"}
               </div>
+              {shown?.currentOdds != null && shown.recommendationType !== "no_bet" && shown.valueEdge >= 0 && (
+                <span className="mt-1 inline-block rounded-full border border-good/40 bg-good/10 px-1.5 py-0.5 text-[10px] text-good">
+                  Positive Edge
+                </span>
+              )}
             </div>
           </div>
         </div>
 
-        <div className="mt-3 flex items-center justify-end gap-2">
-          {shown?.currentOdds != null && <span className="text-[10px] text-muted">via The Odds API</span>}
-          <CaretDown
-            size={14}
-            className={`text-ink-secondary transition-transform duration-150 ${open ? "rotate-180" : ""}`}
-          />
+        {/* Closing row: day/time (icon + bullet-separated, mockup point 4 --
+            was gap-only spacing, no visible "•") + odds source/chevron. */}
+        <div className="mt-3 flex items-center justify-between gap-2 border-t border-border pt-2.5">
+          {/* day/time are separate text nodes (not one interpolated string)
+              so "today"/"tomorrow" etc. stay independently matchable -- a
+              single combined node isn't findable by an exact-text query
+              once other text shares the node (RTL matches per-node, not
+              substrings). */}
+          <div className="flex items-center gap-1.5 text-xs text-ink-secondary">
+            <span className="flex items-center gap-1">
+              <CalendarBlank size={12} />
+              <span>{day}</span>
+            </span>
+            <span className="text-muted">•</span>
+            <span className="flex items-center gap-1">
+              <Clock size={12} />
+              <span>{formatKickoff(match.kickoffIso)}</span>
+            </span>
+          </div>
+          <span className="flex items-center gap-2">
+            {shown?.currentOdds != null && <span className="text-[10px] text-muted">via The Odds API</span>}
+            <CaretDown
+              size={14}
+              className={`text-ink-secondary transition-transform duration-150 ${open ? "rotate-180" : ""}`}
+            />
+          </span>
         </div>
       </button>
 
@@ -878,6 +909,12 @@ export function DashboardPage() {
   // (Direct Bet / Conditional) ones -- direct feedback that non-actionable
   // rows can't be filtered out today, only reordered.
   const [actionableOnly, setActionableOnly] = useState(false);
+  // Direct feedback: on small screens the rail (Edge Distribution/Top
+  // Edges) was overlapping the match list instead of stacking below it --
+  // collapsed behind a toggle by default on mobile rather than always
+  // rendered inline; unaffected at `lg` and up, where it stays the
+  // permanent side-by-side rail it always was.
+  const [railOpen, setRailOpen] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -944,6 +981,9 @@ export function DashboardPage() {
 
   const shownMatches = matches ?? [];
   const activeEdgesCount = shownMatches.filter(isActionable).length;
+  // Mockup point 3: "N with positive edge" -- same predicate the
+  // "Positive Edge" tag on each card itself uses.
+  const positiveEdgeCount = shownMatches.filter(hasPositiveEdge).length;
   // W108: the rail (Edge Distribution/Top Edges) and the Active Edges count
   // above both stay computed over the full loaded set regardless of this
   // filter -- it's a display concern for the list only, not a re-scoping of
@@ -960,10 +1000,21 @@ export function DashboardPage() {
 
   return (
     <AppShell active="dashboard" activeEdgesCount={matches !== null ? activeEdgesCount : undefined}>
-      <div className="lg:flex lg:items-start lg:gap-8">
+      <div className="lg:flex lg:items-start lg:gap-6">
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center justify-between gap-4">
-            <h1 className="text-xl font-semibold tracking-tight text-ink">Daily Edges</h1>
+            <div>
+              <h1 className="text-xl font-semibold tracking-tight text-ink">Daily Edges</h1>
+              {/* Mockup point 3: a live stat summary, not the old static
+                  subtitle W119 removed -- only once matches have actually
+                  loaded (nothing to summarize before then). */}
+              {shownMatches.length > 0 && (
+                <p className="mt-0.5 text-sm text-ink-secondary">
+                  {shownMatches.length} match{shownMatches.length === 1 ? "" : "es"} · {positiveEdgeCount} with
+                  positive edge
+                </p>
+              )}
+            </div>
             {/* Edge % sort hidden (2026-08-13, W118) -- flagged as misleading
                 by direct user feedback. Kickoff is the only sort left, so the
                 toggle itself (nothing left to toggle between) is hidden too,
@@ -1010,7 +1061,14 @@ export function DashboardPage() {
                     </div>
                     <div className="flex flex-col gap-2.5">
                       {group.matches.map((m) => (
-                        <MatchCard key={m.id} match={m} onUpdate={updateMatch} asOf={asOf} sandboxMode={sandboxMode} />
+                        <MatchCard
+                          key={m.id}
+                          match={m}
+                          onUpdate={updateMatch}
+                          asOf={asOf}
+                          sandboxMode={sandboxMode}
+                          tintIndex={i}
+                        />
                       ))}
                     </div>
                   </div>
@@ -1020,9 +1078,32 @@ export function DashboardPage() {
           </div>
         </div>
 
+        {/* Mockup point 4: a real divider from the main content, matching
+            the existing sidebar|main border-r convention (AppShell.tsx),
+            not just a margin gap. Direct feedback: below `lg` the rail was
+            overlapping the match list instead of stacking below it --
+            collapsed behind a toggle by default on mobile instead of
+            always rendered inline; unaffected at `lg` and up, where it
+            keeps rendering as the permanent side-by-side rail it always
+            was (the div below is forced back to `block` there
+            regardless of `railOpen`). */}
         {shownMatches.length > 0 && (
-          <div className="mt-8 lg:mt-0">
-            <DashboardRail matches={shownMatches} />
+          <div className="mt-8 border-t border-border pt-8 lg:mt-0 lg:border-l lg:border-t-0 lg:pl-6 lg:pt-0">
+            <button
+              type="button"
+              onClick={() => setRailOpen((o) => !o)}
+              aria-expanded={railOpen}
+              className="flex w-full items-center justify-between text-sm font-medium text-ink lg:hidden"
+            >
+              Insights
+              <CaretDown
+                size={14}
+                className={`text-ink-secondary transition-transform duration-150 ${railOpen ? "rotate-180" : ""}`}
+              />
+            </button>
+            <div className={`${railOpen ? "mt-3 block" : "hidden"} lg:mt-0 lg:block`}>
+              <DashboardRail matches={shownMatches} />
+            </div>
           </div>
         )}
       </div>
@@ -1331,6 +1412,26 @@ function pickCaption(selection: string): string | null {
   if (selection.startsWith("over")) return "Over";
   if (selection.startsWith("under")) return "Under";
   return null;
+}
+
+// W121 follow-up (mockup point 3): human-readable market names, not the raw
+// backend string (`shown.market` was previously rendered verbatim -- a
+// reader would have seen "result_3way"/"total_goals" literally). Covers
+// only the five real markets the agent actually emits (src/agent/schema.py
+// MarketRecommendation.market Literal) -- an unrecognized market string
+// (future market type) falls back to a generic humanization rather than
+// silently mislabeling it as one of these five.
+const MARKET_LABEL: Record<string, { label: string; subtitle: string }> = {
+  result_3way: { label: "3-Way Result", subtitle: "Full Time" },
+  total_goals: { label: "Over/Under", subtitle: "Full Time" },
+  btts: { label: "Both Teams to Score", subtitle: "Full Time" },
+  home_corners: { label: "Home Corners", subtitle: "Full Time" },
+  away_corners: { label: "Away Corners", subtitle: "Full Time" },
+};
+function marketLabel(market: string): { label: string; subtitle: string | null } {
+  if (MARKET_LABEL[market]) return MARKET_LABEL[market];
+  const spaced = market.replace(/_/g, " ");
+  return { label: spaced.charAt(0).toUpperCase() + spaced.slice(1), subtitle: null };
 }
 
 /** W111: one plain-English sentence, composed entirely from fields already

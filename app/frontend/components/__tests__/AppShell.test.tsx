@@ -45,6 +45,30 @@ describe("AppShell", () => {
     expect(screen.getByText("page content")).toBeInTheDocument();
   });
 
+  it("mockup point 1: shows the 'Edge Engine' tagline under the FPAI logo", () => {
+    vi.mocked(getStatus).mockRejectedValue(new Error("no backend"));
+    render(
+      <AppShell active="dashboard">
+        <p>page content</p>
+      </AppShell>
+    );
+    expect(screen.getByText("Edge Engine")).toBeInTheDocument();
+  });
+
+  it("mockup point 2: each desktop nav link renders its own icon", () => {
+    vi.mocked(getStatus).mockRejectedValue(new Error("no backend"));
+    const { container } = render(
+      <AppShell active="dashboard">
+        <p>page content</p>
+      </AppShell>
+    );
+    // Desktop sidebar's <nav> is the "lg:flex" one (vs. the mobile
+    // bottom-tab-bar's "lg:hidden" nav, which already had icons before
+    // this change) -- scope the query so this doesn't pass by accident.
+    const desktopNav = container.querySelector("nav.lg\\:flex");
+    expect(desktopNav?.querySelectorAll("svg").length).toBe(2);
+  });
+
   it("does not render a Bets nav link -- feature not ready yet (hidden 2026-08-13)", () => {
     vi.mocked(getStatus).mockRejectedValue(new Error("no backend"));
     render(
