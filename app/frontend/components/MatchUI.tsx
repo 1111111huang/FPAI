@@ -548,7 +548,7 @@ function HitBadge({ hit }: { hit: boolean }) {
   return (
     <span className="inline-flex items-center gap-1.5 rounded-md border border-serious/40 bg-serious/15 px-2 py-0.5 text-[11px] font-medium uppercase tracking-wide text-serious">
       <XCircle weight="fill" size={13} />
-      Missed
+      Not Hit
     </span>
   );
 }
@@ -798,11 +798,18 @@ export function MatchCard({
             own bg-warning/15) match this redesign's visual language. */}
         <div className="flex items-center justify-end gap-1.5">
           {isLive && <LiveBadge />}
+          {/* Completed: StatusBadge (the pre-match recommendation type) drops
+              out of this row -- that's now stated in the footer instead
+              ("Was a <label> pick"), since once the match is over what
+              matters up here is FT + whether it actually hit, not what kind
+              of pick it originally was. Upcoming/live unchanged: StatusBadge
+              still leads there, nothing to resolve yet. */}
+          {isCompleted && <span className="text-[11px] font-medium uppercase tracking-wide text-muted">FT</span>}
           {hit !== null && <HitBadge hit={hit} />}
           {match.hasRecommendation ? (
             <>
               <TrustSignal match={match} />
-              <StatusBadge status={match.overall} />
+              {!isCompleted && <StatusBadge status={match.overall} />}
             </>
           ) : (
             <span className="rounded-md border border-border-strong bg-surface px-2 py-0.5 text-[11px] font-medium uppercase tracking-wide text-muted">
@@ -858,7 +865,9 @@ export function MatchCard({
                     {pickCaption(shown.selection) && (
                       <ArrowUp size={11} weight="bold" className="shrink-0 text-good" />
                     )}
-                    <span className="truncate">{pickLabel(match, shown.selection)}</span>
+                    <span className={`truncate ${hit === false ? "line-through" : ""}`}>
+                      {pickLabel(match, shown.selection)}
+                    </span>
                     {pickCaption(shown.selection) && (
                       <span className="shrink-0 text-xs font-normal text-ink-secondary">
                         {pickCaption(shown.selection)}
@@ -869,6 +878,17 @@ export function MatchCard({
                   "—"
                 )}
               </div>
+              {/* Inline echo of the same top-right HitBadge, right under the
+                  specific pick it's about -- readable at a glance without
+                  looking away from the Pick column. hit === null (no
+                  recommendation, or an unresolvable market) renders nothing,
+                  same contract as the top-right badge. */}
+              {hit !== null && (
+                <div className={`flex items-center gap-1 text-xs font-medium ${hit ? "text-good" : "text-serious"}`}>
+                  {hit ? <CheckCircle weight="fill" size={11} /> : <XCircle weight="fill" size={11} />}
+                  {hit ? "Hit" : "Not Hit"}
+                </div>
+              )}
             </div>
 
             <div className="shrink-0 text-right">
@@ -912,7 +932,12 @@ export function MatchCard({
               <div title={EDGE_EXPLAIN} className="text-[10px] uppercase tracking-wide text-muted">Edge</div>
               <div
                 className={`font-mono text-base font-bold ${
-                  shown?.currentOdds
+                  isCompleted
+                    ? // Plain, not green -- "positive edge" reads as "this is
+                      // still worth acting on", which is nonsensical once
+                      // the match is decided. This is a historical fact now.
+                      "text-ink"
+                    : shown?.currentOdds
                     ? shown.recommendationType !== "no_bet" && shown.valueEdge >= 0
                       ? "text-good"
                       : "text-ink-secondary"
@@ -921,10 +946,18 @@ export function MatchCard({
               >
                 {shown?.currentOdds ? formatEdge(shown.valueEdge) : "—"}
               </div>
-              {shown?.currentOdds != null && shown.recommendationType !== "no_bet" && shown.valueEdge >= 0 && (
-                <span className="mt-1 inline-block rounded-full border border-good/40 bg-good/10 px-1.5 py-0.5 text-[10px] text-good">
-                  Positive Edge
-                </span>
+              {isCompleted ? (
+                shown?.currentOdds != null && (
+                  <span className="mt-1 inline-block rounded-full border border-border-strong bg-surface px-1.5 py-0.5 text-[10px] text-muted">
+                    Pre-match edge
+                  </span>
+                )
+              ) : (
+                shown?.currentOdds != null && shown.recommendationType !== "no_bet" && shown.valueEdge >= 0 && (
+                  <span className="mt-1 inline-block rounded-full border border-good/40 bg-good/10 px-1.5 py-0.5 text-[10px] text-good">
+                    Positive Edge
+                  </span>
+                )
               )}
             </div>
           </div>
@@ -944,12 +977,28 @@ export function MatchCard({
               <span>{day}</span>
             </span>
             <span className="text-muted">•</span>
-            <span className="flex items-center gap-1">
-              <Clock size={12} />
-              <span>{formatKickoff(match.kickoffIso)}</span>
-            </span>
+            {isCompleted ? (
+              // A clock time reads as "this is when it kicks off" -- wrong
+              // tense for a match that's already over.
+              <span className="flex items-center gap-1">
+                <Clock size={12} />
+                <span>Full Time</span>
+              </span>
+            ) : (
+              <span className="flex items-center gap-1">
+                <Clock size={12} />
+                <span>{formatKickoff(match.kickoffIso)}</span>
+              </span>
+            )}
           </div>
           <span className="flex items-center gap-2">
+            {/* StatusBadge dropped out of the top-right badge row for a
+                completed match (replaced by FT/HitBadge there) -- restated
+                here instead, since "what kind of pick this was" is still
+                worth knowing once the match is over. */}
+            {isCompleted && match.hasRecommendation && (
+              <span className="text-[10px] text-muted">Was a {STATUS_META[match.overall].label} pick</span>
+            )}
             {shown?.currentOdds != null && <span className="text-[10px] text-muted">via The Odds API</span>}
             <CaretDown
               size={14}

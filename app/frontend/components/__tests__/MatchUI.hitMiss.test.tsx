@@ -77,14 +77,16 @@ function baseMatch(overrides: Partial<Match> = {}): Match {
 
 describe("MatchCard -- hit/miss indicator for a completed match", () => {
   it("shows a HIT badge when the recommended market resolved correctly", () => {
+    // Shown twice by design -- top-right badge row and inline under Pick
+    // (MatchUI.completedRedesign.test.tsx covers that pairing directly).
     render(<MatchCard match={baseMatch()} onUpdate={vi.fn()} />);
-    expect(screen.getByText("Hit")).toBeInTheDocument();
+    expect(screen.getAllByText("Hit").length).toBeGreaterThan(0);
   });
 
-  it("shows a MISSED badge when the recommended market resolved incorrectly", () => {
+  it("shows a NOT HIT badge when the recommended market resolved incorrectly", () => {
     const match = baseMatch({ result: { home: 0, away: 1 } }); // recommended "home", actual "away"
     render(<MatchCard match={match} onUpdate={vi.fn()} />);
-    expect(screen.getByText("Missed")).toBeInTheDocument();
+    expect(screen.getAllByText("Not Hit").length).toBeGreaterThan(0);
   });
 
   it("shows neither badge for an unresolvable market (corners)", () => {
@@ -93,20 +95,20 @@ describe("MatchCard -- hit/miss indicator for a completed match", () => {
     });
     render(<MatchCard match={match} onUpdate={vi.fn()} />);
     expect(screen.queryByText("Hit")).not.toBeInTheDocument();
-    expect(screen.queryByText("Missed")).not.toBeInTheDocument();
+    expect(screen.queryByText("Not Hit")).not.toBeInTheDocument();
   });
 
   it("shows neither badge for an upcoming (not yet completed) match", () => {
     const match = baseMatch({ status: "upcoming", result: undefined });
     render(<MatchCard match={match} onUpdate={vi.fn()} />);
     expect(screen.queryByText("Hit")).not.toBeInTheDocument();
-    expect(screen.queryByText("Missed")).not.toBeInTheDocument();
+    expect(screen.queryByText("Not Hit")).not.toBeInTheDocument();
   });
 
   it("shows neither badge when there's no recommendation at all", () => {
     const match = baseMatch({ hasRecommendation: false });
     render(<MatchCard match={match} onUpdate={vi.fn()} />);
     expect(screen.queryByText("Hit")).not.toBeInTheDocument();
-    expect(screen.queryByText("Missed")).not.toBeInTheDocument();
+    expect(screen.queryByText("Not Hit")).not.toBeInTheDocument();
   });
 });
