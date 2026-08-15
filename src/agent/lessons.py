@@ -415,7 +415,13 @@ def _classify_and_rank(records: list[Any]) -> tuple[list[Any], list[Any]]:
 def _describe_record(r: Any) -> str:
     overall = r.recommendation.get("overall", "unknown")
     confidence = r.recommendation.get("confidence", "unknown")
-    explanation = (r.recommendation.get("explanation") or "").strip()
+    # Found live: explanation is list[str] in the real schema (schema.py's
+    # normalize_explanation, "one item per aspect") -- every real
+    # recommendation has it as a list, not a string. .strip() on that raised
+    # uncaught (generate_batch_reflection has no try/except of its own around
+    # this), aborting the whole agent-train run's lesson-writing step.
+    explanation_raw = r.recommendation.get("explanation") or []
+    explanation = "; ".join(explanation_raw) if isinstance(explanation_raw, list) else str(explanation_raw).strip()
     markets_str = "; ".join(
         f"{m.get('market')}={m.get('selection')} "
         f"({'correct' if m.get('correct') is True else 'incorrect' if m.get('correct') is False else 'unresolved'})"

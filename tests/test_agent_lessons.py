@@ -291,16 +291,21 @@ def test_generate_batch_lesson_text_aggregates_hit_rate_and_worst_market():
 
 
 def test_generate_batch_reflection_includes_stats_and_examples_in_prompt():
+    # explanation is a list[str] in the real schema (src/agent/schema.py:40,
+    # normalize_explanation's "one item per aspect" bullet-point design) --
+    # every real recommendation this whole session has had it as a list, not
+    # a plain string. Found live: a string here masked a real crash in
+    # _describe_record's .strip() call on what's actually always a list.
     records = [
         _FakeRecord(
             league="E0", match_id="m1", date="2025-01-01", home_team="City", away_team="Villa",
-            recommendation={"overall": "direct_bet", "confidence": "high", "explanation": "Confident home win pick.", "limitations": []},
+            recommendation={"overall": "direct_bet", "confidence": "high", "explanation": ["Confident home win pick."], "limitations": []},
             market_results=[{"market": "result_3way", "selection": "home", "correct": False}],
             actual={"result": "away"},
         ),
         _FakeRecord(
             league="E0", match_id="m2", date="2025-01-08", home_team="Spurs", away_team="Fulham",
-            recommendation={"overall": "direct_bet", "confidence": "high", "explanation": "Strong home form.", "limitations": []},
+            recommendation={"overall": "direct_bet", "confidence": "high", "explanation": ["Strong home form.", "Good recent H2H record."], "limitations": []},
             market_results=[{"market": "result_3way", "selection": "home", "correct": True}],
             actual={"result": "home"},
         ),
@@ -326,7 +331,7 @@ def test_generate_batch_reflection_returns_none_on_llm_failure():
     records = [
         _FakeRecord(
             league="E0",
-            recommendation={"overall": "direct_bet", "confidence": "high", "explanation": "x", "limitations": []},
+            recommendation={"overall": "direct_bet", "confidence": "high", "explanation": ["x"], "limitations": []},
             market_results=[{"market": "result_3way", "selection": "home", "correct": False}],
             actual={"result": "away"},
         ),
@@ -343,7 +348,7 @@ def test_generate_batch_reflection_returns_none_on_empty_response():
     records = [
         _FakeRecord(
             league="E0",
-            recommendation={"overall": "direct_bet", "confidence": "high", "explanation": "x", "limitations": []},
+            recommendation={"overall": "direct_bet", "confidence": "high", "explanation": ["x"], "limitations": []},
             market_results=[{"market": "result_3way", "selection": "home", "correct": False}],
             actual={"result": "away"},
         ),
