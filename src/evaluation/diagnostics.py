@@ -22,7 +22,7 @@ class _LoadedEstimatorModel:
     def __init__(self, estimator: Any) -> None:
         self.model = estimator
 
-    def train(self, X: Any, y: Any, eval_set: Any | None = None) -> None:
+    def train(self, X: Any, y: Any, eval_set: Any | None = None, sample_weight: Any | None = None) -> None:
         raise RuntimeError("Loaded diagnostic models are not trainable.")
 
     def predict_proba(self, X: Any) -> np.ndarray:

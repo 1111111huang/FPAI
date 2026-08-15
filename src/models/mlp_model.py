@@ -90,7 +90,13 @@ class MLPModel(FPAIBaseModel):
         """Inject an Optuna trial for ASHA pruning callbacks."""
         self._trial = trial
 
-    def train(self, X: Any, y: Any, eval_set: Any | None = None) -> None:
+    def train(self, X: Any, y: Any, eval_set: Any | None = None, sample_weight: Any | None = None) -> None:
+        # ponytail: sklearn's MLPClassifier.fit() has no sample_weight param at
+        # all (unlike LogisticRegression/RandomForestClassifier/XGBClassifier) --
+        # accepted for FPAIBaseModel interface consistency but silently unused.
+        # Not reachable today (MLPModel has zero call sites, US#158), so no
+        # real weighting is lost; revisit if MLP is ever wired back in for a
+        # classification target.
         X_df = pd.DataFrame(X) if not isinstance(X, pd.DataFrame) else X
         y_arr = np.asarray(y)
 
@@ -212,7 +218,9 @@ class MLPRegressorModel(FPAIBaseModel):
     def set_optuna_trial(self, trial: Any) -> None:
         self._trial = trial
 
-    def train(self, X: Any, y: Any, eval_set: Any | None = None) -> None:
+    def train(self, X: Any, y: Any, eval_set: Any | None = None, sample_weight: Any | None = None) -> None:
+        # sample_weight always None here (regression target), and MLPRegressor.fit()
+        # doesn't accept it anyway -- see MLPModel's train() for the same note.
         X_df = pd.DataFrame(X) if not isinstance(X, pd.DataFrame) else X
         y_arr = np.asarray(y, dtype=float)
 

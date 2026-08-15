@@ -79,8 +79,12 @@ class GoalStackerModel(FPAIBaseModel):
     # FPAIBaseModel interface
     # ------------------------------------------------------------------
 
-    def train(self, X: Any, y: Any, eval_set: Any | None = None) -> None:
-        """Train the two-stage stack using an internal chronological OOF split."""
+    def train(self, X: Any, y: Any, eval_set: Any | None = None, sample_weight: Any | None = None) -> None:
+        """Train the two-stage stack using an internal chronological OOF split.
+
+        sample_weight always None here (regression target) -- accepted for
+        FPAIBaseModel interface consistency, not threaded into the internal
+        base/meta fits given the OOF split's own row bookkeeping."""
         X_df = pd.DataFrame(X) if not isinstance(X, pd.DataFrame) else X
         y_arr = np.asarray(y, dtype=float)
         self._feature_columns = list(X_df.columns)

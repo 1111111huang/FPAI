@@ -30,6 +30,40 @@ from src.utils.logger import get_logger
 LOGGER = get_logger(__name__)
 
 
+def _compute_sample_weight(y: pd.Series, task_type: str) -> np.ndarray | None:
+    """Inverse-class-frequency sample weights for classification targets.
+
+    Found live: result_3way's XGBoost classifier had 2.1% recall on 'draw'
+    (SP1 test split) despite draws being ~25% of real outcomes -- trained
+    with plain unweighted multiclass log-loss, so the model could minimize
+    loss by mostly ignoring the harder-to-separate minority class. Reuses
+    sklearn's own compute_sample_weight('balanced', ...) rather than a
+    hand-rolled formula -- already a project dependency, standard technique.
+    Regression targets have no notion of class balance; returns None so
+    every model's .train(sample_weight=None) call is a byte-identical no-op
+    for them."""
+    if task_type == "regression":
+        return None
+    from sklearn.utils.class_weight import compute_sample_weight
+
+    return compute_sample_weight("balanced", y)
+
+
+def _classes_for_calibration(model: FPAIBaseModel) -> np.ndarray | None:
+    """Ordered class labels matching predict_proba's column order.
+
+    Tries the wrapper's own .classes_ first (XGBoostModel sets this from its
+    internal LabelEncoder after training), then the underlying sklearn
+    estimator's .classes_ (LRModel/RandomForestModel never set a wrapper-level
+    one). sklearn/XGBoostModel's predict_proba column order always matches
+    classes_ in sorted order -- same assumption XGBoostModel.predict()'s own
+    inverse_transform already relies on."""
+    classes = getattr(model, "classes_", None)
+    if classes is None:
+        classes = getattr(getattr(model, "model", None), "classes_", None)
+    return np.asarray(classes) if classes is not None else None
+
+
 def build_artifact_filename(target_name: str, competition_id: str | None, model_prefix: str, date_tag: str) -> str:
     """Construct a model artifact filename, disambiguated by competition (US#139 follow-up).
 
@@ -185,10 +219,11 @@ class ModelManager:
             return None
         try:
             raw_proba = np.asarray(model.predict_proba(X_val))
-            y_val_arr = pd.to_numeric(y_val, errors="coerce").astype(float).to_numpy()
 
             if raw_proba.ndim == 2 and raw_proba.shape[1] == 2:
-                # Binary classifier: calibrate positive-class probability
+                # Binary classifier: labels are already numeric (0/1) here --
+                # see TargetResolver.get_label, home_win/btts .astype(int)/(Int64).
+                y_val_arr = pd.to_numeric(y_val, errors="coerce").astype(float).to_numpy()
                 pos_proba = raw_proba[:, 1]
                 calibrator = IsotonicRegression(out_of_bounds="clip")
                 calibrator.fit(pos_proba, y_val_arr)
@@ -198,12 +233,20 @@ class ModelManager:
                 ll_after = float(log_loss(y_val_arr, cal_proba))
                 sidecar = {"type": "binary", "calibrator": calibrator}
             elif raw_proba.ndim == 2 and raw_proba.shape[1] > 2:
-                # Multi-class: fit one calibrator per class using one-vs-rest probabilities
+                # Multi-class: labels may be strings (result_3way's
+                # 'home'/'draw'/'away') that don't survive pd.to_numeric --
+                # found live, this previously produced an all-NaN y_val_arr
+                # and silently no-op'd calibration for every such target.
+                # Match against the model's own class order instead of coercing.
+                class_labels = _classes_for_calibration(model)
+                if class_labels is None or len(class_labels) != raw_proba.shape[1]:
+                    return None
+                y_val_raw = y_val.to_numpy()
                 n_classes = raw_proba.shape[1]
                 calibrators = []
                 cal_proba = np.zeros_like(raw_proba)
                 for c in range(n_classes):
-                    y_bin = (y_val_arr == c).astype(float)
+                    y_bin = (y_val_raw == class_labels[c]).astype(float)
                     cal = IsotonicRegression(out_of_bounds="clip")
                     cal.fit(raw_proba[:, c], y_bin)
                     cal_proba[:, c] = cal.predict(raw_proba[:, c])
@@ -211,9 +254,9 @@ class ModelManager:
                 # Re-normalise rows so they sum to 1
                 row_sums = cal_proba.sum(axis=1, keepdims=True).clip(min=1e-9)
                 cal_proba /= row_sums
-                ll_before = float(log_loss(y_val_arr, raw_proba))
-                ll_after = float(log_loss(y_val_arr, cal_proba))
-                sidecar = {"type": "multiclass", "calibrator": calibrators}
+                ll_before = float(log_loss(y_val_raw, raw_proba, labels=class_labels))
+                ll_after = float(log_loss(y_val_raw, cal_proba, labels=class_labels))
+                sidecar = {"type": "multiclass", "calibrator": calibrators, "classes": class_labels}
             else:
                 return None
 
@@ -557,7 +600,8 @@ class ModelManager:
         self._log_selected_features(selected_features)
         X_train, X_val, X_test, y_train, y_val, y_test, test_meta = self.prepare_training_data()
         eval_set = [(X_val, y_val)] if isinstance(self.model, (XGBoostModel, XGBoostRegressorModel, GoalStackerModel)) else None
-        self.model.train(X_train, y_train, eval_set=eval_set)
+        sample_weight = _compute_sample_weight(y_train, self.target_definition.task_type)
+        self.model.train(X_train, y_train, eval_set=eval_set, sample_weight=sample_weight)
         self._log_feature_importance(list(X_train.columns), self.model)
         if isinstance(self.model, (XGBoostModel, XGBoostRegressorModel)):
             estimator = getattr(self.model, "model", None)
@@ -595,7 +639,8 @@ class ModelManager:
                 mlflow.set_tag("secondary_metrics", ",".join(self.target_definition.secondary_metrics))
                 mlflow.log_param("target_type", self.target_definition.name)
                 eval_set = [(X_val, y_val)] if isinstance(self.model, (XGBoostModel, XGBoostRegressorModel, GoalStackerModel)) else None
-                self.model.train(X_train, y_train, eval_set=eval_set)
+                sample_weight = _compute_sample_weight(y_train, self.target_definition.task_type)
+                self.model.train(X_train, y_train, eval_set=eval_set, sample_weight=sample_weight)
                 self._log_feature_importance(list(X_train.columns), self.model)
                 if isinstance(self.model, (XGBoostModel, XGBoostRegressorModel)):
                     estimator = getattr(self.model, "model", None)

@@ -18,7 +18,7 @@ class FPAIBaseModel(ABC):
     """Abstract base class for all FPAI prediction models."""
 
     @abstractmethod
-    def train(self, X: Any, y: Any, eval_set: Any | None = None) -> None:
+    def train(self, X: Any, y: Any, eval_set: Any | None = None, sample_weight: Any | None = None) -> None:
         """Fit the model using feature matrix X and target y."""
 
     @abstractmethod
@@ -48,9 +48,9 @@ class LRModel(FPAIBaseModel):
         default_kwargs.update(kwargs)
         self.model = LogisticRegression(**default_kwargs)
 
-    def train(self, X: Any, y: Any, eval_set: Any | None = None) -> None:
+    def train(self, X: Any, y: Any, eval_set: Any | None = None, sample_weight: Any | None = None) -> None:
         """Train the logistic regression model."""
-        self.model.fit(X, y)
+        self.model.fit(X, y, sample_weight=sample_weight)
 
     def predict_proba(self, X: Any) -> np.ndarray:
         """Return predicted class probabilities."""
@@ -95,7 +95,7 @@ class XGBoostModel(FPAIBaseModel):
         self.label_encoder: LabelEncoder | None = None
         self.classes_: np.ndarray | None = None
 
-    def train(self, X: Any, y: Any, eval_set: Any | None = None) -> None:
+    def train(self, X: Any, y: Any, eval_set: Any | None = None, sample_weight: Any | None = None) -> None:
         """Train model with optional validation set for early stopping."""
         self.label_encoder = LabelEncoder()
         y_encoded = self.label_encoder.fit_transform(y)
@@ -106,9 +106,9 @@ class XGBoostModel(FPAIBaseModel):
                 (eval_X, self.label_encoder.transform(eval_y))
                 for eval_X, eval_y in eval_set
             ]
-            self.model.fit(X, y_encoded, eval_set=encoded_eval_set, verbose=False)
+            self.model.fit(X, y_encoded, sample_weight=sample_weight, eval_set=encoded_eval_set, verbose=False)
             return
-        self.model.fit(X, y_encoded, verbose=False)
+        self.model.fit(X, y_encoded, sample_weight=sample_weight, verbose=False)
 
     def predict_proba(self, X: Any) -> np.ndarray:
         """Return predicted class probabilities."""
@@ -144,9 +144,9 @@ class RandomForestModel(FPAIBaseModel):
         default_kwargs.update(kwargs)
         self.model = RandomForestClassifier(**default_kwargs)
 
-    def train(self, X: Any, y: Any, eval_set: Any | None = None) -> None:
+    def train(self, X: Any, y: Any, eval_set: Any | None = None, sample_weight: Any | None = None) -> None:
         """Train the random forest model."""
-        self.model.fit(X, y)
+        self.model.fit(X, y, sample_weight=sample_weight)
 
     def predict_proba(self, X: Any) -> np.ndarray:
         """Return predicted class probabilities."""
@@ -179,9 +179,9 @@ class RandomForestRegressorModel(FPAIBaseModel):
         default_kwargs.update(kwargs)
         self.model = RandomForestRegressor(**default_kwargs)
 
-    def train(self, X: Any, y: Any, eval_set: Any | None = None) -> None:
+    def train(self, X: Any, y: Any, eval_set: Any | None = None, sample_weight: Any | None = None) -> None:
         """Train the random forest regressor."""
-        self.model.fit(X, y)
+        self.model.fit(X, y, sample_weight=sample_weight)
 
     def predict_proba(self, X: Any) -> np.ndarray:
         """Regression models do not produce class probabilities."""
@@ -225,12 +225,12 @@ class XGBoostRegressorModel(FPAIBaseModel):
         default_kwargs.update(kwargs)
         self.model = XGBRegressor(**default_kwargs)
 
-    def train(self, X: Any, y: Any, eval_set: Any | None = None) -> None:
+    def train(self, X: Any, y: Any, eval_set: Any | None = None, sample_weight: Any | None = None) -> None:
         """Train model with optional validation set for early stopping."""
         if eval_set is not None:
-            self.model.fit(X, y, eval_set=eval_set, verbose=False)
+            self.model.fit(X, y, sample_weight=sample_weight, eval_set=eval_set, verbose=False)
             return
-        self.model.fit(X, y, verbose=False)
+        self.model.fit(X, y, sample_weight=sample_weight, verbose=False)
 
     def predict_proba(self, X: Any) -> np.ndarray:
         """Regression models do not produce class probabilities."""
