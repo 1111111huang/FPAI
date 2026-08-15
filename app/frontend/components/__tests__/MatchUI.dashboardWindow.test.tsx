@@ -17,7 +17,7 @@ import type { Fixture, MatchRecommendationOut } from "@/lib/types";
 
 vi.mock("@/lib/api");
 
-function fixture(id: string, utcDate: string): Fixture {
+function fixture(id: string, utcDate: string, overrides: Partial<Fixture> = {}): Fixture {
   return {
     match_id: id,
     utc_date: utcDate,
@@ -26,6 +26,7 @@ function fixture(id: string, utcDate: string): Fixture {
     away_team: "Away",
     home_goals: null,
     away_goals: null,
+    ...overrides,
   };
 }
 
@@ -158,30 +159,11 @@ describe("Dashboard always shows the next 10 matches (date-grouped, not today-on
     expect(screen.queryByText("Tomorrow")).not.toBeInTheDocument();
   });
 
-  it("excludes already-decided (FINISHED) matches from the shown list -- the Dashboard is pre-match only", async () => {
-    // A same-day FINISHED fixture renders "completed" (with a real score)
-    // from fixtureToMatch's own W48 same-day carve-out, in both live and
-    // sandbox mode -- correct for MatchExplorerPage/BetTracker, wrong for
-    // the Dashboard, which must never show a match's real outcome on a
-    // recommendation card.
-    const today = new Date().toISOString().slice(0, 10);
-    const decided: Fixture = {
-      match_id: "decided-match",
-      utc_date: `${today}T12:00:00Z`,
-      status: "FINISHED",
-      home_team: "Decided",
-      away_team: "Away",
-      home_goals: 2,
-      away_goals: 1,
-    };
-    vi.mocked(getFixtures).mockResolvedValue([decided, fixture("upcoming-match", `${today}T18:00:00Z`)]);
-
-    render(<DashboardPage />);
-
-    expect(await screen.findByText("upcoming-match")).toBeInTheDocument();
-    expect(screen.queryByText("Decided")).not.toBeInTheDocument();
-    expect(screen.queryByText("2-1")).not.toBeInTheDocument();
-  });
+  // Formerly asserted the Dashboard excludes every FINISHED match, full
+  // stop ("pre-match only"). Direct user request superseded that: a match
+  // completed earlier today now stays in the same list, styled as
+  // completed -- see "Dashboard -- live and today's-completed matches"
+  // below for the current, intentional behavior this replaced.
 
   it("renders a sensible, non-crashing empty state when the whole 90-day window is empty", async () => {
     vi.mocked(getFixtures).mockResolvedValue([]);
@@ -231,5 +213,46 @@ describe("Dashboard always shows the next 10 matches (date-grouped, not today-on
 
     await user.click(screen.getByText("Actionable only"));
     expect(screen.getByText("not-yet-generated-match")).toBeInTheDocument();
+  });
+});
+
+describe("Dashboard -- live and today's-completed matches (direct user request)", () => {
+  beforeEach(() => {
+    vi.mocked(getFixtures).mockReset();
+    vi.mocked(getSandboxStatus).mockReset();
+    vi.mocked(getSandboxStatus).mockResolvedValue({ sandbox_mode: false, as_of: "" });
+  });
+
+  it("shows a currently-live match (previously filtered out entirely -- only status 'upcoming' passed)", async () => {
+    const now = new Date().toISOString();
+    vi.mocked(getFixtures).mockResolvedValue([fixture("live-match", now, { status: "IN_PLAY", home_goals: 1, away_goals: 0 })]);
+
+    render(<DashboardPage />);
+
+    expect(await screen.findByText("live-match")).toBeInTheDocument();
+    expect(screen.getByText("LIVE")).toBeInTheDocument();
+  });
+
+  it("shows a match completed earlier today, with its final score", async () => {
+    const now = new Date().toISOString();
+    vi.mocked(getFixtures).mockResolvedValue([fixture("finished-today", now, { status: "FINISHED", home_goals: 2, away_goals: 1 })]);
+
+    render(<DashboardPage />);
+
+    expect(await screen.findByText("finished-today")).toBeInTheDocument();
+    expect(screen.getByText("2-1")).toBeInTheDocument();
+  });
+
+  it("still excludes a match completed on an earlier day (defensive -- the forward-only fetch window can't actually produce this, but the filter checks the date explicitly rather than relying on that)", async () => {
+    const yesterday = new Date(Date.now() - 86_400_000).toISOString();
+    vi.mocked(getFixtures).mockResolvedValue([
+      fixture("old-result", yesterday, { status: "FINISHED", home_goals: 3, away_goals: 0 }),
+      fixture("todays-match", new Date().toISOString()),
+    ]);
+
+    render(<DashboardPage />);
+
+    await screen.findByText("todays-match");
+    expect(screen.queryByText("old-result")).not.toBeInTheDocument();
   });
 });

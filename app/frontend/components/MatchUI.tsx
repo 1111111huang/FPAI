@@ -30,6 +30,7 @@ import {
   Question,
   WarningCircle,
   X,
+  XCircle,
 } from "@phosphor-icons/react";
 
 import {
@@ -380,6 +381,37 @@ export function isActionable(match: Match): boolean {
   return match.hasRecommendation && (match.overall === "direct_bet" || match.overall === "conditional");
 }
 
+// Mirrors src/agent/market_resolution.py's RESOLVABLE_MARKETS/build_actual_outcome/
+// market_correct exactly -- that module's docstring exists specifically so
+// backtest scoring and live bet settlement never drift out of sync on which
+// markets can be programmatically resolved; this is a third, presentation-
+// only consumer of the same rule (a completed match's card, not a backend
+// call) -- keep in sync if the Python side ever changes. home_corners/
+// away_corners stay unresolvable: MarketRec has no numeric line field for
+// them, only current_odds/min_odds, so there's no threshold to check against.
+const RESOLVABLE_MARKETS = new Set(["result_3way", "btts", "total_goals"]);
+
+export type ActualOutcome = { result: "home" | "away" | "draw"; btts: "yes" | "no"; totalGoalsSide: "over_2.5" | "under_2.5" };
+
+export function buildActualOutcome(home: number, away: number): ActualOutcome {
+  const result = home > away ? "home" : home < away ? "away" : "draw";
+  const totalGoals = home + away;
+  return {
+    result,
+    btts: home > 0 && away > 0 ? "yes" : "no",
+    totalGoalsSide: totalGoals > 2 ? "over_2.5" : "under_2.5",
+  };
+}
+
+/** Returns null (not false) for a market with no programmatic resolution --
+ * callers MUST treat null as "unknown, skip" and never coerce it to a miss. */
+export function marketCorrect(market: string, selection: string, actual: ActualOutcome): boolean | null {
+  if (!RESOLVABLE_MARKETS.has(market)) return null;
+  if (market === "result_3way") return selection === actual.result;
+  if (market === "btts") return selection === actual.btts;
+  return selection === actual.totalGoalsSide; // market === "total_goals"
+}
+
 export function bestMarket(match: Match): MarketRec | undefined {
   // Prefer an actually-recommended market (direct_bet/conditional) over a
   // no_bet one, even if a no_bet market happens to have a numerically
@@ -494,6 +526,29 @@ function LiveBadge() {
     <span className="inline-flex items-center gap-1.5 rounded-md border border-critical/40 bg-critical/15 px-2 py-0.5 text-[11px] font-medium uppercase tracking-wide text-critical">
       <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-critical" />
       LIVE
+    </span>
+  );
+}
+
+/** Whether the recommended market actually hit, once a match is completed.
+ * hit === null (unresolvable market, e.g. corners) renders nothing --
+ * marketCorrect's own contract: null means "unknown", never a miss.
+ * Literal class strings per branch (not template-interpolated) -- Tailwind's
+ * JIT scanner needs the exact class text present in source, same reason
+ * STATUS_META/TrustSignal above never construct class names dynamically. */
+function HitBadge({ hit }: { hit: boolean }) {
+  if (hit) {
+    return (
+      <span className="inline-flex items-center gap-1.5 rounded-md border border-good/40 bg-good/15 px-2 py-0.5 text-[11px] font-medium uppercase tracking-wide text-good">
+        <CheckCircle weight="fill" size={13} />
+        Hit
+      </span>
+    );
+  }
+  return (
+    <span className="inline-flex items-center gap-1.5 rounded-md border border-serious/40 bg-serious/15 px-2 py-0.5 text-[11px] font-medium uppercase tracking-wide text-serious">
+      <XCircle weight="fill" size={13} />
+      Missed
     </span>
   );
 }
@@ -681,6 +736,13 @@ export function MatchCard({
   const isCompleted = match.status === "completed";
   const isLive = match.status === "live";
   const shown = bestMarket(match);
+  // null covers "not completed yet", "no recommendation", and "market
+  // unresolvable" (e.g. corners) identically -- HitBadge only renders for a
+  // real true/false.
+  const hit =
+    isCompleted && match.hasRecommendation && shown && match.result
+      ? marketCorrect(shown.market, shown.selection, buildActualOutcome(match.result.home, match.result.away))
+      : null;
   // The fallback list spans many different days (W46/W51's 90-day window),
   // so the day label must show on every card, not just ones with no market
   // to display -- previously `shown ? market/selection : day` hid it
@@ -736,6 +798,7 @@ export function MatchCard({
             own bg-warning/15) match this redesign's visual language. */}
         <div className="flex items-center justify-end gap-1.5">
           {isLive && <LiveBadge />}
+          {hit !== null && <HitBadge hit={hit} />}
           {match.hasRecommendation ? (
             <>
               <TrustSignal match={match} />
@@ -985,18 +1048,19 @@ export function DashboardPage() {
         if (cancelled) return;
         const nearest = fixtures
           .map((f) => fixtureToMatch(f, asOf, sandboxMode))
-          // The Dashboard is a pre-match recommendation surface, not a
-          // results view -- a match whose real outcome is already decided
-          // (status: "completed") has nothing left to recommend and, worse,
-          // would show its final score right on the card. This isn't only a
-          // sandbox concern: W48's own same-day carve-out (fixtureToMatch,
-          // needed so BetTracker can still auto-settle today's bets) means a
-          // FINISHED fixture dated on asOf's own date renders "completed" in
-          // both live and sandbox mode. Filtering here, not in
-          // fixtureToMatch itself, keeps that carve-out intact for
-          // MatchExplorerPage/BetTracker, which still need real
-          // completed-match data for search and settlement.
-          .filter((m) => m.status === "upcoming")
+          // Direct user request: a live match, or one completed earlier
+          // today, stays in the same list as upcoming ones -- MatchCard
+          // itself renders the difference (LiveBadge/score row, or the
+          // final score + Hit/Missed badge for a completed one). Every
+          // other day in this forward-only window is still upcoming-only:
+          // completed matches from any day but today are excluded --
+          // checked explicitly via dayDiff rather than relying on the fetch
+          // window's own forward-only shape to imply it (defensive: correct
+          // even if that window's start date ever changes). Was previously
+          // `m.status === "upcoming"` only -- a strict allowlist that (before
+          // "live" existed as a status at all) also silently excluded live
+          // matches, not just completed ones.
+          .filter((m) => m.status !== "completed" || dayDiff(m.kickoffIso, asOf, sandboxMode) === 0)
           // API ordering isn't guaranteed -- sort so "next 10" is actually
           // nearest-first before trimming. ISO 8601 strings sort correctly
           // as strings.
