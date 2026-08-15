@@ -31,6 +31,7 @@ def configure_snapshot_store(
     match_date: str | None = None,
     base_dir: str | Path | None = None,
     allow_lessons_in_replay: bool | None = None,
+    tool_mode_overrides: dict[str, SnapshotMode] | None = None,
 ) -> None:
     """Configure the module-level SnapshotStore shared by all tool functions.
     Call this before run_agent() to switch between live/record/replay. In
@@ -50,7 +51,15 @@ def configure_snapshot_store(
     allow_lessons_in_replay (A41) is likewise sticky-if-omitted (None leaves
     it untouched) -- set once per CLI invocation (e.g. agent-backtest
     --use-lessons calling this once per match via process_match_row) rather
-    than needing to be re-passed on every per-match call."""
+    than needing to be re-passed on every per-match call.
+    tool_mode_overrides is likewise sticky-if-omitted (None leaves it
+    untouched; pass {} explicitly to clear) -- per-tool mode, taking
+    precedence over `mode` in wrap()'s dispatch. Built for agent-snapshot
+    --refresh-model: mode="replay" globally (no new web_search/
+    resolve_competition calls) with forecast_league/forecast_international
+    overridden to "record", so refreshing a match's forecast to reflect a
+    newly retrained model doesn't re-spend Tavily quota on unchanged
+    historical research evidence."""
     global _snapshot_store
     with _configure_lock:
         if base_dir is not None:
@@ -62,6 +71,8 @@ def configure_snapshot_store(
             _snapshot_store.set_match(match_id, match_date)
         if allow_lessons_in_replay is not None:
             _snapshot_store.set_allow_lessons_in_replay(allow_lessons_in_replay)
+        if tool_mode_overrides is not None:
+            _snapshot_store.set_tool_mode_overrides(tool_mode_overrides)
 
 
 def get_snapshot_store() -> SnapshotStore:

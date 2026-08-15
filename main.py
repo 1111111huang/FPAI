@@ -332,6 +332,13 @@ def _build_parser() -> argparse.ArgumentParser:
     agent_snapshot_parser.add_argument("--league", default=None, help="League code (e.g. E0). Omit for all leagues.")
     agent_snapshot_parser.add_argument("--config", default=None, help="Path to agent_config.yaml (default: config/agent_config.yaml)")
     agent_snapshot_parser.add_argument("--dry-run", action="store_true", help="List matches that would be processed without running the agent")
+    agent_snapshot_parser.add_argument(
+        "--refresh-model", action="store_true",
+        help="Reprocess every match in range (including already-complete ones), replaying existing "
+             "web_search/resolve_competition recordings unchanged and only re-invoking forecast_league/"
+             "forecast_international live. Use after retraining a model to refresh a snapshot corpus's "
+             "forecasts without re-spending Tavily quota on unchanged historical research.",
+    )
 
     # agent-backtest
     agent_backtest_parser = subparsers.add_parser(
@@ -1198,8 +1205,20 @@ def run_agent_snapshot(
     league: str | None,
     config_path: str | None,
     dry_run: bool,
+    refresh_model: bool = False,
 ) -> None:
-    """Drive the agent in record mode over historical matches to build a snapshot corpus (A11)."""
+    """Drive the agent in record mode over historical matches to build a snapshot corpus (A11).
+
+    refresh_model: instead of skipping already-complete matches and fully
+    re-recording (LLM + all tools live), reprocess *every* match in range in
+    a mode that replays the existing web_search/resolve_competition
+    recordings unchanged and only re-invokes forecast_league/
+    forecast_international live -- for refreshing a snapshot corpus after
+    retraining a model, without re-spending Tavily quota/wall-clock time on
+    research evidence for matches whose real-world context hasn't changed.
+    A match with no prior recording at all will error cleanly (same
+    per-match error handling as the normal path) -- refresh only makes
+    sense on top of an already-recorded corpus."""
     import sys
     from datetime import datetime, timezone
     from pathlib import Path
@@ -1236,12 +1255,15 @@ def run_agent_snapshot(
     skipped = 0
     for _, row in matches.iterrows():
         marker = league_base_dir(row["league"], base_dir=base_dir) / row["match_id"] / "_complete.json"
-        if marker.exists():
+        if marker.exists() and not refresh_model:
             skipped += 1
             continue
         to_process.append(row)
 
-    print(f"Matches in range: {len(matches)} | already complete: {skipped} | to process: {len(to_process)}")
+    if refresh_model:
+        print(f"Matches in range: {len(matches)} | refreshing all (forecast only, research reused)")
+    else:
+        print(f"Matches in range: {len(matches)} | already complete: {skipped} | to process: {len(to_process)}")
     if dry_run:
         for row in to_process:
             date_str = str(row["date"].date()) if hasattr(row["date"], "date") else str(row["date"])
@@ -1257,9 +1279,25 @@ def run_agent_snapshot(
             match_info["odds"] = {"home": row["odds_h"], "draw": row["odds_d"], "away": row["odds_a"]}
 
         match_base_dir = league_base_dir(row["league"], base_dir=base_dir)
-        agent_tools.configure_snapshot_store("record", match_id=match_id, match_date=date_str, base_dir=match_base_dir)
+        if refresh_model:
+            # replay: frozen web_search/resolve_competition, no new Tavily
+            # calls. forecast_league/forecast_international overridden to
+            # record: live-invoke the (new) model, overwrite just those files.
+            agent_tools.configure_snapshot_store(
+                "replay", match_id=match_id, match_date=date_str, base_dir=match_base_dir,
+                tool_mode_overrides={"forecast_league": "record", "forecast_international": "record"},
+            )
+        else:
+            agent_tools.configure_snapshot_store("record", match_id=match_id, match_date=date_str, base_dir=match_base_dir)
         try:
-            run_agent(match_info=match_info, config=cfg, extra_system_instructions=snapshot_addendum)
+            # A42 precedent: in any mode where web_search isn't itself live,
+            # the LLM's own optional follow-up call (self-generated query
+            # text) almost never matches an existing recorded key and would
+            # abort the whole match via SnapshotMissingError. research_node's
+            # deterministic pre-fetch calls (template-fixed query text) still
+            # replay reliably without the LLM's tool access at all.
+            run_kwargs = {"tools": []} if refresh_model else {}
+            run_agent(match_info=match_info, config=cfg, extra_system_instructions=snapshot_addendum, **run_kwargs)
             marker_path = match_base_dir / match_id / "_complete.json"
             marker_path.parent.mkdir(parents=True, exist_ok=True)
             marker_path.write_text(json.dumps({"completed_at": datetime.now(timezone.utc).isoformat()}))
@@ -1268,7 +1306,7 @@ def run_agent_snapshot(
             errors += 1
             print(f"[{i}/{len(to_process)}] ERROR {match_info['home_team']} vs {match_info['away_team']}: {exc}", file=sys.stderr)
         finally:
-            agent_tools.configure_snapshot_store("live")
+            agent_tools.configure_snapshot_store("live", tool_mode_overrides={})
 
     print(f"\nDone. Processed: {len(to_process) - errors} | Errors: {errors} | Skipped: {skipped}")
 
@@ -1884,6 +1922,7 @@ def main() -> None:
             league=args.league,
             config_path=args.config,
             dry_run=args.dry_run,
+            refresh_model=args.refresh_model,
         )
     elif args.command == "agent-backtest":
         run_agent_backtest(

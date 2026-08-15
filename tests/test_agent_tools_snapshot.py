@@ -16,9 +16,11 @@ def reset_snapshot_store(tmp_path):
     agent_tools._snapshot_store.base_dir = tmp_path
     agent_tools._snapshot_store.set_mode("live")
     agent_tools._snapshot_store.set_allow_lessons_in_replay(False)
+    agent_tools._snapshot_store.set_tool_mode_overrides({})
     yield
     agent_tools._snapshot_store.set_mode("live")
     agent_tools._snapshot_store.set_allow_lessons_in_replay(False)
+    agent_tools._snapshot_store.set_tool_mode_overrides({})
 
 
 def test_configure_snapshot_store_allow_lessons_in_replay_defaults_false():
@@ -34,6 +36,27 @@ def test_configure_snapshot_store_allow_lessons_in_replay_is_sticky_if_omitted()
     agent_tools.configure_snapshot_store("replay", match_id="m1", allow_lessons_in_replay=True)
     agent_tools.configure_snapshot_store("live")  # no allow_lessons_in_replay passed
     assert agent_tools.get_snapshot_store().allow_lessons_in_replay is True
+
+
+def test_configure_snapshot_store_tool_mode_overrides_defaults_empty():
+    assert agent_tools.get_snapshot_store().tool_mode_overrides == {}
+
+
+def test_configure_snapshot_store_sets_tool_mode_overrides():
+    agent_tools.configure_snapshot_store("replay", match_id="m1", tool_mode_overrides={"forecast_league": "record"})
+    assert agent_tools.get_snapshot_store().tool_mode_overrides == {"forecast_league": "record"}
+
+
+def test_configure_snapshot_store_tool_mode_overrides_is_sticky_if_omitted():
+    agent_tools.configure_snapshot_store("replay", match_id="m1", tool_mode_overrides={"forecast_league": "record"})
+    agent_tools.configure_snapshot_store("live")  # no tool_mode_overrides passed
+    assert agent_tools.get_snapshot_store().tool_mode_overrides == {"forecast_league": "record"}
+
+
+def test_configure_snapshot_store_tool_mode_overrides_explicit_empty_clears():
+    agent_tools.configure_snapshot_store("replay", match_id="m1", tool_mode_overrides={"forecast_league": "record"})
+    agent_tools.configure_snapshot_store("live", tool_mode_overrides={})
+    assert agent_tools.get_snapshot_store().tool_mode_overrides == {}
 
 
 def test_web_search_record_then_replay(tmp_path):

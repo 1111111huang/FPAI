@@ -89,6 +89,16 @@ class SnapshotStore:
         self._allow_lessons_var: contextvars.ContextVar[bool] = contextvars.ContextVar(
             "snapshot_allow_lessons_in_replay", default=False
         )
+        # Per-tool mode override, taking precedence over `mode` in wrap()'s
+        # dispatch -- lets a caller run e.g. mode="replay" globally (frozen
+        # web_search/resolve_competition, no new Tavily calls) while forcing
+        # just forecast_league/forecast_international into "record" to pick
+        # up a newly retrained model, without re-recording everything else.
+        # Never mutated in place (always replaced wholesale via .set()), so
+        # sharing the same default {} across contexts before any .set() is safe.
+        self._tool_overrides_var: contextvars.ContextVar[dict[str, "SnapshotMode"]] = contextvars.ContextVar(
+            "snapshot_tool_mode_overrides", default={}
+        )
 
     @property
     def mode(self) -> SnapshotMode:
@@ -106,10 +116,20 @@ class SnapshotStore:
     def allow_lessons_in_replay(self) -> bool:
         return self._allow_lessons_var.get()
 
+    @property
+    def tool_mode_overrides(self) -> dict[str, SnapshotMode]:
+        return self._tool_overrides_var.get()
+
     def set_mode(self, mode: SnapshotMode) -> None:
         if mode not in _VALID_MODES:
             raise ValueError(f"Unknown snapshot mode: {mode!r}")
         self._mode_var.set(mode)
+
+    def set_tool_mode_overrides(self, overrides: dict[str, SnapshotMode]) -> None:
+        for tool, mode in overrides.items():
+            if mode not in _VALID_MODES:
+                raise ValueError(f"Unknown snapshot mode: {mode!r} for tool {tool!r}")
+        self._tool_overrides_var.set(dict(overrides))
 
     def set_match(self, match_id: str, match_date: str | None = None) -> None:
         self._match_id_var.set(match_id)
@@ -133,7 +153,7 @@ class SnapshotStore:
         """Return a callable that records or replays fn's output based on the current mode."""
 
         def wrapped(**kwargs: Any) -> str:
-            mode = self.mode
+            mode = self.tool_mode_overrides.get(tool, self.mode)
             if mode == "live":
                 return fn(**kwargs)
 

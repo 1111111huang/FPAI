@@ -138,6 +138,50 @@ def test_mode_and_match_are_thread_local(tmp_path):
     assert store.match_id == "main-thread-match"
 
 
+def test_tool_mode_overrides_default_empty(tmp_path):
+    store = SnapshotStore(base_dir=tmp_path)
+    assert store.tool_mode_overrides == {}
+
+
+def test_tool_mode_override_takes_precedence_over_global_mode(tmp_path):
+    """Built for the 'refresh model without re-fetching Tavily' use case:
+    global mode=replay (frozen web_search/resolve_competition), but
+    forecast_league overridden to record so it re-invokes the (new) model
+    live and overwrites its snapshot file, while an un-overridden tool in
+    the same run still replays from the existing recording."""
+    store = SnapshotStore(base_dir=tmp_path)
+    store.set_mode("record")
+    store.set_match("match-123")
+    store.wrap("web_search", lambda **kw: "original-search-response")(query="q")
+    store.wrap("forecast_league", lambda **kw: "original-forecast-response")(home="A", away="B")
+
+    store.set_mode("replay")
+    store.set_tool_mode_overrides({"forecast_league": "record"})
+
+    def new_forecast(**kwargs):
+        return "refreshed-forecast-response"
+
+    # forecast_league: overridden to record -- calls the live fn, overwrites the file.
+    result = store.wrap("forecast_league", new_forecast)(home="A", away="B")
+    assert result == "refreshed-forecast-response"
+
+    # web_search: no override -- still replays the original recording untouched.
+    def fail_if_called(**kwargs):
+        raise AssertionError("web_search must still replay, not call live fn")
+
+    replayed = store.wrap("web_search", fail_if_called)(query="q")
+    assert replayed == "original-search-response"
+
+    saved = json.loads(next((tmp_path / "match-123").glob("forecast_league_*.json")).read_text())
+    assert saved["response"] == "refreshed-forecast-response"
+
+
+def test_tool_mode_override_invalid_mode_raises(tmp_path):
+    store = SnapshotStore(base_dir=tmp_path)
+    with pytest.raises(ValueError, match="Unknown snapshot mode"):
+        store.set_tool_mode_overrides({"forecast_league": "bogus"})
+
+
 def test_mode_and_match_propagate_into_context_thread_pool_executor(tmp_path):
     """LangGraph's ToolNode runs every tool call (even a single one) via
     get_executor_for_config(), which returns a ContextThreadPoolExecutor —
