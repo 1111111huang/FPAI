@@ -239,6 +239,18 @@ PHASE 21 (Scheduler Coexistence Under Real Concurrent Operation -- 2026-08-08 ad
   W93 (found live: the manual "regenerate now" endpoint, POST /api/recommendations, has zero handling for this -- an unhandled duckdb.IOException would surface as a raw 500 to the user, unlike every other transient-external-condition path in this app)
   W94 (confirm, don't just assume: the scheduled EOD batch's own already-broad exception handling (eod_batch.py's `except Exception`) incidentally already degrades this same scenario gracefully -- a direct regression test, not a code change)
   W95 (future, a genuine design question not yet decided: should `run_refresh_data` itself retry-with-backoff on a transient lock conflict specifically, rather than its current log-and-reraise-wait-for-next-scheduled-fire behavior, which could silently skip an entire week's refresh on unlucky timing)
+
+PHASE 30 (Serie A, Bundesliga, Ligue 1 Integration -- 2026-08-15 addition)
+  -- Mirrors Phase 12/Phase 15 exactly, three leagues at once. Gated on the ML-engine side (documents/user_stories.md Phase 27) reaching at least US#166 before W136/W140/W142 can produce real forecasts; app-side research/wiring stories can proceed in parallel. --
+  W134 (independent research spike -- confirm football-data.org's competition codes and The Odds API's sport_keys for all three leagues before any code lands)
+  W134 → W135 (open COMPETITION_ALLOWLIST to I1/D1/F1 only once the codes above are confirmed real)
+  W134 → W136 (fixture discovery needs the confirmed football-data.org competition codes)
+  W134 → W137 (odds fetching needs the confirmed Odds API sport_keys)
+  W136 → W138 (team-name mapping verification needs real football-data.org fixture data to check names against)
+  W136 + W137 → W139 (credit-budget re-check needs the real sport_keys wired to confirm actual call volume, now split six ways)
+  W135 + W136 + W137 → W140 (scheduler orchestration ties allowlist + fixtures + odds together into one per-competition EOD/T-30 loop)
+  W136 → W141 (league-name display only matters once fixtures actually render)
+  W138 + W139 + W140 + W141 → W142 (end-to-end smoke test only meaningful once every piece above is wired)
 ```
 
 **Size key:** XS < 2 hrs · S ≈ half day · M ≈ 1 day · L ≈ 2–3 days
