@@ -2,6 +2,7 @@
 
 import Image from "next/image";
 import Link from "next/link";
+import { Montserrat } from "next/font/google";
 import { useState, useEffect } from "react";
 import { House, List, ListBullets, MagnifyingGlass, X, type Icon } from "@phosphor-icons/react";
 
@@ -38,6 +39,11 @@ const NAV_ITEMS: {
 function OddseyLogo({ size = 32 }: { size?: number }) {
   return <Image src="/oddsey-logo.png" width={size} height={size} alt="Oddsey" priority />;
 }
+
+// Wordmark font, scoped to just the "Oddsey" text (not a site-wide font
+// change) -- next/font/google self-hosts at build time (no runtime request,
+// no FOUT), already built into Next.js so no new dependency.
+const brandFont = Montserrat({ subsets: ["latin"], weight: ["600"] });
 
 export function AppShell({
   active,
@@ -143,7 +149,7 @@ export function AppShell({
   const brandBlock = (
     <div className="flex items-center gap-2.5">
       <OddseyLogo size={48} />
-      <div className="text-sm font-semibold tracking-tight text-ink">Oddsey</div>
+      <div className={`${brandFont.className} text-xl tracking-tight text-ink`}>Oddsey</div>
     </div>
   );
 
@@ -237,7 +243,7 @@ export function AppShell({
       <div className="flex items-center justify-between border-b border-border bg-surface px-4 py-3 lg:hidden">
         <div className="flex items-center gap-2">
           <OddseyLogo size={36} />
-          <span className="text-sm font-semibold tracking-tight text-ink">Oddsey</span>
+          <span className={`${brandFont.className} text-base tracking-tight text-ink`}>Oddsey</span>
         </div>
         <button type="button" onClick={() => setMenuOpen(true)} aria-label="Open menu" className="text-ink-secondary">
           <List size={22} />
