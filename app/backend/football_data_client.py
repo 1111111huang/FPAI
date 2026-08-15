@@ -100,7 +100,14 @@ class FootballDataClient:
         # Liga's entire next ~4 weeks of fixtures while EPL's identically-shaped
         # near-term matches happened to survive. Comma-separated works
         # reliably against the real API and doesn't depend on that quirk.
-        return self._get_matches(competition_code, "SCHEDULED,TIMED", date_from, date_to)
+        #
+        # IN_PLAY/PAUSED added (2026-08-15): a match currently being played is
+        # neither SCHEDULED/TIMED (kickoff already happened) nor FINISHED (not
+        # over yet) -- without these, a live match is invisible to this call
+        # for the entire window it's actually being played, then reappears
+        # once it's FINISHED. get_results() deliberately stays FINISHED-only
+        # (a live match isn't a result yet either).
+        return self._get_matches(competition_code, "SCHEDULED,TIMED,IN_PLAY,PAUSED", date_from, date_to)
 
     def get_results(
         self, competition_code: str = "PL", date_from: str | None = None, date_to: str | None = None,

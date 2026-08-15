@@ -91,8 +91,24 @@ def test_get_fixtures_sends_auth_header_and_status_filter() -> None:
 
     call = session.get.call_args
     assert call.kwargs["headers"]["X-Auth-Token"] == "my-secret-key"
-    assert call.kwargs["params"]["status"] == "SCHEDULED,TIMED"
+    assert call.kwargs["params"]["status"] == "SCHEDULED,TIMED,IN_PLAY,PAUSED"
     assert "PL" in call.args[0] or "PL" in call.kwargs.get("url", "")
+
+
+def test_get_fixtures_status_filter_includes_in_play_and_paused() -> None:
+    """A match currently being played is neither SCHEDULED/TIMED (kickoff
+    already happened) nor FINISHED (not over yet) -- without IN_PLAY/PAUSED
+    in this filter, a live match is invisible to get_fixtures() during the
+    exact window it's being played (get_results() correctly stays
+    FINISHED-only; a live match isn't a result yet either)."""
+    session = _mock_session([])
+    client = FootballDataClient(api_key="fake-key", session=session)
+
+    client.get_fixtures(competition_code="PL")
+
+    status = session.get.call_args.kwargs["params"]["status"]
+    assert "IN_PLAY" in status.split(",")
+    assert "PAUSED" in status.split(",")
 
 
 def test_get_fixtures_status_filter_includes_timed() -> None:
@@ -111,7 +127,7 @@ def test_get_fixtures_status_filter_includes_timed() -> None:
 
     client.get_fixtures(competition_code="PD")
 
-    assert session.get.call_args.kwargs["params"]["status"] == "SCHEDULED,TIMED"
+    assert session.get.call_args.kwargs["params"]["status"] == "SCHEDULED,TIMED,IN_PLAY,PAUSED"
 
 
 def test_get_fixtures_normalizes_a_timed_match() -> None:

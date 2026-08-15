@@ -79,7 +79,7 @@ export type Match = {
   kickoffIso: string;
   home: string;
   away: string;
-  status: "upcoming" | "completed";
+  status: "upcoming" | "live" | "completed";
   result?: { home: number; away: number };
   // Recommendation data -- absent until generated (hasRecommendation gates this).
   hasRecommendation: boolean;
@@ -118,7 +118,15 @@ export function fixtureToMatch(fixture: Fixture, asOf?: Date, sandboxMode = fals
   // sandboxMode defaults false so every existing non-sandbox call site
   // keeps its current behavior even without passing them.
   const isFutureInSandbox = sandboxMode && asOf !== undefined && dayDiff(fixture.utc_date, asOf, sandboxMode) > 0;
-  const status: Match["status"] = fixture.status === "FINISHED" && !isFutureInSandbox ? "completed" : "upcoming";
+  // A match currently being played is neither SCHEDULED/TIMED (kickoff
+  // already happened) nor FINISHED (not over yet) -- IN_PLAY/PAUSED (e.g.
+  // half-time) both mean "live". Same isFutureInSandbox guard as FINISHED
+  // below: sandbox mode's own historical data source never actually
+  // produces a real IN_PLAY fixture, but if it ever did, it must not leak
+  // ahead of the sandbox's own pretend clock either.
+  const isLive = (fixture.status === "IN_PLAY" || fixture.status === "PAUSED") && !isFutureInSandbox;
+  const isReallyCompleted = fixture.status === "FINISHED" && !isFutureInSandbox;
+  const status: Match["status"] = isReallyCompleted ? "completed" : isLive ? "live" : "upcoming";
   return {
     id: fixture.match_id,
     league: fixture.competition ?? "E0",
@@ -131,9 +139,11 @@ export function fixtureToMatch(fixture: Fixture, asOf?: Date, sandboxMode = fals
     // a FINISHED-but-future-in-sandbox fixture must not carry a real score
     // on the Match object at all, not merely have it hidden at render time
     // (defense in depth: nothing downstream that later reads match.result
-    // without re-checking status can leak it).
+    // without re-checking status can leak it). Live carries a result too --
+    // football-data.org updates home_goals/away_goals in real time during
+    // play, not just at full-time.
     result:
-      status === "completed" && fixture.home_goals !== null && fixture.away_goals !== null
+      (status === "completed" || status === "live") && fixture.home_goals !== null && fixture.away_goals !== null
         ? { home: fixture.home_goals, away: fixture.away_goals }
         : undefined,
     hasRecommendation: false,
@@ -472,6 +482,22 @@ function initials(name: string) {
 // Atoms
 // ---------------------------------------------------------------------------
 
+/** A match currently being played -- distinct from both "upcoming" (hasn't
+ * kicked off) and "completed" (final score, betting closed). Sits alongside
+ * the existing recommendation badge (StatusBadge/TrustSignal) rather than
+ * replacing it -- "what was recommended pre-kickoff" and "this is happening
+ * right now" are two different, both-relevant facts. status-critical (red)
+ * is otherwise unused in this palette -- a natural fit for something this
+ * urgent/real-time. No minute/clock shown -- not data this app has. */
+function LiveBadge() {
+  return (
+    <span className="inline-flex items-center gap-1.5 rounded-md border border-critical/40 bg-critical/15 px-2 py-0.5 text-[11px] font-medium uppercase tracking-wide text-critical">
+      <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-critical" />
+      LIVE
+    </span>
+  );
+}
+
 export function StatusBadge({ status, size = "sm" }: { status: Overall; size?: "sm" | "lg" }) {
   const s = STATUS_META[status];
   const pad = size === "lg" ? "px-3 py-1.5 text-sm" : "px-2 py-0.5 text-[11px]";
@@ -653,6 +679,7 @@ export function MatchCard({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const isCompleted = match.status === "completed";
+  const isLive = match.status === "live";
   const shown = bestMarket(match);
   // The fallback list spans many different days (W46/W51's 90-day window),
   // so the day label must show on every card, not just ones with no market
@@ -708,6 +735,7 @@ export function MatchCard({
             (previous layout). Filled pills (STATUS_META.fill/TrustSignal's
             own bg-warning/15) match this redesign's visual language. */}
         <div className="flex items-center justify-end gap-1.5">
+          {isLive && <LiveBadge />}
           {match.hasRecommendation ? (
             <>
               <TrustSignal match={match} />
@@ -729,6 +757,22 @@ export function MatchCard({
           <TeamBadge name={match.away} size="lg" />
           <span className="truncate text-base font-semibold text-ink">{match.away}</span>
         </div>
+
+        {/* Live score -- separate from the Market/Pick/Odds/Edge row below,
+            deliberately: that row still shows the original pre-kickoff
+            recommendation and its odds at generation time (unchanged,
+            same as it already does for a completed match), not something
+            that updates live -- this app has no in-play odds feed, only a
+            live score (football-data.org updates home_goals/away_goals
+            during play). Conflating the two in one number would imply the
+            odds are live when they aren't. */}
+        {isLive && match.result && (
+          <div className="mt-2 flex items-center justify-center gap-3 font-mono text-2xl font-bold text-ink">
+            <span>{match.result.home}</span>
+            <span className="text-muted">-</span>
+            <span>{match.result.away}</span>
+          </div>
+        )}
 
         {/* MODELED tag + MARKET/PICK/ODDS/EDGE as one full-width row below
             the team row (direct mockup correction: W120 boxed the grid as a

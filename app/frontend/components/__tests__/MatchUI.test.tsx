@@ -249,6 +249,57 @@ describe("MatchCard", () => {
   });
 });
 
+describe("MatchCard -- live match display", () => {
+  it("shows a LIVE badge for a live match", () => {
+    const match = baseMatch({ status: "live", result: { home: 1, away: 0 } });
+    render(<MatchCard match={match} onUpdate={vi.fn()} />);
+    expect(screen.getByText("LIVE")).toBeInTheDocument();
+  });
+
+  it("shows the current in-progress score for a live match", () => {
+    const match = baseMatch({ status: "live", result: { home: 1, away: 0 } });
+    render(<MatchCard match={match} onUpdate={vi.fn()} />);
+    expect(screen.getByText("1")).toBeInTheDocument();
+    expect(screen.getByText("0")).toBeInTheDocument();
+  });
+
+  it("does not show a LIVE badge or score for an upcoming match", () => {
+    const match = baseMatch({ status: "upcoming" });
+    render(<MatchCard match={match} onUpdate={vi.fn()} />);
+    expect(screen.queryByText("LIVE")).not.toBeInTheDocument();
+  });
+
+  it("does not show a LIVE badge for a completed match", () => {
+    const match = baseMatch({ status: "completed", result: { home: 2, away: 1 } });
+    render(<MatchCard match={match} onUpdate={vi.fn()} />);
+    expect(screen.queryByText("LIVE")).not.toBeInTheDocument();
+  });
+
+  it("the recommendation badge still shows for a live match with a recommendation -- live doesn't replace it", () => {
+    const match = baseMatch({ status: "live", result: { home: 1, away: 0 }, overall: "direct_bet" });
+    render(<MatchCard match={match} onUpdate={vi.fn()} />);
+    expect(screen.getByText("LIVE")).toBeInTheDocument();
+    expect(screen.getByText("Direct Bet")).toBeInTheDocument();
+  });
+
+  it("the Market/Pick/Odds/Edge row is unchanged for a live match -- still shows the original recommendation and odds, not relabeled 'live'", () => {
+    const match = baseMatch({
+      status: "live",
+      result: { home: 1, away: 0 },
+      markets: [
+        {
+          market: "btts", selection: "no", recommendationType: "direct_bet",
+          currentOdds: 1.66, minOdds: 0, mlProbability: 0.6, impliedProbability: 0.56, valueEdge: 0.074,
+        },
+      ],
+    });
+    render(<MatchCard match={match} onUpdate={vi.fn()} />);
+    expect(screen.getByText("Odds")).toBeInTheDocument();
+    expect(screen.getByText("1.66")).toBeInTheDocument();
+    expect(screen.queryByText("Live Odds")).not.toBeInTheDocument();
+  });
+});
+
 describe("MatchCard -- Market/Pick/Odds/Edge grid redesign (2026-08-13, direct mockup)", () => {
   it("renders Market/Pick/Odds/Edge with a real team name and direction caption for a home pick", () => {
     const match = baseMatch({
@@ -439,6 +490,33 @@ describe("fixtureToMatch -- W64 real competition, not a hardcoded E0", () => {
     // that's truly missing, not just re-testing the SWE case above.
     const fixtureWithoutCompetition = baseFixture();
     expect(fixtureToMatch(fixtureWithoutCompetition).league).toBe("E0");
+  });
+});
+
+describe("fixtureToMatch -- live status (a match currently being played)", () => {
+  it("maps an IN_PLAY fixture to status 'live'", () => {
+    const fixture = baseFixture({ status: "IN_PLAY", home_goals: 1, away_goals: 0 });
+    expect(fixtureToMatch(fixture).status).toBe("live");
+  });
+
+  it("maps a PAUSED fixture (half-time) to status 'live' too", () => {
+    const fixture = baseFixture({ status: "PAUSED", home_goals: 1, away_goals: 0 });
+    expect(fixtureToMatch(fixture).status).toBe("live");
+  });
+
+  it("populates result with the current in-progress score for a live fixture, not just a completed one", () => {
+    const fixture = baseFixture({ status: "IN_PLAY", home_goals: 1, away_goals: 0 });
+    expect(fixtureToMatch(fixture).result).toEqual({ home: 1, away: 0 });
+  });
+
+  it("a live fixture with no goals yet gets a 0-0 result, not undefined", () => {
+    const fixture = baseFixture({ status: "IN_PLAY", home_goals: 0, away_goals: 0 });
+    expect(fixtureToMatch(fixture).result).toEqual({ home: 0, away: 0 });
+  });
+
+  it("a genuinely SCHEDULED fixture (unchanged) still maps to 'upcoming', not 'live'", () => {
+    const fixture = baseFixture({ status: "SCHEDULED" });
+    expect(fixtureToMatch(fixture).status).toBe("upcoming");
   });
 });
 
