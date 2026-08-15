@@ -95,6 +95,10 @@ def _build_parser() -> argparse.ArgumentParser:
         "--league", action="append", default=None,
         help="League code to scrape from --league-page-url (repeatable; overrides config.yaml's scraper.leagues, e.g. --league SP1).",
     )
+    scrape_parser.add_argument(
+        "--all-leagues", action="store_true",
+        help="Scrape every big-five league's own page in one run (E0, SP1, I1, D1, F1) instead of a single --league-page-url. Ignores --league-page-url/--league if also given.",
+    )
 
     # ingest
     ingest_parser = subparsers.add_parser("ingest", help="Ingest CSV data and pre-compute features")
@@ -658,9 +662,32 @@ def run_refresh_sweden_data(app_settings: AppSettings, db_manager: DuckDBManager
 # defaults (E0/englandm.php). A per-league override table keeps refresh-data
 # generic without turning config.yaml into a list-of-pages schema (same
 # lightest-option reasoning US#144 already applied to the scrape CLI itself).
+# US#161: I1/D1/F1 pages live-verified (33 seasons each, column-identical to
+# E0/SP1) before being added here.
 _SCRAPE_SOURCE_OVERRIDE_BY_LEAGUE: dict[str, dict[str, object]] = {
     "SP1": {"league_page_url": "https://www.football-data.co.uk/spainm.php", "leagues": ["SP1"]},
+    "I1": {"league_page_url": "https://www.football-data.co.uk/italym.php", "leagues": ["I1"]},
+    "D1": {"league_page_url": "https://www.football-data.co.uk/germanym.php", "leagues": ["D1"]},
+    "F1": {"league_page_url": "https://www.football-data.co.uk/francem.php", "leagues": ["F1"]},
 }
+
+# US#162: every "big five" league scrape_all knows how to reach in one run.
+# E0 has no entry in the override table above (empty kwargs == config.yaml's
+# own englandm.php/["E0"] default), so this list, not the table's keys, is
+# the single source of truth for "everything scrape_all covers by default".
+_ALL_BIG_FIVE_LEAGUES: tuple[str, ...] = ("E0", "SP1", "I1", "D1", "F1")
+
+
+def run_scrape_all(app_settings: AppSettings, force: bool = False, leagues: list[str] | None = None) -> None:
+    """US#162: scrape every big-five league page in one invocation, reusing
+    run_scrape()'s existing single-page call once per league -- no new
+    scraper-class code, run_scrape() itself is untouched. Omitting `leagues`
+    covers every league in _ALL_BIG_FIVE_LEAGUES; pass a subset to scrape only
+    those.
+    """
+    for league in leagues or _ALL_BIG_FIVE_LEAGUES:
+        LOGGER.info("run_scrape_all: scraping %s", league)
+        run_scrape(app_settings, force=force, **_SCRAPE_SOURCE_OVERRIDE_BY_LEAGUE.get(league, {}))
 
 
 def run_refresh_data(app_settings: AppSettings, db_manager: DuckDBManager, league: str = "E0", force: bool = False) -> None:
@@ -1773,12 +1800,15 @@ def main() -> None:
     db_manager = DuckDBManager(default_max_retries=60, default_retry_delay_seconds=10.0)
 
     if args.command == "scrape":
-        run_scrape(
-            app_settings,
-            force=getattr(args, "force", False),
-            league_page_url=getattr(args, "league_page_url", None),
-            leagues=getattr(args, "league", None),
-        )
+        if getattr(args, "all_leagues", False):
+            run_scrape_all(app_settings, force=getattr(args, "force", False))
+        else:
+            run_scrape(
+                app_settings,
+                force=getattr(args, "force", False),
+                league_page_url=getattr(args, "league_page_url", None),
+                leagues=getattr(args, "league", None),
+            )
     elif args.command == "ingest":
         run_ingest(app_settings, db_manager, force=getattr(args, "force", False))
     elif args.command == "refresh-data":
