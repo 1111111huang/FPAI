@@ -39,6 +39,7 @@ describe("countByOverall", () => {
       conditional: 1,
       no_bet: 0,
       insufficient_data: 0,
+      completed: 0,
     });
   });
 
@@ -48,6 +49,44 @@ describe("countByOverall", () => {
       conditional: 0,
       no_bet: 0,
       insufficient_data: 0,
+      completed: 0,
+    });
+  });
+
+  it("direct user request: a completed match counts under 'completed', not its original overall bucket", () => {
+    const matches = [
+      match({ id: "1", status: "completed", overall: "direct_bet" }),
+      match({ id: "2", status: "completed", overall: "conditional" }),
+      match({ id: "3", overall: "direct_bet" }), // still upcoming -- counts normally
+    ];
+    expect(countByOverall(matches)).toEqual({
+      direct_bet: 1,
+      conditional: 0,
+      no_bet: 0,
+      insufficient_data: 0,
+      completed: 2,
+    });
+  });
+
+  it("a live match still counts under its own overall bucket -- not yet decided, unlike completed", () => {
+    const matches = [match({ status: "live", result: { home: 1, away: 0 }, overall: "direct_bet" })];
+    expect(countByOverall(matches)).toEqual({
+      direct_bet: 1,
+      conditional: 0,
+      no_bet: 0,
+      insufficient_data: 0,
+      completed: 0,
+    });
+  });
+
+  it("a completed match with no recommendation at all is still excluded, same as any other match without one", () => {
+    const matches = [match({ status: "completed", hasRecommendation: false })];
+    expect(countByOverall(matches)).toEqual({
+      direct_bet: 0,
+      conditional: 0,
+      no_bet: 0,
+      insufficient_data: 0,
+      completed: 0,
     });
   });
 });

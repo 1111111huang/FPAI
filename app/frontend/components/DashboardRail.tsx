@@ -11,18 +11,28 @@ import { formatEdge, type Match, type Overall } from "./MatchUI";
 // pick. Inline styles (not Tailwind classes) since these are chosen
 // programmatically per status key, same pattern TeamBadge already uses for
 // per-team colors.
-const DONUT_ORDER: Overall[] = ["direct_bet", "conditional", "no_bet", "insufficient_data"];
-const DONUT_COLOR: Record<Overall, string> = {
+//
+// "completed" (direct user request) isn't an Overall value -- it's a match-
+// status fact tracked separately by countByOverall -- so the slice key type
+// widens to include it here rather than in the Overall union itself. --accent
+// (blue) is otherwise unused in this donut: green/amber/gray/orange are all
+// already meaningful (hit/wait/no-edge/no-data), and this needed a distinct
+// color that doesn't imply good or bad, just "done".
+type SliceKey = Overall | "completed";
+const DONUT_ORDER: SliceKey[] = ["direct_bet", "conditional", "no_bet", "insufficient_data", "completed"];
+const DONUT_COLOR: Record<SliceKey, string> = {
   direct_bet: "var(--status-good)",
   conditional: "var(--status-warning)",
   no_bet: "var(--text-muted)",
   insufficient_data: "var(--status-serious)",
+  completed: "var(--accent)",
 };
-const DONUT_LABEL: Record<Overall, string> = {
+const DONUT_LABEL: Record<SliceKey, string> = {
   direct_bet: "Direct Bet",
   conditional: "Conditional",
   no_bet: "No Edge",
   insufficient_data: "No Data",
+  completed: "Completed",
 };
 
 const RADIUS = 40;

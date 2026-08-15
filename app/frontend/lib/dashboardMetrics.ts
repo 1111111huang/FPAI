@@ -1,13 +1,24 @@
 import { bestMarket, dayDiff, type Match, type Overall } from "@/components/MatchUI";
 
-export type OverallCounts = Record<Overall, number>;
+// Direct user request: "completed" as a 5th, mutually-exclusive category --
+// not part of the Overall union (that's a recommendation type, this is a
+// match-status fact), so tracked as an extra field rather than folded into
+// the Overall-keyed counts. A completed match counts here regardless of its
+// original overall -- once decided, "what kind of pick it was" is secondary
+// to "it's done" for an Edge Distribution panel about upcoming opportunity.
+// A live match still counts under its own overall bucket -- not yet decided.
+export type OverallCounts = Record<Overall, number> & { completed: number };
 
 /** Counts only matches with a generated recommendation -- a match still
  * showing "Not yet generated" has no overall worth counting. */
 export function countByOverall(matches: Match[]): OverallCounts {
-  const counts: OverallCounts = { direct_bet: 0, conditional: 0, no_bet: 0, insufficient_data: 0 };
+  const counts: OverallCounts = { direct_bet: 0, conditional: 0, no_bet: 0, insufficient_data: 0, completed: 0 };
   for (const m of matches) {
     if (!m.hasRecommendation) continue;
+    if (m.status === "completed") {
+      counts.completed += 1;
+      continue;
+    }
     counts[m.overall] += 1;
   }
   return counts;

@@ -47,6 +47,22 @@ describe("DashboardRail", () => {
     expect(screen.getByText("3")).toBeInTheDocument(); // total in the donut center
   });
 
+  it("direct user request: shows a 'Completed' row in the Edge Distribution legend", () => {
+    const matches = [
+      match({ id: "1", status: "completed", result: { home: 2, away: 0 }, overall: "direct_bet" }),
+      match({ id: "2", overall: "conditional" }), // still upcoming
+    ];
+    render(<DashboardRail matches={matches} />);
+    expect(screen.getByText("Completed")).toBeInTheDocument();
+    expect(screen.getByText("Conditional")).toBeInTheDocument();
+  });
+
+  it("omits the 'Completed' row entirely when no match is completed -- same zero-count-hidden convention every other category already uses", () => {
+    const matches = [match({ id: "1", overall: "direct_bet" })];
+    render(<DashboardRail matches={matches} />);
+    expect(screen.queryByText("Completed")).not.toBeInTheDocument();
+  });
+
   it("renders Top Edges ranked by value_edge descending, as links to Match Analysis", () => {
     const matches = [
       match({ id: "low", home: "LowEdgeTeam", markets: [{ ...match().markets[0], valueEdge: 0.01 }] }),
