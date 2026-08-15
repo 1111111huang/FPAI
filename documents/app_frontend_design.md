@@ -15,16 +15,20 @@ decoration beyond what encodes information.
 | `--page-plane` | `#0d0d0d` | page background |
 | `--surface-1` | `#1a1a19` | cards, inputs, hover surfaces |
 | `--text-primary` / `--text-secondary` / `--text-muted` | white → gray → dim gray | ink hierarchy |
-| `--accent` | `#3987e5` (blue) | links, focus rings, active nav/tab |
-| `--status-good` | `#0ca30c` (green) | Direct Bet / positive edge / won |
+| `--accent` | `#3987e5` (blue) | links, focus rings, active nav/tab, Edge Distribution's "Completed" slice |
+| `--status-good` | `#0ca30c` (green) | Direct Bet / positive edge / won / Hit |
 | `--status-warning` | `#fab219` (amber) | Conditional / wait / stale data |
-| `--status-serious` | `#ec835a` (orange-red) | Insufficient Data / errors / data issues |
-| `--status-critical` | `#d03b3b` (red) | reserved, not yet used in a component |
+| `--status-serious` | `#ec835a` (orange-red) | Insufficient Data / errors / data issues / Not Hit |
+| `--status-critical` | `#d03b3b` (red) | `LiveBadge` (W144) |
 
 The status colors are the app's one recurring visual system — `StatusBadge`, the Edge Distribution
 donut, bet outcome text, and stale-data warnings all draw from this same 4-color palette rather
-than each inventing their own. Typography is system-default sans + `font-mono` for every number
-(odds, probabilities, edges, dates) so figures align and scan as data, not prose.
+than each inventing their own. The Edge Distribution donut's one exception is its "Completed"
+slice (W147), which reuses `--accent` rather than a status color — a completed match's outcome is
+shown per-card via `HitBadge`'s green/orange, not by this panel, so the slice needed a neutral
+"done" color rather than one of the 4 that already carry a good/bad meaning. Typography is
+system-default sans + `font-mono` for every number (odds, probabilities, edges, dates) so figures
+align and scan as data, not prose.
 
 ## 2. Layout Shell — `AppShell`
 
@@ -104,13 +108,15 @@ because the feature works but wasn't judged ready to surface. See §7 for what "
 
 | Component | Role |
 |---|---|
-| `MatchCard` | The one card used on both Dashboard and Match Explorer. Collapsed: kickoff time, tier tag, teams with color badges, best market + edge or day label. Click to expand: lazily fetches/generates the recommendation, then shows the explanation bullets and a link to full analysis. |
-| `StatusBadge` | The 4-state verdict pill (Direct Bet / Conditional / No Bet / Insufficient Data) — same colors, same labels, everywhere a verdict appears. |
+| `MatchCard` | The one card used on both Dashboard and Match Explorer. Collapsed: kickoff time, tier tag, teams with color badges, best market + edge or day label. Click to expand: lazily fetches/generates the recommendation, then shows the explanation bullets and a link to full analysis. Live (W144): adds `LiveBadge` + a real-time score row, market/odds unchanged (no in-play odds feed). Completed-today (W145/W146): `StatusBadge` replaced by "FT" + `HitBadge`, pick struck through on a miss, edge relabeled "Pre-match edge". |
+| `StatusBadge` | The 4-state verdict pill (Direct Bet / Conditional / No Bet / Insufficient Data) — same colors, same labels, everywhere a verdict appears. Not shown on a completed `MatchCard` — `HitBadge` takes its slot there instead (W146). |
+| `LiveBadge` | (W144) Red pulsing dot + "LIVE", `--status-critical`. Renders alongside `StatusBadge`, not instead of it — pre-kickoff recommendation and in-progress state are two different, both-relevant facts. |
+| `HitBadge` | (W145/W146) "Hit" (green `CheckCircle`) / "Not Hit" (orange `XCircle`) for a completed match's recommended market, resolved via the same rule as `src/agent/market_resolution.py`'s `market_correct()`. Shown both as the card's top badge and as an inline echo under the struck-through pick. |
 | `TrustSignal` | A first-class warning badge for cold-start (thin history) or unknown-team matches — renders independently of the verdict, so a confident-looking recommendation still gets flagged if the underlying data is thin. |
 | `TeamBadge` | Circular team initials badge; real club colors for known Premier League/La Liga/Allsvenskan teams, a deterministic hash-based fallback palette for anyone else — so a badge never looks broken for an unrecognized team. |
 | `LogBetButton` | Inline "Log bet" → stake input → confirm, scoped to one market/selection from a specific recommendation snapshot. Used on both `MatchCard`'s expanded row and Match Analysis's probability rows. |
 | `ErrorState` | One shared inline error row (message + optional Retry) used by every page instead of each rolling its own. |
-| `DashboardRail` | Dashboard-only: edge distribution donut + top-5 edges list. |
+| `DashboardRail` | Dashboard-only: edge distribution donut + top-5 edges list. Donut has a 5th "Completed" slice (W147, `--accent`) alongside the 4 status-colored recommendation-type slices. |
 
 ## 5. Cross-Cutting Interaction Patterns
 
