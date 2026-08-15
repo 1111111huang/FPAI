@@ -21,6 +21,14 @@ LOGGER = get_logger(__name__)
 LEAGUE_IDS: dict[str, int] = {
     "E0": 47,  # Premier League
     "SP1": 87,  # LaLiga (US#146, live-verified 2026-08-06 against /api/data/matches)
+    # US#165, live-verified 2026-08-15 against /api/data/matches across
+    # several real matchday dates (each name/ccode confirmed, not guessed
+    # from the id-pattern alone -- e.g. Germany's men's top-flight
+    # "Bundesliga"/id 54 had to be distinguished from the same endpoint's
+    # "2. Bundesliga"/id 146 and Austria's own "Bundesliga"/id 938366).
+    "I1": 55,  # Serie A (ccode ITA)
+    "D1": 54,  # Bundesliga (ccode GER)
+    "F1": 53,  # Ligue 1 (ccode FRA)
 }
 
 _HEADERS = {

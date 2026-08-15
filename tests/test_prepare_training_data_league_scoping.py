@@ -247,13 +247,15 @@ def test_international_context_pools_e0_and_swe_against_real_registry() -> None:
             list(test_meta["match_id"]),
         ).fetchall()
 
-    # E0, SWE, and SP1 rows all genuinely present -- real pooling, not just a
-    # feature-list restriction. 11,089 = 3,800 (E0) + 3,489 (SWE) + 3,800 (SP1),
-    # matching the real ingested row counts from US#124/125/143. Note this pool
-    # is unfiltered raw_matches (international's league_code is None -> no
-    # WHERE clause at all, per prepare_training_data()), not "every registered
-    # competition" specifically -- SP1's rows are pooled here even before
-    # US#147 registers SP1 in config/competitions.yaml, since registration and
-    # raw ingestion are decoupled events.
-    assert total_rows == 11089
-    assert {row[0] for row in leagues} == {"E0", "SWE", "SP1"}
+    # E0, SWE, SP1, D1, F1, and I1 rows all genuinely present -- real
+    # pooling, not just a feature-list restriction. 21,421 = 3,800 (E0) +
+    # 3,489 (SWE) + 3,800 (SP1) + 3,060 (D1) + 3,475 (F1) + 3,797 (I1),
+    # matching the real ingested row counts from US#124/125/143/163. Note
+    # this pool is unfiltered raw_matches (international's league_code is
+    # None -> no WHERE clause at all, per prepare_training_data()), not
+    # "every registered competition" specifically -- D1/F1/I1's rows are
+    # pooled here even before US#166 registers them in
+    # config/competitions.yaml, since registration and raw ingestion are
+    # decoupled events (the same point US#144/US#147 already made for SP1).
+    assert total_rows == 21421
+    assert {row[0] for row in leagues} == {"E0", "SWE", "SP1", "D1", "F1", "I1"}

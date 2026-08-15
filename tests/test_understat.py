@@ -82,6 +82,33 @@ def test_fetch_league_season_maps_e0_to_epl():
     assert "2023" in captured_urls[0]
 
 
+@pytest.mark.parametrize(
+    "league,slug",
+    [
+        ("I1", "Serie_A"),
+        ("D1", "Bundesliga"),
+        ("F1", "Ligue_1"),
+    ],
+)
+def test_fetch_league_season_maps_new_leagues_to_their_real_understat_slugs(league, slug):
+    """US#165: Serie A/Bundesliga/Ligue 1's real understat.com slugs
+    (live-verified 2026-08-15 against getLeagueData -- real, non-empty team
+    payloads returned for all three, e.g. Bundesliga's included 'Bayern
+    Munich', Ligue_1's included 'Lille'/'Marseille')."""
+    captured_urls = []
+
+    def fake_get(url, **kwargs):
+        captured_urls.append(url)
+        return _mock_resp([])
+
+    with patch("src.ingestion.understat.fetcher.requests.get", side_effect=fake_get), \
+         patch("src.ingestion.understat.fetcher.time.sleep"):
+        fetch_league_season(league, 2023, delay=0)
+
+    assert slug in captured_urls[0]
+    assert "2023" in captured_urls[0]
+
+
 def test_fetch_league_season_maps_sp1_to_la_liga():
     """US#146: La Liga's real understat.com slug is 'La_liga' (live-verified
     2026-08-06), not assumed from the EPL naming pattern."""

@@ -18,17 +18,17 @@ SP1). This module:
    `min_similarity=0.82`, US#126/US#141/US#145's precedent) against every
    existing E0/SWE/SP1 entry -- the first genuinely six-way check.
 
-**Deliberately out of scope here** (unlike US#145's La Liga precedent,
-which proactively guessed at diacritic/full-official-name variants): no
-Understat/FotMob/football-data.org/Odds-API data has been fetched for any
-of these three leagues yet (US#165, `documents/app_user_stories.md` W138),
-so there's no real spelling to verify a guessed variant against -- adding
-unverified full-name variants here would be exactly the kind of assumption
-this codebase's own "measure, don't assume" precedent argues against.
-Real spelling gaps (e.g. "Bayern Muenchen" vs. "Bayern Munich", "PSG" vs.
-"Paris SG") will surface against live data in US#165/W138, the same way
-La Liga's real gaps surfaced in W78 rather than being fully anticipated
-here.
+**Update (US#165, same day):** deliberately deferred at first (no live
+source data existed yet to verify a guess against), but US#165's own real
+Understat fetch immediately surfaced 14 real spelling divergences (e.g.
+"AC Milan" vs. raw "Milan", "RasenBallsport Leipzig" vs. raw "RB Leipzig",
+"Paris Saint Germain" vs. raw "Paris SG") -- added here, backed by real
+fetched data rather than a guess, closing part of the gap this module's
+docstring originally flagged as future work. FotMob's own spelling variants
+and football-data.org's (W138, app-side) remain unverified/deferred --
+FotMob's per-match player backfill was deliberately not run this pass
+(mirrors La Liga's own SP1 precedent, US#146/US#147 -- a flagged fast-follow,
+not a data gap), and W138 hasn't run yet.
 """
 
 from __future__ import annotations
@@ -84,6 +84,30 @@ def test_every_raw_team_name_round_trips_to_itself():
         )
 
 
+def test_real_understat_spelling_variants_map_onto_raw_short_forms():
+    """US#165: real Understat spellings (fetched live, 2025 season, not
+    guessed) that diverge from football-data.co.uk's raw short form."""
+    mapper = TeamNameMapper(mapping_path=MAPPING_PATH)
+    cases = {
+        "AC Milan": "Milan",
+        "Parma Calcio 1913": "Parma",
+        "Bayer Leverkusen": "Leverkusen",
+        "Borussia Dortmund": "Dortmund",
+        "Borussia M.Gladbach": "M'gladbach",
+        "Eintracht Frankfurt": "Ein Frankfurt",
+        "FC Cologne": "FC Koln",
+        "FC Heidenheim": "Heidenheim",
+        "Hamburger SV": "Hamburg",
+        "Mainz 05": "Mainz",
+        "RasenBallsport Leipzig": "RB Leipzig",
+        "St. Pauli": "St Pauli",
+        "VfB Stuttgart": "Stuttgart",
+        "Paris Saint Germain": "Paris SG",
+    }
+    for name, expected in cases.items():
+        assert mapper.map_team(name) == expected
+
+
 def test_no_duplicate_raw_names_across_the_three_new_leagues():
     """A club short name colliding across two of these three leagues (not
     just against E0/SWE/SP1) would silently merge under one mapping key --
@@ -105,10 +129,19 @@ def test_no_high_similarity_collision_between_new_leagues_and_existing_entries()
         v for v in mapping.values() if v not in new_names
     }
 
+    # A high-similarity pair that already resolves to the *same* canonical
+    # target (e.g. "St Pauli" / "St. Pauli", both -> "St Pauli") is a correct,
+    # intentional variant-spelling link, not a cross-club collision --
+    # mirrors US#145's own "Alaves/Alavés share one canonical target" finding.
+    def _target(name: str) -> str:
+        return mapping.get(name, name)
+
     min_similarity = TeamNameMapper(mapping_path=MAPPING_PATH).min_similarity
     collisions = []
     for new in new_names:
         for other in other_names:
+            if _target(new) == _target(other):
+                continue
             score = _similarity_score(new, other)
             if score >= min_similarity:
                 collisions.append((score, new, other))

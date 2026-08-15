@@ -15,6 +15,12 @@ LEAGUE_MAP: dict[str, str] = {
     "E0": "EPL",
     "EPL": "EPL",
     "SP1": "La_liga",  # US#146, live-verified 2026-08-06 against getLeagueData
+    # US#165, live-verified 2026-08-15 against getLeagueData -- real,
+    # non-empty team payloads for all three (e.g. Bundesliga's included
+    # "Bayern Munich", Ligue_1's included "Lille"/"Marseille").
+    "I1": "Serie_A",
+    "D1": "Bundesliga",
+    "F1": "Ligue_1",
 }
 
 _API_URL = "https://understat.com/getLeagueData/{league}/{season}"

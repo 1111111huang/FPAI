@@ -214,3 +214,15 @@ def test_league_ids_maps_sp1_to_the_real_fotmob_league_id():
     """US#146: La Liga's real FotMob league id is 87 (live-verified 2026-08-06
     against /api/data/matches, entry name 'LaLiga', ccode 'ESP')."""
     assert LEAGUE_IDS["SP1"] == 87
+
+
+def test_league_ids_maps_the_three_new_leagues_to_their_real_fotmob_ids():
+    """US#165: Serie A/Bundesliga/Ligue 1's real FotMob league ids
+    (live-verified 2026-08-15 against /api/data/matches across several
+    real matchday dates): I1=55 (name 'Serie A', ccode 'ITA'), D1=54 (name
+    'Bundesliga', ccode 'GER' -- distinct from the '2. Bundesliga'/id 146
+    second-division entry and the Austrian 'Bundesliga'/id 938366 also
+    returned by the same endpoint), F1=53 (name 'Ligue 1', ccode 'FRA')."""
+    assert LEAGUE_IDS["I1"] == 55
+    assert LEAGUE_IDS["D1"] == 54
+    assert LEAGUE_IDS["F1"] == 53
