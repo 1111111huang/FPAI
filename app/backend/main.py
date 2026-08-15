@@ -21,6 +21,7 @@ import duckdb
 from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
 import requests
 from starlette.concurrency import run_in_threadpool
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -445,6 +446,61 @@ async def restore_database(target: _RESTORE_TARGET_NAMES, source_url: str) -> di
 
     bytes_written = await run_in_threadpool(_download)
     return {"target": target, "path": str(target_path), "bytes_written": bytes_written}
+
+
+class _LessonSyncItem(BaseModel):
+    """Fields needed to reproduce an already-approved lesson on a different
+    database -- deliberately not the full agent_lessons row shape (id,
+    created_at, etc. are meaningless across databases); these four are
+    exactly what load_approved_lessons() ever reads at serving time."""
+    competition_id: str
+    tier: str
+    scope: Literal["competition", "tier"]
+    rule_text: str
+    lesson_text: str | None = None
+    source_match_id: str = "synced-from-local-review"
+    reviewer: str = "sync"
+
+
+@app.post("/api/admin/sync-lessons")
+def sync_lessons(lessons: list[_LessonSyncItem]) -> dict:
+    """A lesson approved against a local/dev database has no path to a
+    deployed instance's own agent_lessons table -- it's not part of git
+    (data/fpai_core.db is gitignored), and /api/admin/restore-database's
+    full-file overwrite is the wrong tool: agent_lessons lives in the same
+    physical file as raw_matches/feature_store, so overwriting the whole
+    file to sync one lesson row would also clobber production's own
+    (fresher) match data. This inserts/upserts *only* into agent_lessons,
+    reusing insert_lesson_candidate/approve_lesson (src/agent/lessons.py)
+    rather than re-deriving the table's insert shape here.
+
+    Idempotent by content, not by any transferred id (ids aren't meaningful
+    across databases) -- skips a lesson if an approved row with the exact
+    same (scope, competition_id, tier, rule_text) already exists, so
+    re-running this with the same payload is always safe."""
+    from src.agent.lessons import approve_lesson, create_lessons_tables, insert_lesson_candidate
+
+    db = DuckDBManager()
+    inserted = 0
+    skipped = 0
+    with db.connection() as conn:
+        create_lessons_tables(conn)
+        for lesson in lessons:
+            duplicate = conn.execute(
+                "SELECT COUNT(*) FROM agent_lessons WHERE status = 'approved' "
+                "AND scope = ? AND competition_id = ? AND tier = ? AND rule_text = ?",
+                [lesson.scope, lesson.competition_id, lesson.tier, lesson.rule_text],
+            ).fetchone()[0]
+            if duplicate:
+                skipped += 1
+                continue
+            lesson_id = insert_lesson_candidate(
+                conn, lesson.lesson_text or lesson.rule_text,
+                lesson.competition_id, lesson.tier, lesson.source_match_id,
+            )
+            approve_lesson(conn, lesson_id, lesson.scope, lesson.reviewer, lesson.rule_text)
+            inserted += 1
+    return {"inserted": inserted, "skipped_duplicates": skipped}
 
 
 _REFRESH_LEAGUE_NAMES = Literal["E0", "SP1", "SWE"]
