@@ -16,6 +16,10 @@ from __future__ import annotations
 FOOTBALL_DATA_CODE_BY_LEAGUE: dict[str, str] = {
     "E0": "PL",
     "SP1": "PD",
+    # W134, live-verified 2026-08-15 against GET /v4/competitions.
+    "I1": "SA",
+    "D1": "BL1",
+    "F1": "FL1",
 }
 
 # Matches the pre-existing get_fixtures()/get_results() "PL" default this

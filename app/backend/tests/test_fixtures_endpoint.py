@@ -71,14 +71,40 @@ def la_liga_client_mock():
 def _all_competitions_display_enabled():
     """SWE was flipped to display_enabled=False in the real
     config/competitions.yaml (not a major league, big-5 season starting) --
-    this file's tests exercise the merge/tag/cache mechanics for all three
+    this file's tests exercise the merge/tag/cache mechanics for all
     competitions regardless of that live toggle, so default it back to "all
     on" here (mirrors sweden_client_mock/la_liga_client_mock's own
     autouse-default-then-override pattern). The toggle's own skip-when-off
     behavior is covered separately, by
     test_fixtures_endpoint_skips_a_display_disabled_competition_entirely."""
-    with patch("app.backend.main.list_display_enabled_competition_ids", return_value=["E0", "SWE", "SP1"]):
+    with patch(
+        "app.backend.main.list_display_enabled_competition_ids",
+        return_value=["E0", "SWE", "SP1", "I1", "D1", "F1"],
+    ):
         yield
+
+
+@pytest.fixture(autouse=True)
+def new_leagues_client_mock():
+    """W136: /api/fixtures now also merges in Serie A (I1), Bundesliga (D1),
+    and Ligue 1 (F1) fixtures, each via its own thin accessor
+    (get_serie_a_fixtures_client/get_bundesliga_fixtures_client/
+    get_ligue1_fixtures_client) -- mirrors la_liga_client_mock exactly, one
+    fixture covering all three since they share the identical shape (same
+    football-data.org provider class, only the competition_code differs).
+    Autouse + defaulted to empty, so every pre-existing test in this file
+    keeps working completely unchanged. Returns a dict keyed by league code
+    so a test can configure just the one(s) it needs."""
+    mocks: dict[str, MagicMock] = {}
+    with patch("app.backend.main.get_serie_a_fixtures_client") as mock_i1, \
+         patch("app.backend.main.get_bundesliga_fixtures_client") as mock_d1, \
+         patch("app.backend.main.get_ligue1_fixtures_client") as mock_f1:
+        for code, mock_get_client in (("I1", mock_i1), ("D1", mock_d1), ("F1", mock_f1)):
+            client_mock = mock_get_client.return_value
+            client_mock.get_fixtures.return_value = []
+            client_mock.get_results.return_value = []
+            mocks[code] = client_mock
+        yield mocks
 
 
 def test_fixtures_endpoint_skips_a_display_disabled_competition_entirely(sweden_client_mock):
@@ -656,6 +682,110 @@ def test_fixtures_endpoint_la_liga_fixture_cache_key_is_independent_of_e0s_and_s
     la_liga_client_mock.get_fixtures.assert_called_once_with(
         competition_code="PD", date_from="2027-06-10", date_to="2027-06-15"
     )
+
+
+# ---------------------------------------------------------------------------
+# W136: /api/fixtures merges in Serie A (I1), Bundesliga (D1), and Ligue 1
+# (F1) alongside E0/SWE/SP1, each sourced from the *same* football-data.org
+# provider as E0/SP1 (W134 live-confirmed SA/BL1/FL1) via their own thin
+# accessors. One parametrized block covering all three, rather than
+# tripling W76's own SP1 test bodies -- the shape is identical per league.
+# ---------------------------------------------------------------------------
+
+_NEW_LEAGUE_FIXTURE = NormalizedMatch(
+    match_id="700001", utc_date="2026-08-25T19:00:00Z", status="SCHEDULED",
+    home_team="Juventus", away_team="AC Milan", home_goals=None, away_goals=None,
+)
+_NEW_LEAGUE_RESULT = NormalizedMatch(
+    match_id="700000", utc_date="2025-03-08T20:00:00Z", status="FINISHED",
+    home_team="Bayern Munich", away_team="Borussia Dortmund", home_goals=2, away_goals=1,
+)
+
+_NEW_LEAGUE_CODES = [("I1", "SA"), ("D1", "BL1"), ("F1", "FL1")]
+
+
+@pytest.mark.parametrize("league,fd_code", _NEW_LEAGUE_CODES)
+def test_fixtures_endpoint_merges_new_league_fixtures_alongside_existing(
+    league, fd_code, new_leagues_client_mock
+):
+    new_leagues_client_mock[league].get_fixtures.return_value = [_NEW_LEAGUE_FIXTURE]
+    with patch("app.backend.main.get_fixtures_client") as mock_get_client:
+        mock_get_client.return_value.get_fixtures.return_value = [_REAL_FIXTURE]
+        with TestClient(app) as client:
+            response = client.get(
+                "/api/fixtures", params={"date_from": "2026-08-21", "date_to": "2026-08-28"}
+            )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert {m["home_team"] for m in body} == {"Chelsea", _NEW_LEAGUE_FIXTURE.home_team}
+    new_leagues_client_mock[league].get_fixtures.assert_called_once_with(
+        competition_code=fd_code, date_from="2026-08-21", date_to="2026-08-28"
+    )
+
+
+@pytest.mark.parametrize("league,fd_code", _NEW_LEAGUE_CODES)
+def test_fixtures_endpoint_tags_new_league_fixtures_correctly(league, fd_code, new_leagues_client_mock):
+    new_leagues_client_mock[league].get_fixtures.return_value = [_NEW_LEAGUE_FIXTURE]
+    with patch("app.backend.main.get_fixtures_client") as mock_get_client:
+        mock_get_client.return_value.get_fixtures.return_value = [_REAL_FIXTURE]
+        with TestClient(app) as client:
+            response = client.get(
+                "/api/fixtures", params={"date_from": "2026-08-21", "date_to": "2026-08-28"}
+            )
+
+    body = response.json()
+    by_team = {m["home_team"]: m["competition"] for m in body}
+    assert by_team == {"Chelsea": "E0", _NEW_LEAGUE_FIXTURE.home_team: league}
+
+
+@pytest.mark.parametrize("league,fd_code", _NEW_LEAGUE_CODES)
+def test_fixtures_endpoint_tags_new_league_results_correctly(league, fd_code, new_leagues_client_mock):
+    new_leagues_client_mock[league].get_results.return_value = [_NEW_LEAGUE_RESULT]
+    with patch("app.backend.main._current_real_date", return_value=date(2025, 3, 10)):
+        with patch("app.backend.main.get_fixtures_client") as mock_get_client:
+            mock_get_client.return_value.get_results.return_value = []
+            with TestClient(app) as client:
+                response = client.get(
+                    "/api/fixtures", params={"date_from": "2025-03-08", "date_to": "2025-03-08"}
+                )
+
+    body = response.json()
+    assert body[0]["competition"] == league
+    new_leagues_client_mock[league].get_results.assert_called_once_with(
+        competition_code=fd_code, date_from="2025-03-08", date_to="2025-03-08"
+    )
+
+
+def test_fixtures_endpoint_new_leagues_cache_keys_are_independent_of_each_other_and_existing(
+    new_leagues_client_mock, la_liga_client_mock, sweden_client_mock
+):
+    """A cached E0/SP1/SWE call for a date range must not accidentally
+    serve (or be served by) any of the three new leagues' cache entries for
+    the identical range -- mirrors the existing SP1/SWE independence test,
+    now with three more competitions in the same merge."""
+    new_leagues_client_mock["I1"].get_fixtures.return_value = [_NEW_LEAGUE_FIXTURE]
+    la_liga_client_mock.get_fixtures.return_value = [_LA_LIGA_FIXTURE]
+    sweden_client_mock.get_fixtures.return_value = [_SWEDISH_FIXTURE]
+    with patch("app.backend.main.get_fixtures_client") as mock_get_client:
+        mock_get_client.return_value.get_fixtures.return_value = [_REAL_FIXTURE]
+        with TestClient(app) as client:
+            response = client.get(
+                "/api/fixtures", params={"date_from": "2027-06-10", "date_to": "2027-06-15"}
+            )
+
+    body = response.json()
+    assert {m["home_team"] for m in body} == {
+        "Chelsea", "Malmo FF", "Real Madrid", _NEW_LEAGUE_FIXTURE.home_team,
+    }
+    mock_get_client.return_value.get_fixtures.assert_called_once_with(date_from="2027-06-10", date_to="2027-06-15")
+    new_leagues_client_mock["I1"].get_fixtures.assert_called_once_with(
+        competition_code="SA", date_from="2027-06-10", date_to="2027-06-15"
+    )
+    # D1/F1 contributed nothing this call (only I1 was configured above) --
+    # confirms their own cache slots don't accidentally pick up I1's result.
+    new_leagues_client_mock["D1"].get_fixtures.assert_called_once()
+    new_leagues_client_mock["F1"].get_fixtures.assert_called_once()
 
 
 class TestSplitFixtureDateRange:

@@ -14,8 +14,8 @@ misconfiguration there doesn't silently cascade into the app's routing too.
 from __future__ import annotations
 
 # Sourced from config/competitions.yaml's competition_specific entries as of
-# 2026-08-06 (W75) -- update by hand if that registry changes, not automatically.
-COMPETITION_ALLOWLIST: frozenset[str] = frozenset({"E0", "SWE", "SP1"})
+# 2026-08-15 (W135) -- update by hand if that registry changes, not automatically.
+COMPETITION_ALLOWLIST: frozenset[str] = frozenset({"E0", "SWE", "SP1", "I1", "D1", "F1"})
 
 
 def gate_league(competition_id: str | None) -> str | None:

@@ -28,6 +28,17 @@ def test_sp1_maps_to_the_real_confirmed_sport_key():
     assert ODDS_SPORT_KEY_BY_COMPETITION["SP1"] == "soccer_spain_la_liga"
 
 
+def test_new_leagues_map_to_their_real_confirmed_sport_keys():
+    """W134/W137 confirmed all three live against The Odds API's own
+    /v4/sports/?all=true listing (active: true) -- not guessed. D1 needed
+    disambiguating from the same listing's "soccer_germany_bundesliga2"
+    (2. Bundesliga) and "soccer_austria_bundesliga" (Austria's own top
+    flight), confirmed against the real title "Bundesliga - Germany"."""
+    assert ODDS_SPORT_KEY_BY_COMPETITION["I1"] == "soccer_italy_serie_a"
+    assert ODDS_SPORT_KEY_BY_COMPETITION["D1"] == "soccer_germany_bundesliga"
+    assert ODDS_SPORT_KEY_BY_COMPETITION["F1"] == "soccer_france_ligue_one"
+
+
 def test_default_sport_key_matches_e0():
     """A caller with no/unrecognized league falls back to EPL's sport_key --
     matches the pre-existing get_odds(sport_key="soccer_epl") default this

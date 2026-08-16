@@ -84,6 +84,34 @@ def get_la_liga_fixtures_client() -> FootballDataClient:
 LA_LIGA_COMPETITION_CODE = "PD"
 
 
+def get_serie_a_fixtures_client() -> FootballDataClient:
+    """W136: Serie A uses the same football-data.org provider/class as
+    E0/SP1 (live-confirmed, W134) -- a thin wrapper purely for test/cache
+    isolation, mirroring get_la_liga_fixtures_client() exactly."""
+    return get_fixtures_client()
+
+
+SERIE_A_COMPETITION_CODE = "SA"
+
+
+def get_bundesliga_fixtures_client() -> FootballDataClient:
+    """W136: Bundesliga uses the same football-data.org provider/class as
+    E0/SP1/I1 (live-confirmed, W134)."""
+    return get_fixtures_client()
+
+
+BUNDESLIGA_COMPETITION_CODE = "BL1"
+
+
+def get_ligue1_fixtures_client() -> FootballDataClient:
+    """W136: Ligue 1 uses the same football-data.org provider/class as
+    E0/SP1/I1/D1 (live-confirmed, W134)."""
+    return get_fixtures_client()
+
+
+LIGUE_1_COMPETITION_CODE = "FL1"
+
+
 _sweden_fixtures_client: SwedenFixturesClient | None = None
 
 
@@ -664,6 +692,9 @@ async def get_fixtures(date_from: str | None = None, date_to: str | None = None)
     client = get_fixtures_client()
     sweden_client = get_sweden_fixtures_client()
     la_liga_client = get_la_liga_fixtures_client()
+    serie_a_client = get_serie_a_fixtures_client()
+    bundesliga_client = get_bundesliga_fixtures_client()
+    ligue1_client = get_ligue1_fixtures_client()
     results_range, fixtures_range = _split_fixture_date_range(date_from, date_to, _current_real_date())
     # display_enabled gate (config/competitions.yaml): a competition flipped
     # off there is skipped here entirely -- not just filtered out after the
@@ -712,6 +743,30 @@ async def get_fixtures(date_from: str | None = None, date_to: str | None = None)
                 ),
                 "SP1",
             )
+        if "I1" in enabled:
+            matches += _tag(
+                await _cached_fixture_call(
+                    ("results_i1", past_from, past_to), serie_a_client.get_results,
+                    competition_code=SERIE_A_COMPETITION_CODE, date_from=past_from, date_to=past_to,
+                ),
+                "I1",
+            )
+        if "D1" in enabled:
+            matches += _tag(
+                await _cached_fixture_call(
+                    ("results_d1", past_from, past_to), bundesliga_client.get_results,
+                    competition_code=BUNDESLIGA_COMPETITION_CODE, date_from=past_from, date_to=past_to,
+                ),
+                "D1",
+            )
+        if "F1" in enabled:
+            matches += _tag(
+                await _cached_fixture_call(
+                    ("results_f1", past_from, past_to), ligue1_client.get_results,
+                    competition_code=LIGUE_1_COMPETITION_CODE, date_from=past_from, date_to=past_to,
+                ),
+                "F1",
+            )
     if fixtures_range is not None:
         future_from, future_to = fixtures_range
         if "E0" in enabled:
@@ -735,6 +790,30 @@ async def get_fixtures(date_from: str | None = None, date_to: str | None = None)
                     competition_code=LA_LIGA_COMPETITION_CODE, date_from=future_from, date_to=future_to,
                 ),
                 "SP1",
+            )
+        if "I1" in enabled:
+            matches += _tag(
+                await _cached_fixture_call(
+                    ("fixtures_i1", future_from, future_to), serie_a_client.get_fixtures,
+                    competition_code=SERIE_A_COMPETITION_CODE, date_from=future_from, date_to=future_to,
+                ),
+                "I1",
+            )
+        if "D1" in enabled:
+            matches += _tag(
+                await _cached_fixture_call(
+                    ("fixtures_d1", future_from, future_to), bundesliga_client.get_fixtures,
+                    competition_code=BUNDESLIGA_COMPETITION_CODE, date_from=future_from, date_to=future_to,
+                ),
+                "D1",
+            )
+        if "F1" in enabled:
+            matches += _tag(
+                await _cached_fixture_call(
+                    ("fixtures_f1", future_from, future_to), ligue1_client.get_fixtures,
+                    competition_code=LIGUE_1_COMPETITION_CODE, date_from=future_from, date_to=future_to,
+                ),
+                "F1",
             )
     return matches
 
