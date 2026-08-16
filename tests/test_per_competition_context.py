@@ -344,6 +344,68 @@ def test_forecast_upcoming_real_sp1_registration(tmp_path: Path) -> None:
     assert result["league"] == "SP1"
 
 
+@pytest.mark.parametrize(
+    "code,home,away,constant",
+    [
+        ("I1", "Juventus", "Milan", 1.7),
+        ("D1", "Bayern Munich", "Dortmund", 2.1),
+        ("F1", "Paris SG", "Marseille", 2.3),
+    ],
+)
+def test_forecast_upcoming_real_new_league_registration(
+    tmp_path: Path, code: str, home: str, away: str, constant: float
+) -> None:
+    """US#168: end-to-end forecast_upcoming(league=<code>, match_type='league')
+    for each of Serie A/Bundesliga/Ligue 1 (US#166/US#167 registered and
+    trained them) -- confirms the registry-driven resolution chain routes
+    each real code to its own team-history-and-market model, distinguishable
+    from E0/SWE/SP1 and from the other two new leagues, mirroring
+    test_forecast_upcoming_real_sp1_registration exactly (one body,
+    parametrized across all three, since three landing at once is the
+    natural point to stop tripling the same test)."""
+    config_path = _write_config(tmp_path, schema_features=["MKT_IMPLIED_HOME"])
+    (config_path.parent / "config" / "competitions.yaml").write_text(
+        yaml.safe_dump({"competitions": {code: {"competition_id": code, "tier": "competition_specific", "league_code": code}}}),
+        encoding="utf-8",
+    )
+    config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    with duckdb.connect(config["paths"]["database_path"]) as conn:
+        conn.execute(
+            """
+            CREATE TABLE raw_matches (
+                match_id TEXT PRIMARY KEY, league TEXT, tier INTEGER, date TIMESTAMP,
+                home_team TEXT, away_team TEXT, fthg INTEGER, ftag INTEGER,
+                hs FLOAT, "as" FLOAT, hst FLOAT, ast FLOAT, hc FLOAT, ac FLOAT,
+                hy FLOAT, ay FLOAT, hr FLOAT, ar FLOAT,
+                odds_h FLOAT, odds_d FLOAT, odds_a FLOAT,
+                avgh FLOAT, avgd FLOAT, avga FLOAT,
+                xg_h FLOAT, xg_a FLOAT, xga_h FLOAT, xga_a FLOAT,
+                over25_odds FLOAT, under25_odds FLOAT,
+                ah_line FLOAT, ah_home_odds FLOAT, ah_away_odds FLOAT
+            )
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO raw_matches
+            (match_id, league, tier, date, home_team, away_team, fthg, ftag, odds_h, odds_d, odds_a, avgh, avgd, avga)
+            VALUES (?, ?, NULL, '2025-08-10 20:00:00', ?, ?, 2, 1, 1.5, 4.0, 6.0, 1.5, 4.0, 6.0)
+            """,
+            [code.lower(), code, home, away],
+        )
+    _write_model(config_path, context=code, target="home_goals", feature_names=["MKT_IMPLIED_HOME"], constant=constant)
+
+    service = ForecastService(config_path=str(config_path), targets=["home_goals"])
+    result = service.forecast_upcoming(
+        home_team=home, away_team=away, date="2025-08-24", league=code,
+        odds_h=1.5, odds_d=4.0, odds_a=6.0, match_type="league",
+    )
+
+    assert result["forecast"]["home_goals"]["expected"] == pytest.approx(constant)
+    assert result["data_quality"]["prediction_basis"] == "team_history_and_market"
+    assert result["league"] == code
+
+
 def test_forecast_upcoming_swe_omits_a_target_it_has_no_registered_model_for(tmp_path: Path) -> None:
     """A35 (agent_user_stories.md Phase 12): config/competitions.yaml's real SWE
     entry excludes corners from available_targets (the source data has no
