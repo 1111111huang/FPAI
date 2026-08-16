@@ -125,13 +125,14 @@ def test_forecast_upcoming_unregistered_league_falls_back_to_market_odds_only(tm
     not reach FeatureFactory.build_for_match at all -- it must route to the
     same market-odds-only path as an explicit match_type='international' call.
 
-    A49: replaced "La Liga" as this test's stock unregistered-competition
-    example -- La Liga (SP1) is now genuinely registered in the real
-    config/competitions.yaml (US#147), so it no longer demonstrates the
+    A58: replaced "Bundesliga" as this test's stock unregistered-competition
+    example -- Bundesliga (D1) is now genuinely registered in the real
+    config/competitions.yaml (US#166), so it no longer demonstrates the
     unregistered path (this test's own synthetic registry below only ever
     registers "E0" regardless, but the string choice matters for reading
-    clarity/consistency across the codebase's test suite). Bundesliga/D1 is
-    confirmed to still have no registry entry."""
+    clarity/consistency across the codebase's test suite). Eredivisie is
+    confirmed to still have no registry entry, mirroring A49's own
+    "La Liga" -> "Bundesliga" retirement."""
     config_path = _write_config(tmp_path, schema_features=["OFF_HOME_FTHG_R5", "MKT_IMPLIED_HOME"])
     _write_competitions_registry(
         config_path,
@@ -142,7 +143,7 @@ def test_forecast_upcoming_unregistered_league_falls_back_to_market_odds_only(tm
 
     service = ForecastService(config_path=str(config_path), targets=["home_goals"])
     result = service.forecast_upcoming(
-        home_team="Bayern Munich", away_team="Borussia Dortmund", date="2025-08-24", league="Bundesliga",
+        home_team="Ajax", away_team="PSV", date="2025-08-24", league="Eredivisie",
         odds_h=1.8, odds_d=3.6, odds_a=4.2, match_type="league",
     )
 

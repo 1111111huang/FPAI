@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
 from src.agent.tools import forecast_international, resolve_competition
 
 
@@ -34,6 +36,17 @@ def test_resolve_competition_recommends_forecast_league_for_sp1():
     assert result["recommended_tool"] == "forecast_league"
 
 
+@pytest.mark.parametrize("code", ["I1", "D1", "F1"])
+def test_resolve_competition_recommends_forecast_league_for_new_leagues(code):
+    """A58: Serie A/Bundesliga/Ligue 1 were registered competition_specific
+    in the real config/competitions.yaml (US#166) -- confirm resolve_competition
+    routes each correctly, mirroring A49's SP1 test exactly (one body,
+    parametrized across all three)."""
+    result = json.loads(resolve_competition.invoke({"competition_or_league": code}))
+    assert result["tier"] == "competition_specific"
+    assert result["recommended_tool"] == "forecast_league"
+
+
 def test_resolve_competition_normalizes_la_liga_free_text_name_to_sp1():
     """A50: resolve_competition's own docstring uses 'La Liga' as a valid
     example input -- confirm it actually resolves to SP1's real
@@ -48,13 +61,14 @@ def test_resolve_competition_normalizes_la_liga_free_text_name_to_sp1():
 
 
 def test_resolve_competition_recommends_forecast_international_for_unregistered_competition():
-    """A49: Bundesliga (D1) has no entry in config/competitions.yaml at all --
+    """A58: Eredivisie has no entry in config/competitions.yaml at all --
     must fall back to general_purpose/forecast_international, not error or
-    default to league. Replaced "La Liga" as this test's stock unregistered-
-    competition example -- La Liga (SP1) is now genuinely registered
-    (US#147), so it no longer demonstrates the unregistered-competition
-    path; Bundesliga/D1 is confirmed to still have no registry entry."""
-    result = json.loads(resolve_competition.invoke({"competition_or_league": "Bundesliga"}))
+    default to league. Replaced "Bundesliga" as this test's stock
+    unregistered-competition example -- Bundesliga (D1) is now genuinely
+    registered (US#166), so it no longer demonstrates the unregistered-
+    competition path; Eredivisie is confirmed to still have no registry
+    entry, mirroring A49's own "La Liga" -> "Bundesliga" retirement."""
+    result = json.loads(resolve_competition.invoke({"competition_or_league": "Eredivisie"}))
     assert result["tier"] == "general_purpose"
     assert result["recommended_tool"] == "forecast_international"
 
@@ -65,7 +79,7 @@ def test_following_resolve_competitions_advice_for_unregistered_league_yields_ma
     cold-start team_history_and_market result."""
     from unittest.mock import MagicMock, patch
 
-    advice = json.loads(resolve_competition.invoke({"competition_or_league": "Bundesliga"}))
+    advice = json.loads(resolve_competition.invoke({"competition_or_league": "Eredivisie"}))
     assert advice["recommended_tool"] == "forecast_international"
 
     mock_result = {

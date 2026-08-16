@@ -174,13 +174,15 @@ def test_forecast_node_returns_no_odds_error_when_neither_source_has_odds():
 
 
 def test_forecast_node_calls_forecast_international_when_recommended():
-    """A49: replaced "La Liga" as this test's stock unregistered/general_purpose
-    competition example with "Bundesliga" -- La Liga (SP1) is now genuinely
-    registered competition_specific (US#147), so it no longer demonstrates
-    the general_purpose-fallback path this test exercises (competition_resolution
-    is directly supplied here, not resolved via the real registry, so the
-    string choice is purely about not misleadingly implying La Liga still
-    routes here). Bundesliga/D1 is confirmed to still have no registry entry."""
+    """A58: replaced "Bundesliga" as this test's stock unregistered/
+    general_purpose competition example with "Eredivisie" -- Bundesliga (D1)
+    is now genuinely registered competition_specific (US#166), so it no
+    longer demonstrates the general_purpose-fallback path this test
+    exercises (competition_resolution is directly supplied here, not
+    resolved via the real registry, so the string choice is purely about
+    not misleadingly implying Bundesliga still routes here). Eredivisie is
+    confirmed to still have no registry entry, mirroring A49's own
+    "La Liga" -> "Bundesliga" retirement."""
     fake_result = {"result_3way": {"probabilities": {"home": 0.4}}, "data_quality": {"prediction_basis": "market_odds_only"}}
     with patch("src.forecast.forecast_service.ForecastService") as MockSvc:
         instance = MagicMock()
@@ -189,10 +191,10 @@ def test_forecast_node_calls_forecast_international_when_recommended():
 
         state = _base_state(
             match_info={
-                "home_team": "Bayern Munich", "away_team": "Borussia Dortmund", "date": "2026-06-21",
-                "league": "Bundesliga", "odds": {"home": 2.1, "draw": 3.4, "away": 3.3},
+                "home_team": "Ajax", "away_team": "PSV", "date": "2026-06-21",
+                "league": "Eredivisie", "odds": {"home": 2.1, "draw": 3.4, "away": 3.3},
             },
-            competition_resolution={"competition": "Bundesliga", "tier": "general_purpose", "recommended_tool": "forecast_international"},
+            competition_resolution={"competition": "Eredivisie", "tier": "general_purpose", "recommended_tool": "forecast_international"},
         )
         result = forecast_node(state)
 
@@ -222,6 +224,36 @@ def test_forecast_node_calls_forecast_league_for_sp1():
     call_kwargs = instance.forecast_upcoming.call_args.kwargs
     assert call_kwargs["match_type"] == "league"
     assert call_kwargs["league"] == "SP1"
+    assert "error" not in result["forecast_payload"]
+
+
+@pytest.mark.parametrize(
+    "code,home,away",
+    [("I1", "Juventus", "AC Milan"), ("D1", "Bayern Munich", "Borussia Dortmund"), ("F1", "Paris Saint-Germain", "Marseille")],
+)
+def test_forecast_node_calls_forecast_league_for_new_leagues(code, home, away):
+    """A58: Serie A/Bundesliga/Ligue 1 are now registered competition_specific
+    (US#166) -- confirm forecast_node routes each through forecast_league/
+    match_type="league" exactly like E0/SP1, mirroring A49's SP1 test (one
+    body, parametrized across all three)."""
+    fake_result = {"result_3way": {"probabilities": {"home": 0.4}}, "data_quality": {"prediction_basis": "team_history_and_market"}}
+    with patch("src.forecast.forecast_service.ForecastService") as MockSvc:
+        instance = MagicMock()
+        MockSvc.return_value = instance
+        instance.forecast_upcoming.return_value = fake_result
+
+        state = _base_state(
+            match_info={
+                "home_team": home, "away_team": away, "date": "2026-08-22",
+                "league": code, "odds": {"home": 1.8, "draw": 3.6, "away": 4.2},
+            },
+            competition_resolution={"competition": code, "tier": "competition_specific", "recommended_tool": "forecast_league"},
+        )
+        result = forecast_node(state)
+
+    call_kwargs = instance.forecast_upcoming.call_args.kwargs
+    assert call_kwargs["match_type"] == "league"
+    assert call_kwargs["league"] == code
     assert "error" not in result["forecast_payload"]
 
 
