@@ -132,6 +132,118 @@ competitions:
       - MKT
       - EFFICIENCY
     player_data_sources: []
+  I1:
+    competition_id: I1
+    tier: competition_specific
+    league_code: I1
+    # US#161/US#163/US#165: live-verified 2026-08-15 that football-data.co.uk
+    # publishes I1 (Serie A) via italym.php in the same rich per-season CSV
+    # format as E0/SP1 -- identical column set, scraped/loaded by the exact
+    # same FootballDataScraper/CSVLoader.process_v1_csv with zero code
+    # changes. Real ingested I1 rows (10 seasons, 2016/17-2025/26, 3,797
+    # matches) confirm 100% non-null shots/corners/discipline/over-under/
+    # Asian-handicap columns and 100% non-null B365-based odds -- full column
+    # parity with E0/SP1. Real Understat xG backfill (US#165) reached 99.8%
+    # coverage. enabled_feature_groups mirrors SP1's list exactly, MINUS
+    # SQUAD: FotMob's Serie A league id (55) is confirmed live (US#165), but
+    # the actual per-match player-level backfill has not been run yet --
+    # flagged as a fast-follow, same posture as SP1's own SQUAD gap.
+    # available_targets is left unset (all 8 targets trainable).
+    enabled_feature_groups:
+      - OFF_GOALS
+      - OFF_SHOTS
+      - OFF_CORNERS
+      - DEF_GOALS
+      - DEF_SHOTS
+      - DEF_CORNERS
+      - OPP_ADJ_GOALS
+      - OPP_ADJ_SHOTS
+      - OPP_ADJ_CORNERS
+      - STRENGTH_GOALS
+      - STRENGTH_SHOTS
+      - INTERACTION_GOALS
+      - INTERACTION_SHOTS
+      - DIS
+      - CTX
+      - CTX_CORNERS
+      - H2H_CORNERS
+      - MKT
+      - EFFICIENCY
+    player_data_sources: []
+  D1:
+    competition_id: D1
+    tier: competition_specific
+    league_code: D1
+    # US#161/US#163/US#165: live-verified 2026-08-15 that football-data.co.uk
+    # publishes D1 (Bundesliga) via germanym.php in the same rich per-season
+    # CSV format as E0/SP1/I1 -- identical column set, zero code changes.
+    # Real ingested D1 rows (10 seasons, 2016/17-2025/26, 3,060 matches --
+    # correctly lower than the 20-team leagues, Bundesliga is 18 teams)
+    # confirm 100% non-null shots/corners/discipline/over-under/Asian-
+    # handicap columns and 100% non-null B365-based odds. Real Understat xG
+    # backfill (US#165) reached 100.0% coverage (the FotMob league id, 54,
+    # needed extra care to disambiguate from the same endpoint's "2.
+    # Bundesliga"/146 and Austria's own "Bundesliga"/938366 -- confirmed
+    # against the real GER top-flight entry specifically). enabled_feature_
+    # groups mirrors SP1/I1's list exactly, MINUS SQUAD (FotMob per-match
+    # player backfill not yet run, same fast-follow posture).
+    # available_targets left unset (all 8 targets trainable).
+    enabled_feature_groups:
+      - OFF_GOALS
+      - OFF_SHOTS
+      - OFF_CORNERS
+      - DEF_GOALS
+      - DEF_SHOTS
+      - DEF_CORNERS
+      - OPP_ADJ_GOALS
+      - OPP_ADJ_SHOTS
+      - OPP_ADJ_CORNERS
+      - STRENGTH_GOALS
+      - STRENGTH_SHOTS
+      - INTERACTION_GOALS
+      - INTERACTION_SHOTS
+      - DIS
+      - CTX
+      - CTX_CORNERS
+      - H2H_CORNERS
+      - MKT
+      - EFFICIENCY
+    player_data_sources: []
+  F1:
+    competition_id: F1
+    tier: competition_specific
+    league_code: F1
+    # US#161/US#163/US#165: live-verified 2026-08-15 that football-data.co.uk
+    # publishes F1 (Ligue 1) via francem.php in the same rich per-season CSV
+    # format as E0/SP1/I1/D1 -- identical column set, zero code changes.
+    # Real ingested F1 rows (10 seasons, 2016/17-2025/26, 3,475 matches)
+    # confirm 100% non-null shots/corners/discipline/over-under/Asian-
+    # handicap columns and 100% non-null B365-based odds. Real Understat xG
+    # backfill (US#165) reached 99.5% coverage. enabled_feature_groups
+    # mirrors SP1/I1/D1's list exactly, MINUS SQUAD (FotMob per-match player
+    # backfill not yet run, same fast-follow posture). available_targets
+    # left unset (all 8 targets trainable).
+    enabled_feature_groups:
+      - OFF_GOALS
+      - OFF_SHOTS
+      - OFF_CORNERS
+      - DEF_GOALS
+      - DEF_SHOTS
+      - DEF_CORNERS
+      - OPP_ADJ_GOALS
+      - OPP_ADJ_SHOTS
+      - OPP_ADJ_CORNERS
+      - STRENGTH_GOALS
+      - STRENGTH_SHOTS
+      - INTERACTION_GOALS
+      - INTERACTION_SHOTS
+      - DIS
+      - CTX
+      - CTX_CORNERS
+      - H2H_CORNERS
+      - MKT
+      - EFFICIENCY
+    player_data_sources: []
   international:
     competition_id: international
     tier: general_purpose

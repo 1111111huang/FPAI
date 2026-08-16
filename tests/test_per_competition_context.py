@@ -35,11 +35,12 @@ from src.utils.model_selection import ModelSelector
 
 
 def test_list_context_keys_matches_real_registry_today() -> None:
-    """Regression: E0, SWE, and SP1 (all competition_specific) each get their
-    own bucket, plus the shared international (general_purpose) bucket --
-    US#128 registered SWE alongside E0, US#147 registered SP1 alongside both,
-    so this list has grown by one entry each time."""
-    assert list_context_keys() == ["E0", "SP1", "SWE", "international"]
+    """Regression: E0, SWE, SP1, I1, D1, and F1 (all competition_specific)
+    each get their own bucket, plus the shared international
+    (general_purpose) bucket -- US#128 registered SWE alongside E0, US#147
+    registered SP1, US#166 registered I1/D1/F1, so this list has grown each
+    time. Alphabetically sorted (list_context_keys' own contract)."""
+    assert list_context_keys() == ["D1", "E0", "F1", "I1", "SP1", "SWE", "international"]
 
 
 def test_list_context_keys_gives_each_competition_specific_competition_its_own_bucket(tmp_path: Path) -> None:

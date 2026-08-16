@@ -87,7 +87,8 @@ def test_list_competition_definitions_is_stable() -> None:
     assert names == sorted(names)
     # US#128: SWE joined the registry alongside E0/international.
     # US#147/US#152: SP1 (La Liga) joined as a third competition_specific entry.
-    assert set(names) == {"E0", "SWE", "SP1", "international"}
+    # US#166: I1/D1/F1 joined as three more.
+    assert set(names) == {"E0", "SWE", "SP1", "I1", "D1", "F1", "international"}
 
 
 def test_resolve_feature_subset_for_general_purpose_matches_legacy_mkt_features() -> None:
@@ -350,3 +351,75 @@ def test_la_liga_available_targets_unrestricted() -> None:
     assert definition.available_targets is None
     for target in ("home_corners", "away_corners", "total_corners", "result_3way"):
         assert is_target_available(definition, target) is True
+
+
+# ---------------------------------------------------------------------------
+# US#166: Serie A (I1), Bundesliga (D1), Ligue 1 (F1)'s real registration,
+# verified against the real config/competitions.yaml. US#161's live
+# column-parity check found all three sources have the exact same rich
+# column set as E0/SP1, so each league's enabled_feature_groups mirrors
+# SP1's list exactly (minus SQUAD -- FotMob player backfill not yet run for
+# any of them) and available_targets is left unset (full parity, all 8
+# targets). One block, parametrized across all three, since the shape is
+# identical for each -- SP1's own registration used a bare (non-parametrized)
+# block because it was the first and only competition_specific league beyond
+# E0/SWE at the time; three more added at once is the natural point to stop
+# repeating the same test body per league.
+# ---------------------------------------------------------------------------
+
+_NEW_LEAGUES = ["I1", "D1", "F1"]
+
+
+@pytest.mark.parametrize("code", _NEW_LEAGUES)
+def test_new_leagues_are_registered_competition_specific(code: str) -> None:
+    definition = get_competition_definition(code)
+    assert definition.tier == "competition_specific"
+    assert definition.league_code == code
+    assert definition.player_data_sources == ()
+
+
+@pytest.mark.parametrize("code", _NEW_LEAGUES)
+def test_new_leagues_enabled_feature_groups_match_sp1s_shape(code: str) -> None:
+    definition = get_competition_definition(code)
+    assert set(definition.enabled_feature_groups) == {
+        "OFF_GOALS", "OFF_SHOTS", "OFF_CORNERS",
+        "DEF_GOALS", "DEF_SHOTS", "DEF_CORNERS",
+        "OPP_ADJ_GOALS", "OPP_ADJ_SHOTS", "OPP_ADJ_CORNERS",
+        "STRENGTH_GOALS", "STRENGTH_SHOTS",
+        "INTERACTION_GOALS", "INTERACTION_SHOTS",
+        "DIS", "CTX", "CTX_CORNERS", "H2H_CORNERS", "MKT", "EFFICIENCY",
+    }
+    assert "SQUAD" not in definition.enabled_feature_groups
+
+
+@pytest.mark.parametrize("code", _NEW_LEAGUES)
+def test_new_leagues_resolved_feature_count_matches_e0_minus_squad(code: str) -> None:
+    squad_gated_prefixes = ("SQUAD_", "LUCK_", "XOC_", "FRDS_", "DEF_ANCHOR_")
+    e0_features = set(_selected_features_for("E0"))
+    league_features = set(_selected_features_for(code))
+    squad_only = {f for f in e0_features if f not in league_features}
+    assert all(f.startswith(squad_gated_prefixes) for f in squad_only), squad_only
+    assert league_features < e0_features
+
+
+@pytest.mark.parametrize("code", _NEW_LEAGUES)
+def test_new_leagues_feature_set_is_superset_of_general_purpose_features(code: str) -> None:
+    features = set(_selected_features_for(code))
+    assert set(GENERAL_PURPOSE_FEATURES) <= features
+
+
+@pytest.mark.parametrize("code", _NEW_LEAGUES)
+def test_new_leagues_available_targets_unrestricted(code: str) -> None:
+    definition = get_competition_definition(code)
+    assert definition.available_targets is None
+    for target in ("home_corners", "away_corners", "total_corners", "result_3way"):
+        assert is_target_available(definition, target) is True
+
+
+def test_e0_sweden_and_la_liga_still_resolve_unchanged_after_new_league_registration() -> None:
+    # Regression: registering three more competition_specific competitions
+    # must not change any previously-registered competition's own resolved
+    # feature set.
+    assert len(_selected_features_for("E0")) == 167
+    assert len(_selected_features_for("SWE")) == 74
+    assert len(_selected_features_for("SP1")) == len(_selected_features_for("I1"))
