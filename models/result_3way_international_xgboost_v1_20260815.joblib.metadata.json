@@ -1,0 +1,96 @@
+{
+  "artifact_name": "result_3way_international_xgboost_v1_20260815.joblib",
+  "artifact_path": "models/result_3way_international_xgboost_v1_20260815.joblib",
+  "calibration": {
+    "log_loss_after": 0.9527020710840064,
+    "log_loss_before": 0.990713659109959
+  },
+  "classes": [
+    "home",
+    "draw",
+    "away"
+  ],
+  "created_at": "2026-08-16T02:55:01Z",
+  "feature_importance": [
+    {
+      "feature": "MKT_IMPLIED_AWAY",
+      "importance": 0.3732675015926361
+    },
+    {
+      "feature": "MKT_IMPLIED_HOME",
+      "importance": 0.2569238543510437
+    },
+    {
+      "feature": "MKT_IMPLIED_DRAW",
+      "importance": 0.09989327937364578
+    },
+    {
+      "feature": "MKT_LAMBDA_HOME",
+      "importance": 0.037859439849853516
+    },
+    {
+      "feature": "MKT_AH_LINE",
+      "importance": 0.03588242828845978
+    },
+    {
+      "feature": "MKT_LAMBDA_AWAY",
+      "importance": 0.035105541348457336
+    },
+    {
+      "feature": "MKT_AH_AWAY_ODDS",
+      "importance": 0.03390699252486229
+    },
+    {
+      "feature": "MKT_OVERROUND",
+      "importance": 0.033194880932569504
+    },
+    {
+      "feature": "MKT_LAMBDA_TOTAL",
+      "importance": 0.031559206545352936
+    },
+    {
+      "feature": "MKT_AH_HOME_ODDS",
+      "importance": 0.031555116176605225
+    },
+    {
+      "feature": "MKT_POISSON_BTTS_PROB",
+      "importance": 0.03085167706012726
+    },
+    {
+      "feature": "MKT_LAMBDA_AH_DIFF",
+      "importance": 0.0
+    },
+    {
+      "feature": "MKT_IMPLIED_OVER25",
+      "importance": 0.0
+    }
+  ],
+  "feature_names": [
+    "MKT_IMPLIED_HOME",
+    "MKT_IMPLIED_DRAW",
+    "MKT_IMPLIED_AWAY",
+    "MKT_OVERROUND",
+    "MKT_LAMBDA_TOTAL",
+    "MKT_LAMBDA_HOME",
+    "MKT_LAMBDA_AWAY",
+    "MKT_POISSON_BTTS_PROB",
+    "MKT_LAMBDA_AH_DIFF",
+    "MKT_AH_LINE",
+    "MKT_AH_HOME_ODDS",
+    "MKT_AH_AWAY_ODDS",
+    "MKT_IMPLIED_OVER25"
+  ],
+  "feature_schema_version": "v1",
+  "metrics": {
+    "accuracy": 0.4866210329807094,
+    "log_loss": 1.000832588403641
+  },
+  "model_type": "XGBoostModel",
+  "primary_metric": "log_loss",
+  "secondary_metrics": [
+    "accuracy"
+  ],
+  "target": "result_3way",
+  "task_type": "multiclass_classification",
+  "training_cutoff": "2023-04-17T00:00:00"
+}
