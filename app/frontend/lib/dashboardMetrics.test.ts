@@ -155,6 +155,15 @@ describe("groupByLeague", () => {
     const groups = groupByLeague([match({ league: "XYZ" })]);
     expect(groups[0].label).toBe("XYZ");
   });
+
+  it("labels Serie A/Bundesliga/Ligue 1 correctly (W141)", () => {
+    const groups = groupByLeague([
+      match({ id: "1", league: "I1" }),
+      match({ id: "2", league: "D1" }),
+      match({ id: "3", league: "F1" }),
+    ]);
+    expect(groups.map((g) => g.label)).toEqual(["Serie A", "Bundesliga", "Ligue 1"]);
+  });
 });
 
 describe("groupByDate", () => {
