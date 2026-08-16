@@ -108,6 +108,38 @@ def test_real_understat_spelling_variants_map_onto_raw_short_forms():
         assert mapper.map_team(name) == expected
 
 
+def test_real_understat_full_backfill_variants_map_onto_raw_short_forms():
+    """US#165 (xG backfill follow-up): after the 2025-season-only check above,
+    a full fetch_seasons_range() backfill across all 10 ingested seasons
+    surfaced 10 more real Understat spellings for clubs from *earlier*
+    in-window seasons (2016/17-2025/26) that the single-season 2025 check
+    couldn't see, since those clubs weren't in the current top flight.
+    Each was verified against real raw_matches date ranges before adding --
+    e.g. 'GFC Ajaccio' (a real historical club) was deliberately NOT added
+    despite a fuzzy-suggested 0.64 similarity to 'Ajaccio', because
+    raw_matches' own 'Ajaccio' rows are exclusively the 2022/23 season (a
+    different, later club -- AC Ajaccio's promotion -- not GFC Ajaccio's
+    earlier stint), confirmed by directly querying MIN/MAX(date) before
+    trusting any fuzzy suggestion string-similarity alone would have given."""
+    mapper = TeamNameMapper(mapping_path=MAPPING_PATH)
+    cases = {
+        "Arminia Bielefeld": "Bielefeld",
+        "Clermont Foot": "Clermont",
+        "Fortuna Duesseldorf": "Fortuna Dusseldorf",
+        "Greuther Fuerth": "Greuther Furth",
+        "Hannover 96": "Hannover",
+        "Hertha Berlin": "Hertha",
+        "Nuernberg": "Nurnberg",
+        "SC Bastia": "Bastia",
+        "SPAL 2013": "Spal",
+        "Saint-Etienne": "St Etienne",
+    }
+    for name, expected in cases.items():
+        assert mapper.map_team(name) == expected
+    # Confirmed NOT added -- a different real club/season, not a spelling gap.
+    assert mapper.map_team("GFC Ajaccio") == "GFC Ajaccio"
+
+
 def test_no_duplicate_raw_names_across_the_three_new_leagues():
     """A club short name colliding across two of these three leagues (not
     just against E0/SWE/SP1) would silently merge under one mapping key --
