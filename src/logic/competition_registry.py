@@ -146,6 +146,10 @@ COMPETITION_NAME_ALIASES: dict[str, str] = {
     "english premier league": "E0",
     "epl": "E0",
     "allsvenskan": "SWE",
+    # A59
+    "serie a": "I1",
+    "bundesliga": "D1",
+    "ligue 1": "F1",
 }
 
 

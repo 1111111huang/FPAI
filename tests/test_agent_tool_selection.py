@@ -47,6 +47,20 @@ def test_resolve_competition_recommends_forecast_league_for_new_leagues(code):
     assert result["recommended_tool"] == "forecast_league"
 
 
+@pytest.mark.parametrize(
+    "name,code", [("Serie A", "I1"), ("Bundesliga", "D1"), ("Ligue 1", "F1")]
+)
+def test_resolve_competition_normalizes_new_league_free_text_names(name, code):
+    """A59: mirrors test_resolve_competition_normalizes_la_liga_free_text_name_to_sp1
+    exactly -- the resolved 'competition' field must be the real code, not
+    the raw free-text input, so a caller reusing it for forecast_league's
+    own `league` argument gets a value that argument actually accepts."""
+    result = json.loads(resolve_competition.invoke({"competition_or_league": name}))
+    assert result["tier"] == "competition_specific"
+    assert result["recommended_tool"] == "forecast_league"
+    assert result["competition"] == code
+
+
 def test_resolve_competition_normalizes_la_liga_free_text_name_to_sp1():
     """A50: resolve_competition's own docstring uses 'La Liga' as a valid
     example input -- confirm it actually resolves to SP1's real

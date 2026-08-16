@@ -76,10 +76,28 @@ def test_get_competition_definition_real_code_always_wins_over_any_alias() -> No
 
 def test_get_competition_definition_still_rejects_a_genuinely_unregistered_free_text_name() -> None:
     """A name that isn't in the alias table either must still raise, not
-    silently default to something -- Bundesliga (D1) is confirmed
-    unregistered (A49)."""
+    silently default to something -- Eredivisie is confirmed unregistered
+    (A58). Replaced "Bundesliga" as this test's stock example -- Bundesliga
+    (D1) is now both registered (US#166) *and* aliased (A59), so it no
+    longer demonstrates the genuinely-unregistered path."""
     with pytest.raises(ValueError, match="Unknown competition"):
-        get_competition_definition("Bundesliga")
+        get_competition_definition("Eredivisie")
+
+
+@pytest.mark.parametrize(
+    "name,code",
+    [("Serie A", "I1"), ("Bundesliga", "D1"), ("Ligue 1", "F1")],
+)
+def test_get_competition_definition_normalizes_new_league_free_text_names(name: str, code: str) -> None:
+    """A59: 'Serie A'/'Bundesliga'/'Ligue 1' are well-known free-text names
+    an LLM would plausibly reach for, distinct from their registry codes --
+    mirrors A50's La Liga precedent exactly, one body parametrized across
+    all three rather than tripling it."""
+    definition = get_competition_definition(name)
+    assert definition.competition_id == code
+    assert definition.tier == "competition_specific"
+    # Case-insensitive, same as every other alias.
+    assert get_competition_definition(name.lower()).competition_id == code
 
 
 def test_list_competition_definitions_is_stable() -> None:
