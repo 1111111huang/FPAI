@@ -343,6 +343,11 @@ async def lifespan(app: FastAPI):
             # EOD batch / T-30 refresh, sourced from football-data.org --
             # the same provider/class as E0 (W74/W76), unlike SWE.
             la_liga_fixtures_client=get_la_liga_fixtures_client(),
+            # W140: Serie A/Bundesliga/Ligue 1 processed the same way as
+            # La Liga -- football-data.org, same provider/class (W134/W136).
+            serie_a_fixtures_client=get_serie_a_fixtures_client(),
+            bundesliga_fixtures_client=get_bundesliga_fixtures_client(),
+            ligue1_fixtures_client=get_ligue1_fixtures_client(),
         )
         scheduler.start()
         LOGGER.info("W08/W09/W10 scheduler started (ENABLE_SCHEDULER=1).")

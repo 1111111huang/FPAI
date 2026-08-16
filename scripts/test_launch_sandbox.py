@@ -331,11 +331,12 @@ class TestPrecomputeRecommendationsOrdering:
                 f"{name} was called before SANDBOX_MODE/SANDBOX_DATE were correctly set "
                 f"(observed {env_snapshots[name]!r})"
             )
-        # W81: E0 and SP1 both go through the same mocked FootballDataClient
-        # (get_results blanket-returns [fixture] regardless of
-        # competition_code) -- SWE finds nothing (historical_results_from_raw_matches
-        # mocked to []), so run_eod_batch fires twice, not once.
-        assert mock_run_batch.await_count == 2
+        # W140: E0, SP1, I1, D1, and F1 all go through the same mocked
+        # FootballDataClient (get_results blanket-returns [fixture]
+        # regardless of competition_code) -- SWE finds nothing
+        # (historical_results_from_raw_matches mocked to []), so
+        # run_eod_batch fires five times, not once.
+        assert mock_run_batch.await_count == 5
 
 
 class TestPrecomputeRecommendationsConfigSelection:
@@ -409,12 +410,12 @@ class TestPrecomputeRecommendationsFallbackReporting:
                 os.environ.pop("SANDBOX_MODE", None)
                 os.environ.pop("SANDBOX_DATE", None)
 
-        # W81: E0 and SP1 both go through the same mocked FootballDataClient
-        # (keyed only on date range, not competition_code), so both find the
-        # same fixture -- run_eod_batch fires twice, not once. SWE finds
-        # nothing (historical_results_from_raw_matches mocked to []) so
-        # contributes no call.
-        assert mock_run_batch.await_count == 2
+        # W140: E0, SP1, I1, D1, and F1 all go through the same mocked
+        # FootballDataClient (keyed only on date range, not competition_code),
+        # so all five find the same fixture -- run_eod_batch fires five
+        # times, not once. SWE finds nothing (historical_results_from_raw_matches
+        # mocked to []) so contributes no call.
+        assert mock_run_batch.await_count == 5
         for call in mock_run_batch.await_args_list:
             assert call.kwargs["fixtures"] == [later_fixture]
 
@@ -433,7 +434,11 @@ class TestPrecomputeRecommendationsBothLeagues:
     distinguished by competition_code, so the mock's side_effect keys off
     that kwarg rather than a blanket return_value."""
 
-    def test_precomputes_all_three_leagues_with_correct_league_tags(self):
+    def test_precomputes_all_six_leagues_with_correct_league_tags(self):
+        """W140: COMPETITIONS grew from 3 (E0/SWE/SP1) to 6 (+I1/D1/F1) --
+        confirms the existing competition-list-driven loop extends with zero
+        further generalization needed, mirroring W81's own "extends cleanly"
+        finding when SP1 was added as the third."""
         date_str = "2025-03-08"
         e0_fixture = NormalizedMatch(
             match_id="1", utc_date="2025-03-08T15:00:00Z", status="FINISHED",
@@ -447,9 +452,25 @@ class TestPrecomputeRecommendationsBothLeagues:
             match_id="3", utc_date="2025-03-08T19:00:00Z", status="FINISHED",
             home_team="Real Madrid", away_team="Sevilla FC", home_goals=3, away_goals=1,
         )
+        i1_fixture = NormalizedMatch(
+            match_id="4", utc_date="2025-03-08T14:00:00Z", status="FINISHED",
+            home_team="Juventus", away_team="AC Milan", home_goals=1, away_goals=1,
+        )
+        d1_fixture = NormalizedMatch(
+            match_id="5", utc_date="2025-03-08T14:30:00Z", status="FINISHED",
+            home_team="Bayern Munich", away_team="Borussia Dortmund", home_goals=2, away_goals=2,
+        )
+        f1_fixture = NormalizedMatch(
+            match_id="6", utc_date="2025-03-08T20:00:00Z", status="FINISHED",
+            home_team="Paris Saint-Germain", away_team="Marseille", home_goals=3, away_goals=0,
+        )
+
+        _RESULTS_BY_CODE = {
+            "PD": [sp1_fixture], "SA": [i1_fixture], "BL1": [d1_fixture], "FL1": [f1_fixture],
+        }
 
         def _get_results(**kwargs):
-            return [sp1_fixture] if kwargs.get("competition_code") == "PD" else [e0_fixture]
+            return _RESULTS_BY_CODE.get(kwargs.get("competition_code"), [e0_fixture])
 
         with patch("scripts.launch_sandbox.FootballDataClient") as mock_client_cls, \
              patch("app.backend.scheduler_wiring.build_odds_client", return_value=None), \
@@ -472,9 +493,9 @@ class TestPrecomputeRecommendationsBothLeagues:
                 os.environ.pop("SANDBOX_MODE", None)
                 os.environ.pop("SANDBOX_DATE", None)
 
-        assert mock_run_batch.await_count == 3
+        assert mock_run_batch.await_count == 6
         leagues_called = {call.kwargs["league"] for call in mock_run_batch.await_args_list}
-        assert leagues_called == {"E0", "SWE", "SP1"}
+        assert leagues_called == {"E0", "SWE", "SP1", "I1", "D1", "F1"}
 
         fixtures_by_league = {
             call.kwargs["league"]: call.kwargs["fixtures"] for call in mock_run_batch.await_args_list
@@ -482,3 +503,6 @@ class TestPrecomputeRecommendationsBothLeagues:
         assert fixtures_by_league["E0"] == [e0_fixture]
         assert fixtures_by_league["SWE"] == [swe_fixture]
         assert fixtures_by_league["SP1"] == [sp1_fixture]
+        assert fixtures_by_league["I1"] == [i1_fixture]
+        assert fixtures_by_league["D1"] == [d1_fixture]
+        assert fixtures_by_league["F1"] == [f1_fixture]
