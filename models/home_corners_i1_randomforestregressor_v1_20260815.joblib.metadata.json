@@ -1,0 +1,376 @@
+{
+  "artifact_name": "home_corners_i1_randomforestregressor_v1_20260815.joblib",
+  "artifact_path": "models/home_corners_i1_randomforestregressor_v1_20260815.joblib",
+  "classes": [],
+  "created_at": "2026-08-16T01:09:33Z",
+  "feature_importance": [
+    {
+      "feature": "MKT_IMPLIED_HOME",
+      "importance": 0.06225107770108358
+    },
+    {
+      "feature": "MKT_IMPLIED_AWAY",
+      "importance": 0.06086861388350993
+    },
+    {
+      "feature": "MKT_AH_LINE",
+      "importance": 0.032945815979444064
+    },
+    {
+      "feature": "MKT_OVERROUND",
+      "importance": 0.01444399617654132
+    },
+    {
+      "feature": "MKT_LAMBDA_HOME",
+      "importance": 0.013051323049194175
+    },
+    {
+      "feature": "CTX_AWAY_CORNERS_STD_R5",
+      "importance": 0.01302913142155163
+    },
+    {
+      "feature": "CTX_AWAY_CUM_PTS",
+      "importance": 0.012048888067199054
+    },
+    {
+      "feature": "MKT_IMPLIED_DRAW",
+      "importance": 0.010960847790279457
+    },
+    {
+      "feature": "CTX_HOME_CUM_PTS",
+      "importance": 0.010544160630074793
+    },
+    {
+      "feature": "DEF_HOME_SAVE_RATE_R3",
+      "importance": 0.010093356350033207
+    },
+    {
+      "feature": "OFF_HOME_XG_R3",
+      "importance": 0.010074467902080577
+    },
+    {
+      "feature": "OFF_HOME_LUCK_R3",
+      "importance": 0.009979971753014835
+    },
+    {
+      "feature": "CTX_HOME_CORNERS_STD_R5",
+      "importance": 0.00989011208161711
+    },
+    {
+      "feature": "DEF_AWAY_HC_R5",
+      "importance": 0.009541341521475882
+    },
+    {
+      "feature": "OFF_AWAY_LUCK_R5",
+      "importance": 0.009494589057400825
+    },
+    {
+      "feature": "OPP_ADJ_AWAY_CORNERS_CONCEDED_R5",
+      "importance": 0.009455910849848004
+    },
+    {
+      "feature": "DEF_AWAY_XGA_R3",
+      "importance": 0.009303515012456217
+    },
+    {
+      "feature": "DIS_AWAY_HY_R5",
+      "importance": 0.008832557304310177
+    },
+    {
+      "feature": "H2H_CORNERS_R5",
+      "importance": 0.008791107097709434
+    },
+    {
+      "feature": "DEF_HOME_XGA_R3",
+      "importance": 0.008767890825299426
+    },
+    {
+      "feature": "CTX_AWAY_REST_DAYS",
+      "importance": 0.008714751265190225
+    },
+    {
+      "feature": "DEF_HOME_SAVE_RATE_R5",
+      "importance": 0.008696759044892324
+    },
+    {
+      "feature": "OFF_AWAY_XG_R3",
+      "importance": 0.00848864047660407
+    },
+    {
+      "feature": "OFF_HOME_SHOT_ACCURACY_R3",
+      "importance": 0.008420231593689582
+    },
+    {
+      "feature": "OFF_HOME_HST_EMA5",
+      "importance": 0.008249011155031532
+    },
+    {
+      "feature": "OFF_AWAY_LUCK_R3",
+      "importance": 0.00817545681602249
+    },
+    {
+      "feature": "DEF_AWAY_FTHG_EMA5",
+      "importance": 0.008165081381267801
+    },
+    {
+      "feature": "OPP_ADJ_AWAY_CORNERS_SCORED_R5",
+      "importance": 0.008047853963478464
+    },
+    {
+      "feature": "OFF_HOME_XG_R5",
+      "importance": 0.008022665197475328
+    },
+    {
+      "feature": "DEF_HOME_XGA_R5",
+      "importance": 0.007918896481136367
+    },
+    {
+      "feature": "H2H_TOTAL_GOALS_R5",
+      "importance": 0.007855453590921557
+    },
+    {
+      "feature": "OFF_HOME_HC_R3",
+      "importance": 0.007842103969703898
+    },
+    {
+      "feature": "OPP_ADJ_AWAY_CORNERS_SCORED_R3",
+      "importance": 0.007808639342443378
+    },
+    {
+      "feature": "OFF_HOME_HS_R3",
+      "importance": 0.007782884480797712
+    },
+    {
+      "feature": "OFF_HOME_LUCK_R5",
+      "importance": 0.00774422106042052
+    },
+    {
+      "feature": "DEF_HOME_AS_R5",
+      "importance": 0.007717744424737695
+    },
+    {
+      "feature": "OFF_AWAY_FTAG_EMA5",
+      "importance": 0.007685763287234935
+    },
+    {
+      "feature": "DEF_HOME_AC_R5",
+      "importance": 0.0076735965963124165
+    },
+    {
+      "feature": "OFF_HOME_FTHG_EMA5",
+      "importance": 0.00766615501549566
+    },
+    {
+      "feature": "OPP_ADJ_HOME_SOT_SCORED_R5",
+      "importance": 0.007662441477675404
+    },
+    {
+      "feature": "OFF_AWAY_SHOT_ACCURACY_R3",
+      "importance": 0.007563353368673137
+    },
+    {
+      "feature": "OPP_ADJ_AWAY_CORNERS_CONCEDED_R3",
+      "importance": 0.007362327982567205
+    },
+    {
+      "feature": "DEF_AWAY_XGA_R5",
+      "importance": 0.0073551615361343815
+    },
+    {
+      "feature": "CTX_AWAY_CONCEDED_STD_R5",
+      "importance": 0.007331879560904187
+    },
+    {
+      "feature": "DIS_HOME_AY_R5",
+      "importance": 0.007270170407806647
+    },
+    {
+      "feature": "OFF_AWAY_SHOT_ACCURACY_R5",
+      "importance": 0.00718212294026508
+    },
+    {
+      "feature": "OPP_ADJ_HOME_CORNERS_SCORED_R3",
+      "importance": 0.007102188994037777
+    },
+    {
+      "feature": "DEF_HOME_FTAG_EMA5",
+      "importance": 0.007084597014337371
+    },
+    {
+      "feature": "OFF_HOME_SHOT_ACCURACY_R5",
+      "importance": 0.0069564843221941505
+    },
+    {
+      "feature": "OPP_ADJ_CORNER_MATCHUP_HOME_R3",
+      "importance": 0.006949500459963166
+    }
+  ],
+  "feature_names": [
+    "OFF_HOME_FTHG_R3",
+    "OFF_HOME_FTHG_R5",
+    "DEF_HOME_FTAG_R3",
+    "DEF_HOME_FTAG_R5",
+    "OFF_HOME_HS_R3",
+    "OFF_HOME_HS_R5",
+    "DEF_HOME_AS_R3",
+    "DEF_HOME_AS_R5",
+    "OFF_HOME_HST_R3",
+    "OFF_HOME_HST_R5",
+    "DEF_HOME_AST_R3",
+    "DEF_HOME_AST_R5",
+    "OFF_HOME_HC_R3",
+    "OFF_HOME_HC_R5",
+    "DEF_HOME_AC_R3",
+    "DEF_HOME_AC_R5",
+    "DIS_HOME_HY_R3",
+    "DIS_HOME_HY_R5",
+    "DIS_HOME_AY_R3",
+    "DIS_HOME_AY_R5",
+    "DIS_HOME_HR_R3",
+    "DIS_HOME_HR_R5",
+    "DIS_HOME_AR_R3",
+    "DIS_HOME_AR_R5",
+    "OFF_HOME_SHOT_ACCURACY_R3",
+    "OFF_HOME_SHOT_ACCURACY_R5",
+    "DIS_HOME_DISCIPLINE_SCORE_R3",
+    "DIS_HOME_DISCIPLINE_SCORE_R5",
+    "DEF_HOME_SAVE_RATE_R3",
+    "DEF_HOME_SAVE_RATE_R5",
+    "OFF_AWAY_FTAG_R3",
+    "OFF_AWAY_FTAG_R5",
+    "DEF_AWAY_FTHG_R3",
+    "DEF_AWAY_FTHG_R5",
+    "OFF_AWAY_AS_R3",
+    "OFF_AWAY_AS_R5",
+    "DEF_AWAY_HS_R3",
+    "DEF_AWAY_HS_R5",
+    "OFF_AWAY_AST_R3",
+    "OFF_AWAY_AST_R5",
+    "DEF_AWAY_HST_R3",
+    "DEF_AWAY_HST_R5",
+    "OFF_AWAY_AC_R3",
+    "OFF_AWAY_AC_R5",
+    "DEF_AWAY_HC_R3",
+    "DEF_AWAY_HC_R5",
+    "DIS_AWAY_AY_R3",
+    "DIS_AWAY_AY_R5",
+    "DIS_AWAY_HY_R3",
+    "DIS_AWAY_HY_R5",
+    "DIS_AWAY_AR_R3",
+    "DIS_AWAY_AR_R5",
+    "DIS_AWAY_HR_R3",
+    "DIS_AWAY_HR_R5",
+    "OFF_AWAY_SHOT_ACCURACY_R3",
+    "OFF_AWAY_SHOT_ACCURACY_R5",
+    "DIS_AWAY_DISCIPLINE_SCORE_R3",
+    "DIS_AWAY_DISCIPLINE_SCORE_R5",
+    "OFF_HOME_FTHG_EMA5",
+    "DEF_HOME_FTAG_EMA5",
+    "OFF_HOME_HST_EMA5",
+    "OFF_AWAY_FTAG_EMA5",
+    "DEF_AWAY_FTHG_EMA5",
+    "OFF_AWAY_AST_EMA5",
+    "CTX_HOME_REST_DAYS",
+    "CTX_AWAY_REST_DAYS",
+    "CTX_REST_DAYS_DIFF",
+    "MKT_IMPLIED_HOME",
+    "MKT_IMPLIED_DRAW",
+    "MKT_IMPLIED_AWAY",
+    "STRENGTH_Goal_Diff",
+    "STRENGTH_SoT_Diff",
+    "INTERACTION_ATTACK_GOALS_DIFF_R5",
+    "INTERACTION_DEFENSE_GOALS_DIFF_R5",
+    "INTERACTION_ATTACK_SOT_DIFF_R5",
+    "EFFICIENCY_HOME_ATTACK_VS_AWAY_DEF_R5",
+    "EFFICIENCY_AWAY_ATTACK_VS_HOME_DEF_R5",
+    "EFFICIENCY_ATTACK_MATCHUP_DIFF_R5",
+    "OPP_ADJ_HOME_GOALS_SCORED_R3",
+    "OPP_ADJ_HOME_GOALS_SCORED_R5",
+    "OPP_ADJ_HOME_GOALS_CONCEDED_R3",
+    "OPP_ADJ_HOME_GOALS_CONCEDED_R5",
+    "OPP_ADJ_HOME_CORNERS_SCORED_R3",
+    "OPP_ADJ_HOME_CORNERS_SCORED_R5",
+    "OPP_ADJ_HOME_CORNERS_CONCEDED_R3",
+    "OPP_ADJ_HOME_CORNERS_CONCEDED_R5",
+    "OPP_ADJ_HOME_SOT_SCORED_R3",
+    "OPP_ADJ_HOME_SOT_SCORED_R5",
+    "OPP_ADJ_AWAY_GOALS_SCORED_R3",
+    "OPP_ADJ_AWAY_GOALS_SCORED_R5",
+    "OPP_ADJ_AWAY_GOALS_CONCEDED_R3",
+    "OPP_ADJ_AWAY_GOALS_CONCEDED_R5",
+    "OPP_ADJ_AWAY_CORNERS_SCORED_R3",
+    "OPP_ADJ_AWAY_CORNERS_SCORED_R5",
+    "OPP_ADJ_AWAY_CORNERS_CONCEDED_R3",
+    "OPP_ADJ_AWAY_CORNERS_CONCEDED_R5",
+    "OPP_ADJ_AWAY_SOT_SCORED_R3",
+    "OPP_ADJ_AWAY_SOT_SCORED_R5",
+    "OPP_ADJ_GOAL_MATCHUP_HOME_R3",
+    "OPP_ADJ_GOAL_MATCHUP_HOME_R5",
+    "OPP_ADJ_GOAL_MATCHUP_AWAY_R3",
+    "OPP_ADJ_GOAL_MATCHUP_AWAY_R5",
+    "OPP_ADJ_CORNER_MATCHUP_HOME_R3",
+    "OPP_ADJ_CORNER_MATCHUP_HOME_R5",
+    "OPP_ADJ_CORNER_MATCHUP_AWAY_R3",
+    "OPP_ADJ_CORNER_MATCHUP_AWAY_R5",
+    "OFF_HOME_XG_R3",
+    "OFF_HOME_XG_R5",
+    "DEF_HOME_XGA_R3",
+    "DEF_HOME_XGA_R5",
+    "OFF_HOME_LUCK_R3",
+    "OFF_HOME_LUCK_R5",
+    "OFF_AWAY_XG_R3",
+    "OFF_AWAY_XG_R5",
+    "DEF_AWAY_XGA_R3",
+    "DEF_AWAY_XGA_R5",
+    "OFF_AWAY_LUCK_R3",
+    "OFF_AWAY_LUCK_R5",
+    "CTX_HOME_CUM_PTS",
+    "CTX_AWAY_CUM_PTS",
+    "CTX_HOME_PPG_L10",
+    "CTX_AWAY_PPG_L10",
+    "H2H_TOTAL_GOALS_R5",
+    "H2H_CORNERS_R5",
+    "H2H_HOME_WIN_RATE_R5",
+    "MKT_OVERROUND",
+    "MKT_IMPLIED_OVER25",
+    "MKT_AH_LINE",
+    "MKT_AH_HOME_ODDS",
+    "MKT_AH_AWAY_ODDS",
+    "MKT_LAMBDA_TOTAL",
+    "MKT_LAMBDA_HOME",
+    "MKT_LAMBDA_AWAY",
+    "MKT_POISSON_BTTS_PROB",
+    "MKT_LAMBDA_AH_DIFF",
+    "CTX_HOME_GOALS_STD_R5",
+    "CTX_HOME_CONCEDED_STD_R5",
+    "CTX_HOME_CORNERS_STD_R5",
+    "CTX_AWAY_GOALS_STD_R5",
+    "CTX_AWAY_CONCEDED_STD_R5",
+    "CTX_AWAY_CORNERS_STD_R5",
+    "CTX_HOME_SCORE_STREAK",
+    "CTX_HOME_WIN_STREAK",
+    "CTX_HOME_CS_STREAK",
+    "CTX_AWAY_SCORE_STREAK",
+    "CTX_AWAY_WIN_STREAK",
+    "CTX_AWAY_CS_STREAK"
+  ],
+  "feature_schema_version": "v1",
+  "metrics": {
+    "mae": 2.2410964912280704,
+    "rmse": 2.758114241047072
+  },
+  "model_type": "RandomForestRegressorModel",
+  "prediction_interval": {
+    "coverage": 0.8,
+    "lower_residual": -3.331,
+    "method": "validation_residual_quantile",
+    "upper_residual": 3.9530000000000007
+  },
+  "primary_metric": "mae",
+  "secondary_metrics": [
+    "rmse"
+  ],
+  "target": "home_corners",
+  "task_type": "regression",
+  "training_cutoff": "2023-06-04T00:00:00"
+}
