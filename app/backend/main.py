@@ -536,7 +536,7 @@ def sync_lessons(lessons: list[_LessonSyncItem]) -> dict:
     return {"inserted": inserted, "skipped_duplicates": skipped}
 
 
-_REFRESH_LEAGUE_NAMES = Literal["E0", "SP1", "SWE"]
+_REFRESH_LEAGUE_NAMES = Literal["E0", "SP1", "SWE", "I1", "D1", "F1"]
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 
 

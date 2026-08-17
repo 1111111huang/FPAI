@@ -14,6 +14,7 @@ from unittest.mock import MagicMock, patch
 
 sys.path.append(str(Path(__file__).resolve().parents[3]))
 
+import pytest
 from fastapi.testclient import TestClient
 
 from app.backend.main import app
@@ -33,6 +34,30 @@ def test_triggers_a_subprocess_with_the_correct_command_and_league(monkeypatch):
     command = args[0]
     assert command[-3:] == ["main.py", "refresh-data", "--league"] or command[-2:] == ["--league", "SWE"]
     assert "--league" in command and "SWE" in command
+    assert "refresh-data" in command
+
+
+@pytest.mark.parametrize("league", ["I1", "D1", "F1"])
+def test_triggers_a_subprocess_for_the_three_new_leagues(monkeypatch, league):
+    """Found live (2026-08-17) while checking what's left for Serie A/
+    Bundesliga/Ligue 1 to take effect on the deployed app: the allowlist
+    here never got extended alongside match_info.py's COMPETITION_ALLOWLIST
+    (W135) -- without this, a deployed instance's own DB (gitignored, not
+    synced via git, W100) has no way to be backfilled with these three
+    leagues' historical match data remotely, so live forecasts for them
+    would stay stuck at cold-start even after the code itself deploys."""
+    monkeypatch.delenv("APP_ACCESS_TOKEN", raising=False)
+    mock_process = MagicMock()
+    mock_process.pid = 12345
+    with patch("app.backend.main.subprocess.Popen", return_value=mock_process) as mock_popen:
+        with TestClient(app) as client:
+            response = client.post("/api/admin/trigger-data-refresh", params={"league": league})
+
+    assert response.status_code == 200
+    assert response.json() == {"league": league, "pid": 12345, "status": "started"}
+    args, kwargs = mock_popen.call_args
+    command = args[0]
+    assert "--league" in command and league in command
     assert "refresh-data" in command
 
 
