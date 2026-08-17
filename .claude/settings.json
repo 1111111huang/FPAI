@@ -3,7 +3,14 @@
     "allow": [
       "Bash(python -m pytest tests/test_agent_config.py tests/test_agent_schema.py tests/test_agent_graph.py -q)",
       "Bash(git commit -m ' *)",
-      "Bash(git checkout *)"
+      "Bash(git checkout *)",
+      "Bash(python -m pytest app/backend/tests/ -q)",
+      "Bash(python3 -c ' *)",
+      "Bash(sort -t'#' -k2 -n)",
+      "Bash(sort -t'W' -k2 -n)",
+      "Bash(sort -t'A' -k2 -n)",
+      "Bash(xargs ls)",
+      "Bash(curl -s --max-time 30 \"https://fpai-production.up.railway.app/api/status\" -H \"x-app-token: fpai-test-8x2kQmZ4pR9vL7wN\")"
     ]
   }
 }

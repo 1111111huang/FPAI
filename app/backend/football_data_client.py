@@ -107,7 +107,16 @@ class FootballDataClient:
         # for the entire window it's actually being played, then reappears
         # once it's FINISHED. get_results() deliberately stays FINISHED-only
         # (a live match isn't a result yet either).
-        return self._get_matches(competition_code, "SCHEDULED,TIMED,IN_PLAY,PAUSED", date_from, date_to)
+        #
+        # LIVE added (2026-08-16): found live -- PD's own in-progress matches
+        # report status="LIVE" verbatim (confirmed via a direct single-match
+        # fetch), not "IN_PLAY" as the above assumed. IN_PLAY/PAUSED is left
+        # in rather than replaced -- still real, documented football-data.org
+        # values (used elsewhere, e.g. by other competitions/seasons) -- this
+        # is additive coverage for a second live-match spelling, not a
+        # correction of the first. Same invisibility bug either way: a status
+        # string this filter doesn't name is silently dropped, not erred on.
+        return self._get_matches(competition_code, "SCHEDULED,TIMED,IN_PLAY,PAUSED,LIVE", date_from, date_to)
 
     def get_results(
         self, competition_code: str = "PL", date_from: str | None = None, date_to: str | None = None,

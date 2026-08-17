@@ -4,10 +4,10 @@
     "reason": "calibration_curve currently applies to binary targets"
   },
   "metrics": {
-    "accuracy": 0.5263157894736842,
-    "log_loss": 0.9969657473437782
+    "accuracy": 0.46551724137931033,
+    "log_loss": 1.075936794047326
   },
-  "model_path": "models/result_3way_sp1_lr_v1_20260806.joblib",
+  "model_path": "models/result_3way_f1_lr_v1_20260815.joblib",
   "target": "result_3way",
   "task_type": "multiclass_classification"
 }

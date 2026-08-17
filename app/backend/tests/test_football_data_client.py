@@ -91,7 +91,7 @@ def test_get_fixtures_sends_auth_header_and_status_filter() -> None:
 
     call = session.get.call_args
     assert call.kwargs["headers"]["X-Auth-Token"] == "my-secret-key"
-    assert call.kwargs["params"]["status"] == "SCHEDULED,TIMED,IN_PLAY,PAUSED"
+    assert call.kwargs["params"]["status"] == "SCHEDULED,TIMED,IN_PLAY,PAUSED,LIVE"
     assert "PL" in call.args[0] or "PL" in call.kwargs.get("url", "")
 
 
@@ -111,6 +111,22 @@ def test_get_fixtures_status_filter_includes_in_play_and_paused() -> None:
     assert "PAUSED" in status.split(",")
 
 
+def test_get_fixtures_status_filter_includes_live() -> None:
+    """Found live (2026-08-16): PD's own in-progress matches report
+    status="LIVE" verbatim, not "IN_PLAY" as the prior fix assumed --
+    confirmed against the real API via a direct single-match fetch (list
+    endpoint's own status=IN_PLAY,PAUSED filter returned zero results for a
+    match whose own status field was "LIVE"). Same invisibility gap as
+    IN_PLAY/PAUSED above, just a second real spelling this filter didn't
+    name yet."""
+    session = _mock_session([])
+    client = FootballDataClient(api_key="fake-key", session=session)
+
+    client.get_fixtures(competition_code="PD")
+
+    assert "LIVE" in session.get.call_args.kwargs["params"]["status"].split(",")
+
+
 def test_get_fixtures_status_filter_includes_timed() -> None:
     """Bug found live (2026-08-14): football-data.org marks near-term
     fixtures with a confirmed kickoff time as status=TIMED, not SCHEDULED
@@ -127,7 +143,7 @@ def test_get_fixtures_status_filter_includes_timed() -> None:
 
     client.get_fixtures(competition_code="PD")
 
-    assert session.get.call_args.kwargs["params"]["status"] == "SCHEDULED,TIMED,IN_PLAY,PAUSED"
+    assert session.get.call_args.kwargs["params"]["status"] == "SCHEDULED,TIMED,IN_PLAY,PAUSED,LIVE"
 
 
 def test_get_fixtures_normalizes_a_timed_match() -> None:
