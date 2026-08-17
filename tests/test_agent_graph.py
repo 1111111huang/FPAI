@@ -353,6 +353,90 @@ def test_run_agent_produces_recommendation_when_forecast_succeeds():
     mock_llm.bind_tools.return_value.invoke.assert_called_once()
 
 
+def test_run_agent_retries_llm_call_on_transient_failure_then_succeeds():
+    """W151/A64: a transient provider error (timeout/rate limit/5xx) on the
+    first attempt no longer fails the whole match -- _invoke_with_retry
+    retries the identical call before giving up."""
+    from unittest.mock import MagicMock, patch
+    from langchain_core.messages import AIMessage
+    from src.agent.graph import run_agent
+
+    llm_json = json.dumps({
+        "match": {"home": "Man City", "away": "Arsenal", "date": "2026-06-21", "league": "E0"},
+        "overall": "no_bet", "markets": [], "explanation": "Balanced match.",
+        "confidence": "medium", "limitations": [], "prediction_basis": "team_history_and_market",
+    })
+    fake_forecast_result = {"result_3way": {"probabilities": {"home": 0.4}}, "data_quality": {"prediction_basis": "team_history_and_market"}}
+
+    with patch("src.agent.graph._build_llm") as mock_build_llm, \
+         patch("src.agent.graph._load_system_prompt", return_value="stub prompt"), \
+         patch("src.agent.tools._dated_web_search", return_value="No results found."), \
+         patch("src.forecast.forecast_service.ForecastService") as MockSvc, \
+         patch("src.agent.lessons.load_approved_lessons", return_value=[]), \
+         patch("src.utils.db_manager.DuckDBManager") as MockDB:
+        MockDB.return_value.connection.return_value.__enter__.return_value = MagicMock()
+        instance = MagicMock()
+        MockSvc.return_value = instance
+        instance.forecast_upcoming.return_value = fake_forecast_result
+
+        mock_llm = MagicMock()
+        mock_llm.bind_tools.return_value.invoke.side_effect = [
+            TimeoutError("deepseek timed out"), AIMessage(content=llm_json),
+        ]
+        mock_build_llm.return_value = mock_llm
+
+        cfg = _make_config()
+        recommendation = run_agent(
+            match_info={
+                "home_team": "Man City", "away_team": "Arsenal", "date": "2026-06-21", "league": "E0",
+                "odds": {"home": 2.0, "draw": 3.4, "away": 3.6},
+            },
+            config=cfg,
+            tools=[],
+        )
+
+    assert recommendation["overall"] == "no_bet"
+    assert mock_llm.bind_tools.return_value.invoke.call_count == 2
+
+
+def test_run_agent_raises_after_exhausting_all_retry_attempts():
+    """Every attempt failing still surfaces the failure -- eod_batch.py's
+    own per-match try/except (not this layer) is what turns this into a
+    graceful skip, so a persistent failure must not be swallowed here."""
+    from unittest.mock import MagicMock, patch
+    from src.agent.graph import run_agent
+
+    fake_forecast_result = {"result_3way": {"probabilities": {"home": 0.4}}, "data_quality": {"prediction_basis": "team_history_and_market"}}
+
+    with patch("src.agent.graph._build_llm") as mock_build_llm, \
+         patch("src.agent.graph._load_system_prompt", return_value="stub prompt"), \
+         patch("src.agent.tools._dated_web_search", return_value="No results found."), \
+         patch("src.forecast.forecast_service.ForecastService") as MockSvc, \
+         patch("src.agent.lessons.load_approved_lessons", return_value=[]), \
+         patch("src.utils.db_manager.DuckDBManager") as MockDB:
+        MockDB.return_value.connection.return_value.__enter__.return_value = MagicMock()
+        instance = MagicMock()
+        MockSvc.return_value = instance
+        instance.forecast_upcoming.return_value = fake_forecast_result
+
+        mock_llm = MagicMock()
+        mock_llm.bind_tools.return_value.invoke.side_effect = TimeoutError("deepseek timed out")
+        mock_build_llm.return_value = mock_llm
+
+        cfg = _make_config()
+        with pytest.raises(TimeoutError):
+            run_agent(
+                match_info={
+                    "home_team": "Man City", "away_team": "Arsenal", "date": "2026-06-21", "league": "E0",
+                    "odds": {"home": 2.0, "draw": 3.4, "away": 3.6},
+                },
+                config=cfg,
+                tools=[],
+            )
+
+    assert mock_llm.bind_tools.return_value.invoke.call_count == 3
+
+
 def test_run_agent_degrades_when_llm_hallucinates_a_different_match():
     """BUG-023/024 end-to-end: the agent's LLM call hallucinated a
     "Manchester City vs Liverpool" analysis for a real Brentford vs

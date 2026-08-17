@@ -108,7 +108,7 @@ START → agent_node ──[should_continue]──► tools_node ──► agent
 ```
 
 **`agent_node`**
-Invokes `llm_with_tools.invoke(state["messages"])`. Increments `tool_call_count` by the number of tool calls in the response. Logs `tool_calls=[...]` or `raw_output_length=N` at INFO.
+Invokes `llm_with_tools.invoke(state["messages"])` via `_invoke_with_retry()` (A64, Section 26.5) — up to 3 attempts, last exception re-raised if all fail. Increments `tool_call_count` by the number of tool calls in the response. Logs `tool_calls=[...]` or `raw_output_length=N` at INFO.
 
 **`should_continue`** (conditional edge)
 Routes to `"tools"` if the last message has tool calls AND `tool_call_count < max_tool_calls`; otherwise routes to `"output"`. Logs the routing decision at INFO every call — this was essential for diagnosing model failures (see Section 7) and should not be removed.
@@ -1063,3 +1063,19 @@ Direct follow-up, same day — A60's pilot was an explicit smoke test, not the r
 **Outstanding:** 554 pending lesson candidates (305 `I1` + 249 `D1`) sit in `agent_lessons` (`status=pending`) awaiting human review via `agent-lessons approve/reject` — explicitly left for the user, not auto-approved. `F1`'s 306-match corpus is complete but has no train/test pass yet.
 
 Full story-level detail lives in `documents/agent_user_stories.md` Phase 19 and its full-season-corpus addendum.
+
+## 27. Retry on the LLM Call, and EOD/Pregenerate Dedup (A64/W151, 2026-08-17)
+
+Found live while investigating two real Dashboard fixtures stuck on "Not yet generated" (Atleti v Málaga, Marseille v Strasbourg) — every other external call in this graph already degrades gracefully on failure (`_web_search_impl`/A53, `_forecast_league_impl`/`_forecast_international_impl`, `resolve_competition`), but `agent_node`'s own call to the LLM provider (`llm_with_tools.invoke(...)`) and `output_node`'s forced-synthesis fallback call had none — a single transient provider error (timeout/rate limit/5xx) propagated all the way to `eod_batch.py`'s per-match `try/except`, silently skipping the match until its *next* scheduled window (T-30, potentially days away for an early fixture).
+
+### 27.1 `_invoke_with_retry()` (`src/agent/graph.py`, A64)
+
+Both call sites now go through a small module-level helper — `_invoke_with_retry(runnable, messages, attempts=3)` — that retries the identical `.invoke()` call up to 3 times, re-raising the last exception unchanged if every attempt fails (callers see the same failure mode as before, just less often). Deliberately a hand-rolled loop, not LangChain's own `Runnable.with_retry()`: the native wrapper returns a *new* `Runnable` instance, which is transparent in production but breaks every existing test double that mocks at `mock_llm.bind_tools.return_value.invoke` — the hand-rolled version keeps calling `.invoke()` on the exact same object, so it composes with the existing mock shape with zero collateral test changes. No backoff between attempts (batch concurrency is already bounded by `eod_batch.py`'s own semaphore, so this isn't hammering the provider) — flagged as the deliberate corner cut, add exponential backoff if a real sustained outage (not a one-off blip) starts exhausting all 3 attempts in practice.
+
+### 27.2 EOD/pregenerate dedup — `already_fresh()` (`app/backend/eod_batch.py`, W151)
+
+Separate but related root cause for the same symptom class: boot-time pregenerate (`main.py::_pregenerate_recommendations`, W103) generates every fixture in the next 5 days on deploy, and the nightly EOD batch (`scheduler_wiring.py`, W09) — which reuses `run_eod_batch()` internally — regenerated the *same* fixture again the night before kickoff regardless, a redundant (real-money) LLM call per fixture. `already_fresh(cache, match_id, date, agent_config_hash, odds)` extracts the odds-unchanged comparison `t30_refresh.py`'s `refresh_match_at_t30()` already used for its own "skip if nothing changed" check (Section 6.2 of `app_techspec.md`) into a function shared by both call sites — `eod_batch.py::_generate_one` checks it before calling `run_agent()`, and `t30_refresh.py` now calls the same helper instead of its own inline copy. `EodBatchResult` gained a third counter, `unchanged`, distinct from `skipped` (a real `run_agent()` failure) — surfaced through to `_pregenerate_recommendations()`'s per-league results dict so a batch-result log line tells the two apart without reading warnings. T-30 is still scheduled unconditionally for every fixture either way, unchanged.
+
+Net effect of both fixes together: a fixture gets at most one real LLM call per scheduled window unless odds actually moved, and a transient failure within that one call is very likely absorbed by the retry instead of waiting for the next window — directly serving the original ask ("recommendation should show up ASAP after refresh").
+
+Full story-level detail lives in `documents/agent_user_stories.md` A64 and `documents/app_user_stories.md` W151.

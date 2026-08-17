@@ -60,11 +60,31 @@ class EodBatchResult:
     fixtures: list[NormalizedMatch] = field(default_factory=list)
     generated: int = 0
     skipped: int = 0
+    # W151: fixtures a prior pass (boot pregenerate, or an earlier EOD run)
+    # already generated with these exact odds -- distinct from `skipped`
+    # (a real run_agent failure) so a batch-result log line tells the two
+    # apart without digging through warnings.
+    unchanged: int = 0
 
 
 def odds_lookup(odds_events: list[NormalizedOdds]) -> dict[tuple[str, str], NormalizedOdds]:
     mapper = TeamNameMapper(mapping_path=str(_TEAM_MAPPING_PATH))
     return {(mapper.map_team(o.home_team), mapper.map_team(o.away_team)): o for o in odds_events}
+
+
+def already_fresh(
+    cache: RecommendationCache, match_id: str, date: str, agent_config_hash: str, odds: dict | None,
+) -> bool:
+    """W151: True when a cache entry already exists for this exact
+    (match, agent_config_hash) with the same odds as `odds` -- shared by
+    run_eod_batch (below) and t30_refresh.py's refresh_match_at_t30 so a
+    fixture boot-pregenerate/an earlier EOD pass already handled isn't
+    silently regenerated (and re-billed against the LLM) again for no
+    reason. `odds` may be None (no odds found this pass) -- compared
+    against RecommendationCache's own `odds={}` convention for a
+    no-odds generation (see run_eod_batch's `odds or {}` below)."""
+    cached = cache.get_latest(match_id, date, agent_config_hash)
+    return cached is not None and cached.odds == (odds or {})
 
 
 def _fixture_date(fixture: NormalizedMatch) -> str:
@@ -121,8 +141,10 @@ async def run_eod_batch(
     `on_progress`, when supplied, is called once per fixture as its
     generation finishes (order not guaranteed -- fixtures generate
     concurrently, bounded by `concurrency`), with the fixture and one of
-    "generated"/"skipped". A CLI progress hook for W50's sandbox precompute
-    step; the real scheduler path never passes it."""
+    "generated"/"skipped"/"unchanged" (W151 -- already_fresh() found a
+    cache entry with identical odds, no LLM call made). A CLI progress
+    hook for W50's sandbox precompute step; the real scheduler path never
+    passes it."""
     if fixtures is None:
         # W76: keyed off `league` (already accepted below), not the E0-only
         # COMPETITION_CODE constant -- this fallback is dead in practice for
@@ -166,6 +188,17 @@ async def run_eod_batch(
         odds = match_odds(fixture, odds_by_teams_by_date.get(fixture_date, {}))
         if odds is not None:
             match_info["odds"] = odds
+
+        # W151: a prior pass (boot pregenerate, or tonight's own EOD run
+        # catching a fixture pregenerate already covered) already produced
+        # a recommendation with these exact odds -- nothing has changed,
+        # so skip the redundant (real-money) LLM call. T-30 still gets
+        # scheduled for this fixture regardless, unchanged below.
+        if already_fresh(cache, fixture.match_id, fixture_date, agent_config_hash, odds):
+            result.unchanged += 1
+            if on_progress is not None:
+                on_progress(fixture, "unchanged")
+            return
 
         async with semaphore:
             try:

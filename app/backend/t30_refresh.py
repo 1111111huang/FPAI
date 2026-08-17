@@ -22,7 +22,7 @@ from typing import Literal
 
 from app.backend import recommendations
 from app.backend.agent_config_hash import compute_agent_config_hash
-from app.backend.eod_batch import LEAGUE_CODE, match_odds, odds_lookup
+from app.backend.eod_batch import LEAGUE_CODE, already_fresh, match_odds, odds_lookup
 from app.backend.football_data_client import NormalizedMatch
 from app.backend.odds_api_client import OddsAPIClient
 from app.backend.odds_sport_keys import ODDS_SPORT_KEY_BY_COMPETITION
@@ -79,8 +79,9 @@ def refresh_match_at_t30(
         return T30RefreshResult(match_id=fixture.match_id, outcome="skipped_no_odds")
 
     agent_config_hash = compute_agent_config_hash(config)
-    cached_entry = cache.get_latest(fixture.match_id, date_str, agent_config_hash)
-    if cached_entry is not None and cached_entry.odds == fresh_odds:
+    # W151: shared with eod_batch.py's own EOD-pass dedup check -- one
+    # "does this need regenerating" rule for both scheduled entry points.
+    if already_fresh(cache, fixture.match_id, date_str, agent_config_hash, fresh_odds):
         LOGGER.info("T-30 refresh: no new data, refresh skipped for match_id=%s.", fixture.match_id)
         return T30RefreshResult(match_id=fixture.match_id, outcome="skipped_no_change")
 

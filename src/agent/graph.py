@@ -87,6 +87,32 @@ def _extract_text(content: str | list) -> str:
     return str(content)
 
 
+def _invoke_with_retry(runnable: Any, messages: list, attempts: int = 3) -> Any:
+    """W151/A64: agent_node's calls to the LLM provider were the one
+    external call left in this graph with no error handling at all --
+    every other tool call already degrades on failure instead of raising
+    (_web_search_impl/A53, _forecast_league_impl, resolve_competition).
+    A transient provider error (timeout/rate limit/5xx) here used to
+    propagate all the way to eod_batch.py's per-match try/except, silently
+    skipping the whole match until the next scheduled EOD/T-30 window --
+    sometimes days away for an early fixture. Retries the identical call
+    up to `attempts` times; the last exception is re-raised unchanged if
+    every attempt fails, so callers see exactly the same failure mode as
+    before, just less often.
+    # ponytail: no backoff between attempts -- batch concurrency is
+    # already bounded (eod_batch.py's own semaphore), so this isn't
+    # hammering the provider. Add exponential backoff if a real outage
+    # (not a one-off blip) starts exhausting all 3 attempts in practice."""
+    last_exc: Exception | None = None
+    for attempt in range(attempts):
+        try:
+            return runnable.invoke(messages)
+        except Exception as exc:
+            last_exc = exc
+            _LOG.warning("llm_invoke_failed | attempt=%d/%d | %s", attempt + 1, attempts, exc)
+    raise last_exc
+
+
 _CONFIDENCE_STEPS = ["high", "medium", "low"]
 _NO_RESULTS_MARKERS = ("No results found.", "TOOL_PERMANENTLY_UNAVAILABLE")
 
@@ -262,7 +288,7 @@ def build_graph(config: AgentConfig, tools: list):
     llm_with_tools = llm.bind_tools(tools)
 
     def agent_node(state: AgentState) -> dict:
-        response = llm_with_tools.invoke(state["messages"])
+        response = _invoke_with_retry(llm_with_tools, state["messages"])
         tool_calls = getattr(response, "tool_calls", []) or []
         new_count = state["tool_call_count"] + len(tool_calls)
         if tool_calls:
@@ -324,7 +350,7 @@ def build_graph(config: AgentConfig, tools: list):
                 "Include all required fields: match, overall, markets, explanation, confidence, limitations, prediction_basis. "
                 "Output ONLY the JSON block -- no narrative report, no headers, no text before or after it."
             )
-            synthesis_response = llm.invoke(state["messages"] + [HumanMessage(content=synthesis_prompt)])
+            synthesis_response = _invoke_with_retry(llm, state["messages"] + [HumanMessage(content=synthesis_prompt)])
             text = _extract_text(synthesis_response.content)
             _LOG.info("output_node | synthesis_length=%d | synthesis_output=%s", len(text), text)
 

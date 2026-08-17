@@ -300,7 +300,7 @@ async def _pregenerate_recommendations(
         except Exception:
             LOGGER.warning("Pregenerate: batch failed for league=%s -- other leagues unaffected.", league, exc_info=True)
             continue
-        results[league] = {"generated": result.generated, "skipped": result.skipped}
+        results[league] = {"generated": result.generated, "skipped": result.skipped, "unchanged": result.unchanged}
     LOGGER.info("Pregenerate complete | days_ahead=%d | concurrency=%d | results=%s", days_ahead, concurrency, results)
     return results
 

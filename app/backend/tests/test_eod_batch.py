@@ -482,6 +482,127 @@ def test_match_info_date_uses_the_fixtures_own_date_not_date_str(tmp_path: Path)
     assert captured_match_info["date"] == "2026-03-14"
 
 
+# --- W151: skip regeneration when a prior pass (boot pregenerate, or this
+# same EOD run catching a fixture pregenerate already covered) already
+# produced a recommendation with identical odds. ---
+
+def test_skips_regeneration_when_odds_unchanged_from_prior_cache_entry(tmp_path: Path) -> None:
+    fixtures_client = MagicMock()
+    fixtures_client.get_fixtures.return_value = [_fixture("m1", "Arsenal", "Everton")]
+    odds_client = MagicMock()
+    odds_client.get_odds.return_value = [
+        NormalizedOdds(home_team="Arsenal", away_team="Everton", commence_time="2026-08-22T15:00:00Z",
+                        home_odds=1.8, draw_odds=3.6, away_odds=4.5),
+    ]
+    cache = RecommendationCache(db_path=tmp_path / "cache.db")
+    config = AgentConfig.default()
+    agent_config_hash = compute_agent_config_hash(config)
+    cache.record_generation(
+        match_id="m1", date="2026-08-22", agent_config_hash=agent_config_hash,
+        odds={"home": 1.8, "draw": 3.6, "away": 4.5}, recommendation=_RECOMMENDATION, triggered_by="scheduled",
+    )
+
+    with patch("app.backend.recommendations.run_agent") as mock_run_agent:
+        result = asyncio.run(
+            run_eod_batch(
+                fixtures_client=fixtures_client, odds_client=odds_client, cache=cache, config=config,
+                schedule_t30=lambda f: None, date_str="2026-08-22",
+            )
+        )
+
+    mock_run_agent.assert_not_called()
+    assert result.generated == 0
+    assert result.unchanged == 1
+    assert len(cache.get_history("m1", "2026-08-22", agent_config_hash)) == 1  # no new row written
+
+
+def test_regenerates_when_odds_changed_from_prior_cache_entry(tmp_path: Path) -> None:
+    fixtures_client = MagicMock()
+    fixtures_client.get_fixtures.return_value = [_fixture("m1", "Arsenal", "Everton")]
+    odds_client = MagicMock()
+    odds_client.get_odds.return_value = [
+        NormalizedOdds(home_team="Arsenal", away_team="Everton", commence_time="2026-08-22T15:00:00Z",
+                        home_odds=1.6, draw_odds=3.8, away_odds=5.0),  # moved since the cached entry
+    ]
+    cache = RecommendationCache(db_path=tmp_path / "cache.db")
+    config = AgentConfig.default()
+    agent_config_hash = compute_agent_config_hash(config)
+    cache.record_generation(
+        match_id="m1", date="2026-08-22", agent_config_hash=agent_config_hash,
+        odds={"home": 1.8, "draw": 3.6, "away": 4.5}, recommendation=_RECOMMENDATION, triggered_by="scheduled",
+    )
+
+    with patch("app.backend.recommendations.run_agent", return_value=_RECOMMENDATION) as mock_run_agent:
+        result = asyncio.run(
+            run_eod_batch(
+                fixtures_client=fixtures_client, odds_client=odds_client, cache=cache, config=config,
+                schedule_t30=lambda f: None, date_str="2026-08-22",
+            )
+        )
+
+    mock_run_agent.assert_called_once()
+    assert result.generated == 1
+    assert result.unchanged == 0
+
+
+def test_skips_regeneration_when_still_no_odds_and_prior_entry_also_had_none(tmp_path: Path) -> None:
+    """already_fresh() must compare `None` (no odds this pass) against the
+    cache's own odds={} convention (used when a generation had no odds),
+    not treat "no odds" as automatically different from a prior no-odds
+    entry."""
+    fixtures_client = MagicMock()
+    fixtures_client.get_fixtures.return_value = [_fixture("m1", "Arsenal", "Everton")]
+    odds_client = MagicMock()
+    odds_client.get_odds.return_value = []  # no matching odds event, same as before
+    cache = RecommendationCache(db_path=tmp_path / "cache.db")
+    config = AgentConfig.default()
+    agent_config_hash = compute_agent_config_hash(config)
+    cache.record_generation(
+        match_id="m1", date="2026-08-22", agent_config_hash=agent_config_hash,
+        odds={}, recommendation=_RECOMMENDATION, triggered_by="scheduled",
+    )
+
+    with patch("app.backend.recommendations.run_agent") as mock_run_agent:
+        result = asyncio.run(
+            run_eod_batch(
+                fixtures_client=fixtures_client, odds_client=odds_client, cache=cache, config=config,
+                schedule_t30=lambda f: None, date_str="2026-08-22",
+            )
+        )
+
+    mock_run_agent.assert_not_called()
+    assert result.unchanged == 1
+
+
+def test_on_progress_reports_unchanged_for_a_dedup_skipped_fixture(tmp_path: Path) -> None:
+    fixtures_client = MagicMock()
+    fixtures_client.get_fixtures.return_value = [_fixture("m1", "Arsenal", "Everton")]
+    odds_client = MagicMock()
+    odds_client.get_odds.return_value = [
+        NormalizedOdds(home_team="Arsenal", away_team="Everton", commence_time="2026-08-22T15:00:00Z",
+                        home_odds=1.8, draw_odds=3.6, away_odds=4.5),
+    ]
+    cache = RecommendationCache(db_path=tmp_path / "cache.db")
+    config = AgentConfig.default()
+    agent_config_hash = compute_agent_config_hash(config)
+    cache.record_generation(
+        match_id="m1", date="2026-08-22", agent_config_hash=agent_config_hash,
+        odds={"home": 1.8, "draw": 3.6, "away": 4.5}, recommendation=_RECOMMENDATION, triggered_by="scheduled",
+    )
+    progress: list[tuple[str, str]] = []
+
+    with patch("app.backend.recommendations.run_agent"):
+        asyncio.run(
+            run_eod_batch(
+                fixtures_client=fixtures_client, odds_client=odds_client, cache=cache, config=config,
+                schedule_t30=lambda f: None, date_str="2026-08-22",
+                on_progress=lambda fixture, outcome: progress.append((fixture.match_id, outcome)),
+            )
+        )
+
+    assert progress == [("m1", "unchanged")]
+
+
 def test_odds_fetched_per_distinct_fixture_date_when_fixtures_span_multiple_dates(tmp_path: Path) -> None:
     """W54: a fallback window can contain fixtures on several different
     dates (not just one date later than date_str) -- each fixture's odds

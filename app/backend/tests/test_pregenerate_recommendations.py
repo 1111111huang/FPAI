@@ -55,8 +55,8 @@ def test_groups_fixtures_by_league_and_runs_one_batch_per_league(monkeypatch):
     assert called_leagues == {"E0", "SWE"}
     e0_call = next(c for c in batch_calls if c["league"] == "E0")
     assert len(e0_call["fixtures"]) == 2
-    assert results["E0"] == {"generated": 2, "skipped": 0}
-    assert results["SWE"] == {"generated": 1, "skipped": 0}
+    assert results["E0"] == {"generated": 2, "skipped": 0, "unchanged": 0}
+    assert results["SWE"] == {"generated": 1, "skipped": 0, "unchanged": 0}
 
 
 def test_bug_045_defaults_to_a_lower_concurrency_than_eod_batchs_own_default(monkeypatch):
@@ -147,7 +147,7 @@ def test_one_leagues_batch_failure_does_not_block_the_others(monkeypatch):
         results = asyncio.run(main._pregenerate_recommendations(days_ahead=5, scheduler=None))
 
     assert "E0" not in results
-    assert results["SWE"] == {"generated": 1, "skipped": 0}
+    assert results["SWE"] == {"generated": 1, "skipped": 0, "unchanged": 0}
 
 
 def test_admin_endpoint_returns_immediately_without_waiting_for_pregenerate(monkeypatch):
