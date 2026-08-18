@@ -975,8 +975,17 @@ async def get_cached_recommendation(
     market) instead of a raw MatchRecommendationOut.model_validate(), which
     raised an uncaught ValidationError (a 500) for any pre-existing cached
     row using a market/selection value that predates BUG-027's Literal
-    constraints -- routine for local-model-hallucinated rows."""
-    entry = cache.get_latest(match_id, date, compute_agent_config_hash(AgentConfig.default()))
+    constraints -- routine for local-model-hallucinated rows.
+
+    A65/A66 follow-up: falls back to get_latest_any_config() (ignores
+    agent_config_hash) when there's no entry for today's exact config --
+    a still-good prior recommendation, generated under an older config,
+    beats a hard miss, especially when a config bump (busts every match's
+    hash at once) coincides with an unrelated regeneration failure
+    (confirmed live: a DeepSeek billing outage) that leaves nothing
+    regenerated under the new hash yet."""
+    agent_config_hash = compute_agent_config_hash(AgentConfig.default())
+    entry = cache.get_latest(match_id, date, agent_config_hash) or cache.get_latest_any_config(match_id, date)
     if entry is None:
         raise HTTPException(status_code=404, detail="No cached recommendation for this match/date yet.")
     return validate_and_degrade(entry.recommendation)

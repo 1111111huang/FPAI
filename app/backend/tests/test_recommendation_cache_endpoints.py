@@ -48,6 +48,29 @@ def test_get_returns_404_when_nothing_cached_yet(tmp_path: Path):
         app.dependency_overrides.clear()
 
 
+def test_get_falls_back_to_a_stale_config_hash_row_instead_of_404ing(tmp_path: Path):
+    """A65/A66 follow-up: a config change bumps agent_config_hash for every
+    match at once -- if regeneration under the new hash then also fails
+    (or just hasn't run yet), get_latest() alone finds nothing even though
+    a perfectly good prior recommendation, generated under the previous
+    config, still exists. Confirmed live: a DeepSeek billing outage failed
+    every match in the same batch identically, right after A66's own
+    config-field addition had already bumped the hash for all of them."""
+    cache = _override_cache(tmp_path)
+    cache.record_generation(
+        match_id="m1", date="2026-08-22", agent_config_hash="stale-hash-from-before-the-config-change",
+        odds={"home": 1.5, "draw": 4.0, "away": 6.0}, recommendation=_VALID_RECOMMENDATION,
+        triggered_by="scheduled",
+    )
+    try:
+        with TestClient(app) as client:
+            response = client.get("/api/recommendations/m1", params={"date": "2026-08-22"})
+        assert response.status_code == 200
+        assert response.json()["overall"] == "direct_bet"
+    finally:
+        app.dependency_overrides.clear()
+
+
 def test_get_never_calls_run_agent(tmp_path: Path):
     _override_cache(tmp_path)
     try:

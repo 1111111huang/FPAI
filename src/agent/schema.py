@@ -127,6 +127,38 @@ def normalize_explanation(value: object) -> list[str]:
     return []
 
 
+def _downgrade_direct_bet_below_value_edge_floor(data: dict, min_value_edge: float) -> dict:
+    """A67: recommendation_type='direct_bet' requires the market's own
+    self-reported value_edge to actually clear min_value_edge -- confirmed
+    live: a market reported 'direct_bet' with value_edge=-0.138, a
+    fundamentally incoherent combination (a direct bet, by definition,
+    claims the model's probability clears the value bar *right now*)
+    nothing before this checked, only current_odds bounds/eligibility/the
+    conditional floor (A29/A54/A66) -- all price-*realism* checks, not
+    value-*coherence*. Runs first, before any of those: a negative-edge
+    market has no genuine underlying value to even wait for, so it must
+    never reach A29's "reclassify as conditional" path in the first place.
+    Downgrades to 'no_bet' -- same BUG-013 precedent (no coherent
+    actionable state left). Deliberately scoped to 'direct_bet' only --
+    'conditional' explicitly tolerates value_edge below the floor right
+    now, that's the entire premise of "wait for a better price to clear
+    it later" (A52's target_odds computation)."""
+    limitations = list(data.get("limitations") or [])
+    for market in data.get("markets", []):
+        if market["recommendation_type"] != "direct_bet":
+            continue
+        if market["value_edge"] >= min_value_edge:
+            continue
+        market["recommendation_type"] = "no_bet"
+        limitations.append(
+            f"Downgraded {market['market']!r}/{market['selection']!r} from direct_bet to no_bet: "
+            f"value_edge {market['value_edge']} is below the {min_value_edge} floor -- not a coherent "
+            "direct bet without a real edge."
+        )
+    data["limitations"] = limitations
+    return data
+
+
 def _downgrade_direct_bet_with_null_odds(data: dict) -> dict:
     """BUG-013: recommendation_type='direct_bet' requires a non-null
     current_odds -- downgrade to 'no_bet' (the only other value valid for this
@@ -438,6 +470,7 @@ def extract_recommendation(
                 )
                 continue
 
+        data = _downgrade_direct_bet_below_value_edge_floor(data, min_value_edge)
         data = _downgrade_direct_bet_with_null_odds(data)
         data = _downgrade_direct_bet_outside_odds_bounds(data, min_odds_threshold, max_odds_threshold)
         data = _restrict_conditional_to_eligible_markets(data)

@@ -101,6 +101,33 @@ class RecommendationCache:
             ).fetchone()
         return self._row_to_entry(row) if row else None
 
+    def get_latest_any_config(self, match_id: str, date: str) -> CacheEntry | None:
+        """A65/A66 follow-up: a config change (a tunable threshold, a model
+        swap) bumps agent_config_hash for every match at once, making every
+        prior generation briefly unreachable via get_latest()'s exact-hash
+        lookup until each match is regenerated under the new config. If that
+        regeneration also fails for an unrelated reason (confirmed live: a
+        DeepSeek billing outage failed every match in the same batch
+        identically), get_latest() alone leaves nothing to serve at all,
+        even though a perfectly good prior recommendation still physically
+        exists in this same table under an older hash. Used only as an
+        explicit fallback (main.py's GET /api/recommendations/{match_id}) --
+        not a replacement for get_latest()'s own exact-hash semantics, which
+        eod_batch.py's already_fresh() still needs unchanged (a config
+        change should still trigger fresh regeneration, not be masked by
+        this)."""
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT match_id, date, agent_config_hash, odds_json, recommendation_json, generated_at, triggered_by
+                FROM recommendation_generations
+                WHERE match_id = ? AND date = ?
+                ORDER BY id DESC LIMIT 1
+                """,
+                (match_id, date),
+            ).fetchone()
+        return self._row_to_entry(row) if row else None
+
     def get_history(self, match_id: str, date: str, agent_config_hash: str) -> list[CacheEntry]:
         with self._connect() as conn:
             rows = conn.execute(
