@@ -20,6 +20,7 @@ def compute_agent_config_hash(config: AgentConfig) -> str:
             "max_tool_calls": config.max_tool_calls,
             "min_odds_threshold": config.min_odds_threshold,
             "max_odds_threshold": config.max_odds_threshold,
+            "min_conditional_odds_threshold": config.min_conditional_odds_threshold,
             "min_value_edge": config.min_value_edge,
             "markets": config.markets,
             "system_prompt_version": config.system_prompt_version,

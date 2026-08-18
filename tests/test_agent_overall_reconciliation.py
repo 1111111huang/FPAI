@@ -44,9 +44,14 @@ def test_overall_left_unchanged_when_a_market_actually_supports_it():
 
 def test_overall_downgraded_to_the_strongest_market_present():
     """Two markets: the direct_bet one gets bounds-downgraded to
-    conditional (A29), the other was already no_bet -- overall must land
-    on 'conditional' (the strongest of the two survivors), not 'no_bet'."""
-    downgraded_market = {**_BASE_MARKET, "market": "total_goals", "selection": "over_2.5", "current_odds": 1.05}
+    conditional (A29's *ceiling* case -- odds too high, not too low; A66's
+    floor doesn't apply to it, unlike the floor case), the other was
+    already no_bet -- overall must land on 'conditional' (the strongest of
+    the two survivors), not 'no_bet'."""
+    downgraded_market = {
+        **_BASE_MARKET, "market": "total_goals", "selection": "over_2.5",
+        "current_odds": 15.0, "ml_probability": 0.10,
+    }
     no_bet_market = {**_BASE_MARKET, "market": "btts", "selection": "yes", "recommendation_type": "no_bet", "current_odds": 1.8}
     data = {**_VALID, "markets": [downgraded_market, no_bet_market]}
 

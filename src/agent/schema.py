@@ -208,6 +208,39 @@ def _restrict_conditional_to_eligible_markets(data: dict) -> dict:
     return data
 
 
+def _downgrade_conditional_below_floor(data: dict, min_conditional_odds_threshold: float) -> dict:
+    """A66: 'conditional' current_odds below this floor is downgraded to
+    'no_bet' -- either the price is already so short that "wait for it to
+    improve" isn't a realistic strategy (a market wouldn't plausibly move
+    from e.g. 1.13 to a value-clearing price), or current_odds isn't a
+    real price at all (confirmed live: current_odds=0.0 on a corners
+    market with no real bookmaker feed to ground it -- decimal odds are
+    mathematically never below 1.0, so any value under a sane floor is
+    already degenerate). One check covers both: null current_odds is
+    already out of scope here (never triggers this comparison), same
+    precedent as A29's own bounds check leaving null to BUG-013's rule.
+    Run after A29's/A54's own downgrade passes, so this catches both an
+    algorithmically-downgraded direct_bet and the LLM's own organic
+    'conditional' call; before A52's target_odds computation, so a
+    downgraded market never gets one (it's no longer 'conditional' by the
+    time that pass runs)."""
+    limitations = list(data.get("limitations") or [])
+    for market in data.get("markets", []):
+        if market["recommendation_type"] != "conditional":
+            continue
+        odds = market["current_odds"]
+        if odds is None or odds >= min_conditional_odds_threshold:
+            continue
+        market["recommendation_type"] = "no_bet"
+        limitations.append(
+            f"Downgraded {market['market']!r}/{market['selection']!r} from conditional to no_bet: "
+            f"current_odds {odds} is below the {min_conditional_odds_threshold} floor -- too short "
+            "a price for 'wait for it to improve' to be a realistic strategy."
+        )
+    data["limitations"] = limitations
+    return data
+
+
 def _compute_target_odds(data: dict, min_value_edge: float) -> dict:
     """A52: for each 'conditional' market with real current_odds, compute the
     price it would need to reach to actually clear the value-edge bar --
@@ -312,6 +345,7 @@ def extract_recommendation(
     text: str,
     min_odds_threshold: float = 1.2,
     max_odds_threshold: float = 11.0,
+    min_conditional_odds_threshold: float = 1.5,
     min_value_edge: float = 0.05,
     home_team: str | None = None,
     away_team: str | None = None,
@@ -407,6 +441,7 @@ def extract_recommendation(
         data = _downgrade_direct_bet_with_null_odds(data)
         data = _downgrade_direct_bet_outside_odds_bounds(data, min_odds_threshold, max_odds_threshold)
         data = _restrict_conditional_to_eligible_markets(data)
+        data = _downgrade_conditional_below_floor(data, min_conditional_odds_threshold)
         data = _compute_target_odds(data, min_value_edge)
         data = _reconcile_overall_with_markets(data)
         return data  # type: ignore[return-value]

@@ -21,7 +21,7 @@ from src.agent.agent_config import AgentConfig
 def _config(**overrides) -> AgentConfig:
     defaults = dict(
         model="llama3.1:8b", provider="ollama", temperature=0.1, max_tool_calls=10,
-        min_odds_threshold=1.2, max_odds_threshold=11.0, min_value_edge=0.05,
+        min_odds_threshold=1.2, max_odds_threshold=11.0, min_conditional_odds_threshold=1.5, min_value_edge=0.05,
         markets=["result_3way"], system_prompt_version="v1",
     )
     defaults.update(overrides)

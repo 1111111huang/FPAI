@@ -204,6 +204,26 @@ describe("MatchCard", () => {
     expect(screen.getByText("now 1.15")).toBeInTheDocument();
   });
 
+  it("does not show 'now 0.00' for a degenerate/stale current_odds of exactly 0", () => {
+    // A66 (agent_user_stories.md) now code-enforces this server-side going
+    // forward, but this is a frontend-only guard for an already-cached row
+    // from before that fix shipped -- confirmed live, a corners market
+    // with no real bookmaker feed rendered a literal "now 0.00".
+    const match = baseMatch({
+      overall: "conditional",
+      markets: [
+        {
+          market: "home_corners", selection: "over_2.5", recommendationType: "conditional",
+          currentOdds: 0, minOdds: 0, mlProbability: 0.6, impliedProbability: 0.87, valueEdge: -0.27,
+          targetOdds: 1.13,
+        },
+      ],
+    });
+    render(<MatchCard match={match} onUpdate={vi.fn()} />);
+    expect(screen.getByText("Wait ≥")).toBeInTheDocument();
+    expect(screen.queryByText("now 0.00")).not.toBeInTheDocument();
+  });
+
   it("shows the plain Odds box (no Wait ≥) for a direct_bet market -- there's nothing to wait for", () => {
     const match = baseMatch({
       overall: "direct_bet",

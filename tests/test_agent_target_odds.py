@@ -37,15 +37,20 @@ def _wrap_json(data: dict) -> str:
     return f"Some reasoning here.\n\n```json\n{json.dumps(data)}\n```"
 
 
-def test_floor_downgraded_market_gets_a_target_odds_above_current_odds():
-    """A29's floor-downgrade case: current_odds (1.05) is below min_odds_threshold
-    (1.2), so this market becomes conditional. Hand-computed: needed_prob =
-    0.55 - 0.05 = 0.5, candidate = 1 / 0.5 = 2.0, and 2.0 > 1.05 -- a genuine
-    forward target. A54: market/selection overridden to an eligible pair --
-    result_3way (the shared _VALID_MARKET default) would be further
-    downgraded to no_bet by that pass, which isn't this test's concern."""
-    market = {**_VALID_MARKET, "market": "total_goals", "selection": "over_2.5", "current_odds": 1.05, "ml_probability": 0.55}
-    data = {**_VALID, "markets": [market]}
+def test_organic_conditional_market_gets_a_target_odds_above_current_odds():
+    """An LLM-organic 'conditional' call (not A29's algorithmic downgrade --
+    A66 (documents/agent_user_stories.md) makes it structurally impossible
+    for A29's own *floor*-downgrade case to survive as 'conditional' at
+    all: min_odds_threshold, 1.2, is always below
+    min_conditional_odds_threshold, 1.5, so that path always cascades
+    straight to no_bet -- see test_agent_conditional_odds_floor.py).
+    Hand-computed: needed_prob = 0.55 - 0.05 = 0.5, candidate = 1 / 0.5 =
+    2.0, and 2.0 > 1.6 -- a genuine forward target."""
+    market = {
+        **_VALID_MARKET, "market": "total_goals", "selection": "over_2.5",
+        "recommendation_type": "conditional", "current_odds": 1.6, "ml_probability": 0.55,
+    }
+    data = {**_VALID, "overall": "conditional", "markets": [market]}
 
     rec = extract_recommendation(_wrap_json(data))
 

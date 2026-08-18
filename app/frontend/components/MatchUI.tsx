@@ -919,8 +919,14 @@ export function MatchCard({
                       live current_odds lets a reader gauge roughly how long
                       this might take to clear, the same way ProbabilityRow's
                       Model Probabilities table already shows both side by
-                      side (further down this file). */}
-                  {shown.currentOdds != null && (
+                      side (further down this file). `> 0`, not `!= null` --
+                      decimal odds are never <= 0 in reality; A66
+                      (agent_user_stories.md) now code-enforces that
+                      server-side going forward, but this guard also covers
+                      an already-cached row from before that fix shipped
+                      (confirmed live: a 0.0 current_odds rendered as a
+                      literal "now 0.00"). */}
+                  {shown.currentOdds != null && shown.currentOdds > 0 && (
                     <div className="font-mono text-[10px] text-ink-secondary">now {shown.currentOdds.toFixed(2)}</div>
                   )}
                 </>

@@ -10,6 +10,7 @@ max_tool_calls: 10
 
 min_odds_threshold: 1.2
 max_odds_threshold: 11.0
+min_conditional_odds_threshold: 1.5   # A66: decimal / roughly -200 American
 min_value_edge: 0.05
 
 markets:

@@ -8,7 +8,8 @@ import yaml
 
 _REQUIRED = {
     "model", "provider", "temperature", "max_tool_calls",
-    "min_odds_threshold", "max_odds_threshold", "min_value_edge", "markets", "system_prompt_version",
+    "min_odds_threshold", "max_odds_threshold", "min_conditional_odds_threshold",
+    "min_value_edge", "markets", "system_prompt_version",
 }
 _DEFAULT_CONFIG = Path(__file__).parent.parent.parent / "config" / "agent_config.yaml"
 
@@ -21,6 +22,11 @@ class AgentConfig:
     max_tool_calls: int
     min_odds_threshold: float
     max_odds_threshold: float
+    # A66: a 'conditional' market's current_odds below this is too short a
+    # price for "wait for it to improve" to be a realistic strategy (or, in
+    # the degenerate case, not a real price at all -- e.g. 0.0) -- see
+    # src/agent/schema.py's _downgrade_conditional_below_floor.
+    min_conditional_odds_threshold: float
     min_value_edge: float
     markets: list[str]
     system_prompt_version: str

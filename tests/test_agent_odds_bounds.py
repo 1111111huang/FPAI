@@ -36,22 +36,32 @@ def _wrap_json(data: dict) -> str:
     return f"Some reasoning here.\n\n```json\n{json.dumps(data)}\n```"
 
 
-def test_direct_bet_below_floor_downgraded_to_conditional():
+def test_direct_bet_below_floor_downgraded_to_conditional_then_further_to_no_bet():
     # A54: 'conditional' only stays conditional for an eligible (over/yes)
-    # market -- result_3way (the shared _VALID_MARKET default) would be
-    # further downgraded to no_bet by that pass, which isn't this test's
-    # concern.
+    # market -- total_goals/over_2.5 here is eligible, so that pass isn't
+    # what's downgrading this one further.
+    #
+    # A66: min_odds_threshold (1.2, A29's own floor) is always below
+    # min_conditional_odds_threshold (1.5) -- so a market this pass
+    # downgrades for being *too low* can never actually survive as
+    # 'conditional' end to end; it always cascades one step further to
+    # 'no_bet'. This test used to assert the intermediate 'conditional'
+    # state (still real, still true one pass earlier) as the final one --
+    # updated to the actual final state now that A66 exists. A29's own
+    # transition is still exercised (and still visible in `limitations`,
+    # asserted below) even though it's no longer the last word.
     market = {**_VALID_MARKET, "market": "total_goals", "selection": "over_2.5", "current_odds": 1.05}
     data = {**_VALID, "markets": [market]}
 
     rec = extract_recommendation(_wrap_json(data))
 
-    assert rec["markets"][0]["recommendation_type"] == "conditional"
+    assert rec["markets"][0]["recommendation_type"] == "no_bet"
     assert any("1.05" in note and "conditional" in note for note in rec["limitations"])
+    assert any("1.05" in note and "no_bet" in note for note in rec["limitations"])
     # A65: 'overall' (still "direct_bet" in _VALID's base dict) must be
     # reconciled down too -- the one market it could have referred to no
     # longer supports it.
-    assert rec["overall"] == "conditional"
+    assert rec["overall"] == "no_bet"
 
 
 def test_direct_bet_above_ceiling_downgraded_to_conditional():

@@ -16,7 +16,7 @@ from src.agent.graph import _build_recommendation, _extract_forecast_diagnostics
 def _make_config(**overrides) -> AgentConfig:
     defaults = dict(
         model="stub-model", provider="ollama", temperature=0.0, max_tool_calls=5,
-        min_odds_threshold=1.2, max_odds_threshold=11.0, min_value_edge=0.05,
+        min_odds_threshold=1.2, max_odds_threshold=11.0, min_conditional_odds_threshold=1.5, min_value_edge=0.05,
         markets=["btts"], system_prompt_version="v1",
     )
     defaults.update(overrides)

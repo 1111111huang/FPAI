@@ -29,6 +29,7 @@ def _make_config(**overrides) -> AgentConfig:
         max_tool_calls=5,
         min_odds_threshold=1.2,
         max_odds_threshold=11.0,
+        min_conditional_odds_threshold=1.5,
         min_value_edge=0.05,
         markets=["btts"],
         system_prompt_version="v1",

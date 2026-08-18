@@ -9,6 +9,11 @@ max_tool_calls: 10              # per-match tool budget
 # Value detection thresholds (A29, 2026-07-11: widened from a 2.0-only floor)
 min_odds_threshold: 1.2         # never recommend direct_bet below this (decimal) / -500 American
 max_odds_threshold: 11.0        # never recommend direct_bet above this (decimal) / +1000 American
+# A66, 2026-08-17: a 'conditional' (wait-for-a-better-price) market below this is too short
+# a price for that strategy to be realistic -- downgraded to no_bet instead. Also the floor
+# that makes a degenerate/missing-data current_odds (e.g. 0.0) impossible to pass through as
+# a real price.
+min_conditional_odds_threshold: 1.5   # decimal / roughly -200 American
 min_value_edge: 0.05            # model prob must exceed implied prob by at least this
 
 # Markets the agent evaluates per match

@@ -26,6 +26,14 @@ def test_default_config_has_a29_widened_odds_bounds():
     assert cfg.max_odds_threshold == 11.0
 
 
+def test_default_config_has_a66_conditional_odds_floor():
+    """A66: a 'conditional' market below this (decimal, roughly -200
+    American) is too short a price for 'wait for it to improve' to be a
+    realistic strategy -- downgraded to no_bet instead."""
+    cfg = AgentConfig.default()
+    assert cfg.min_conditional_odds_threshold == 1.5
+
+
 def test_from_yaml_missing_file():
     with pytest.raises(FileNotFoundError):
         AgentConfig.from_yaml("/nonexistent/path/config.yaml")
@@ -46,6 +54,7 @@ def test_from_yaml_roundtrip(tmp_path):
         "max_tool_calls": 5,
         "min_odds_threshold": 1.2,
         "max_odds_threshold": 11.0,
+        "min_conditional_odds_threshold": 1.5,
         "min_value_edge": 0.05,
         "markets": ["btts", "result_3way"],
         "system_prompt_version": "v1",

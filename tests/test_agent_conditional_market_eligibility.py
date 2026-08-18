@@ -46,16 +46,23 @@ def _wrap_json(data: dict) -> str:
         ("btts", "yes"),
     ],
 )
-def test_eligible_market_stays_conditional_after_a29_downgrade(market, selection):
-    """A29's floor-downgrade case, on an eligible market -- unchanged
-    behavior, still conditional, still gets a real target_odds (A52)."""
-    m = {**_VALID_MARKET, "market": market, "selection": selection, "current_odds": 1.05, "ml_probability": 0.55}
+def test_eligible_market_stays_conditional_after_a29_ceiling_downgrade(market, selection):
+    """A29's *ceiling*-downgrade case (odds above max_odds_threshold), on an
+    eligible market -- unaffected by A66's floor (Section 27.3-adjacent;
+    see tests/test_agent_conditional_odds_floor.py), since 15.0 is nowhere
+    near it: still conditional, still gets a real target_odds (A52).
+    A29's *floor*-downgrade case (odds below min_odds_threshold) used to be
+    tested here too, but A66 made "stays conditional" structurally
+    impossible for it regardless of eligibility (min_odds_threshold=1.2 is
+    always below min_conditional_odds_threshold=1.5) -- that scenario now
+    lives in test_agent_conditional_odds_floor.py instead."""
+    m = {**_VALID_MARKET, "market": market, "selection": selection, "current_odds": 15.0, "ml_probability": 0.10}
     data = {**_VALID, "markets": [m]}
 
     rec = extract_recommendation(_wrap_json(data))
 
     assert rec["markets"][0]["recommendation_type"] == "conditional"
-    assert rec["markets"][0]["target_odds"] == pytest.approx(2.0)
+    assert rec["markets"][0]["target_odds"] == pytest.approx(20.0)
 
 
 @pytest.mark.parametrize(
