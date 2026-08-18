@@ -195,9 +195,13 @@ describe("MatchCard", () => {
     const value = screen.getByText("1.85");
     expect(value).toBeInTheDocument();
     expect(value).toHaveClass("text-warning");
-    // The current (insufficient) price is not shown once a real target
-    // takes over the box -- showing both would be confusing, not clearer.
+    // The "Odds" *label* still steps aside for "Wait ≥" (still one box, one
+    // headline number) -- but direct user feedback reversed the earlier
+    // call to hide the current price entirely: a bare target with no
+    // reference point doesn't say how far off the market actually is, so
+    // the live current_odds is now shown underneath as a small "now X.XX".
     expect(screen.queryByText("Odds")).not.toBeInTheDocument();
+    expect(screen.getByText("now 1.15")).toBeInTheDocument();
   });
 
   it("shows the plain Odds box (no Wait ≥) for a direct_bet market -- there's nothing to wait for", () => {
@@ -246,6 +250,56 @@ describe("MatchCard", () => {
     render(<MatchCard match={match} onUpdate={vi.fn()} />);
     expect(screen.queryByText("Wait ≥")).not.toBeInTheDocument();
     expect(screen.getByText("Odds")).toBeInTheDocument();
+  });
+});
+
+describe("MatchCard -- W153: the top badge describes the shown market, not match.overall", () => {
+  // Direct user report: a live card showed a "Direct Bet" badge over a
+  // market that was rendering as "WAIT ≥" (conditional) right below it.
+  // A65 (agent_user_stories.md) fixes this at the source for new
+  // generations, but the badge must be correct even against an
+  // already-stale/inconsistent cached row -- this is the frontend-side
+  // guarantee, independent of whatever match.overall happens to say.
+  it("shows Conditional, not the stale Direct Bet overall, when the single shown market is conditional", () => {
+    const match = baseMatch({
+      overall: "direct_bet", // stale -- as if cached before A65 shipped
+      markets: [
+        {
+          market: "home_corners", selection: "over_2.5", recommendationType: "conditional",
+          currentOdds: 1.13, minOdds: 0, mlProbability: 0.92, impliedProbability: 0.885, valueEdge: 0.035,
+          targetOdds: 1.2,
+        },
+      ],
+    });
+    render(<MatchCard match={match} onUpdate={vi.fn()} />);
+    expect(screen.getByText("Conditional")).toBeInTheDocument();
+    expect(screen.queryByText("Direct Bet")).not.toBeInTheDocument();
+  });
+
+  it("shows the higher-edge conditional market's badge, not a lower-edge direct_bet market's, when overall reports the latter", () => {
+    // The general multi-market case A65's backend cap alone doesn't fully
+    // cover: overall="direct_bet" is legitimately true of *a* market
+    // (result_3way), but bestMarket() picks the higher-edge one
+    // (home_corners, conditional) to actually display -- the badge must
+    // follow what's shown, not the match-wide aggregate.
+    const match = baseMatch({
+      overall: "direct_bet",
+      markets: [
+        {
+          market: "result_3way", selection: "home", recommendationType: "direct_bet",
+          currentOdds: 2.1, minOdds: 1.8, mlProbability: 0.55, impliedProbability: 0.48, valueEdge: 0.03,
+          targetOdds: null,
+        },
+        {
+          market: "home_corners", selection: "over_2.5", recommendationType: "conditional",
+          currentOdds: 1.13, minOdds: 0, mlProbability: 0.92, impliedProbability: 0.885, valueEdge: 0.15,
+          targetOdds: 1.2,
+        },
+      ],
+    });
+    render(<MatchCard match={match} onUpdate={vi.fn()} />);
+    expect(screen.getByText("Conditional")).toBeInTheDocument();
+    expect(screen.queryByText("Direct Bet")).not.toBeInTheDocument();
   });
 });
 

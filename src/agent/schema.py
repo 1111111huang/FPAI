@@ -240,6 +240,43 @@ def _compute_target_odds(data: dict, min_value_edge: float) -> dict:
     return data
 
 
+_RANK_TO_OVERALL = ["insufficient_data", "no_bet", "conditional", "direct_bet"]
+_OVERALL_RANK = {name: rank for rank, name in enumerate(_RANK_TO_OVERALL)}
+
+
+def _reconcile_overall_with_markets(data: dict) -> dict:
+    """A65: 'overall' is the LLM's own top-level self-report, written
+    before the code-enforced downgrade passes above ever run -- A29's
+    odds-bounds check (direct_bet -> conditional) and A54's eligible-
+    markets check (conditional -> no_bet) mutate individual markets'
+    recommendation_type but never touched this field. Confirmed live: a
+    Dashboard card showed a 'Direct Bet' badge (from 'overall') over a
+    market whose own recommendation_type had already been downgraded to
+    'conditional' by A29's odds-bounds check -- the badge and the market
+    it was describing told two different stories. Caps 'overall' at the
+    strongest recommendation_type any market still actually has, same
+    downgrade-only direction as every pass above -- never claims a
+    stronger state than the LLM itself originally reported, only a
+    weaker, more honest one when the markets no longer support what it
+    said. A no-op when `markets` is empty (nothing to reconcile against;
+    that shape is reserved for the graph's own no-forecast short-circuit,
+    which never reaches this function at all)."""
+    markets = data.get("markets") or []
+    if not markets:
+        return data
+    strongest = max(_OVERALL_RANK[m["recommendation_type"]] for m in markets)
+    if _OVERALL_RANK[data["overall"]] > strongest:
+        old_overall = data["overall"]
+        data["overall"] = _RANK_TO_OVERALL[strongest]
+        limitations = list(data.get("limitations") or [])
+        limitations.append(
+            f"Downgraded overall from {old_overall!r} to {data['overall']!r}: no market actually "
+            f"supports {old_overall!r} after the downgrade passes above."
+        )
+        data["limitations"] = limitations
+    return data
+
+
 def reported_teams(match_field: dict) -> tuple[str, str] | None:
     """The two team names the agent's own `match` field claims this
     recommendation is about, tolerating the `home`/`away` key spelling the
@@ -371,6 +408,7 @@ def extract_recommendation(
         data = _downgrade_direct_bet_outside_odds_bounds(data, min_odds_threshold, max_odds_threshold)
         data = _restrict_conditional_to_eligible_markets(data)
         data = _compute_target_odds(data, min_value_edge)
+        data = _reconcile_overall_with_markets(data)
         return data  # type: ignore[return-value]
 
     raise RecommendationParseError(text, f"no valid MatchRecommendation found ({last_error})")

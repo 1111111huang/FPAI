@@ -81,6 +81,10 @@ def test_malformed_markets_array_repaired():
         '"explanation": "test", "confidence": "medium", "limitations": [], "prediction_basis": "market_odds_only"}'
     )
     rec = extract_recommendation(text)
-    assert rec["overall"] == "conditional"
+    # A54 downgrades both (result_3way isn't conditional-eligible) to
+    # no_bet, and A65 reconciles 'overall' to match -- this test's own
+    # concern is json_repair recovering both markets, not this value, but
+    # it must reflect what the markets actually ended up as.
+    assert rec["overall"] == "no_bet"
     assert len(rec["markets"]) == 2
     assert rec["markets"][1]["selection"] == "away"

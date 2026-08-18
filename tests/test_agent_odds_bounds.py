@@ -48,6 +48,10 @@ def test_direct_bet_below_floor_downgraded_to_conditional():
 
     assert rec["markets"][0]["recommendation_type"] == "conditional"
     assert any("1.05" in note and "conditional" in note for note in rec["limitations"])
+    # A65: 'overall' (still "direct_bet" in _VALID's base dict) must be
+    # reconciled down too -- the one market it could have referred to no
+    # longer supports it.
+    assert rec["overall"] == "conditional"
 
 
 def test_direct_bet_above_ceiling_downgraded_to_conditional():
@@ -59,6 +63,7 @@ def test_direct_bet_above_ceiling_downgraded_to_conditional():
 
     assert rec["markets"][0]["recommendation_type"] == "conditional"
     assert any("15.0" in note and "conditional" in note for note in rec["limitations"])
+    assert rec["overall"] == "conditional"  # A65
 
 
 def test_direct_bet_at_exact_floor_is_accepted():
@@ -125,3 +130,4 @@ def test_direct_bet_with_null_odds_still_downgrades_to_no_bet_not_conditional():
     rec = extract_recommendation(_wrap_json(data))
 
     assert rec["markets"][0]["recommendation_type"] == "no_bet"
+    assert rec["overall"] == "no_bet"  # A65

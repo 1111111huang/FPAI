@@ -809,7 +809,15 @@ export function MatchCard({
           {match.hasRecommendation ? (
             <>
               <TrustSignal match={match} />
-              {!isCompleted && <StatusBadge status={match.overall} />}
+              {/* W153: the shown market's own recommendationType, not
+                  match.overall -- this badge sits right next to the one
+                  market this card actually displays (below), and must
+                  describe *that* market, not a separate match-wide
+                  aggregate that can legitimately differ from it (see
+                  summarySentence's comment for the concrete scenario).
+                  Falls back to match.overall only when bestMarket()
+                  found nothing to show at all. */}
+              {!isCompleted && <StatusBadge status={shown?.recommendationType ?? match.overall} />}
             </>
           ) : (
             <span className="rounded-md border border-border-strong bg-surface px-2 py-0.5 text-[11px] font-medium uppercase tracking-wide text-muted">
@@ -906,6 +914,15 @@ export function MatchCard({
                 <>
                   <div className="text-[10px] uppercase tracking-wide text-warning">Wait ≥</div>
                   <div className="font-mono text-base font-bold text-warning">{shown.targetOdds.toFixed(2)}</div>
+                  {/* Direct user feedback: the target alone doesn't say how
+                      far off the current price is -- pairing it with the
+                      live current_odds lets a reader gauge roughly how long
+                      this might take to clear, the same way ProbabilityRow's
+                      Model Probabilities table already shows both side by
+                      side (further down this file). */}
+                  {shown.currentOdds != null && (
+                    <div className="font-mono text-[10px] text-ink-secondary">now {shown.currentOdds.toFixed(2)}</div>
+                  )}
                 </>
               ) : (
                 <>
@@ -997,7 +1014,10 @@ export function MatchCard({
                 here instead, since "what kind of pick this was" is still
                 worth knowing once the match is over. */}
             {isCompleted && match.hasRecommendation && (
-              <span className="text-[10px] text-muted">Was a {STATUS_META[match.overall].label} pick</span>
+              // W153: same shown-market-not-match.overall reasoning as the
+              // top badge above -- "what kind of pick this was" must
+              // describe the specific market this card showed pre-match.
+              <span className="text-[10px] text-muted">Was a {STATUS_META[shown?.recommendationType ?? match.overall].label} pick</span>
             )}
             {shown?.currentOdds != null && <span className="text-[10px] text-muted">via The Odds API</span>}
             <CaretDown
@@ -1640,10 +1660,20 @@ function marketLabel(market: string): { label: string; subtitle: string | null }
  * on the recommendation (overall/confidence/bestMarket) -- no new backend
  * field, no LLM call. Sits ahead of the jargon-dense Model Probabilities
  * table so a reader with zero betting vocabulary has something to read
- * before the numbers. */
+ * before the numbers.
+ *
+ * W153: keys off the *shown* market's own recommendationType, not
+ * match.overall -- match.overall describes the match as a whole (used for
+ * the dashboard's aggregate "N with positive edge" count, where it's the
+ * right concept: "is ANYTHING on this match actionable"), but this
+ * sentence is specifically about the one market bestMarket() picked to
+ * display, and those two can genuinely differ (a higher-edge conditional
+ * market can outrank a lower-edge direct_bet one for "shown", even though
+ * match.overall reports the strongest type across every market). Falls
+ * back to match.overall only when there's no shown market at all. */
 function summarySentence(match: Match): string {
   const shown = bestMarket(match);
-  switch (match.overall) {
+  switch (shown?.recommendationType ?? match.overall) {
     case "direct_bet":
       return shown
         ? `Oddsey recommends betting on ${selectionLabel(match, shown.selection)} (${shown.market}), with ${match.confidence} confidence.`
@@ -1746,6 +1776,13 @@ export function MatchAnalysisPage({
     );
   }
 
+  // W153: the shown market's own recommendationType, not match.overall --
+  // this verdict sits right above the same Model Probabilities table that
+  // highlights this exact market, and must describe it, not a separate
+  // match-wide aggregate that can legitimately differ (see
+  // summarySentence's comment for the concrete scenario).
+  const shown = match ? bestMarket(match) : undefined;
+
   return (
     <AppShell active="matches">
       <Link
@@ -1772,10 +1809,10 @@ export function MatchAnalysisPage({
         {match && (
           <div className="text-right">
             <div
-              title={STATUS_META[match.overall].explain}
-              className={`text-2xl font-bold tracking-tight ${STATUS_META[match.overall].text}`}
+              title={STATUS_META[shown?.recommendationType ?? match.overall].explain}
+              className={`text-2xl font-bold tracking-tight ${STATUS_META[shown?.recommendationType ?? match.overall].text}`}
             >
-              {STATUS_META[match.overall].verdict}
+              {STATUS_META[shown?.recommendationType ?? match.overall].verdict}
             </div>
             <div title={CONFIDENCE_EXPLAIN} className="mt-1 text-xs text-ink-secondary">
               Confidence: <span className="font-medium text-ink">{match.confidence}</span>
