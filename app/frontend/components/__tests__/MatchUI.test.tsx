@@ -11,9 +11,11 @@ import { describe, expect, it, vi, beforeEach } from "vitest";
 
 import {
   fixtureToMatch,
+  LeagueBadge,
   LogBetButton,
   MatchAnalysisPage,
   MatchCard,
+  MatchExplorerPage,
   StatusBadge,
   TeamBadge,
   type Match,
@@ -41,10 +43,12 @@ vi.mock("@/lib/api", () => ({
 import {
   generateRecommendation,
   getCachedRecommendation,
+  getFixtures,
   getSandboxStatus,
   getStatus,
   logBetFromRecommendation,
 } from "@/lib/api";
+import { LEAGUE_COUNTRY } from "@/lib/dashboardMetrics";
 
 const ALL_OVERALL_STATES: { overall: Overall; label: string }[] = [
   { overall: "direct_bet", label: "Direct Bet" },
@@ -131,6 +135,20 @@ describe("TeamBadge -- La Liga club colors (W80)", () => {
     // documented cold-start case) must keep rendering via the existing
     // fallback, not crash or render blank.
     const { container } = render(<TeamBadge name="Santander" />);
+    const badge = container.querySelector("span");
+    expect(badge).toHaveAttribute("style");
+    expect(badge?.getAttribute("style")).not.toBe("");
+  });
+});
+
+describe("LeagueBadge", () => {
+  it("renders initials for a known league code", () => {
+    render(<LeagueBadge code="SP1" />);
+    expect(screen.getByText("LL")).toBeInTheDocument();
+  });
+
+  it("falls back to the generic hash-based badge for an unmapped league code, without crashing", () => {
+    const { container } = render(<LeagueBadge code="XYZ" />);
     const badge = container.querySelector("span");
     expect(badge).toHaveAttribute("style");
     expect(badge?.getAttribute("style")).not.toBe("");
@@ -320,6 +338,32 @@ describe("MatchCard -- W153: the top badge describes the shown market, not match
     render(<MatchCard match={match} onUpdate={vi.fn()} />);
     expect(screen.getByText("Conditional")).toBeInTheDocument();
     expect(screen.queryByText("Direct Bet")).not.toBeInTheDocument();
+  });
+});
+
+describe("MatchCard -- league identification bar (direct user request)", () => {
+  it("shows the league name and country for a known league", () => {
+    const match = baseMatch({ league: "SP1" });
+    render(<MatchCard match={match} onUpdate={vi.fn()} />);
+    expect(screen.getByText("La Liga")).toBeInTheDocument();
+    expect(screen.getByText("Spain")).toBeInTheDocument();
+  });
+
+  it("falls back to the raw league code, and omits the country row, for an unmapped league", () => {
+    // "XYZ1" (4 chars), not "XYZ" -- initials() truncates the badge's own
+    // text to 3 chars, which would collide with (and ambiguously match)
+    // a 3-char raw-code fallback in the label span right next to it.
+    const match = baseMatch({ league: "XYZ1" });
+    render(<MatchCard match={match} onUpdate={vi.fn()} />);
+    expect(screen.getByText("XYZ1")).toBeInTheDocument();
+    expect(screen.queryByText("Spain")).not.toBeInTheDocument();
+    expect(screen.queryByText("England")).not.toBeInTheDocument();
+  });
+
+  it.each(Object.keys(LEAGUE_COUNTRY))("renders the country for league=%s without crashing", (code) => {
+    const { unmount } = render(<MatchCard match={baseMatch({ league: code })} onUpdate={vi.fn()} />);
+    expect(screen.getByText(LEAGUE_COUNTRY[code])).toBeInTheDocument();
+    unmount();
   });
 });
 
@@ -915,5 +959,62 @@ describe("LogBetButton (bet-logging locked-except-stake behavior)", () => {
       match_id: "m1", recommendation, market: "result_3way", selection: "home", stake: 10,
     });
     expect(await screen.findByText("Logged")).toBeInTheDocument();
+  });
+});
+
+describe("MatchExplorerPage -- league section headers (direct user request)", () => {
+  beforeEach(() => {
+    vi.mocked(getFixtures).mockReset();
+    vi.mocked(getCachedRecommendation).mockReset().mockResolvedValue(null);
+    // AppShell (wraps MatchExplorerPage) calls these unconditionally on
+    // mount -- same harmless-default pattern as the MatchAnalysisPage
+    // describe block above.
+    vi.mocked(getStatus).mockReset().mockRejectedValue(new Error("no backend"));
+    vi.mocked(getSandboxStatus).mockReset().mockResolvedValue({ sandbox_mode: false, as_of: null });
+  });
+
+  it("groups matches under a section header per distinct league, and each card also carries its own league pill", async () => {
+    vi.mocked(getFixtures).mockResolvedValue([
+      {
+        match_id: "1", utc_date: "2026-08-22T15:00:00Z", status: "SCHEDULED",
+        home_team: "Arsenal", away_team: "Everton", home_goals: null, away_goals: null, competition: "E0",
+      },
+      {
+        match_id: "2", utc_date: "2026-08-23T15:00:00Z", status: "SCHEDULED",
+        home_team: "Atleti", away_team: "Malaga", home_goals: null, away_goals: null, competition: "SP1",
+      },
+    ]);
+
+    render(<MatchExplorerPage />);
+
+    // groupByLeague() already existed (dashboardMetrics.ts) but had never
+    // been wired into a page -- this is the actual wiring, not new grouping
+    // logic. `getByRole("heading", ...)` disambiguates the section h2 from
+    // the per-card pill's own span, which shows the identical league name.
+    expect(await screen.findByRole("heading", { name: "Premier League" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "La Liga" })).toBeInTheDocument();
+    // The per-card pill (MatchCard itself) additionally carries country --
+    // unique text that only ever appears there, not in the section header.
+    expect(screen.getByText("England")).toBeInTheDocument();
+    expect(screen.getByText("Spain")).toBeInTheDocument();
+  });
+
+  it("puts every fixture from the same league under one shared section header, not one per fixture", async () => {
+    vi.mocked(getFixtures).mockResolvedValue([
+      {
+        match_id: "1", utc_date: "2026-08-22T15:00:00Z", status: "SCHEDULED",
+        home_team: "Arsenal", away_team: "Everton", home_goals: null, away_goals: null, competition: "E0",
+      },
+      {
+        match_id: "2", utc_date: "2026-08-23T15:00:00Z", status: "SCHEDULED",
+        home_team: "Chelsea", away_team: "Brighton", home_goals: null, away_goals: null, competition: "E0",
+      },
+    ]);
+
+    render(<MatchExplorerPage />);
+
+    expect(await screen.findByText("Arsenal")).toBeInTheDocument();
+    expect(screen.getByText("Chelsea")).toBeInTheDocument();
+    expect(screen.getAllByRole("heading", { name: "Premier League" })).toHaveLength(1);
   });
 });

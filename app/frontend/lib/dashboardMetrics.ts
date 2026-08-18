@@ -70,6 +70,18 @@ export const LEAGUE_LABEL: Record<string, string> = {
   F1: "Ligue 1",
 };
 
+// Direct user request: identify which country/league a card belongs to.
+// Same 6-key league-code map LEAGUE_LABEL already is -- no new file/schema,
+// just a second field of the same lookup.
+export const LEAGUE_COUNTRY: Record<string, string> = {
+  E0: "England",
+  SWE: "Sweden",
+  SP1: "Spain",
+  I1: "Italy",
+  D1: "Germany",
+  F1: "France",
+};
+
 export type LeagueGroup = { league: string; label: string; matches: Match[] };
 
 /** Groups by league in first-seen order (not alphabetical) so the section

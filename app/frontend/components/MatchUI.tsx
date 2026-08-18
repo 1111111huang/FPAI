@@ -28,6 +28,7 @@ import {
   MagnifyingGlass,
   MinusCircle,
   Question,
+  Trophy,
   WarningCircle,
   X,
   XCircle,
@@ -42,7 +43,7 @@ import {
 } from "@/lib/api";
 import type { Fixture, MatchRecommendationOut } from "@/lib/types";
 import { useSandboxAsOf } from "@/lib/useSandboxAsOf";
-import { groupByDate, sortMatches, LEAGUE_LABEL, type MatchSort } from "@/lib/dashboardMetrics";
+import { groupByDate, groupByLeague, sortMatches, LEAGUE_COUNTRY, LEAGUE_LABEL, type MatchSort } from "@/lib/dashboardMetrics";
 import { AppShell } from "./AppShell";
 import { DashboardRail } from "./DashboardRail";
 
@@ -615,6 +616,44 @@ export function TeamBadge({ name, size = "sm" }: { name: string; size?: "sm" | "
   );
 }
 
+// Curated per-league colors, same rationale/precedent as TEAM_COLORS above
+// (W61/W80) -- a real club can share a fallback hash color with an unrelated
+// entity without anyone noticing, but a league only ever has 6 known values
+// (match_info.py's COMPETITION_ALLOWLIST) so there's no reason not to name
+// them all explicitly.
+const LEAGUE_COLORS: Record<string, { primary: string; secondary?: string }> = {
+  E0: { primary: "#3D195B" }, // Premier League purple
+  SP1: { primary: "#EE2737" }, // La Liga red
+  SWE: { primary: "#006AA7", secondary: "#FECC02" }, // Allsvenskan (Sweden flag)
+  I1: { primary: "#008C45" }, // Serie A green
+  D1: { primary: "#7D1128" }, // Bundesliga maroon
+  F1: { primary: "#00A19C" }, // Ligue 1 teal
+};
+function leagueColor(code: string) {
+  return LEAGUE_COLORS[code] ?? { primary: badgeColor(code) };
+}
+
+/** A league's own identifying badge -- `rounded-md` (not TeamBadge's
+ * `rounded-full`), so the two never read as the same kind of thing when
+ * both appear on a card (the league bar above, team circles below). */
+export function LeagueBadge({ code, size = "sm" }: { code: string; size?: "sm" | "lg" }) {
+  const { primary, secondary } = leagueColor(code);
+  const dims = size === "lg" ? "h-9 w-9 text-xs" : "h-6 w-6 text-[9px]";
+  return (
+    <span
+      className={`flex shrink-0 items-center justify-center rounded-md font-bold ${dims}`}
+      style={{
+        background: primary,
+        color: textColorFor(primary),
+        border: `1.5px solid ${secondary ?? "var(--border-hairline)"}`,
+      }}
+      aria-hidden="true"
+    >
+      {initials(LEAGUE_LABEL[code] ?? code)}
+    </span>
+  );
+}
+
 function TierTag({ tier, tintIndex }: { tier: Tier; tintIndex?: number }) {
   // tintIndex is only ever passed by DashboardPage's date-grouped cards
   // (matching that group's own DATE_GROUP_WASHES index) -- Match Explorer's
@@ -792,6 +831,23 @@ export function MatchCard({
     // gradient wash behind it, not blend into it.
     <div className="rounded-xl border border-border bg-page/80 transition-all duration-150 hover:-translate-y-px hover:border-border-strong">
       <button type="button" onClick={handleExpand} className="w-full p-4 text-left">
+        {/* Direct user request: identify which league/country a card belongs
+            to at a glance -- full-bleed via negative margins (undoing the
+            button's own p-4) rather than restructuring around the button, so
+            its background reaches the card's true edges. Renders on every
+            MatchCard regardless of which page grouping wraps it (Dashboard
+            groups by date, Match Explorer by league below) -- one change,
+            both pages, since both render this same component. */}
+        <div className="-mx-4 -mt-4 mb-3 flex items-center justify-between gap-2 rounded-t-xl border-b border-border bg-white/[0.02] px-4 py-2">
+          <div className="flex items-center gap-2">
+            <LeagueBadge code={match.league} />
+            <span className="text-sm font-semibold text-ink">{LEAGUE_LABEL[match.league] ?? match.league}</span>
+          </div>
+          {LEAGUE_COUNTRY[match.league] && (
+            <span className="text-xs text-ink-secondary">{LEAGUE_COUNTRY[match.league]}</span>
+          )}
+        </div>
+
         {/* Status badge(s) -- top-right corner, independent of the team/
             market body below rather than sharing a row with the tier tag
             (previous layout). Filled pills (STATUS_META.fill/TrustSignal's
@@ -1428,6 +1484,13 @@ export function MatchExplorerPage() {
   // loaded", not "edges among what's currently visible after filtering").
   const activeEdgesCount = (matches ?? []).filter(isActionable).length;
 
+  // Direct user request: league section headers, since this page has no
+  // grouping at all today -- mirrors DashboardPage's own date-group panel
+  // (same DATE_GROUP_WASHES/TIER_TAG_TINTS rotation, wrapping-panel shape),
+  // just grouped by league instead of date. groupByLeague() already existed
+  // (dashboardMetrics.ts) but had never been wired into a page.
+  const leagueGroups = useMemo(() => (rows ? groupByLeague(rows) : null), [rows]);
+
   return (
     <AppShell active="matches" activeEdgesCount={matches !== null ? activeEdgesCount : undefined}>
       <h1 className="text-xl font-semibold tracking-tight text-ink">Match Explorer</h1>
@@ -1455,10 +1518,30 @@ export function MatchExplorerPage() {
             {actionableOnly ? 'No actionable matches right now -- try turning off "Actionable only".' : "No matches found."}
           </p>
         )}
-        {!error && rows && rows.length > 0 && (
-          <div className="flex flex-col gap-2.5">
-            {rows.map((m) => (
-              <MatchCard key={m.id} match={m} onUpdate={updateMatch} asOf={asOf} sandboxMode={sandboxMode} />
+        {!error && rows && rows.length > 0 && leagueGroups && (
+          <div className="flex flex-col gap-6">
+            {leagueGroups.map((group, i) => (
+              <div
+                key={group.league}
+                className={`rounded-2xl border border-white/5 bg-gradient-to-br p-4 ${
+                  DATE_GROUP_WASHES[i % DATE_GROUP_WASHES.length]
+                }`}
+              >
+                <div className="mb-3 flex items-center justify-between gap-3">
+                  <div className="flex items-center gap-3">
+                    <h2 className="text-lg font-bold tracking-tight text-ink">{group.label}</h2>
+                    <span className="rounded-full border border-border-strong px-2 py-0.5 text-xs text-ink-secondary">
+                      {group.matches.length} match{group.matches.length === 1 ? "" : "es"}
+                    </span>
+                  </div>
+                  <Trophy size={16} className="text-muted" aria-hidden="true" />
+                </div>
+                <div className="flex flex-col gap-2.5">
+                  {group.matches.map((m) => (
+                    <MatchCard key={m.id} match={m} onUpdate={updateMatch} asOf={asOf} sandboxMode={sandboxMode} tintIndex={i} />
+                  ))}
+                </div>
+              </div>
             ))}
           </div>
         )}
