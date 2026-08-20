@@ -82,7 +82,7 @@ class _CapturingModel:
         raise NotImplementedError
 
 
-def _make_manager(tmp_path: Path, model: Any, target: str) -> ModelManager:
+def _make_manager(tmp_path: Path, model: Any, target: str, sample_weight_alpha: float = 1.0) -> ModelManager:
     db_path = tmp_path / "test.db"
     config_path = tmp_path / "config.yaml"
     config_path.write_text(
@@ -92,6 +92,7 @@ def _make_manager(tmp_path: Path, model: Any, target: str) -> ModelManager:
         model=model,
         config_path=str(config_path),
         target_config={"target": target},
+        sample_weight_alpha=sample_weight_alpha,
     )
 
 
@@ -136,6 +137,28 @@ def test_model_manager_train_passes_no_sample_weight_for_regression(tmp_path: Pa
     manager.train()
 
     assert model.received_sample_weight is None
+
+
+def test_model_manager_train_threads_sample_weight_alpha(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    model = _CapturingModel()
+    manager = _make_manager(tmp_path, model, "result_3way", sample_weight_alpha=0.5)
+
+    X = pd.DataFrame({"f1": range(20)})
+    y_train = pd.Series(["home"] * 15 + ["draw"] * 5)
+    empty_meta = pd.DataFrame(index=y_train.index)
+    monkeypatch.setattr(
+        manager,
+        "prepare_training_data",
+        lambda: (X, X, X, y_train, y_train, y_train, empty_meta),
+    )
+    monkeypatch.setattr(manager, "_load_selected_features", lambda: ["f1"])
+    monkeypatch.setattr(manager, "_log_selected_features", lambda *_: None)
+    monkeypatch.setattr(manager, "_log_feature_importance", lambda *_: None)
+
+    manager.train()
+
+    expected = _compute_sample_weight(y_train, "classification", alpha=0.5)
+    np.testing.assert_array_equal(model.received_sample_weight, expected)
 
 
 # ---------------------------------------------------------------------------

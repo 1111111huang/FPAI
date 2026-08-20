@@ -108,6 +108,7 @@ class ModelManager:
         feature_subset: list[str] | None = None,
         context: str = "E0",
         competition_id: str = "E0",
+        sample_weight_alpha: float = 1.0,
     ) -> None:
         """Initialize manager with a model instance and YAML config path."""
         self.model = model
@@ -136,6 +137,10 @@ class ModelManager:
         # US#62: optional override to train on a subset of selected_features
         self.feature_subset: list[str] | None = feature_subset
         self.competition_id: str = competition_id
+        # 2026-08-20: dampens compute_sample_weight('balanced', ...) -- see
+        # _compute_sample_weight's own docstring. 1.0 (default) preserves
+        # every existing caller's exact current behavior.
+        self.sample_weight_alpha: float = sample_weight_alpha
         mlflow.set_experiment("FPAI_Evolution")
 
     def _load_selected_features(self) -> list[str]:
@@ -611,7 +616,7 @@ class ModelManager:
         self._log_selected_features(selected_features)
         X_train, X_val, X_test, y_train, y_val, y_test, test_meta = self.prepare_training_data()
         eval_set = [(X_val, y_val)] if isinstance(self.model, (XGBoostModel, XGBoostRegressorModel, GoalStackerModel)) else None
-        sample_weight = _compute_sample_weight(y_train, self.target_definition.task_type)
+        sample_weight = _compute_sample_weight(y_train, self.target_definition.task_type, alpha=self.sample_weight_alpha)
         self.model.train(X_train, y_train, eval_set=eval_set, sample_weight=sample_weight)
         self._log_feature_importance(list(X_train.columns), self.model)
         if isinstance(self.model, (XGBoostModel, XGBoostRegressorModel)):
@@ -650,7 +655,7 @@ class ModelManager:
                 mlflow.set_tag("secondary_metrics", ",".join(self.target_definition.secondary_metrics))
                 mlflow.log_param("target_type", self.target_definition.name)
                 eval_set = [(X_val, y_val)] if isinstance(self.model, (XGBoostModel, XGBoostRegressorModel, GoalStackerModel)) else None
-                sample_weight = _compute_sample_weight(y_train, self.target_definition.task_type)
+                sample_weight = _compute_sample_weight(y_train, self.target_definition.task_type, alpha=self.sample_weight_alpha)
                 self.model.train(X_train, y_train, eval_set=eval_set, sample_weight=sample_weight)
                 self._log_feature_importance(list(X_train.columns), self.model)
                 if isinstance(self.model, (XGBoostModel, XGBoostRegressorModel)):
