@@ -754,6 +754,25 @@ def _default_model_for_target(target_name: str) -> str:
     return "lr"
 
 
+# 2026-08-20: per-league result_3way sample_weight dampening, chosen via
+# docs/superpowers/plans/results/2026-08-20-result-3way-alpha-choice.md.
+# D1/SP1 improved over the prior alpha=1.0 (fully-balanced) selection on
+# held-out log_loss; I1 stayed at 1.0 (no change, the gate simply passed at
+# the existing setting); F1 is deliberately absent -- its draw-recall
+# problem doesn't respond to this knob at all (see the same results file),
+# so it keeps the plain default (1.0) like every other target/league this
+# mechanism doesn't apply to. E0/SP1 are a real but only partial fix --
+# a live spot-check (docs/superpowers/plans/results/2026-08-20-result-3way-verification.md)
+# found the reported draw-overprediction symptom persists on individual
+# matchups despite the aggregate metric improvement; see
+# documents/user_stories.md US#173 for the open follow-up.
+RESULT_3WAY_ALPHA: dict[str, float] = {
+    "E0": 0.90,
+    "SP1": 0.85,
+    "D1": 0.7,
+}
+
+
 def _xgb_params_for_target(target_name: str, model_key: str) -> dict:
     definition = get_target_definition(target_name)
     if model_key not in {"xgb", "xgboost"}:
@@ -764,7 +783,7 @@ def _xgb_params_for_target(target_name: str, model_key: str) -> dict:
 
 
 def run_train_target(
-    target_name: str, model_name: str | None = None, context: str = "E0", sample_weight_alpha: float = 1.0,
+    target_name: str, model_name: str | None = None, context: str = "E0", sample_weight_alpha: float | None = None,
 ) -> Path:
     """Train one registry-backed forecast target model.
 
@@ -774,8 +793,16 @@ def run_train_target(
     Deliberately not exposed as a CLI flag: it's a one-time tuning constant
     for result_3way's draw-overprediction fix, called directly from Python
     (scripts/tune_result_3way_sample_weight.py and the promotion step), not
-    something meant to vary per ordinary train-target invocation. Every
-    existing CLI call site keeps the 1.0 default, unchanged behavior.
+    something meant to vary per ordinary train-target invocation.
+
+    Left as None (the default), this resolves via RESULT_3WAY_ALPHA below --
+    every existing/routine caller (train-forecast-suite, plain train-target)
+    keeps getting the correct per-league chosen alpha automatically, rather
+    than silently reverting a future retrain back to alpha=1.0 (found live,
+    2026-08-20 final review: an earlier version of this function defaulted
+    to the literal float 1.0, which would have undone this fix on the very
+    next routine `train-forecast-suite` run). Pass an explicit float to
+    override (e.g. the sweep script), same as before.
     """
     definition = get_target_definition(target_name)
     selected_model = (model_name or _default_model_for_target(definition.name)).strip().lower()
@@ -809,13 +836,17 @@ def run_train_target(
             "train-forecast-suite, which skips unavailable targets automatically."
         )
     feature_subset = resolve_feature_subset_for_tier(competition_def.tier)
+    if sample_weight_alpha is None:
+        effective_alpha = RESULT_3WAY_ALPHA.get(competition_id, 1.0) if definition.name == "result_3way" else 1.0
+    else:
+        effective_alpha = sample_weight_alpha
     model_manager = ModelManager(
         model=model,
         target_config={"target": definition.name},
         feature_subset=feature_subset,
         context=competition_id,
         competition_id=competition_id,
-        sample_weight_alpha=sample_weight_alpha,
+        sample_weight_alpha=effective_alpha,
     )
     model_path = model_manager.run_pipeline()
     LOGGER.info("Target model saved to %s", model_path)

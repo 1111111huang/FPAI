@@ -333,3 +333,63 @@ def test_run_train_target_passes_sample_weight_alpha_to_model_manager(monkeypatc
     main.run_train_target("result_3way", model_name="xgb", context="E0", sample_weight_alpha=0.5)
 
     assert captured.get("sample_weight_alpha") == 0.5
+
+
+def test_run_train_target_defaults_result_3way_alpha_from_table(monkeypatch: pytest.MonkeyPatch) -> None:
+    """2026-08-20 final-review fix: omitting sample_weight_alpha must NOT
+    silently revert a routine retrain to 1.0 for a league this fix chose a
+    dampened value for -- it must resolve via RESULT_3WAY_ALPHA instead."""
+    captured: dict = {}
+
+    class _FakeManager:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+        def run_pipeline(self):
+            return Path("fake_model.joblib")
+
+    monkeypatch.setattr(main, "ModelManager", _FakeManager)
+
+    main.run_train_target("result_3way", model_name="xgb", context="E0")
+
+    assert captured.get("sample_weight_alpha") == main.RESULT_3WAY_ALPHA["E0"] == 0.90
+
+
+def test_run_train_target_defaults_alpha_to_one_for_league_not_in_table(monkeypatch: pytest.MonkeyPatch) -> None:
+    """F1 (and any other league not in RESULT_3WAY_ALPHA) must keep the
+    plain unweighted-relative-to-this-fix default of 1.0 -- F1 was
+    deliberately left untouched, it has a different, unrelated problem."""
+    captured: dict = {}
+
+    class _FakeManager:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+        def run_pipeline(self):
+            return Path("fake_model.joblib")
+
+    monkeypatch.setattr(main, "ModelManager", _FakeManager)
+
+    main.run_train_target("result_3way", model_name="xgb", context="F1")
+
+    assert captured.get("sample_weight_alpha") == 1.0
+
+
+def test_run_train_target_defaults_alpha_to_one_for_non_result_3way_target(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The alpha table only applies to result_3way -- every other target
+    (btts, home_win, goals, corners, ...) must be completely unaffected,
+    regardless of context/league."""
+    captured: dict = {}
+
+    class _FakeManager:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+        def run_pipeline(self):
+            return Path("fake_model.joblib")
+
+    monkeypatch.setattr(main, "ModelManager", _FakeManager)
+
+    main.run_train_target("btts", model_name="xgb", context="E0")
+
+    assert captured.get("sample_weight_alpha") == 1.0
