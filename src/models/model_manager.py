@@ -30,7 +30,7 @@ from src.utils.logger import get_logger
 LOGGER = get_logger(__name__)
 
 
-def _compute_sample_weight(y: pd.Series, task_type: str) -> np.ndarray | None:
+def _compute_sample_weight(y: pd.Series, task_type: str, alpha: float = 1.0) -> np.ndarray | None:
     """Inverse-class-frequency sample weights for classification targets.
 
     Found live: result_3way's XGBoost classifier had 2.1% recall on 'draw'
@@ -41,12 +41,23 @@ def _compute_sample_weight(y: pd.Series, task_type: str) -> np.ndarray | None:
     hand-rolled formula -- already a project dependency, standard technique.
     Regression targets have no notion of class balance; returns None so
     every model's .train(sample_weight=None) call is a byte-identical no-op
-    for them."""
+    for them.
+
+    alpha dampens the balanced weighting: weights ** alpha. alpha=1.0 (default)
+    is full balancing (today's behavior, byte-identical to the pre-alpha
+    function). alpha=0.0 collapses every weight to 1.0 -- the pre-08-14
+    unweighted behavior. Added 2026-08-20 after full 'balanced' weighting
+    (alpha=1.0) was found to overcorrect result_3way's draw-blindness bug
+    into a draw-overprediction bug on E0/SP1 -- see
+    docs/superpowers/specs/2026-08-20-result-3way-sample-weight-retune-design.md."""
     if task_type == "regression":
         return None
     from sklearn.utils.class_weight import compute_sample_weight
 
-    return compute_sample_weight("balanced", y)
+    weights = compute_sample_weight("balanced", y)
+    if alpha != 1.0:
+        weights = weights ** alpha
+    return weights
 
 
 def _classes_for_calibration(model: FPAIBaseModel) -> np.ndarray | None:

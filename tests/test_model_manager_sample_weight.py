@@ -188,3 +188,34 @@ def test_xgboost_model_sample_weight_improves_minority_class_recall() -> None:
     assert unweighted_minority_recall < 0.5
     assert weighted_minority_recall > unweighted_minority_recall
     assert weighted_minority_recall >= 0.8
+
+
+def test_compute_sample_weight_alpha_defaults_to_one_unchanged() -> None:
+    y = pd.Series(["home"] * 80 + ["away"] * 15 + ["draw"] * 5)
+    default_call = _compute_sample_weight(y, "classification")
+    explicit_alpha_one = _compute_sample_weight(y, "classification", alpha=1.0)
+    np.testing.assert_array_equal(default_call, explicit_alpha_one)
+
+
+def test_compute_sample_weight_alpha_zero_gives_uniform_weights() -> None:
+    y = pd.Series(["home"] * 80 + ["away"] * 15 + ["draw"] * 5)
+    weights = _compute_sample_weight(y, "classification", alpha=0.0)
+    np.testing.assert_allclose(weights, np.ones(len(y)))
+
+
+def test_compute_sample_weight_alpha_half_is_between_uniform_and_balanced() -> None:
+    y = pd.Series(["home"] * 80 + ["away"] * 15 + ["draw"] * 5)
+    balanced = _compute_sample_weight(y, "classification", alpha=1.0)
+    dampened = _compute_sample_weight(y, "classification", alpha=0.5)
+    uniform = _compute_sample_weight(y, "classification", alpha=0.0)
+
+    draw_mask = (y == "draw").to_numpy()
+    # Draw's weight is above 1.0 (uniform) since it's the minority class --
+    # dampened must sit strictly between the uniform (1.0) and fully-balanced
+    # draw weight, not equal to either.
+    assert uniform[draw_mask][0] < dampened[draw_mask][0] < balanced[draw_mask][0]
+
+
+def test_compute_sample_weight_alpha_still_none_for_regression() -> None:
+    y = pd.Series([1.0, 2.0, 3.0])
+    assert _compute_sample_weight(y, "regression", alpha=0.5) is None
