@@ -56,7 +56,11 @@ describe("fixture-fetch race guard (W42)", () => {
   });
 
   it("Dashboard: a stale real-clock response landing after the correct sandbox response does not overwrite it", async () => {
-    const today = new Date().toISOString().slice(0, 10);
+    // Local date, not .toISOString() -- outside sandbox mode, asOf is a
+    // real browser instant and "today" means the viewer's own local
+    // calendar day (dayDiff's own established convention, MatchUI.tsx).
+    const now = new Date();
+    const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
     const sandboxDate = "2025-03-05";
 
     const staleFixtures = [fixture("real-clock-fixture")];
@@ -97,7 +101,11 @@ describe("fixture-fetch race guard (W42)", () => {
   });
 
   it("Match Explorer: a stale real-clock response landing after the correct sandbox response does not overwrite it", async () => {
-    const today = new Date().toISOString().slice(0, 10);
+    // Local date, not .toISOString() -- outside sandbox mode, asOf is a
+    // real browser instant and "today" means the viewer's own local
+    // calendar day (dayDiff's own established convention, MatchUI.tsx).
+    const now = new Date();
+    const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
     const sandboxDate = "2025-03-05";
     const sandboxWindowEnd = "2025-06-03"; // 2025-03-05 + 90 days
 

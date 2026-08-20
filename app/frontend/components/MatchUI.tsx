@@ -122,11 +122,18 @@ export function fixtureToMatch(fixture: Fixture, asOf?: Date, sandboxMode = fals
   const isFutureInSandbox = sandboxMode && asOf !== undefined && dayDiff(fixture.utc_date, asOf, sandboxMode) > 0;
   // A match currently being played is neither SCHEDULED/TIMED (kickoff
   // already happened) nor FINISHED (not over yet) -- IN_PLAY/PAUSED (e.g.
-  // half-time) both mean "live". Same isFutureInSandbox guard as FINISHED
-  // below: sandbox mode's own historical data source never actually
-  // produces a real IN_PLAY fixture, but if it ever did, it must not leak
-  // ahead of the sandbox's own pretend clock either.
-  const isLive = (fixture.status === "IN_PLAY" || fixture.status === "PAUSED") && !isFutureInSandbox;
+  // half-time) both mean "live". "LIVE" too (direct user report, confirmed
+  // live: football-data.org's own real API returns this exact literal for
+  // a currently-in-progress match, per BUG-050's football_data_client.py
+  // comment -- BUG-050 added it to the backend's own status *query* so the
+  // fixture is fetched at all, but never to this frontend check, so a
+  // fetched status="LIVE" fixture fell through to "upcoming" here: no
+  // LiveBadge, no live score, the card looked like the match hadn't
+  // started). Same isFutureInSandbox guard as FINISHED below: sandbox
+  // mode's own historical data source never actually produces a real
+  // in-progress fixture, but if it ever did, it must not leak ahead of the
+  // sandbox's own pretend clock either.
+  const isLive = (fixture.status === "IN_PLAY" || fixture.status === "PAUSED" || fixture.status === "LIVE") && !isFutureInSandbox;
   const isReallyCompleted = fixture.status === "FINISHED" && !isFutureInSandbox;
   const status: Match["status"] = isReallyCompleted ? "completed" : isLive ? "live" : "upcoming";
   return {
@@ -267,6 +274,36 @@ function formatDay(iso: string, asOf: Date, sandboxMode: boolean): string {
   if (diffDays === -1) return "yesterday";
   if (diffDays > 1) return `in ${diffDays} days`;
   return `${-diffDays} days ago`;
+}
+
+// Direct user report: today's own already-finished match (Atleti v Malaga,
+// kicked off 19:00 UTC) was completely missing from the Dashboard -- not
+// filtered out by dayDiff (which already gets this branch right), but never
+// even fetched. DashboardPage/MatchExplorerPage computed their getFixtures()
+// window bounds via `asOf.toISOString().slice(0, 10)` -- always UTC --
+// which silently advances "today" to tomorrow for several hours every
+// evening in any UTC-negative-offset timezone (US zones included), sending
+// a date_from that's one day too late and excluding the real local-today's
+// fixtures/results before dayDiff/filtering ever runs on them. The exact
+// getter-mismatch class this file already fixed three times elsewhere
+// (dayDiff's own sandbox-vs-real branch, W30/W48/W71) -- missed here because
+// this call site was never touched by any of those stories. Same asOf/
+// sandboxMode contract as dayDiff: local getters (no .toISOString() round
+// trip, which mis-renders for positive-offset zones too) outside sandbox
+// mode, UTC getters (the pre-existing, already-correct behavior) inside it.
+function dateString(d: Date, sandboxMode: boolean): string {
+  if (sandboxMode) return d.toISOString().slice(0, 10);
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
+function addDays(d: Date, days: number, sandboxMode: boolean): Date {
+  const copy = new Date(d);
+  if (sandboxMode) copy.setUTCDate(copy.getUTCDate() + days);
+  else copy.setDate(copy.getDate() + days);
+  return copy;
 }
 
 // ---------------------------------------------------------------------------
@@ -1172,10 +1209,9 @@ export function DashboardPage() {
         // --precompute actually covers what the Dashboard shows -- if this
         // window, sort, or cap ever changes, update that Python copy too,
         // there is no shared implementation.
-        const today = asOf.toISOString().slice(0, 10);
-        const to = new Date(asOf);
-        to.setUTCDate(to.getUTCDate() + 90);
-        const fixtures = await getFixtures(today, to.toISOString().slice(0, 10));
+        const today = dateString(asOf, sandboxMode);
+        const to = addDays(asOf, 90, sandboxMode);
+        const fixtures = await getFixtures(today, dateString(to, sandboxMode));
         if (cancelled) return;
         const nearest = fixtures
           .map((f) => fixtureToMatch(f, asOf, sandboxMode))
@@ -1419,17 +1455,22 @@ export function MatchExplorerPage() {
       setError(null);
       setMatches(null);
       try {
-        const from = new Date(asOf);
-        const to = new Date(asOf);
         // Widened from 30 to 90 days after live verification showed the
         // off-season gap between fixture windows can exceed 30 days (e.g.
         // 2026-07-11 -> next real fixture 2026-08-21, 41 days out).
-        // UTC methods, not local getDate/setDate: from/to are read back via
-        // toISOString() (always UTC) below, and asOf is UTC midnight (W30) --
-        // mixing local date arithmetic with a UTC value shifts the window by
-        // a day in negative-UTC-offset timezones.
-        to.setUTCDate(to.getUTCDate() + 90);
-        const fixtures = await getFixtures(from.toISOString().slice(0, 10), to.toISOString().slice(0, 10));
+        // dateString()/addDays() branch on sandboxMode the same way dayDiff
+        // already does -- UTC getters when asOf really is UTC midnight
+        // (sandbox mode, W30), local getters when it's a real browser
+        // instant (live mode). The previous version here always used UTC
+        // (.toISOString()/setUTCDate), asserting "asOf is UTC midnight" as
+        // if that held unconditionally -- true only in sandbox mode, and
+        // wrong for roughly a third of every day for a live non-UTC viewer,
+        // which silently excluded today's own fixtures/results from the
+        // window (confirmed live: a same-day finished match went missing
+        // entirely).
+        const from = dateString(asOf, sandboxMode);
+        const to = dateString(addDays(asOf, 90, sandboxMode), sandboxMode);
+        const fixtures = await getFixtures(from, to);
         if (cancelled) return;
         const initialMatches = fixtures.map((f) => fixtureToMatch(f, asOf, sandboxMode));
         // W53: unlike Dashboard's two call sites (each capped at 10 --

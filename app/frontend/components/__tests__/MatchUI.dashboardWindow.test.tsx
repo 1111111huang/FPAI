@@ -41,7 +41,11 @@ describe("Dashboard always shows the next 10 matches (date-grouped, not today-on
   });
 
   it("queries a single 90-day-forward window (not a same-day-only query)", async () => {
-    const today = new Date().toISOString().slice(0, 10);
+    // Local date, not .toISOString() -- outside sandbox mode, asOf is a
+    // real browser instant and "today" means the viewer's own local
+    // calendar day (dayDiff's own established convention, MatchUI.tsx).
+    const now = new Date();
+    const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
     vi.mocked(getFixtures).mockResolvedValue([]);
 
     render(<DashboardPage />);

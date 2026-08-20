@@ -622,6 +622,17 @@ describe("fixtureToMatch -- live status (a match currently being played)", () =>
     expect(fixtureToMatch(fixture).status).toBe("live");
   });
 
+  it("maps a LIVE fixture to status 'live' too", () => {
+    // Direct user report: football-data.org's real API returns this exact
+    // literal for a currently-in-progress match (BUG-050's own finding,
+    // football_data_client.py) -- the backend's status query already
+    // fetched it, but this check never recognized it, so it fell through
+    // to "upcoming" here: no LiveBadge, no live score.
+    const fixture = baseFixture({ status: "LIVE", home_goals: 1, away_goals: 0 });
+    expect(fixtureToMatch(fixture).status).toBe("live");
+    expect(fixtureToMatch(fixture).result).toEqual({ home: 1, away: 0 });
+  });
+
   it("populates result with the current in-progress score for a live fixture, not just a completed one", () => {
     const fixture = baseFixture({ status: "IN_PLAY", home_goals: 1, away_goals: 0 });
     expect(fixtureToMatch(fixture).result).toEqual({ home: 1, away: 0 });
