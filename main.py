@@ -763,8 +763,20 @@ def _xgb_params_for_target(target_name: str, model_key: str) -> dict:
     return {"objective": "binary:logistic", "eval_metric": "logloss"}
 
 
-def run_train_target(target_name: str, model_name: str | None = None, context: str = "E0") -> Path:
-    """Train one registry-backed forecast target model."""
+def run_train_target(
+    target_name: str, model_name: str | None = None, context: str = "E0", sample_weight_alpha: float = 1.0,
+) -> Path:
+    """Train one registry-backed forecast target model.
+
+    sample_weight_alpha (2026-08-20): dampens _compute_sample_weight's
+    class-balancing strength for this run -- see
+    docs/superpowers/specs/2026-08-20-result-3way-sample-weight-retune-design.md.
+    Deliberately not exposed as a CLI flag: it's a one-time tuning constant
+    for result_3way's draw-overprediction fix, called directly from Python
+    (scripts/tune_result_3way_sample_weight.py and the promotion step), not
+    something meant to vary per ordinary train-target invocation. Every
+    existing CLI call site keeps the 1.0 default, unchanged behavior.
+    """
     definition = get_target_definition(target_name)
     selected_model = (model_name or _default_model_for_target(definition.name)).strip().lower()
     if selected_model not in MODEL_REGISTRY:
@@ -803,6 +815,7 @@ def run_train_target(target_name: str, model_name: str | None = None, context: s
         feature_subset=feature_subset,
         context=competition_id,
         competition_id=competition_id,
+        sample_weight_alpha=sample_weight_alpha,
     )
     model_path = model_manager.run_pipeline()
     LOGGER.info("Target model saved to %s", model_path)

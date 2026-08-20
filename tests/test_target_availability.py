@@ -313,3 +313,23 @@ def test_run_train_target_raises_clear_error_for_unavailable_target(
 
     with pytest.raises(ValueError, match="not available for competition 'SWE'"):
         main.run_train_target("home_corners", context="SWE")
+
+
+def test_run_train_target_passes_sample_weight_alpha_to_model_manager(monkeypatch: pytest.MonkeyPatch) -> None:
+    """sample_weight_alpha is a plain Python kwarg, not a CLI flag (2026-08-20
+    design decision) -- this only needs to reach ModelManager's constructor,
+    not argparse."""
+    captured: dict = {}
+
+    class _FakeManager:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+        def run_pipeline(self):
+            return Path("fake_model.joblib")
+
+    monkeypatch.setattr(main, "ModelManager", _FakeManager)
+
+    main.run_train_target("result_3way", model_name="xgb", context="E0", sample_weight_alpha=0.5)
+
+    assert captured.get("sample_weight_alpha") == 0.5
