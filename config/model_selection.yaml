@@ -930,12 +930,12 @@ contexts:
       - CTX_AWAY_WIN_STREAK
       - CTX_AWAY_CS_STREAK
       metric_name: test_log_loss
-      metric_value: 1.007708
-      mlflow_run_id: 50298674fdc640dba0d7920e151d5f1a
-      model_path: models/result_3way_d1_xgboost_v1_20260816.joblib
+      metric_value: 1.003614
+      mlflow_run_id: 18fcf5a3d2e747879e3912c5573425c4
+      model_path: models/result_3way_d1_xgboost_v1_20260820.joblib
       model_type: xgboost
-      previous_model_path: models/result_3way_d1_lr_v1_20260815.joblib
-      selected_at: '2026-08-16T14:34:40Z'
+      previous_model_path: models/result_3way_d1_xgboost_v1_20260816.joblib
+      selected_at: '2026-08-20T16:14:32Z'
     total_corners:
       feature_subset:
       - OFF_HOME_FTHG_R3
@@ -1436,12 +1436,12 @@ contexts:
       selected_at: '2026-07-06T07:07:16Z'
     result_3way:
       metric_name: test_log_loss
-      metric_value: 1.0139
-      mlflow_run_id: manual-sample-weight-experiment-20260814
-      model_path: models/result_3way_xgboost_v1_20260814.joblib
+      metric_value: 1.01389
+      mlflow_run_id: 2beb8592b82d4d3a823e3ba44e0870ab
+      model_path: models/result_3way_xgboost_v1_20260820.joblib
       model_type: xgboost
-      previous_model_path: models/result_3way_xgboost_v1_20260627.joblib
-      selected_at: '2026-08-14T14:57:48Z'
+      previous_model_path: models/result_3way_xgboost_v1_20260814.joblib
+      selected_at: '2026-08-20T16:14:32Z'
     total_corners:
       metric_name: test_mae
       metric_value: 2.651686
@@ -3639,11 +3639,11 @@ contexts:
       - CTX_AWAY_CS_STREAK
       metric_name: test_log_loss
       metric_value: 0.984215
-      mlflow_run_id: b9c101db51d04e1d9565a2fa7a0c4149
-      model_path: models/result_3way_i1_xgboost_v1_20260816.joblib
+      mlflow_run_id: b6c99b6bb5fd4fd991b3a8f4596b1604
+      model_path: models/result_3way_i1_xgboost_v1_20260820.joblib
       model_type: xgboost
-      previous_model_path: models/result_3way_i1_lr_v1_20260815.joblib
-      selected_at: '2026-08-16T14:04:40Z'
+      previous_model_path: models/result_3way_i1_xgboost_v1_20260816.joblib
+      selected_at: '2026-08-20T16:14:32Z'
     total_corners:
       feature_subset:
       - OFF_HOME_FTHG_R3
@@ -4885,12 +4885,12 @@ contexts:
       - CTX_AWAY_WIN_STREAK
       - CTX_AWAY_CS_STREAK
       metric_name: test_log_loss
-      metric_value: 0.9837
-      mlflow_run_id: manual-sample-weight-experiment-20260814
-      model_path: models/result_3way_sp1_xgboost_v1_20260814.joblib
+      metric_value: 0.976076
+      mlflow_run_id: 909d45a38160430084a9e9ef08ec1937
+      model_path: models/result_3way_sp1_xgboost_v1_20260820.joblib
       model_type: xgboost
-      previous_model_path: models/result_3way_sp1_xgboost_v1_20260807.joblib
-      selected_at: '2026-08-14T14:57:42Z'
+      previous_model_path: models/result_3way_sp1_xgboost_v1_20260814.joblib
+      selected_at: '2026-08-20T16:13:48Z'
     total_corners:
       feature_subset:
       - OFF_HOME_FTHG_R3
