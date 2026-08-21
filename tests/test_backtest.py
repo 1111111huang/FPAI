@@ -11,6 +11,7 @@ from src.agent.backtest import (
     LEAKAGE_GUARD_INSTRUCTIONS,
     BacktestHarness,
     BacktestRecord,
+    _build_match_info,
     load_outcome,
     match_in_test_split,
     process_match_row,
@@ -52,6 +53,45 @@ def test_load_outcome_draw_and_no_btts():
     assert outcome["result"] == "draw"
     assert outcome["btts"] == "no"
     assert outcome["total_goals_side"] == "under_2.5"
+
+
+# ---------------------------------------------------------------------------
+# _build_match_info: 2026-08-21 -- total_goals_odds threading
+# ---------------------------------------------------------------------------
+
+def test_build_match_info_includes_3way_odds_unchanged():
+    info = _build_match_info(_row())
+    assert info["odds"] == {"home": 1.9, "draw": 3.5, "away": 4.0}
+
+
+def test_build_match_info_includes_total_goals_odds_when_both_present():
+    row = _row(over25_odds=1.85, under25_odds=1.95)
+    info = _build_match_info(row)
+    assert info["total_goals_odds"] == {"over_2.5": 1.85, "under_2.5": 1.95}
+
+
+def test_build_match_info_omits_total_goals_odds_when_absent_from_row():
+    # Base _row() fixture carries no over25_odds/under25_odds at all --
+    # real raw_matches rows predating US#124-style column backfills, or a
+    # league whose source never populated them, must degrade the same way
+    # missing 3-way odds already does (key simply absent, not a placeholder).
+    info = _build_match_info(_row())
+    assert "total_goals_odds" not in info
+
+
+def test_build_match_info_omits_total_goals_odds_when_only_one_side_present():
+    row = _row(over25_odds=1.85, under25_odds=None)
+    info = _build_match_info(row)
+    assert "total_goals_odds" not in info
+
+
+def test_build_match_info_omits_total_goals_odds_when_nan():
+    # Real DataFrame rows represent a missing numeric value as NaN, not None
+    # -- NaN is truthy in Python (bool(float('nan')) is True), so a naive
+    # `if row.get(...):` check would silently pass it through.
+    row = _row(over25_odds=1.85, under25_odds=float("nan"))
+    info = _build_match_info(row)
+    assert "total_goals_odds" not in info
 
 
 def test_load_outcome_away_win():

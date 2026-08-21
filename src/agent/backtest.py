@@ -81,6 +81,15 @@ def _date_str(row: pd.Series) -> str:
 
 
 def _build_match_info(row: pd.Series) -> dict[str, Any]:
+    """2026-08-21: also threads total_goals_odds (over25_odds/under25_odds)
+    through when both are present. raw_matches has genuinely real data for
+    this market (football-data.co.uk's Avg>2.5/Avg<2.5 columns) that sat
+    unused here -- every agent-train/agent-backtest run reported "no current
+    odds" for total_goals even when a real price existed in the same row.
+    btts and corners have no equivalent real column anywhere in this system
+    (live or historical) -- see documents/agent_techspec.md's "Secondary-market
+    odds coverage" section for the full investigation and what to check
+    before wiring up a new market here."""
     match_info: dict[str, Any] = {
         "home_team": row["home_team"],
         "away_team": row["away_team"],
@@ -89,6 +98,14 @@ def _build_match_info(row: pd.Series) -> dict[str, Any]:
     }
     if row.get("odds_h") and row.get("odds_d") and row.get("odds_a"):
         match_info["odds"] = {"home": row["odds_h"], "draw": row["odds_d"], "away": row["odds_a"]}
+    over25 = row.get("over25_odds")
+    under25 = row.get("under25_odds")
+    # pd.notna() rather than plain truthiness: a real DataFrame row's missing
+    # numeric value is NaN, not None, and NaN is truthy in Python (bool(nan)
+    # is True) -- a bare `if over25 and under25:` would silently pass a NaN
+    # through into total_goals_odds instead of correctly treating it as absent.
+    if pd.notna(over25) and pd.notna(under25):
+        match_info["total_goals_odds"] = {"over_2.5": over25, "under_2.5": under25}
     return match_info
 
 

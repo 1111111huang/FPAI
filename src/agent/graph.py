@@ -429,6 +429,18 @@ def run_agent(
     odds = match_info.get("odds")
     if odds:
         prompt += f". Bookmaker odds: home={odds['home']}, draw={odds['draw']}, away={odds['away']}."
+    # 2026-08-21: total_goals is the only secondary market (beyond result_3way)
+    # with a real odds source anywhere in this system (raw_matches's own
+    # over25_odds/under25_odds, threaded in by backtest.py's _build_match_info
+    # for replay; live callers may set this key the same way). btts/corners
+    # have no equivalent real column, live or historical -- see
+    # documents/agent_techspec.md's "Secondary-market odds coverage" section.
+    total_goals_odds = match_info.get("total_goals_odds")
+    if total_goals_odds:
+        prompt += (
+            f" Bookmaker odds for total goals (over/under 2.5): "
+            f"over_2.5={total_goals_odds['over_2.5']}, under_2.5={total_goals_odds['under_2.5']}."
+        )
 
     initial_state: AgentState = {
         "messages": [
