@@ -10,7 +10,7 @@ description: Use when running a cost-aware agent-train experiment for a league �
 `agent-train` already writes results to DuckDB (`agent_telemetry`, `agent_lessons`), but
 neither table alone gives a reviewable per-match record of what happened in one run, and
 there's no built-in "what did we learn" summary. This skill wraps a single `agent-train`
-invocation with three things on top:
+invocation with four things on top:
 
 1. **Cost-aware defaults** — `--sample 100` (stratified by actual result, seeded, see
    `src/agent/backtest.py::_stratified_sample`) instead of a full season, `--batch-size 1`
@@ -23,6 +23,19 @@ invocation with three things on top:
    and group them by recurring theme, most-frequent first. This is a reading/judgment step,
    not a deterministic script — do it directly, don't try to automate it with keyword
    matching.
+4. **A stop-on-repeated-data-issues gate** (A73) — if the popular-lessons read turns up one
+   recurring *data/plumbing* complaint across a clear majority of matches, that's a bug
+   signal, not just a lesson to report. See Step 7 below; don't skip it.
+
+**Why this gate exists (don't skip it):** A73 ran a full 100-sample SP1 experiment where
+96/99 lessons complained about missing `total_goals` odds — a full day after that exact
+gap was supposedly fixed (A69). The fix (`_build_match_info()`) was correct in isolation;
+the real bug was one level up (`BacktestHarness.load_matches()`'s SQL never selected the
+columns), and nobody noticed until the *user* asked "why is this still happening?" after
+seeing the summary. A whole run's worth of real API spend happened on a silently-degraded
+corpus before anyone stopped to look. The lesson: don't wait to be asked — a repeated
+data-issue theme is itself the signal to stop and investigate, not something to note and
+move past.
 
 **This is real, wanted data, not a throwaway calibration test.** Unlike the ad hoc
 prompt-wording tests earlier in this project's history, do NOT delete or clean up the
@@ -108,9 +121,23 @@ that's a genuine, useful comparison point, not duplication to clean up.
    forecast flagged", "conflicting recent-form signals") and report the top themes ranked
    by frequency, with 1-2 representative quotes each — as prose in the response, not just
    left in the JSON file.
-7. **Report back**: the report_summary stats (matches_evaluated, bets_placed, roi,
-   hit_rate), the log file path, the popular-lessons summary, and actual spend (sample ×
-   measured per-match rate) against budget.
+7. **Stop-and-investigate gate.** Look at the top theme from Step 6. Is it a *data/plumbing*
+   complaint (missing/null odds, stale or absent search evidence, a schema/field gap,
+   duplicate or contradictory recorded data) rather than a model-judgment theme (declined on
+   uncertainty, conflicting news, a borderline edge)? If so, and it appears in a clear
+   majority of matches (rule of thumb: >50%; treat >30% as worth a look too), **stop before
+   running any further samples, postures, or leagues on this same config**:
+   - Check whether this exact theme is already a *documented, permanent* limitation (e.g.
+     A69's btts/corners gap) — if so, it's expected, not a new bug; note it and proceed.
+   - If it's not already documented as permanent, treat it as a probable regression or gap
+     (per `systematic-debugging`: find where the data should be flowing from, confirm
+     whether the raw data actually exists, trace why it isn't reaching the recommendation)
+     before spending any more real API budget on more samples under the same broken input.
+   - Report the finding to the user proactively, in the same response as the run's results
+     — don't wait to be asked "why is this happening" (see Overview).
+8. **Report back**: the report_summary stats (matches_evaluated, bets_placed, roi,
+   hit_rate), the log file path, the popular-lessons summary, the Step 7 gate check result,
+   and actual spend (sample × measured per-match rate) against budget.
 
 ## Gotchas
 
@@ -122,3 +149,7 @@ that's a genuine, useful comparison point, not duplication to clean up.
 - Don't clean up this run's rows afterward (see Overview) — that discipline exists for
   *calibration test* runs specifically, not for real experiment/lesson-generation runs like
   this one.
+- A popular-lessons theme that's a *data* complaint (not a model-judgment one) and shows up
+  in most matches is a stop signal, not a reporting footnote (Step 7) — this is exactly what
+  A73 got wrong the first time: a whole run's spend happened before the pattern got
+  investigated, and only because the user asked. Surface it unprompted next time.
