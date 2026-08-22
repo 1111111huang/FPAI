@@ -84,7 +84,30 @@ def research_node(state: dict) -> dict:
     return {"research_evidence": evidence}
 
 
-def _format_evidence_message(forecast_payload: dict, research_evidence: dict | None) -> str:
+def _strip_forecast_uncertainty(payload: dict) -> dict:
+    """Remove each market's entropy/uncertainty diagnostic before the forecast
+    is serialized into evidence. The raw field (e.g. {"method": "entropy",
+    "level": "high"}) is real, deterministic data -- not something the LLM
+    invents -- but it hands the model a ready-made "high uncertainty" reason
+    to decline a qualifying value_edge regardless of prompt wording (see the
+    aggressive posture's calibration notes in agent_user_stories.md). Used
+    only by postures that want the model to act on value_edge alone."""
+    stripped = dict(payload)
+    forecast = stripped.get("forecast")
+    if isinstance(forecast, dict):
+        stripped["forecast"] = {
+            target: (
+                {k: v for k, v in target_payload.items() if k != "uncertainty"}
+                if isinstance(target_payload, dict) else target_payload
+            )
+            for target, target_payload in forecast.items()
+        }
+    return stripped
+
+
+def _format_evidence_message(
+    forecast_payload: dict, research_evidence: dict | None, suppress_uncertainty: bool = False,
+) -> str:
     """The message injected into the LLM's context once the deterministic
     pipeline finishes, replacing the old tool-call results the LLM used to
     see. Explicitly tells the LLM the forecast/competition tools are gone.
@@ -101,12 +124,15 @@ def _format_evidence_message(forecast_payload: dict, research_evidence: dict | N
     JSON keys are restated immediately after the evidence -- closest to the
     model's own next turn, where a schema reminder has the most influence."""
     evidence = research_evidence or {}
+    payload_to_serialize = (
+        _strip_forecast_uncertainty(forecast_payload) if suppress_uncertainty else forecast_payload
+    )
     lines = [
         "Reference data for this match below (not a document to write about, and "
         "not an example of your output format -- use it only to inform the JSON "
         "recommendation described further below).",
         "",
-        "FORECAST_PAYLOAD: " + json.dumps(forecast_payload, default=str),
+        "FORECAST_PAYLOAD: " + json.dumps(payload_to_serialize, default=str),
         "AVAILABILITY_SEARCH_RESULT: " + (evidence.get("availability") or "No results."),
         "FORM_SEARCH_RESULT: " + (evidence.get("form_context") or "No results."),
     ]
@@ -129,14 +155,18 @@ def _format_evidence_message(forecast_payload: dict, research_evidence: dict | N
     return "\n".join(lines)
 
 
-def forecast_node(state: dict) -> dict:
+def forecast_node(state: dict, suppress_uncertainty: bool = False) -> dict:
     """A31: the ML forecast is now a required deterministic step, not
     something the LLM chooses (or fails) to call. Odds are sourced in
     priority order: caller-supplied -> research_node's odds-verification
     parse -> none. There is no third "fallback odds" tier -- ForecastService
     cannot run without real odds (see the plan's technical-correction note),
     so "none" short-circuits to an error payload that routes straight to
-    insufficient_data, skipping the LLM entirely."""
+    insufficient_data, skipping the LLM entirely.
+
+    suppress_uncertainty: posture-driven (AgentConfig.suppress_forecast_uncertainty)
+    -- strips the entropy/uncertainty diagnostic from evidence before the LLM
+    sees it. See _strip_forecast_uncertainty."""
     match_info = state["match_info"]
     odds = match_info.get("odds")
     if not odds:
@@ -173,7 +203,9 @@ def forecast_node(state: dict) -> dict:
     if "error" in payload:
         return {"forecast_payload": payload}
 
-    evidence_message = _format_evidence_message(payload, state.get("research_evidence"))
+    evidence_message = _format_evidence_message(
+        payload, state.get("research_evidence"), suppress_uncertainty=suppress_uncertainty,
+    )
     return {"forecast_payload": payload, "messages": [HumanMessage(content=evidence_message)]}
 
 

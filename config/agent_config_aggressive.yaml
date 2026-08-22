@@ -36,3 +36,10 @@ markets:
 # 2026-08-21: risk-posture variant -- aggressive posture uses its own system prompt.
 # See docs/superpowers/specs/2026-08-21-agent-risk-posture-design.md
 system_prompt_version: "v1_aggressive"     # maps to config/prompts/agent_v1_aggressive.txt
+
+# 2026-08-22: root-caused DeepSeek citing the forecast's entropy/uncertainty diagnostic
+# as a reason to decline even qualifying value_edges, regardless of prompt wording --
+# it's a real field in FORECAST_PAYLOAD (src/forecast/uncertainty.py), not something the
+# prompt taught it to say. Aggressive posture strips it from the evidence entirely so
+# there's no uncertainty label left to latch onto. See agent_user_stories.md.
+suppress_forecast_uncertainty: true

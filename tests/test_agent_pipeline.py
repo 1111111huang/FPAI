@@ -296,6 +296,31 @@ def test_format_evidence_message_has_no_markdown_headers():
     assert "###" not in message
 
 
+def test_format_evidence_message_suppress_uncertainty_strips_entropy_field():
+    """2026-08-22: uncertainty/entropy is real forecast data, not something the
+    LLM invents from prompt wording -- it gave DeepSeek a ready-made "high
+    uncertainty" reason to decline qualifying value_edges regardless of how
+    the prompt was worded (see agent_user_stories.md aggressive-posture
+    calibration notes). suppress_uncertainty=True (aggressive posture) must
+    remove it from the evidence entirely; default behavior is unchanged."""
+    payload = {
+        "forecast": {
+            "result_3way": {
+                "probabilities": {"home": 0.5},
+                "uncertainty": {"method": "entropy", "score": 0.99, "level": "high"},
+            },
+        },
+    }
+
+    default_message = _format_evidence_message(payload, None)
+    assert '"level": "high"' in default_message or '"level":"high"' in default_message
+
+    suppressed_message = _format_evidence_message(payload, None, suppress_uncertainty=True)
+    assert "entropy" not in suppressed_message
+    assert "uncertainty" not in suppressed_message
+    assert "probabilities" in suppressed_message  # rest of the forecast is untouched
+
+
 def test_lessons_node_returns_empty_dict_when_not_live_mode():
     from unittest.mock import patch
     from src.agent.pipeline import lessons_node

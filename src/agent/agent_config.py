@@ -30,6 +30,13 @@ class AgentConfig:
     min_value_edge: float
     markets: list[str]
     system_prompt_version: str
+    # Posture-driven (aggressive): strips the forecast's entropy/uncertainty
+    # diagnostic from the evidence shown to the LLM. Root cause: this field is
+    # real data (see src/forecast/uncertainty.py), not prompt-invented, and
+    # gives the model a ready-made "high uncertainty" reason to decline a
+    # qualifying value_edge no matter how the prompt is worded. Optional --
+    # defaults to False (unchanged) for any config that doesn't set it.
+    suppress_forecast_uncertainty: bool = False
 
     @classmethod
     def from_yaml(cls, path: str | Path) -> "AgentConfig":
@@ -41,7 +48,9 @@ class AgentConfig:
         missing = _REQUIRED - data.keys()
         if missing:
             raise ValueError(f"Missing required fields in agent config: {sorted(missing)}")
-        return cls(**{k: data[k] for k in _REQUIRED})
+        kwargs = {k: data[k] for k in _REQUIRED}
+        kwargs["suppress_forecast_uncertainty"] = data.get("suppress_forecast_uncertainty", False)
+        return cls(**kwargs)
 
     @classmethod
     def default(cls) -> "AgentConfig":
