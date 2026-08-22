@@ -1,0 +1,38 @@
+# Betting agent configuration — all tunable knobs.
+# Swap model/provider to change the LLM tier without touching code.
+
+model: "deepseek-chat"           # DeepSeek (2026-08-06: switched from local llama3.1:8b/ollama -- BUG-023/024/027 (documents/bugs.md) found the local model hallucinating a completely different match/odds/markets on ~50% of a real sandbox batch; a live 20-fixture DeepSeek re-run on the same real data (same odds, same evidence) produced 0 hallucinations and correct canonical market naming throughout. See documents/agent_user_stories.md A46 and config/agent_config_deepseek.yaml (A42, now redundant with this default but left in place as an explicit pin).
+provider: "deepseek"            # "ollama" | "anthropic" | "groq" | "gemini" | "deepseek"
+# A68, 2026-08-18: 0.1 -> 0.0 for live serving too, not just backtesting -- this repo's own
+# findings (agent_techspec.md Sec 18.6, A47) already showed 0.1 causes measurable run-to-run
+# variance in the final recommendation itself, not just tool-call arguments; confirmed live by
+# an incoherent direct_bet/negative-edge output this same investigation also fixed at the
+# validation layer (A67). Doesn't fix model-capability gaps (BUG-023/024/027, fixed by the
+# provider swap above) -- only reduces sampling noise on top of whatever the model would
+# otherwise produce for identical inputs.
+temperature: 0.0                # lower = more deterministic/stable
+max_tool_calls: 10              # per-match tool budget
+
+# Value detection thresholds (A29, 2026-07-11: widened from a 2.0-only floor)
+min_odds_threshold: 1.2         # never recommend direct_bet below this (decimal) / -500 American
+max_odds_threshold: 11.0        # never recommend direct_bet above this (decimal) / +1000 American
+# A66, 2026-08-17: a 'conditional' (wait-for-a-better-price) market below this is too short
+# a price for that strategy to be realistic -- downgraded to no_bet instead. Also the floor
+# that makes a degenerate/missing-data current_odds (e.g. 0.0) impossible to pass through as
+# a real price.
+min_conditional_odds_threshold: 1.5   # decimal / roughly -200 American
+# 2026-08-21: risk-posture variant -- aggressive posture requires lower min_value_edge.
+# See docs/superpowers/specs/2026-08-21-agent-risk-posture-design.md
+min_value_edge: 0.04            # model prob must exceed implied prob by at least this
+
+# Markets the agent evaluates per match
+markets:
+  - result_3way
+  - btts
+  - total_goals
+  - home_corners
+  - away_corners
+
+# 2026-08-21: risk-posture variant -- aggressive posture uses its own system prompt.
+# See docs/superpowers/specs/2026-08-21-agent-risk-posture-design.md
+system_prompt_version: "v1_aggressive"     # maps to config/prompts/agent_v1_aggressive.txt
