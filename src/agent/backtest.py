@@ -89,7 +89,18 @@ def _build_match_info(row: pd.Series) -> dict[str, Any]:
     btts and corners have no equivalent real column anywhere in this system
     (live or historical) -- see documents/agent_techspec.md's "Secondary-market
     odds coverage" section for the full investigation and what to check
-    before wiring up a new market here."""
+    before wiring up a new market here.
+
+    A73, 2026-08-22: this function was correct in isolation from day one, but
+    BacktestHarness.load_matches()'s own SQL SELECT never actually fetched
+    over25_odds/under25_odds from raw_matches -- so `row` never carried them,
+    row.get() always returned None, and total_goals_odds silently never got
+    set on any real agent-train/agent-backtest run despite every unit test
+    here passing (they all construct `row` directly, bypassing the real
+    query entirely). Found via a real 99-match SP1 sample: 96/99 lessons
+    still complained about missing total_goals odds despite this fix
+    supposedly landing three days earlier. Fixed by adding both columns to
+    load_matches()'s SELECT -- see agent_user_stories.md A73."""
     match_info: dict[str, Any] = {
         "home_team": row["home_team"],
         "away_team": row["away_team"],
@@ -227,7 +238,7 @@ class BacktestHarness:
             raise ValueError(f"split must be one of {_VALID_SPLITS}, got {split!r}")
         query = (
             "SELECT match_id, league, date, home_team, away_team, "
-            "odds_h, odds_d, odds_a, fthg, ftag, hc, ac "
+            "odds_h, odds_d, odds_a, over25_odds, under25_odds, fthg, ftag, hc, ac "
             "FROM raw_matches WHERE date >= ? AND date <= ? AND fthg IS NOT NULL AND ftag IS NOT NULL"
         )
         params: list[Any] = [from_date, to_date]

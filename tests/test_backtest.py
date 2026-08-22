@@ -247,6 +247,27 @@ def test_backtest_harness_load_matches_filters_by_date_and_league():
     assert "league" in sql_used.lower()
 
 
+def test_backtest_harness_load_matches_selects_total_goals_odds_columns():
+    """A73: _build_match_info() has threaded over25_odds/under25_odds through
+    since A69, but that fix was invisible in production -- load_matches()'s
+    own SQL never selected either column, so `row.get("over25_odds")` always
+    returned None on every real agent-train/agent-backtest run, regardless of
+    what _build_match_info's own (correctly passing) unit tests showed. This
+    asserts the real query path, not just the downstream function, so a
+    future regression here fails loudly instead of silently reproducing A73."""
+    harness = BacktestHarness(config=_make_config())
+    fake_df = pd.DataFrame([_row(match_id="a", date=pd.Timestamp("2025-01-15"))])
+    mock_conn = MagicMock()
+    mock_conn.execute.return_value.fetchdf.return_value = fake_df
+    with patch.object(harness.db, "connection") as mock_connection:
+        mock_connection.return_value.__enter__.return_value = mock_conn
+        harness.load_matches("2025-01-01", "2025-03-01", league="E0")
+
+    sql_used = mock_conn.execute.call_args[0][0]
+    assert "over25_odds" in sql_used
+    assert "under25_odds" in sql_used
+
+
 def test_backtest_harness_stratified_sample_balances_result_categories():
     harness = BacktestHarness(config=_make_config())
     rows = (
