@@ -86,11 +86,16 @@ def test_aggressive_posture_config_loads_with_own_prompt_and_edge():
 
 
 def test_all_three_posture_configs_keep_every_other_field_identical_to_default():
+    """2026-08-22 (A71): model/provider are now a deliberate posture difference
+    -- DeepSeek showed a strong decline bias not reproduced by gemini/anthropic
+    on identical inputs (agent_user_stories.md), so the three posture configs
+    moved to gemini-3.6-flash while the shared default config is untouched.
+    Everything else (temperature, thresholds, markets) still must match."""
     default = AgentConfig.default()
     for posture in ("conservative", "balanced", "aggressive"):
         cfg = AgentConfig.from_yaml(f"config/agent_config_{posture}.yaml")
-        assert cfg.model == default.model
-        assert cfg.provider == default.provider
+        assert cfg.provider == "gemini"
+        assert cfg.model == "gemini-3.6-flash"
         assert cfg.temperature == default.temperature
         assert cfg.max_tool_calls == default.max_tool_calls
         assert cfg.min_odds_threshold == default.min_odds_threshold

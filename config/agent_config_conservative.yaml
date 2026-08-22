@@ -1,8 +1,8 @@
 # Betting agent configuration — all tunable knobs.
 # Swap model/provider to change the LLM tier without touching code.
 
-model: "deepseek-chat"           # DeepSeek (2026-08-06: switched from local llama3.1:8b/ollama -- BUG-023/024/027 (documents/bugs.md) found the local model hallucinating a completely different match/odds/markets on ~50% of a real sandbox batch; a live 20-fixture DeepSeek re-run on the same real data (same odds, same evidence) produced 0 hallucinations and correct canonical market naming throughout. See documents/agent_user_stories.md A46 and config/agent_config_deepseek.yaml (A42, now redundant with this default but left in place as an explicit pin).
-provider: "deepseek"            # "ollama" | "anthropic" | "groq" | "gemini" | "deepseek"
+model: "gemini-3.6-flash"   # 2026-08-22: switched from deepseek-chat -- see A71 in agent_user_stories.md, DeepSeek shows a strong decline bias not reproduced by gemini/anthropic on identical inputs
+provider: "gemini"          # "ollama" | "anthropic" | "groq" | "gemini" | "deepseek"
 # A68, 2026-08-18: 0.1 -> 0.0 for live serving too, not just backtesting -- this repo's own
 # findings (agent_techspec.md Sec 18.6, A47) already showed 0.1 causes measurable run-to-run
 # variance in the final recommendation itself, not just tool-call arguments; confirmed live by
