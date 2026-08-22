@@ -1,8 +1,8 @@
 # Betting agent configuration — all tunable knobs.
 # Swap model/provider to change the LLM tier without touching code.
 
-model: "deepseek-chat"           # DeepSeek (2026-08-06: switched from local llama3.1:8b/ollama -- BUG-023/024/027 (documents/bugs.md) found the local model hallucinating a completely different match/odds/markets on ~50% of a real sandbox batch; a live 20-fixture DeepSeek re-run on the same real data (same odds, same evidence) produced 0 hallucinations and correct canonical market naming throughout. See documents/agent_user_stories.md A46 and config/agent_config_deepseek.yaml (A42, now redundant with this default but left in place as an explicit pin).
-provider: "deepseek"            # "ollama" | "anthropic" | "groq" | "gemini" | "deepseek"
+model: "gemini-3.6-flash"        # A72, 2026-08-22: switched from deepseek-chat -- DeepSeek shows a strong, model-level bias toward declining even qualifying value_edge bets (0/10 on a controlled SP1 window across 6 prompt variants, incl. after A70 stripped its stated "entropy" justification -- it just substitutes a new, sometimes factually false, reason instead). Claude Haiku 4.5, Gemini 3.6 Flash, and Groq all accept the same edges on identical inputs (agent_user_stories.md A71). Gemini chosen over Claude on cost (~$0.75/$3.75 per M tokens vs Claude's much higher rate) once billing was enabled on the API key (the free tier's 20 req/day cap made this unusable beforehand). DeepSeek's own hallucination fix (BUG-023/024/027, A46) is unaffected by this swap -- unrelated failure mode, already fixed on the provider-selection axis this comment used to describe.
+provider: "gemini"              # "ollama" | "anthropic" | "groq" | "gemini" | "deepseek"
 # A68, 2026-08-18: 0.1 -> 0.0 for live serving too, not just backtesting -- this repo's own
 # findings (agent_techspec.md Sec 18.6, A47) already showed 0.1 causes measurable run-to-run
 # variance in the final recommendation itself, not just tool-call arguments; confirmed live by
