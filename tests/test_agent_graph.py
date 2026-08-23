@@ -6,7 +6,7 @@ from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from langchain_core.tools import tool
 
 from src.agent.agent_config import AgentConfig
-from src.agent.graph import AgentState, _extract_text, build_graph, route_after_forecast
+from src.agent.graph import AgentState, _build_llm, _extract_text, build_graph, route_after_forecast
 
 
 @tool
@@ -36,6 +36,25 @@ def _make_config(**overrides) -> AgentConfig:
     )
     defaults.update(overrides)
     return AgentConfig(**defaults)
+
+
+def test_build_llm_sets_timeout_on_openai_compatible_providers(monkeypatch):
+    """A75: ChatOpenAI's own default `timeout` is None (no timeout at all) --
+    found live when a real backtest hit a bad connection on this exact code
+    path and hung for over 9 hours on a single match, since
+    _invoke_with_retry only retries on a raised exception and a request that
+    never returns never raises one. Covers both OpenAI-compatible branches
+    (deepseek, qwen) -- same underlying gap, same fix."""
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "test-key")
+    monkeypatch.setenv("DASHSCOPE_API_KEY", "test-key")
+
+    deepseek_llm = _build_llm(_make_config(model="deepseek-chat", provider="deepseek"))
+    assert deepseek_llm.request_timeout is not None
+    assert deepseek_llm.request_timeout > 0
+
+    qwen_llm = _build_llm(_make_config(model="qwen3.8-max", provider="qwen"))
+    assert qwen_llm.request_timeout is not None
+    assert qwen_llm.request_timeout > 0
 
 
 def test_graph_compiles():

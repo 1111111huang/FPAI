@@ -22,6 +22,13 @@ from src.utils.logger import get_logger
 
 _PROMPTS_DIR = Path(__file__).parent.parent.parent / "config" / "prompts"
 _LOG = get_logger(__name__)
+# A75: request timeout for the OpenAI-compatible provider branches (deepseek,
+# qwen) -- ChatOpenAI's own default is no timeout at all (see _build_llm).
+# 90s comfortably covers real observed per-match latency (single digits to
+# ~40s on a slow response) with margin, while still failing a genuinely
+# hung/blackholed connection fast enough for _invoke_with_retry's 3 attempts
+# to matter instead of each one blocking indefinitely.
+_OPENAI_COMPATIBLE_TIMEOUT_SECONDS = 90
 
 
 class AgentState(TypedDict):
@@ -53,8 +60,15 @@ def _build_llm(config: AgentConfig) -> Any:
         # pointed at DeepSeek's base_url is the standard integration path.
         # Reads DEEPSEEK_API_KEY the same way every other provider here reads
         # its own *_API_KEY (langchain's own env-var convention, not custom).
+        # A75: `timeout=` (ChatOpenAI's real field is `request_timeout`, this
+        # is its alias) -- ChatOpenAI's own default is None (no timeout at
+        # all). Found live: a real backtest run hit a bad connection to a
+        # provider on this same OpenAI-compatible code path and hung for
+        # over 9 hours on a single match -- _invoke_with_retry (above) only
+        # retries on a raised exception, so a request that never returns
+        # (rather than erroring) blocks forever, retries or not.
         from langchain_openai import ChatOpenAI
-        return ChatOpenAI(model=config.model, temperature=config.temperature, base_url="https://api.deepseek.com", api_key=os.environ.get("DEEPSEEK_API_KEY"))
+        return ChatOpenAI(model=config.model, temperature=config.temperature, base_url="https://api.deepseek.com", api_key=os.environ.get("DEEPSEEK_API_KEY"), timeout=_OPENAI_COMPATIBLE_TIMEOUT_SECONDS)
     if config.provider == "qwen":
         # A74: QwenCloud (docs.qwencloud.com) also exposes an OpenAI-compatible
         # endpoint via Alibaba Cloud's DashScope backend -- same ChatOpenAI +
@@ -64,8 +78,10 @@ def _build_llm(config: AgentConfig) -> Any:
         # DASHSCOPE_API_KEY (QwenCloud's own key, prefixed sk-ws-, not a
         # generic Alibaba Cloud Model Studio workspace-scoped key -- that's a
         # different product with a different, account-specific base_url).
+        # A75: same missing-timeout gap as the deepseek branch -- see its
+        # comment above. This is the branch that actually hit it live.
         from langchain_openai import ChatOpenAI
-        return ChatOpenAI(model=config.model, temperature=config.temperature, base_url="https://dashscope-intl.aliyuncs.com/compatible-mode/v1", api_key=os.environ.get("DASHSCOPE_API_KEY"))
+        return ChatOpenAI(model=config.model, temperature=config.temperature, base_url="https://dashscope-intl.aliyuncs.com/compatible-mode/v1", api_key=os.environ.get("DASHSCOPE_API_KEY"), timeout=_OPENAI_COMPATIBLE_TIMEOUT_SECONDS)
     raise ValueError(f"Unknown provider: {config.provider!r}")
 
 
