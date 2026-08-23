@@ -55,6 +55,17 @@ def _build_llm(config: AgentConfig) -> Any:
         # its own *_API_KEY (langchain's own env-var convention, not custom).
         from langchain_openai import ChatOpenAI
         return ChatOpenAI(model=config.model, temperature=config.temperature, base_url="https://api.deepseek.com", api_key=os.environ.get("DEEPSEEK_API_KEY"))
+    if config.provider == "qwen":
+        # A74: QwenCloud (docs.qwencloud.com) also exposes an OpenAI-compatible
+        # endpoint via Alibaba Cloud's DashScope backend -- same ChatOpenAI +
+        # custom base_url pattern as the deepseek branch above, no dedicated
+        # langchain-qwen package needed. Confirmed live: qwen3.8-max and
+        # qwen3.5-flash both respond correctly at this endpoint with a
+        # DASHSCOPE_API_KEY (QwenCloud's own key, prefixed sk-ws-, not a
+        # generic Alibaba Cloud Model Studio workspace-scoped key -- that's a
+        # different product with a different, account-specific base_url).
+        from langchain_openai import ChatOpenAI
+        return ChatOpenAI(model=config.model, temperature=config.temperature, base_url="https://dashscope-intl.aliyuncs.com/compatible-mode/v1", api_key=os.environ.get("DASHSCOPE_API_KEY"))
     raise ValueError(f"Unknown provider: {config.provider!r}")
 
 
