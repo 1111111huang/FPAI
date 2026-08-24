@@ -145,11 +145,12 @@ def test_fixtures_endpoint_returns_normalized_matches():
 
 
 def test_fixtures_endpoint_passes_date_range_through():
-    with patch("app.backend.main.get_fixtures_client") as mock_get_client:
-        mock_client = mock_get_client.return_value
-        mock_client.get_fixtures.return_value = []
-        with TestClient(app) as client:
-            client.get("/api/fixtures", params={"date_from": "2026-08-21", "date_to": "2026-08-28"})
+    with patch("app.backend.main._current_real_date", return_value=date(2026, 7, 19)):
+        with patch("app.backend.main.get_fixtures_client") as mock_get_client:
+            mock_client = mock_get_client.return_value
+            mock_client.get_fixtures.return_value = []
+            with TestClient(app) as client:
+                client.get("/api/fixtures", params={"date_from": "2026-08-21", "date_to": "2026-08-28"})
 
     mock_client.get_fixtures.assert_called_once_with(date_from="2026-08-21", date_to="2026-08-28")
 
@@ -291,12 +292,13 @@ def test_fixtures_endpoint_deduplicates_identical_calls_within_ttl():
     """Two requests for the identical date range within the TTL window must
     only hit the underlying client once -- this is exactly the repeated-
     navigation pattern that was exhausting the shared rate-limit budget."""
-    with patch("app.backend.main.get_fixtures_client") as mock_get_client:
-        mock_client = mock_get_client.return_value
-        mock_client.get_fixtures.return_value = []
-        with TestClient(app) as client:
-            first = client.get("/api/fixtures", params={"date_from": "2026-08-21", "date_to": "2026-08-28"})
-            second = client.get("/api/fixtures", params={"date_from": "2026-08-21", "date_to": "2026-08-28"})
+    with patch("app.backend.main._current_real_date", return_value=date(2026, 7, 19)):
+        with patch("app.backend.main.get_fixtures_client") as mock_get_client:
+            mock_client = mock_get_client.return_value
+            mock_client.get_fixtures.return_value = []
+            with TestClient(app) as client:
+                first = client.get("/api/fixtures", params={"date_from": "2026-08-21", "date_to": "2026-08-28"})
+                second = client.get("/api/fixtures", params={"date_from": "2026-08-21", "date_to": "2026-08-28"})
 
     assert first.status_code == 200
     assert second.status_code == 200
@@ -615,12 +617,13 @@ _LA_LIGA_RESULT = NormalizedMatch(
 
 def test_fixtures_endpoint_merges_la_liga_fixtures_alongside_e0_and_swe(la_liga_client_mock):
     la_liga_client_mock.get_fixtures.return_value = [_LA_LIGA_FIXTURE]
-    with patch("app.backend.main.get_fixtures_client") as mock_get_client:
-        mock_get_client.return_value.get_fixtures.return_value = [_REAL_FIXTURE]
-        with TestClient(app) as client:
-            response = client.get(
-                "/api/fixtures", params={"date_from": "2026-08-21", "date_to": "2026-08-28"}
-            )
+    with patch("app.backend.main._current_real_date", return_value=date(2026, 7, 19)):
+        with patch("app.backend.main.get_fixtures_client") as mock_get_client:
+            mock_get_client.return_value.get_fixtures.return_value = [_REAL_FIXTURE]
+            with TestClient(app) as client:
+                response = client.get(
+                    "/api/fixtures", params={"date_from": "2026-08-21", "date_to": "2026-08-28"}
+                )
 
     assert response.status_code == 200
     body = response.json()
@@ -709,12 +712,13 @@ def test_fixtures_endpoint_merges_new_league_fixtures_alongside_existing(
     league, fd_code, new_leagues_client_mock
 ):
     new_leagues_client_mock[league].get_fixtures.return_value = [_NEW_LEAGUE_FIXTURE]
-    with patch("app.backend.main.get_fixtures_client") as mock_get_client:
-        mock_get_client.return_value.get_fixtures.return_value = [_REAL_FIXTURE]
-        with TestClient(app) as client:
-            response = client.get(
-                "/api/fixtures", params={"date_from": "2026-08-21", "date_to": "2026-08-28"}
-            )
+    with patch("app.backend.main._current_real_date", return_value=date(2026, 7, 19)):
+        with patch("app.backend.main.get_fixtures_client") as mock_get_client:
+            mock_get_client.return_value.get_fixtures.return_value = [_REAL_FIXTURE]
+            with TestClient(app) as client:
+                response = client.get(
+                    "/api/fixtures", params={"date_from": "2026-08-21", "date_to": "2026-08-28"}
+                )
 
     assert response.status_code == 200
     body = response.json()
