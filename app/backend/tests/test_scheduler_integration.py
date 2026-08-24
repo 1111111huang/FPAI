@@ -15,7 +15,7 @@ T-30 job catching up the same way after a fixture's window was missed.
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 import sys
 import time
@@ -29,6 +29,16 @@ from app.backend.recommendation_cache import RecommendationCache
 from app.backend.scheduler import NY_TZ, JobRunLog, RecoverableScheduler
 from app.backend.scheduler_wiring import EOD_JOB_ID, build_schedule_t30, register_eod_job, t30_run_at
 from src.agent.agent_config import AgentConfig
+
+# eod_batch.has_kicked_off() (reused by both register_eod_job's EOD path and
+# build_schedule_t30's T-30 path) compares each fixture's utc_date against
+# real wall-clock time (sandbox_now()) -- independent of the `now_fn`
+# injected into RecoverableScheduler below for its own catch-up-trigger
+# math. _FUTURE_DAY is the simulated "now"'s calendar day; _FUTURE_KICKOFF_DAY
+# is the fixture's kickoff day (one day later, matching the EOD-job-at-23:00-
+# discovers-tomorrow's-fixtures relationship these tests simulate).
+_FUTURE_DAY = (datetime.now(timezone.utc) + timedelta(days=2)).date()
+_FUTURE_KICKOFF_DAY = _FUTURE_DAY + timedelta(days=1)
 
 
 def _wait_until(predicate, timeout: float = 2.0, interval: float = 0.01) -> bool:
@@ -58,7 +68,7 @@ def test_missed_eod_batch_catches_up_after_an_outage_spanning_the_trigger(tmp_pa
     time the restarted process finishes registering the job, not be
     silently deferred to tomorrow's 23:00 fire."""
     fixture = NormalizedMatch(
-        match_id="m1", utc_date="2026-07-13T15:00:00Z", status="SCHEDULED",
+        match_id="m1", utc_date=f"{_FUTURE_KICKOFF_DAY.isoformat()}T15:00:00Z", status="SCHEDULED",
         home_team="Arsenal", away_team="Everton", home_goals=None, away_goals=None,
     )
     fixtures_client = MagicMock()
@@ -68,24 +78,24 @@ def test_missed_eod_batch_catches_up_after_an_outage_spanning_the_trigger(tmp_pa
     job_runs_db = tmp_path / "job_runs.db"
 
     # --- process A: still healthy at 22:00, before the trigger ---
-    down_since = datetime(2026, 7, 12, 22, 0, tzinfo=NY_TZ)
+    down_since = datetime(_FUTURE_DAY.year, _FUTURE_DAY.month, _FUTURE_DAY.day, 22, 0, tzinfo=NY_TZ)
     scheduler_a = RecoverableScheduler(run_log=JobRunLog(db_path=job_runs_db), now_fn=lambda: down_since)
     with patch("app.backend.recommendations.run_agent", return_value=_RECOMMENDATION) as mock_run_agent:
         register_eod_job(scheduler_a, fixtures_client=fixtures_client, odds_client=None, cache=cache, config=config, now_fn=lambda: down_since)
     mock_run_agent.assert_not_called()  # too early -- backend "goes down" right after this
 
     # --- process B: restarts at 23:30, after the missed 23:00 trigger ---
-    restart_at = datetime(2026, 7, 12, 23, 30, tzinfo=NY_TZ)
+    restart_at = datetime(_FUTURE_DAY.year, _FUTURE_DAY.month, _FUTURE_DAY.day, 23, 30, tzinfo=NY_TZ)
     scheduler_b = RecoverableScheduler(run_log=JobRunLog(db_path=job_runs_db), now_fn=lambda: restart_at)
     with patch("app.backend.recommendations.run_agent", return_value=_RECOMMENDATION) as mock_run_agent:
         register_eod_job(scheduler_b, fixtures_client=fixtures_client, odds_client=None, cache=cache, config=config, now_fn=lambda: restart_at)
         # W159 follow-up: catch-up now runs on a background thread without
         # waiting -- must finish before the patch above is torn down.
-        assert _wait_until(lambda: scheduler_b.run_log.has_run(EOD_JOB_ID, "2026-07-12"))
+        assert _wait_until(lambda: scheduler_b.run_log.has_run(EOD_JOB_ID, _FUTURE_DAY.isoformat()))
 
     mock_run_agent.assert_called_once()  # caught up immediately on restart
     agent_config_hash = compute_agent_config_hash(config)
-    assert cache.get_latest("m1", "2026-07-13", agent_config_hash) is not None
+    assert cache.get_latest("m1", _FUTURE_KICKOFF_DAY.isoformat(), agent_config_hash) is not None
 
     # --- a third restart at the same moment must not re-run it again ---
     scheduler_c = RecoverableScheduler(run_log=JobRunLog(db_path=job_runs_db), now_fn=lambda: restart_at)
@@ -103,7 +113,7 @@ def test_missed_t30_job_catches_up_after_an_outage_spanning_the_kickoff_window(t
     ran at all* (proven via JobRunLog, which is marked regardless of that
     outcome), not what it decided to do once it ran."""
     fixture = NormalizedMatch(
-        match_id="m2", utc_date="2026-07-13T15:00:00Z", status="SCHEDULED",  # T-30 trigger = 14:30 UTC
+        match_id="m2", utc_date=f"{_FUTURE_KICKOFF_DAY.isoformat()}T15:00:00Z", status="SCHEDULED",  # T-30 trigger = 14:30 UTC
         home_team="Chelsea", away_team="Fulham", home_goals=None, away_goals=None,
     )
     cache = RecommendationCache(db_path=tmp_path / "cache.db")
@@ -113,16 +123,16 @@ def test_missed_t30_job_catches_up_after_an_outage_spanning_the_kickoff_window(t
     expected_run_key = t30_run_at(fixture).isoformat()
 
     # before the T-30 window: 14:00 UTC -- registering must not catch up yet
-    before_utc = datetime(2026, 7, 13, 14, 0, tzinfo=timezone.utc)
+    before_utc = datetime(_FUTURE_KICKOFF_DAY.year, _FUTURE_KICKOFF_DAY.month, _FUTURE_KICKOFF_DAY.day, 14, 0, tzinfo=timezone.utc)
     scheduler_a = RecoverableScheduler(run_log=JobRunLog(db_path=job_runs_db), now_fn=lambda: before_utc)
-    schedule_t30_a = build_schedule_t30(scheduler_a, odds_client=None, cache=cache, config=config, date_str="2026-07-13")
+    schedule_t30_a = build_schedule_t30(scheduler_a, odds_client=None, cache=cache, config=config, date_str=_FUTURE_KICKOFF_DAY.isoformat())
     schedule_t30_a(fixture)
     assert not run_log.has_run("t30_m2", expected_run_key)
 
     # restart after the outage, at 15:00 UTC (past the 14:30 T-30 trigger)
-    after_utc = datetime(2026, 7, 13, 15, 0, tzinfo=timezone.utc)
+    after_utc = datetime(_FUTURE_KICKOFF_DAY.year, _FUTURE_KICKOFF_DAY.month, _FUTURE_KICKOFF_DAY.day, 15, 0, tzinfo=timezone.utc)
     scheduler_b = RecoverableScheduler(run_log=JobRunLog(db_path=job_runs_db), now_fn=lambda: after_utc)
-    schedule_t30_b = build_schedule_t30(scheduler_b, odds_client=None, cache=cache, config=config, date_str="2026-07-13")
+    schedule_t30_b = build_schedule_t30(scheduler_b, odds_client=None, cache=cache, config=config, date_str=_FUTURE_KICKOFF_DAY.isoformat())
     schedule_t30_b(fixture)
 
     # W159 follow-up: catch-up now runs on a background thread without waiting.

@@ -10,6 +10,7 @@ best-effort."""
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 import sys
 from unittest.mock import MagicMock, patch
@@ -31,9 +32,22 @@ _RECOMMENDATION = {
 }
 
 
-def _fixture(match_id: str, home: str, away: str, utc_date: str = "2026-08-22T15:00:00Z") -> NormalizedMatch:
+def _future_utc_datetime(days_from_now: int, hour: int = 15) -> str:
+    """A fixture kickoff has_kicked_off() (eod_batch.py) will treat as not
+    yet started -- real wall-clock time, not a fixed calendar date, so this
+    can't be a literal string without rotting the moment real time passes
+    it (as the previous hardcoded "2026-08-22" did the day has_kicked_off()
+    was introduced)."""
+    return (datetime.now(timezone.utc) + timedelta(days=days_from_now)).strftime(f"%Y-%m-%dT{hour:02d}:00:00Z")
+
+
+def _future_date(days_from_now: int) -> str:
+    return (datetime.now(timezone.utc) + timedelta(days=days_from_now)).strftime("%Y-%m-%d")
+
+
+def _fixture(match_id: str, home: str, away: str, utc_date: str | None = None) -> NormalizedMatch:
     return NormalizedMatch(
-        match_id=match_id, utc_date=utc_date, status="SCHEDULED",
+        match_id=match_id, utc_date=utc_date or _future_utc_datetime(1), status="SCHEDULED",
         home_team=home, away_team=away, home_goals=None, away_goals=None,
     )
 
@@ -55,7 +69,7 @@ def test_generates_a_recommendation_and_schedules_t30_for_every_fixture(tmp_path
         result = asyncio.run(
             run_eod_batch(
                 fixtures_client=fixtures_client, odds_client=odds_client, cache=cache, config=config,
-                schedule_t30=scheduled.append, date_str="2026-08-22",
+                schedule_t30=scheduled.append, date_str=_future_date(1),
             )
         )
 
@@ -64,7 +78,7 @@ def test_generates_a_recommendation_and_schedules_t30_for_every_fixture(tmp_path
     assert len(scheduled) == 3
     agent_config_hash = compute_agent_config_hash(config)
     for match_id in ("m1", "m2", "m3"):
-        assert cache.get_latest(match_id, "2026-08-22", agent_config_hash) is not None
+        assert cache.get_latest(match_id, _future_date(1), agent_config_hash) is not None
 
 
 def test_one_erroring_match_is_skipped_not_fatal(tmp_path: Path) -> None:
@@ -88,7 +102,7 @@ def test_one_erroring_match_is_skipped_not_fatal(tmp_path: Path) -> None:
         result = asyncio.run(
             run_eod_batch(
                 fixtures_client=fixtures_client, odds_client=odds_client, cache=cache, config=config,
-                schedule_t30=scheduled.append, date_str="2026-08-22",
+                schedule_t30=scheduled.append, date_str=_future_date(1),
             )
         )
 
@@ -96,6 +110,43 @@ def test_one_erroring_match_is_skipped_not_fatal(tmp_path: Path) -> None:
     assert result.skipped == 1
     # T-30 is still scheduled for both fixtures -- best-effort, independent of EOD success
     assert len(scheduled) == 2
+
+
+def test_fixture_already_kicked_off_is_skipped_and_not_scheduled_for_t30(tmp_path: Path) -> None:
+    """A pre-match recommendation is meaningless once a match has already
+    started -- "current odds" at that point reflect in-game state, not a
+    pre-match edge. Covers both call sites has_kicked_off() guards:
+    _generate_one (no LLM call, no cache write) and the T-30 scheduling
+    loop (no pointless-and-dangerous already-past job registered -- that
+    job's own catch-up path would otherwise fire it immediately)."""
+    fixtures_client = MagicMock()
+    fixtures_client.get_fixtures.return_value = [
+        _fixture("m1", "Arsenal", "Everton", utc_date=_future_utc_datetime(-1)),  # kicked off yesterday
+        _fixture("m2", "Chelsea", "Fulham"),  # still pre-match (default: tomorrow)
+    ]
+    odds_client = MagicMock()
+    odds_client.get_odds.return_value = []
+    cache = RecommendationCache(db_path=tmp_path / "cache.db")
+    config = AgentConfig.default()
+    scheduled: list[NormalizedMatch] = []
+    progress: list[tuple[str, str]] = []
+
+    with patch("app.backend.recommendations.run_agent", return_value=_RECOMMENDATION) as mock_run:
+        result = asyncio.run(
+            run_eod_batch(
+                fixtures_client=fixtures_client, odds_client=odds_client, cache=cache, config=config,
+                schedule_t30=scheduled.append, date_str=_future_date(1),
+                on_progress=lambda fixture, outcome: progress.append((fixture.match_id, outcome)),
+            )
+        )
+
+    assert result.generated == 1
+    assert result.skipped == 1
+    mock_run.assert_called_once()  # only for m2 -- never for the already-kicked-off m1
+    assert ("m1", "skipped") in progress
+    assert [f.match_id for f in scheduled] == ["m2"]  # m1 not scheduled for a pointless/past T-30
+    agent_config_hash = compute_agent_config_hash(config)
+    assert cache.get_latest("m1", _future_date(-1), agent_config_hash) is None
 
 
 def test_a_locked_database_mid_batch_skips_only_that_match_not_the_whole_batch(tmp_path: Path) -> None:
@@ -133,7 +184,7 @@ def test_a_locked_database_mid_batch_skips_only_that_match_not_the_whole_batch(t
         result = asyncio.run(
             run_eod_batch(
                 fixtures_client=fixtures_client, odds_client=odds_client, cache=cache, config=config,
-                schedule_t30=scheduled.append, date_str="2026-08-22",
+                schedule_t30=scheduled.append, date_str=_future_date(1),
             )
         )
 
@@ -164,7 +215,7 @@ def test_odds_matched_to_fixture_by_team_name(tmp_path: Path) -> None:
         asyncio.run(
             run_eod_batch(
                 fixtures_client=fixtures_client, odds_client=odds_client, cache=cache, config=config,
-                schedule_t30=lambda f: None, date_str="2026-08-22",
+                schedule_t30=lambda f: None, date_str=_future_date(1),
             )
         )
 
@@ -200,7 +251,7 @@ def test_odds_matched_via_canonical_team_name_despite_provider_spelling_differen
         asyncio.run(
             run_eod_batch(
                 fixtures_client=fixtures_client, odds_client=odds_client, cache=cache, config=config,
-                schedule_t30=lambda f: None, date_str="2026-08-22",
+                schedule_t30=lambda f: None, date_str=_future_date(1),
             )
         )
 
@@ -229,7 +280,7 @@ def test_unmatched_odds_proceeds_with_no_odds_rather_than_skipping(tmp_path: Pat
         result = asyncio.run(
             run_eod_batch(
                 fixtures_client=fixtures_client, odds_client=odds_client, cache=cache, config=config,
-                schedule_t30=lambda f: None, date_str="2026-08-22",
+                schedule_t30=lambda f: None, date_str=_future_date(1),
             )
         )
 
@@ -253,7 +304,7 @@ def test_league_parameter_tags_match_info_and_selects_the_matching_sport_key(tmp
         asyncio.run(
             run_eod_batch(
                 fixtures_client=fixtures_client, odds_client=odds_client, cache=cache, config=config,
-                schedule_t30=lambda f: None, date_str="2026-08-22",
+                schedule_t30=lambda f: None, date_str=_future_date(1),
                 fixtures=[swedish_fixture], league="SWE",
             )
         )
@@ -274,7 +325,7 @@ def test_league_parameter_defaults_to_e0_preserving_existing_behavior(tmp_path: 
         asyncio.run(
             run_eod_batch(
                 fixtures_client=fixtures_client, odds_client=odds_client, cache=cache, config=config,
-                schedule_t30=lambda f: None, date_str="2026-08-22",
+                schedule_t30=lambda f: None, date_str=_future_date(1),
                 fixtures=[_fixture("m1", "Arsenal", "Everton")],
             )
         )
@@ -299,7 +350,7 @@ def test_get_odds_is_called_with_an_explicit_epl_sport_key(tmp_path: Path) -> No
         asyncio.run(
             run_eod_batch(
                 fixtures_client=fixtures_client, odds_client=odds_client, cache=cache, config=config,
-                schedule_t30=lambda f: None, date_str="2026-08-22",
+                schedule_t30=lambda f: None, date_str=_future_date(1),
             )
         )
 
@@ -320,7 +371,7 @@ def test_odds_client_returning_none_gracefully_proceeds_without_odds(tmp_path: P
         result = asyncio.run(
             run_eod_batch(
                 fixtures_client=fixtures_client, odds_client=odds_client, cache=cache, config=config,
-                schedule_t30=lambda f: None, date_str="2026-08-22",
+                schedule_t30=lambda f: None, date_str=_future_date(1),
             )
         )
 
@@ -337,7 +388,7 @@ def test_no_odds_client_at_all_proceeds_without_odds(tmp_path: Path) -> None:
         result = asyncio.run(
             run_eod_batch(
                 fixtures_client=fixtures_client, odds_client=None, cache=cache, config=config,
-                schedule_t30=lambda f: None, date_str="2026-08-22",
+                schedule_t30=lambda f: None, date_str=_future_date(1),
             )
         )
 
@@ -364,7 +415,7 @@ def test_supplied_fixtures_bypass_fixtures_client_get_fixtures(tmp_path: Path) -
         result = asyncio.run(
             run_eod_batch(
                 fixtures_client=fixtures_client, odds_client=odds_client, cache=cache, config=config,
-                schedule_t30=lambda f: None, date_str="2026-08-22", fixtures=supplied,
+                schedule_t30=lambda f: None, date_str=_future_date(1), fixtures=supplied,
             )
         )
 
@@ -373,7 +424,7 @@ def test_supplied_fixtures_bypass_fixtures_client_get_fixtures(tmp_path: Path) -
     assert result.fixtures == supplied
     agent_config_hash = compute_agent_config_hash(config)
     for match_id in ("m1", "m2"):
-        assert cache.get_latest(match_id, "2026-08-22", agent_config_hash) is not None
+        assert cache.get_latest(match_id, _future_date(1), agent_config_hash) is not None
 
 
 def test_omitting_fixtures_preserves_default_get_fixtures_call(tmp_path: Path) -> None:
@@ -390,12 +441,12 @@ def test_omitting_fixtures_preserves_default_get_fixtures_call(tmp_path: Path) -
         result = asyncio.run(
             run_eod_batch(
                 fixtures_client=fixtures_client, odds_client=odds_client, cache=cache, config=config,
-                schedule_t30=lambda f: None, date_str="2026-08-22",
+                schedule_t30=lambda f: None, date_str=_future_date(1),
             )
         )
 
     fixtures_client.get_fixtures.assert_called_once_with(
-        competition_code="PL", date_from="2026-08-22", date_to="2026-08-22",
+        competition_code="PL", date_from=_future_date(1), date_to=_future_date(1),
     )
     assert result.generated == 1
 
@@ -421,7 +472,7 @@ def test_on_progress_called_once_per_fixture_with_outcome(tmp_path: Path) -> Non
         asyncio.run(
             run_eod_batch(
                 fixtures_client=fixtures_client, odds_client=odds_client, cache=cache, config=config,
-                schedule_t30=lambda f: None, date_str="2026-08-22",
+                schedule_t30=lambda f: None, date_str=_future_date(1),
                 on_progress=lambda fixture, outcome: progress.append((fixture.match_id, outcome)),
             )
         )
@@ -443,7 +494,7 @@ def test_fixture_with_a_different_date_than_date_str_is_cached_under_its_own_dat
     odds_client.get_odds.return_value = []
     cache = RecommendationCache(db_path=tmp_path / "cache.db")
     config = AgentConfig.default()
-    fixture = _fixture("m1", "Sunderland", "Brighton Hove", utc_date="2026-03-14T15:00:00Z")
+    fixture = _fixture("m1", "Sunderland", "Brighton Hove", utc_date=_future_utc_datetime(7))
 
     with patch("app.backend.recommendations.run_agent", return_value=_RECOMMENDATION):
         asyncio.run(
@@ -454,7 +505,7 @@ def test_fixture_with_a_different_date_than_date_str_is_cached_under_its_own_dat
         )
 
     agent_config_hash = compute_agent_config_hash(config)
-    assert cache.get_latest("m1", "2026-03-14", agent_config_hash) is not None
+    assert cache.get_latest("m1", _future_date(7), agent_config_hash) is not None
     assert cache.get_latest("m1", "2026-03-08", agent_config_hash) is None
 
 
@@ -464,7 +515,7 @@ def test_match_info_date_uses_the_fixtures_own_date_not_date_str(tmp_path: Path)
     odds_client.get_odds.return_value = []
     cache = RecommendationCache(db_path=tmp_path / "cache.db")
     config = AgentConfig.default()
-    fixture = _fixture("m1", "Sunderland", "Brighton Hove", utc_date="2026-03-14T15:00:00Z")
+    fixture = _fixture("m1", "Sunderland", "Brighton Hove", utc_date=_future_utc_datetime(7))
     captured_match_info = {}
 
     def _capture(match_info, config):
@@ -479,7 +530,7 @@ def test_match_info_date_uses_the_fixtures_own_date_not_date_str(tmp_path: Path)
             )
         )
 
-    assert captured_match_info["date"] == "2026-03-14"
+    assert captured_match_info["date"] == _future_date(7)
 
 
 # --- W151: skip regeneration when a prior pass (boot pregenerate, or this
@@ -498,7 +549,7 @@ def test_skips_regeneration_when_odds_unchanged_from_prior_cache_entry(tmp_path:
     config = AgentConfig.default()
     agent_config_hash = compute_agent_config_hash(config)
     cache.record_generation(
-        match_id="m1", date="2026-08-22", agent_config_hash=agent_config_hash,
+        match_id="m1", date=_future_date(1), agent_config_hash=agent_config_hash,
         odds={"home": 1.8, "draw": 3.6, "away": 4.5}, recommendation=_RECOMMENDATION, triggered_by="scheduled",
     )
 
@@ -506,14 +557,14 @@ def test_skips_regeneration_when_odds_unchanged_from_prior_cache_entry(tmp_path:
         result = asyncio.run(
             run_eod_batch(
                 fixtures_client=fixtures_client, odds_client=odds_client, cache=cache, config=config,
-                schedule_t30=lambda f: None, date_str="2026-08-22",
+                schedule_t30=lambda f: None, date_str=_future_date(1),
             )
         )
 
     mock_run_agent.assert_not_called()
     assert result.generated == 0
     assert result.unchanged == 1
-    assert len(cache.get_history("m1", "2026-08-22", agent_config_hash)) == 1  # no new row written
+    assert len(cache.get_history("m1", _future_date(1), agent_config_hash)) == 1  # no new row written
 
 
 def test_regenerates_when_odds_changed_from_prior_cache_entry(tmp_path: Path) -> None:
@@ -528,7 +579,7 @@ def test_regenerates_when_odds_changed_from_prior_cache_entry(tmp_path: Path) ->
     config = AgentConfig.default()
     agent_config_hash = compute_agent_config_hash(config)
     cache.record_generation(
-        match_id="m1", date="2026-08-22", agent_config_hash=agent_config_hash,
+        match_id="m1", date=_future_date(1), agent_config_hash=agent_config_hash,
         odds={"home": 1.8, "draw": 3.6, "away": 4.5}, recommendation=_RECOMMENDATION, triggered_by="scheduled",
     )
 
@@ -536,7 +587,7 @@ def test_regenerates_when_odds_changed_from_prior_cache_entry(tmp_path: Path) ->
         result = asyncio.run(
             run_eod_batch(
                 fixtures_client=fixtures_client, odds_client=odds_client, cache=cache, config=config,
-                schedule_t30=lambda f: None, date_str="2026-08-22",
+                schedule_t30=lambda f: None, date_str=_future_date(1),
             )
         )
 
@@ -558,7 +609,7 @@ def test_skips_regeneration_when_still_no_odds_and_prior_entry_also_had_none(tmp
     config = AgentConfig.default()
     agent_config_hash = compute_agent_config_hash(config)
     cache.record_generation(
-        match_id="m1", date="2026-08-22", agent_config_hash=agent_config_hash,
+        match_id="m1", date=_future_date(1), agent_config_hash=agent_config_hash,
         odds={}, recommendation=_RECOMMENDATION, triggered_by="scheduled",
     )
 
@@ -566,7 +617,7 @@ def test_skips_regeneration_when_still_no_odds_and_prior_entry_also_had_none(tmp
         result = asyncio.run(
             run_eod_batch(
                 fixtures_client=fixtures_client, odds_client=odds_client, cache=cache, config=config,
-                schedule_t30=lambda f: None, date_str="2026-08-22",
+                schedule_t30=lambda f: None, date_str=_future_date(1),
             )
         )
 
@@ -586,7 +637,7 @@ def test_on_progress_reports_unchanged_for_a_dedup_skipped_fixture(tmp_path: Pat
     config = AgentConfig.default()
     agent_config_hash = compute_agent_config_hash(config)
     cache.record_generation(
-        match_id="m1", date="2026-08-22", agent_config_hash=agent_config_hash,
+        match_id="m1", date=_future_date(1), agent_config_hash=agent_config_hash,
         odds={"home": 1.8, "draw": 3.6, "away": 4.5}, recommendation=_RECOMMENDATION, triggered_by="scheduled",
     )
     progress: list[tuple[str, str]] = []
@@ -595,7 +646,7 @@ def test_on_progress_reports_unchanged_for_a_dedup_skipped_fixture(tmp_path: Pat
         asyncio.run(
             run_eod_batch(
                 fixtures_client=fixtures_client, odds_client=odds_client, cache=cache, config=config,
-                schedule_t30=lambda f: None, date_str="2026-08-22",
+                schedule_t30=lambda f: None, date_str=_future_date(1),
                 on_progress=lambda fixture, outcome: progress.append((fixture.match_id, outcome)),
             )
         )
@@ -611,18 +662,18 @@ def test_odds_fetched_per_distinct_fixture_date_when_fixtures_span_multiple_date
     fixtures_client = MagicMock()
     cache = RecommendationCache(db_path=tmp_path / "cache.db")
     config = AgentConfig.default()
-    fixture_14 = _fixture("m1", "Sunderland", "Brighton Hove", utc_date="2026-03-14T15:00:00Z")
-    fixture_15 = _fixture("m2", "Arsenal", "Everton", utc_date="2026-03-15T15:00:00Z")
+    fixture_14 = _fixture("m1", "Sunderland", "Brighton Hove", utc_date=_future_utc_datetime(7))
+    fixture_15 = _fixture("m2", "Arsenal", "Everton", utc_date=_future_utc_datetime(8))
 
     def _odds_for_date(sport_key: str, date: str | None = None):
-        if date == "2026-03-14":
+        if date == _future_date(7):
             return [NormalizedOdds(
-                home_team="Sunderland", away_team="Brighton Hove", commence_time="2026-03-14T15:00:00Z",
+                home_team="Sunderland", away_team="Brighton Hove", commence_time=_future_utc_datetime(7),
                 home_odds=2.5, draw_odds=3.2, away_odds=2.9,
             )]
-        if date == "2026-03-15":
+        if date == _future_date(8):
             return [NormalizedOdds(
-                home_team="Arsenal", away_team="Everton", commence_time="2026-03-15T15:00:00Z",
+                home_team="Arsenal", away_team="Everton", commence_time=_future_utc_datetime(8),
                 home_odds=1.5, draw_odds=4.0, away_odds=6.0,
             )]
         return []
