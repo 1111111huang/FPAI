@@ -12,6 +12,8 @@ import os
 from pathlib import Path
 from typing import Callable
 
+import requests
+
 from app.backend.eod_batch import COMPETITION_CODE, LEAGUE_CODE, run_eod_batch
 from app.backend.football_data_client import FootballDataClient, NormalizedMatch
 from app.backend.historical_odds_client import HistoricalOddsClient
@@ -28,6 +30,7 @@ from src.utils.logger import get_logger
 LOGGER = get_logger(__name__)
 
 CREDIT_COUNTER_PATH = Path(__file__).parent.parent / "data" / "odds_api_credit_counter.json"
+CREDIT_COUNTER_PATH_2 = Path(__file__).parent.parent / "data" / "odds_api_credit_counter_2.json"
 EOD_JOB_ID = "eod_batch_generation"
 EOD_HOUR = 23
 EOD_MINUTE = 0
@@ -79,21 +82,59 @@ class PersistingOddsClient:
         return result
 
 
-def build_odds_client() -> OddsAPIClient | HistoricalOddsClient | None:
+class FallbackOddsClient:
+    """Tries each wrapped PersistingOddsClient (one per ODDS_API_KEY[_2] env
+    var) in order, moving to the next when one is exhausted -- either
+    predicted exhausted by its own local CreditCounter (get_odds() returns
+    None) or actually rejected by the API (a raised RequestException, e.g.
+    a truly out-of-credits or revoked key) -- so a second key can be added
+    purely via env vars and picked up automatically once the first runs dry
+    mid-month. Returns None (the same "keep last-known odds" convention as a
+    single exhausted client) only once every client has failed."""
+
+    def __init__(self, clients: list[PersistingOddsClient]) -> None:
+        self._clients = clients
+
+    def get_odds(self, sport_key: str = "soccer_epl", date: str | None = None):
+        for i, client in enumerate(self._clients):
+            try:
+                result = client.get_odds(sport_key=sport_key, date=date)
+            except requests.RequestException as exc:
+                LOGGER.warning("FallbackOddsClient: key #%d failed (%s) -- trying next key.", i + 1, exc)
+                continue
+            if result is not None:
+                return result
+            LOGGER.info("FallbackOddsClient: key #%d exhausted (local budget) -- trying next key.", i + 1)
+        return None
+
+
+def _build_persisting_odds_client(api_key: str, counter_path: Path) -> PersistingOddsClient:
+    store = FileCreditCounterStore(counter_path)
+    counter = store.load()
+    return PersistingOddsClient(client=OddsAPIClient(api_key=api_key, credit_counter=counter), counter=counter, store=store)
+
+
+def build_odds_client() -> OddsAPIClient | HistoricalOddsClient | FallbackOddsClient | None:
     """Returns W28's HistoricalOddsClient when sandbox mode is active with a
     SANDBOX_DATE set (a real historical odds source, since The Odds API is
-    live-current-odds-only); otherwise the real, live OddsAPIClient -- None
-    if no ODDS_API_KEY is configured."""
+    live-current-odds-only); otherwise the real, live OddsAPIClient(s) --
+    None if no ODDS_API_KEY is configured.
+
+    ODDS_API_KEY_2, when also set, is wired in as a fallback: each key gets
+    its own CreditCounter file (CREDIT_COUNTER_PATH / _PATH_2), since credits
+    are tracked per-key by the API itself, not shared across keys."""
     override_date = sandbox_date()
     if override_date is not None:
         return HistoricalOddsClient(sandbox_date=override_date.isoformat())
 
-    api_key = os.environ.get("ODDS_API_KEY", "")
-    if not api_key:
+    keys_and_paths = [
+        (os.environ.get("ODDS_API_KEY", ""), CREDIT_COUNTER_PATH),
+        (os.environ.get("ODDS_API_KEY_2", ""), CREDIT_COUNTER_PATH_2),
+    ]
+    clients = [_build_persisting_odds_client(key, path) for key, path in keys_and_paths if key]
+    if not clients:
         return None
-    store = FileCreditCounterStore(CREDIT_COUNTER_PATH)
-    counter = store.load()
-    return PersistingOddsClient(client=OddsAPIClient(api_key=api_key, credit_counter=counter), counter=counter, store=store)
+    return clients[0] if len(clients) == 1 else FallbackOddsClient(clients)
 
 
 def next_day_date_str(now_fn: Callable[[], datetime] = lambda: sandbox_now(NY_TZ)) -> str:
