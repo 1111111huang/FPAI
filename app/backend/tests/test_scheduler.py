@@ -11,11 +11,29 @@ import asyncio
 from datetime import datetime, timedelta
 from pathlib import Path
 import sys
+import time
 from zoneinfo import ZoneInfo
 
 sys.path.append(str(Path(__file__).resolve().parents[3]))
 
 from app.backend.scheduler import NY_TZ, JobRunLog, RecoverableScheduler
+
+
+def _wait_until(predicate, timeout: float = 2.0, interval: float = 0.01) -> bool:
+    """Polls predicate() until it's true or timeout elapses. W159 follow-up:
+    the immediate catch-up path (schedule_daily()/schedule_once()) now runs
+    on a background thread without waiting (a hang-on-startup fix -- see
+    scheduler.py's _run_and_mark docstring), so its side effects are no
+    longer guaranteed visible the instant the call returns. Condition-based
+    waiting instead of a fixed sleep: fast when the thread finishes
+    quickly (the common case in these tests), still correct if it's ever
+    slower."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if predicate():
+            return True
+        time.sleep(interval)
+    return predicate()
 
 
 def test_job_run_log_persists_across_instances(tmp_path: Path) -> None:
@@ -39,8 +57,8 @@ def test_daily_job_catches_up_immediately_when_trigger_time_already_passed(tmp_p
     scheduler = RecoverableScheduler(run_log=run_log, now_fn=lambda: now)
     scheduler.schedule_daily("daily_eod", lambda: calls.append("ran"), hour=23, minute=0)
 
+    assert _wait_until(lambda: run_log.has_run("daily_eod", "2026-07-12"))
     assert calls == ["ran"]
-    assert run_log.has_run("daily_eod", "2026-07-12")
 
 
 def test_daily_job_does_not_rerun_once_already_run_today(tmp_path: Path) -> None:
@@ -78,8 +96,8 @@ def test_schedule_once_catches_up_when_run_at_already_passed(tmp_path: Path) -> 
         "t30_m1", lambda: calls.append("ran"), run_at=run_at
     )
 
+    assert _wait_until(lambda: run_log.has_run("t30_m1", run_at.isoformat()))
     assert calls == ["ran"]
-    assert run_log.has_run("t30_m1", run_at.isoformat())
 
 
 def test_schedule_once_does_not_rerun_once_marked_ran(tmp_path: Path) -> None:
@@ -133,6 +151,12 @@ def test_restart_mid_day_detects_and_runs_a_missed_job_only_once(tmp_path: Path)
     RecoverableScheduler(run_log=run_log_b, now_fn=lambda: after_trigger).schedule_daily(
         "daily_eod", lambda: calls.append("ran"), hour=23, minute=0
     )
+    # Waits on run_log_b.has_run() specifically, not just calls -- that's
+    # the actual condition the third registration below depends on; waiting
+    # on calls alone leaves a real window between calls.append() and
+    # run_log.mark_ran() where the third registration can race in and spawn
+    # its own (duplicate) catch-up thread.
+    assert _wait_until(lambda: run_log_b.has_run("daily_eod", "2026-07-12"))
     assert calls == ["ran"]  # process B: detected the miss, ran it once
 
     # a third registration (e.g. another restart) must not double-run it
@@ -140,7 +164,7 @@ def test_restart_mid_day_detects_and_runs_a_missed_job_only_once(tmp_path: Path)
     RecoverableScheduler(run_log=run_log_c, now_fn=lambda: after_trigger).schedule_daily(
         "daily_eod", lambda: calls.append("ran"), hour=23, minute=0
     )
-    assert calls == ["ran"]
+    assert calls == ["ran"]  # unchanged: run_log_c sees it already ran, no catch-up thread spawned at all
 
 
 def test_scheduler_uses_america_new_york_timezone(tmp_path: Path) -> None:
@@ -183,7 +207,17 @@ def test_catchup_job_whose_body_calls_asyncio_run_works_from_inside_a_running_lo
     recommendations, indefinitely, until a restart happened to land before
     the scheduled hour instead. Reproduces the exact shape: schedule_daily()
     invoked from inside a running event loop, whose job body itself calls
-    asyncio.run()."""
+    asyncio.run().
+
+    Follow-up (same production incident, second bug): once fixed to
+    actually succeed, the catch-up path could then block the calling
+    async context for as long as the job body took to run -- for a real
+    EOD catch-up backlog, long enough that FastAPI's lifespan startup
+    never completed and the app returned 502 for every request
+    indefinitely. schedule_daily()'s catch-up path now runs the job body
+    without waiting for it -- asserted here via condition-based polling
+    (_wait_until) rather than immediately after schedule_daily() returns,
+    since the whole point is that it no longer blocks."""
     run_log = JobRunLog(db_path=tmp_path / "job_runs.db")
     now = datetime(2026, 7, 12, 23, 30, tzinfo=NY_TZ)
     calls = []
@@ -197,8 +231,12 @@ def test_catchup_job_whose_body_calls_asyncio_run_works_from_inside_a_running_lo
     async def _register_from_inside_a_running_loop() -> None:
         scheduler = RecoverableScheduler(run_log=run_log, now_fn=lambda: now)
         scheduler.schedule_daily("daily_eod", _job_like_eod_job, hour=23, minute=0)
+        # the whole point of this test: registering the job (and its
+        # catch-up firing) must not block this coroutine -- returning here
+        # promptly, before the background thread necessarily finishes, is
+        # correct, not a race to work around.
 
     asyncio.run(_register_from_inside_a_running_loop())
 
+    assert _wait_until(lambda: run_log.has_run("daily_eod", "2026-07-12"))
     assert calls == ["ran"]
-    assert run_log.has_run("daily_eod", "2026-07-12")

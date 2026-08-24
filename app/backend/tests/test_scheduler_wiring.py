@@ -10,6 +10,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 from pathlib import Path
 import sys
+import time
 from unittest.mock import MagicMock, patch
 
 sys.path.append(str(Path(__file__).resolve().parents[3]))
@@ -26,6 +27,24 @@ from app.backend.scheduler_wiring import (
     t30_run_at,
 )
 from src.agent.agent_config import AgentConfig
+
+
+def _wait_until(predicate, timeout: float = 2.0, interval: float = 0.01) -> bool:
+    """Polls predicate() until it's true or timeout elapses. W159 follow-up:
+    RecoverableScheduler's immediate catch-up path now runs the job body on
+    a background thread without waiting (schedule_daily()/schedule_once(),
+    wait=False -- a real production hang-on-startup fix), so register_eod_job()
+    returns before the EOD job body has necessarily finished. Tests that mock
+    run_agent/clients via `with patch(...):` must wait for completion *before*
+    the patch context exits, or the background thread executes against the
+    real (unpatched) objects once it does -- confirmed live: this is exactly
+    what "Real network call attempted during an app/backend test" meant."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if predicate():
+            return True
+        time.sleep(interval)
+    return predicate()
 
 
 def test_next_day_date_str_in_ny_timezone() -> None:
@@ -126,8 +145,11 @@ def test_register_eod_job_generates_recommendations_and_schedules_t30(tmp_path: 
             scheduler, fixtures_client=fixtures_client, odds_client=None,
             cache=cache, config=config, now_fn=lambda: now,
         )
+        # W159 follow-up: catch-up now runs on a background thread without
+        # waiting -- must finish before the patch above is torn down, or it
+        # executes against the real (unpatched) run_agent.
+        assert _wait_until(lambda: run_log.has_run(EOD_JOB_ID, "2026-08-22"))
 
-    assert run_log.has_run(EOD_JOB_ID, "2026-08-22")
     assert run_log.has_run("t30_m1", t30_run_at(fixture).isoformat())
 
 
@@ -167,6 +189,7 @@ def test_register_eod_job_processes_both_e0_and_swe_when_sweden_client_configure
             cache=cache, config=config, now_fn=lambda: now,
             sweden_fixtures_client=sweden_fixtures_client,
         )
+        assert _wait_until(lambda: run_log.has_run(EOD_JOB_ID, "2026-08-22"))
 
     leagues_seen = {call.kwargs["match_info"]["league"] for call in mock_run_agent.call_args_list}
     assert leagues_seen == {"E0", "SWE"}
@@ -199,6 +222,7 @@ def test_register_eod_job_skips_sweden_gracefully_when_no_sweden_client_configur
             scheduler, fixtures_client=fixtures_client, odds_client=None,
             cache=cache, config=config, now_fn=lambda: now,
         )
+        assert _wait_until(lambda: run_log.has_run(EOD_JOB_ID, "2026-08-22"))
 
     assert mock_run_agent.call_count == 1
     assert mock_run_agent.call_args.kwargs["match_info"]["league"] == "E0"
@@ -242,6 +266,7 @@ def test_register_eod_job_skips_a_display_disabled_competition_even_with_its_cli
             cache=cache, config=config, now_fn=lambda: now,
             sweden_fixtures_client=sweden_fixtures_client,
         )
+        assert _wait_until(lambda: run_log.has_run(EOD_JOB_ID, "2026-08-22"))
 
     assert mock_run_agent.call_count == 1
     assert mock_run_agent.call_args.kwargs["match_info"]["league"] == "E0"
@@ -276,6 +301,7 @@ def test_register_eod_job_one_competitions_fixture_fetch_failure_does_not_block_
             cache=cache, config=config, now_fn=lambda: now,
             sweden_fixtures_client=sweden_fixtures_client,
         )
+        assert _wait_until(lambda: run_log.has_run(EOD_JOB_ID, "2026-08-22"))
 
     assert mock_run_agent.call_count == 1
     assert mock_run_agent.call_args.kwargs["match_info"]["league"] == "E0"
@@ -326,6 +352,7 @@ def test_register_eod_job_processes_e0_swe_and_sp1_when_all_clients_configured(t
             sweden_fixtures_client=sweden_fixtures_client,
             la_liga_fixtures_client=la_liga_fixtures_client,
         )
+        assert _wait_until(lambda: run_log.has_run(EOD_JOB_ID, "2026-08-22"))
 
     leagues_seen = {call.kwargs["match_info"]["league"] for call in mock_run_agent.call_args_list}
     assert leagues_seen == {"E0", "SWE", "SP1"}
@@ -361,6 +388,7 @@ def test_register_eod_job_skips_la_liga_gracefully_when_no_la_liga_client_config
             scheduler, fixtures_client=fixtures_client, odds_client=None,
             cache=cache, config=config, now_fn=lambda: now,
         )
+        assert _wait_until(lambda: run_log.has_run(EOD_JOB_ID, "2026-08-22"))
 
     assert mock_run_agent.call_count == 1
     assert mock_run_agent.call_args.kwargs["match_info"]["league"] == "E0"

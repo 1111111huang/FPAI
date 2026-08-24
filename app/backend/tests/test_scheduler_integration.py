@@ -18,6 +18,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from pathlib import Path
 import sys
+import time
 from unittest.mock import MagicMock, patch
 
 sys.path.append(str(Path(__file__).resolve().parents[3]))
@@ -28,6 +29,21 @@ from app.backend.recommendation_cache import RecommendationCache
 from app.backend.scheduler import NY_TZ, JobRunLog, RecoverableScheduler
 from app.backend.scheduler_wiring import EOD_JOB_ID, build_schedule_t30, register_eod_job, t30_run_at
 from src.agent.agent_config import AgentConfig
+
+
+def _wait_until(predicate, timeout: float = 2.0, interval: float = 0.01) -> bool:
+    """Polls predicate() until it's true or timeout elapses. W159 follow-up:
+    the immediate catch-up path now runs the job body on a background
+    thread without waiting -- tests that mock run_agent via `with patch(...):`
+    must wait for completion *before* the patch context exits, or the
+    background thread executes against the real (unpatched) objects once
+    it does."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if predicate():
+            return True
+        time.sleep(interval)
+    return predicate()
 
 _RECOMMENDATION = {
     "match": {"home": "Arsenal", "away": "Everton", "date": "2026-07-13", "league": "E0"},
@@ -63,6 +79,9 @@ def test_missed_eod_batch_catches_up_after_an_outage_spanning_the_trigger(tmp_pa
     scheduler_b = RecoverableScheduler(run_log=JobRunLog(db_path=job_runs_db), now_fn=lambda: restart_at)
     with patch("app.backend.recommendations.run_agent", return_value=_RECOMMENDATION) as mock_run_agent:
         register_eod_job(scheduler_b, fixtures_client=fixtures_client, odds_client=None, cache=cache, config=config, now_fn=lambda: restart_at)
+        # W159 follow-up: catch-up now runs on a background thread without
+        # waiting -- must finish before the patch above is torn down.
+        assert _wait_until(lambda: scheduler_b.run_log.has_run(EOD_JOB_ID, "2026-07-12"))
 
     mock_run_agent.assert_called_once()  # caught up immediately on restart
     agent_config_hash = compute_agent_config_hash(config)
@@ -106,4 +125,5 @@ def test_missed_t30_job_catches_up_after_an_outage_spanning_the_kickoff_window(t
     schedule_t30_b = build_schedule_t30(scheduler_b, odds_client=None, cache=cache, config=config, date_str="2026-07-13")
     schedule_t30_b(fixture)
 
-    assert run_log.has_run("t30_m2", expected_run_key)  # caught up immediately on restart
+    # W159 follow-up: catch-up now runs on a background thread without waiting.
+    assert _wait_until(lambda: run_log.has_run("t30_m2", expected_run_key))  # caught up immediately on restart

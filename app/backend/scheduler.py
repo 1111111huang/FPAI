@@ -113,7 +113,7 @@ class RecoverableScheduler:
         trigger_today = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
         run_key = now.date().isoformat()
         if now >= trigger_today and not self.run_log.has_run(job_id, run_key):
-            self._run_and_mark(job_id, fn, run_key)
+            self._run_and_mark(job_id, fn, run_key, wait=False)
 
     def schedule_once(self, job_id: str, fn: Callable[[], None], run_at: datetime) -> None:
         # Keyed on (job_id, run_at) rather than a constant: job_id alone is
@@ -129,50 +129,55 @@ class RecoverableScheduler:
             replace_existing=True,
         )
         if self._now_fn() >= run_at and not self.run_log.has_run(job_id, run_key):
-            self._run_and_mark(job_id, fn, run_key)
+            self._run_and_mark(job_id, fn, run_key, wait=False)
 
-    def _run_and_mark(self, job_id: str, fn: Callable[[], None], run_key: str) -> None:
-        """Never lets a job's own exception propagate: schedule_daily()/
-        schedule_once() call this synchronously in the caller's own thread
-        for the immediate catch-up path (unlike APScheduler's own later
-        trigger fires, which run on its background thread and are already
-        exception-isolated there) -- an unguarded failure here would crash
-        whoever is registering the job, at worst the whole app's startup.
-        A failed run is also not marked as done, so the next registration
-        retries it rather than silently treating a failure as a success.
+    def _run_and_mark(self, job_id: str, fn: Callable[[], None], run_key: str, wait: bool = True) -> None:
+        """Never lets a job's own exception propagate -- an unguarded failure
+        here would crash whoever calls this, at worst the whole app's
+        startup. A failed run is also not marked as done, so the next
+        registration retries it rather than silently treating a failure as
+        a success.
 
-        Runs fn() on a dedicated thread, joined before returning, rather
-        than directly on the calling thread. Found live: register_eod_job()
-        is called from FastAPI's async lifespan startup, and its job body
-        (_eod_job in scheduler_wiring.py) calls asyncio.run() internally --
-        when the catch-up path fired (app restarted after today's scheduled
-        hour), fn() ran directly on lifespan's own thread, which already had
-        a running event loop attached, and asyncio.run() raised "cannot be
-        called from a running event loop". A dedicated thread is always
-        loop-free regardless of the caller's own context, so this can never
-        recur for any job body -- and .join() keeps this method's own
-        behavior synchronous/blocking from the caller's point of view,
-        unchanged (existing tests assert the catch-up path's side effects
-        are visible immediately after schedule_daily()/schedule_once()
-        return). APScheduler's own later trigger fires already ran on its
-        own background thread and are unaffected by this -- this just adds
-        the same isolation to the catch-up path, which previously lacked it."""
-        errors: list[BaseException] = []
+        Runs fn() on a dedicated thread rather than directly on the calling
+        thread -- guaranteed loop-free regardless of the caller's own
+        context, since fn() may itself call asyncio.run() internally (e.g.
+        scheduler_wiring.py's _eod_job). Found live: register_eod_job() is
+        called from FastAPI's async lifespan startup; when the immediate
+        catch-up path fired there (app restarted after today's scheduled
+        hour) and fn() ran directly on lifespan's own thread, which already
+        had a running event loop attached, asyncio.run() raised "cannot be
+        called from a running event loop" (W159).
 
+        wait=True (the default; APScheduler's own later trigger fires,
+        already isolated on their own background thread, and any other
+        caller with no reason to return early) blocks until fn() finishes,
+        matching the original synchronous contract.
+
+        wait=False (schedule_daily()/schedule_once()'s own immediate
+        catch-up path specifically) returns immediately without waiting.
+        Found live in production, a second incident right after W159:
+        blocking here can hang the calling async context indefinitely --
+        register_eod_job()'s catch-up now actually *runs* the EOD job
+        (rather than failing fast the way the pre-W159 bug did), and a
+        large catch-up backlog (real fixture/odds/LLM calls, potentially
+        for every league) took long enough that FastAPI's lifespan startup
+        never reached its own `yield`, so the app never finished starting
+        and returned 502 for every request indefinitely. The pre-W159 bug
+        had accidentally "protected" against this by always failing
+        instantly; fixing it to actually succeed exposed this separate,
+        real blocking-startup risk."""
         def _target() -> None:
             try:
                 fn()
-            except BaseException as exc:  # noqa: BLE001 -- re-logged on the calling thread below
-                errors.append(exc)
+            except Exception:
+                LOGGER.exception("RecoverableScheduler: job %r (run_key=%r) failed.", job_id, run_key)
+                return
+            self.run_log.mark_ran(job_id, run_key)
 
-        thread = threading.Thread(target=_target)
+        thread = threading.Thread(target=_target, daemon=True)
         thread.start()
-        thread.join()
-
-        if errors:
-            LOGGER.error("RecoverableScheduler: job %r (run_key=%r) failed.", job_id, run_key, exc_info=errors[0])
-            return
-        self.run_log.mark_ran(job_id, run_key)
+        if wait:
+            thread.join()
 
     def start(self) -> None:
         self._scheduler.start()
