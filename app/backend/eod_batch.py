@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable
 
@@ -43,6 +44,7 @@ from app.backend.football_data_competition_codes import FOOTBALL_DATA_CODE_BY_LE
 from app.backend.odds_sport_keys import ODDS_SPORT_KEY_BY_COMPETITION
 from app.backend.recommendation_cache import RecommendationCache
 from app.backend.recommendations import validate_and_degrade
+from app.backend.sandbox_clock import sandbox_now
 from src.agent.agent_config import AgentConfig
 from src.ingestion.common.team_mapping import TeamNameMapper
 from src.utils.logger import get_logger
@@ -89,6 +91,23 @@ def already_fresh(
 
 def _fixture_date(fixture: NormalizedMatch) -> str:
     return fixture.utc_date[:10]
+
+
+def has_kicked_off(fixture: NormalizedMatch, now: datetime) -> bool:
+    """True once kickoff has passed. Shared by run_eod_batch (below, used by
+    both the nightly EOD job and main.py's boot-time pregenerate sweep) and
+    t30_refresh.py -- a pre-match value-betting recommendation is meaningless
+    once a match has actually started, since "current odds" past that point
+    reflect in-game state, not a pre-match edge. Time-based rather than
+    fixture.status-based deliberately: get_fixtures() (BUG-set found live)
+    already had to chase down multiple provider-specific in-progress status
+    spellings (IN_PLAY/PAUSED/LIVE) that don't fully overlap between
+    football-data.org competitions -- kickoff-time comparison sidesteps that
+    whole problem, and also stays correct for a fixture snapshot that's gone
+    stale by the time a restart-catch-up run actually reaches it (status
+    reflects whenever the fixture was fetched, not right now)."""
+    kickoff = datetime.fromisoformat(fixture.utc_date.replace("Z", "+00:00"))
+    return now >= kickoff
 
 
 def match_odds(
@@ -180,6 +199,17 @@ async def run_eod_batch(
     result = EodBatchResult(fixtures=list(fixtures))
 
     async def _generate_one(fixture: NormalizedMatch) -> None:
+        if has_kicked_off(fixture, sandbox_now(timezone.utc)):
+            LOGGER.info(
+                "EOD batch: skipping match_id=%s (%s v %s) -- kickoff already passed, a "
+                "pre-match recommendation is no longer meaningful.",
+                fixture.match_id, fixture.home_team, fixture.away_team,
+            )
+            result.skipped += 1
+            if on_progress is not None:
+                on_progress(fixture, "skipped")
+            return
+
         fixture_date = _fixture_date(fixture)
         match_info = {
             "home_team": fixture.home_team, "away_team": fixture.away_team,
@@ -224,7 +254,14 @@ async def run_eod_batch(
 
     await asyncio.gather(*[_generate_one(fixture) for fixture in fixtures])
 
+    now = sandbox_now(timezone.utc)
     for fixture in fixtures:
-        schedule_t30(fixture)
+        # A T-30 job for a fixture that's already kicked off would fire
+        # immediately via RecoverableScheduler's own catch-up path (its
+        # trigger time is already in the past) -- straight back into the
+        # same "recommendation for a live match" problem this function's
+        # own has_kicked_off() check above just avoided.
+        if not has_kicked_off(fixture, now):
+            schedule_t30(fixture)
 
     return result

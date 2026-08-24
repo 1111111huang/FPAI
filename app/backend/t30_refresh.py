@@ -20,20 +20,23 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal
 
+from datetime import timezone
+
 from app.backend import recommendations
 from app.backend.agent_config_hash import compute_agent_config_hash
-from app.backend.eod_batch import LEAGUE_CODE, already_fresh, match_odds, odds_lookup
+from app.backend.eod_batch import LEAGUE_CODE, already_fresh, has_kicked_off, match_odds, odds_lookup
 from app.backend.football_data_client import NormalizedMatch
 from app.backend.odds_api_client import OddsAPIClient
 from app.backend.odds_sport_keys import ODDS_SPORT_KEY_BY_COMPETITION
 from app.backend.recommendation_cache import RecommendationCache
 from app.backend.recommendations import validate_and_degrade
+from app.backend.sandbox_clock import sandbox_now
 from src.agent.agent_config import AgentConfig
 from src.utils.logger import get_logger
 
 LOGGER = get_logger(__name__)
 
-Outcome = Literal["refreshed", "skipped_no_change", "skipped_no_odds", "skipped_error"]
+Outcome = Literal["refreshed", "skipped_no_change", "skipped_no_odds", "skipped_error", "skipped_kicked_off"]
 
 
 @dataclass
@@ -60,6 +63,23 @@ def refresh_match_at_t30(
     # caller's exact behavior -- lets the multi-competition scheduler
     # orchestration call this once per competition instead of it being
     # structurally single-league.
+    #
+    # This T-30 job was scheduled while `fixture` was still genuinely
+    # pre-match, but RecoverableScheduler's own catch-up path (scheduler.py)
+    # runs a job immediately if its trigger time has already passed by the
+    # time the process actually gets to registering it (e.g. a restart long
+    # after the real T-30 instant) -- by then the match itself may have
+    # kicked off. Same rationale as eod_batch.has_kicked_off()'s own two
+    # call sites: leave the last cached pre-match recommendation as-is
+    # rather than replacing it with an "analysis" of a match already live.
+    if has_kicked_off(fixture, sandbox_now(timezone.utc)):
+        LOGGER.info(
+            "T-30 refresh: skipping match_id=%s -- kickoff already passed (stale "
+            "catch-up run), leaving the last cached pre-match recommendation in place.",
+            fixture.match_id,
+        )
+        return T30RefreshResult(match_id=fixture.match_id, outcome="skipped_kicked_off")
+
     # W58: explicit sport_key from the competition-id mapping, rather than
     # relying on get_odds()'s own "soccer_epl" default parameter.
     odds_events = odds_client.get_odds(sport_key=ODDS_SPORT_KEY_BY_COMPETITION[league]) if odds_client is not None else None

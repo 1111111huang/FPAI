@@ -7,6 +7,7 @@ in place rather than failing."""
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 import sys
 from unittest.mock import MagicMock, patch
@@ -28,16 +29,27 @@ _RECOMMENDATION = {
 }
 
 
-def _fixture(match_id: str = "m1", home: str = "Arsenal", away: str = "Everton") -> NormalizedMatch:
+def _future_utc_datetime(days_from_now: int, hour: int = 15) -> str:
+    """Real wall-clock time, not a fixed calendar date -- has_kicked_off()
+    (eod_batch.py, reused here) needs a kickoff genuinely in the future or
+    every test fixture reads as already-started."""
+    return (datetime.now(timezone.utc) + timedelta(days=days_from_now)).strftime(f"%Y-%m-%dT{hour:02d}:00:00Z")
+
+
+def _future_date(days_from_now: int) -> str:
+    return (datetime.now(timezone.utc) + timedelta(days=days_from_now)).strftime("%Y-%m-%d")
+
+
+def _fixture(match_id: str = "m1", home: str = "Arsenal", away: str = "Everton", utc_date: str | None = None) -> NormalizedMatch:
     return NormalizedMatch(
-        match_id=match_id, utc_date="2026-08-22T15:00:00Z", status="SCHEDULED",
+        match_id=match_id, utc_date=utc_date or _future_utc_datetime(1), status="SCHEDULED",
         home_team=home, away_team=away, home_goals=None, away_goals=None,
     )
 
 
 def _seed_cache(cache: RecommendationCache, config: AgentConfig, odds: dict) -> None:
     cache.record_generation(
-        match_id="m1", date="2026-08-22", agent_config_hash=compute_agent_config_hash(config),
+        match_id="m1", date=_future_date(1), agent_config_hash=compute_agent_config_hash(config),
         odds=odds, recommendation=_RECOMMENDATION, triggered_by="scheduled",
     )
 
@@ -54,14 +66,14 @@ def test_skips_refresh_when_odds_unchanged(tmp_path: Path) -> None:
     ]
 
     with patch("app.backend.recommendations.run_agent") as mock_run_agent:
-        result = refresh_match_at_t30(_fixture(), odds_client=odds_client, cache=cache, config=config, date_str="2026-08-22")
+        result = refresh_match_at_t30(_fixture(), odds_client=odds_client, cache=cache, config=config, date_str=_future_date(1))
 
     mock_run_agent.assert_not_called()
     assert result.outcome == "skipped_no_change"
     agent_config_hash = compute_agent_config_hash(config)
-    entry = cache.get_latest("m1", "2026-08-22", agent_config_hash)
+    entry = cache.get_latest("m1", _future_date(1), agent_config_hash)
     assert entry.triggered_by == "scheduled"
-    assert len(cache.get_history("m1", "2026-08-22", agent_config_hash)) == 1  # no new row written
+    assert len(cache.get_history("m1", _future_date(1), agent_config_hash)) == 1  # no new row written
 
 
 def test_get_odds_is_called_with_an_explicit_epl_sport_key(tmp_path: Path) -> None:
@@ -71,7 +83,7 @@ def test_get_odds_is_called_with_an_explicit_epl_sport_key(tmp_path: Path) -> No
     odds_client = MagicMock()
     odds_client.get_odds.return_value = []
 
-    refresh_match_at_t30(_fixture(), odds_client=odds_client, cache=cache, config=config, date_str="2026-08-22")
+    refresh_match_at_t30(_fixture(), odds_client=odds_client, cache=cache, config=config, date_str=_future_date(1))
 
     odds_client.get_odds.assert_called_once_with(sport_key="soccer_epl")
 
@@ -93,7 +105,7 @@ def test_league_parameter_tags_match_info_and_selects_the_matching_sport_key(tmp
     with patch("app.backend.recommendations.run_agent", return_value=_RECOMMENDATION) as mock_run:
         refresh_match_at_t30(
             swedish_fixture, odds_client=odds_client, cache=cache, config=config,
-            date_str="2026-08-22", league="SWE",
+            date_str=_future_date(1), league="SWE",
         )
 
     odds_client.get_odds.assert_called_once_with(sport_key="soccer_sweden_allsvenskan")
@@ -110,7 +122,7 @@ def test_league_parameter_defaults_to_e0_preserving_existing_behavior(tmp_path: 
     ]
 
     with patch("app.backend.recommendations.run_agent", return_value=_RECOMMENDATION) as mock_run:
-        refresh_match_at_t30(_fixture(), odds_client=odds_client, cache=cache, config=config, date_str="2026-08-22")
+        refresh_match_at_t30(_fixture(), odds_client=odds_client, cache=cache, config=config, date_str=_future_date(1))
 
     odds_client.get_odds.assert_called_once_with(sport_key="soccer_epl")
     assert mock_run.call_args.kwargs["match_info"]["league"] == "E0"
@@ -128,12 +140,12 @@ def test_refreshes_when_odds_changed(tmp_path: Path) -> None:
     ]
 
     with patch("app.backend.recommendations.run_agent", return_value=_RECOMMENDATION) as mock_run_agent:
-        result = refresh_match_at_t30(_fixture(), odds_client=odds_client, cache=cache, config=config, date_str="2026-08-22")
+        result = refresh_match_at_t30(_fixture(), odds_client=odds_client, cache=cache, config=config, date_str=_future_date(1))
 
     mock_run_agent.assert_called_once()
     assert result.outcome == "refreshed"
     agent_config_hash = compute_agent_config_hash(config)
-    history = cache.get_history("m1", "2026-08-22", agent_config_hash)
+    history = cache.get_history("m1", _future_date(1), agent_config_hash)
     assert len(history) == 2
     assert history[-1].odds == {"home": 1.6, "draw": 3.8, "away": 5.0}
 
@@ -151,7 +163,7 @@ def test_generates_fresh_when_no_prior_cache_entry_exists(tmp_path: Path) -> Non
     ]
 
     with patch("app.backend.recommendations.run_agent", return_value=_RECOMMENDATION) as mock_run_agent:
-        result = refresh_match_at_t30(_fixture(), odds_client=odds_client, cache=cache, config=config, date_str="2026-08-22")
+        result = refresh_match_at_t30(_fixture(), odds_client=odds_client, cache=cache, config=config, date_str=_future_date(1))
 
     mock_run_agent.assert_called_once()
     assert result.outcome == "refreshed"
@@ -166,12 +178,12 @@ def test_skips_gracefully_when_credit_budget_exhausted(tmp_path: Path) -> None:
     odds_client.get_odds.return_value = None  # W07's own budget-exhausted convention
 
     with patch("app.backend.recommendations.run_agent") as mock_run_agent:
-        result = refresh_match_at_t30(_fixture(), odds_client=odds_client, cache=cache, config=config, date_str="2026-08-22")
+        result = refresh_match_at_t30(_fixture(), odds_client=odds_client, cache=cache, config=config, date_str=_future_date(1))
 
     mock_run_agent.assert_not_called()
     assert result.outcome == "skipped_no_odds"
     agent_config_hash = compute_agent_config_hash(config)
-    assert len(cache.get_history("m1", "2026-08-22", agent_config_hash)) == 1  # prior recommendation untouched
+    assert len(cache.get_history("m1", _future_date(1), agent_config_hash)) == 1  # prior recommendation untouched
 
 
 def test_skips_gracefully_when_fixture_odds_not_found_eg_postponed(tmp_path: Path) -> None:
@@ -183,7 +195,7 @@ def test_skips_gracefully_when_fixture_odds_not_found_eg_postponed(tmp_path: Pat
     odds_client.get_odds.return_value = []  # fixture no longer in the odds feed
 
     with patch("app.backend.recommendations.run_agent") as mock_run_agent:
-        result = refresh_match_at_t30(_fixture(), odds_client=odds_client, cache=cache, config=config, date_str="2026-08-22")
+        result = refresh_match_at_t30(_fixture(), odds_client=odds_client, cache=cache, config=config, date_str=_future_date(1))
 
     mock_run_agent.assert_not_called()
     assert result.outcome == "skipped_no_odds"
@@ -201,11 +213,11 @@ def test_skips_gracefully_on_run_agent_error(tmp_path: Path) -> None:
     ]
 
     with patch("app.backend.recommendations.run_agent", side_effect=RuntimeError("LLM timeout")):
-        result = refresh_match_at_t30(_fixture(), odds_client=odds_client, cache=cache, config=config, date_str="2026-08-22")
+        result = refresh_match_at_t30(_fixture(), odds_client=odds_client, cache=cache, config=config, date_str=_future_date(1))
 
     assert result.outcome == "skipped_error"
     agent_config_hash = compute_agent_config_hash(config)
-    assert len(cache.get_history("m1", "2026-08-22", agent_config_hash)) == 1  # prior recommendation untouched
+    assert len(cache.get_history("m1", _future_date(1), agent_config_hash)) == 1  # prior recommendation untouched
 
 
 def test_no_odds_client_at_all_skips_gracefully(tmp_path: Path) -> None:
@@ -214,7 +226,37 @@ def test_no_odds_client_at_all_skips_gracefully(tmp_path: Path) -> None:
     _seed_cache(cache, config, odds={"home": 1.8, "draw": 3.6, "away": 4.5})
 
     with patch("app.backend.recommendations.run_agent") as mock_run_agent:
-        result = refresh_match_at_t30(_fixture(), odds_client=None, cache=cache, config=config, date_str="2026-08-22")
+        result = refresh_match_at_t30(_fixture(), odds_client=None, cache=cache, config=config, date_str=_future_date(1))
 
     mock_run_agent.assert_not_called()
     assert result.outcome == "skipped_no_odds"
+
+
+def test_skips_refresh_when_kickoff_already_passed(tmp_path: Path) -> None:
+    """A T-30 job scheduled while the fixture was genuinely pre-match can
+    still execute late -- RecoverableScheduler's own catch-up path runs a
+    job immediately once its trigger time has passed (e.g. a restart long
+    after the real T-30 instant). By then the match may have kicked off;
+    refreshing with "current" odds at that point would replace a real
+    pre-match recommendation with in-game-odds noise instead."""
+    config = AgentConfig.default()
+    cache = RecommendationCache(db_path=tmp_path / "cache.db")
+    _seed_cache(cache, config, odds={"home": 1.8, "draw": 3.6, "away": 4.5})
+    already_kicked_off = _fixture(utc_date=_future_utc_datetime(-1))  # yesterday
+
+    odds_client = MagicMock()
+    odds_client.get_odds.return_value = [
+        NormalizedOdds(home_team="Arsenal", away_team="Everton", commence_time=_future_utc_datetime(-1),
+                        home_odds=1.6, draw_odds=3.8, away_odds=5.0),  # moved -- would otherwise trigger a refresh
+    ]
+
+    with patch("app.backend.recommendations.run_agent") as mock_run_agent:
+        result = refresh_match_at_t30(
+            already_kicked_off, odds_client=odds_client, cache=cache, config=config, date_str=_future_date(1),
+        )
+
+    mock_run_agent.assert_not_called()
+    odds_client.get_odds.assert_not_called()
+    assert result.outcome == "skipped_kicked_off"
+    agent_config_hash = compute_agent_config_hash(config)
+    assert len(cache.get_history("m1", _future_date(1), agent_config_hash)) == 1  # prior recommendation untouched

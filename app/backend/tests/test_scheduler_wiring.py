@@ -7,7 +7,7 @@ trio leaves persistence to the caller by design)."""
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 import sys
 import time
@@ -30,6 +30,16 @@ from app.backend.scheduler_wiring import (
     t30_run_at,
 )
 from src.agent.agent_config import AgentConfig
+
+# eod_batch.has_kicked_off() (reused by run_eod_batch, called under the hood
+# by register_eod_job below) compares each fixture's utc_date against real
+# wall-clock time (sandbox_now()) -- independent of the `now_fn` these tests
+# inject into RecoverableScheduler for its own catch-up-trigger math. A fixed
+# calendar date rots the moment real time passes it, so every fixture/`now`
+# pair below is anchored to this real-future day instead.
+_FUTURE_DAY = (datetime.now(timezone.utc) + timedelta(days=2)).date()
+_FUTURE_DAY_STR = _FUTURE_DAY.isoformat()
+_FUTURE_DAY_PLUS_1_STR = (_FUTURE_DAY + timedelta(days=1)).isoformat()
 
 
 def _wait_until(predicate, timeout: float = 2.0, interval: float = 0.01) -> bool:
@@ -62,11 +72,11 @@ def test_next_day_date_str_rolls_over_at_midnight_ny() -> None:
 
 def test_t30_run_at_is_30_minutes_before_kickoff() -> None:
     fixture = NormalizedMatch(
-        match_id="m1", utc_date="2026-08-22T15:00:00Z", status="SCHEDULED",
+        match_id="m1", utc_date=f"{_FUTURE_DAY_STR}T15:00:00Z", status="SCHEDULED",
         home_team="Arsenal", away_team="Everton", home_goals=None, away_goals=None,
     )
     run_at = t30_run_at(fixture)
-    assert run_at.isoformat() == "2026-08-22T14:30:00+00:00"
+    assert run_at.isoformat() == f"{_FUTURE_DAY_STR}T14:30:00+00:00"
 
 
 def test_persisting_odds_client_saves_counter_after_call(tmp_path: Path) -> None:
@@ -162,7 +172,7 @@ def test_register_eod_job_generates_recommendations_and_schedules_t30(tmp_path: 
     T-30 job's own catch-up fires (its run_at is already in the past
     relative to 'now', matching a realistic same-run scheduling case)."""
     fixture = NormalizedMatch(
-        match_id="m1", utc_date="2026-08-22T15:00:00Z", status="SCHEDULED",
+        match_id="m1", utc_date=f"{_FUTURE_DAY_STR}T15:00:00Z", status="SCHEDULED",
         home_team="Arsenal", away_team="Everton", home_goals=None, away_goals=None,
     )
     fixtures_client = MagicMock()
@@ -175,7 +185,7 @@ def test_register_eod_job_generates_recommendations_and_schedules_t30(tmp_path: 
     # past both today's 23:00 EOD trigger and the fixture's T-30 trigger
     # (2026-08-22T14:30:00Z), so registering triggers immediate catch-up
     # runs for both rather than waiting.
-    now = datetime(2026, 8, 22, 23, 30, tzinfo=NY_TZ)
+    now = datetime(_FUTURE_DAY.year, _FUTURE_DAY.month, _FUTURE_DAY.day, 23, 30, tzinfo=NY_TZ)
     scheduler = RecoverableScheduler(run_log=run_log, now_fn=lambda: now)
 
     recommendation = {
@@ -191,7 +201,7 @@ def test_register_eod_job_generates_recommendations_and_schedules_t30(tmp_path: 
         # W159 follow-up: catch-up now runs on a background thread without
         # waiting -- must finish before the patch above is torn down, or it
         # executes against the real (unpatched) run_agent.
-        assert _wait_until(lambda: run_log.has_run(EOD_JOB_ID, "2026-08-22"))
+        assert _wait_until(lambda: run_log.has_run(EOD_JOB_ID, _FUTURE_DAY_STR))
 
     assert run_log.has_run("t30_m1", t30_run_at(fixture).isoformat())
 
@@ -202,11 +212,11 @@ def test_register_eod_job_processes_both_e0_and_swe_when_sweden_client_configure
     SWE (The Odds API, W57) fixtures are discovered and generate correctly
     league-tagged recommendations in the same nightly run."""
     e0_fixture = NormalizedMatch(
-        match_id="m1", utc_date="2026-08-22T15:00:00Z", status="SCHEDULED",
+        match_id="m1", utc_date=f"{_FUTURE_DAY_STR}T15:00:00Z", status="SCHEDULED",
         home_team="Arsenal", away_team="Everton", home_goals=None, away_goals=None,
     )
     swe_fixture = NormalizedMatch(
-        match_id="sw1", utc_date="2026-08-22T17:00:00Z", status="SCHEDULED",
+        match_id="sw1", utc_date=f"{_FUTURE_DAY_STR}T17:00:00Z", status="SCHEDULED",
         home_team="Malmo FF", away_team="AIK", home_goals=None, away_goals=None,
     )
     fixtures_client = MagicMock()
@@ -216,7 +226,7 @@ def test_register_eod_job_processes_both_e0_and_swe_when_sweden_client_configure
     cache = RecommendationCache(db_path=tmp_path / "cache.db")
     config = AgentConfig.default()
     run_log = JobRunLog(db_path=tmp_path / "job_runs.db")
-    now = datetime(2026, 8, 22, 23, 30, tzinfo=NY_TZ)
+    now = datetime(_FUTURE_DAY.year, _FUTURE_DAY.month, _FUTURE_DAY.day, 23, 30, tzinfo=NY_TZ)
     scheduler = RecoverableScheduler(run_log=run_log, now_fn=lambda: now)
 
     recommendation = {
@@ -232,7 +242,7 @@ def test_register_eod_job_processes_both_e0_and_swe_when_sweden_client_configure
             cache=cache, config=config, now_fn=lambda: now,
             sweden_fixtures_client=sweden_fixtures_client,
         )
-        assert _wait_until(lambda: run_log.has_run(EOD_JOB_ID, "2026-08-22"))
+        assert _wait_until(lambda: run_log.has_run(EOD_JOB_ID, _FUTURE_DAY_STR))
 
     leagues_seen = {call.kwargs["match_info"]["league"] for call in mock_run_agent.call_args_list}
     assert leagues_seen == {"E0", "SWE"}
@@ -244,7 +254,7 @@ def test_register_eod_job_skips_sweden_gracefully_when_no_sweden_client_configur
     """Backward compatibility: omitting sweden_fixtures_client (its default)
     must behave exactly like before W62 -- only E0 is processed, no crash."""
     e0_fixture = NormalizedMatch(
-        match_id="m1", utc_date="2026-08-22T15:00:00Z", status="SCHEDULED",
+        match_id="m1", utc_date=f"{_FUTURE_DAY_STR}T15:00:00Z", status="SCHEDULED",
         home_team="Arsenal", away_team="Everton", home_goals=None, away_goals=None,
     )
     fixtures_client = MagicMock()
@@ -252,7 +262,7 @@ def test_register_eod_job_skips_sweden_gracefully_when_no_sweden_client_configur
     cache = RecommendationCache(db_path=tmp_path / "cache.db")
     config = AgentConfig.default()
     run_log = JobRunLog(db_path=tmp_path / "job_runs.db")
-    now = datetime(2026, 8, 22, 23, 30, tzinfo=NY_TZ)
+    now = datetime(_FUTURE_DAY.year, _FUTURE_DAY.month, _FUTURE_DAY.day, 23, 30, tzinfo=NY_TZ)
     scheduler = RecoverableScheduler(run_log=run_log, now_fn=lambda: now)
 
     recommendation = {
@@ -265,7 +275,7 @@ def test_register_eod_job_skips_sweden_gracefully_when_no_sweden_client_configur
             scheduler, fixtures_client=fixtures_client, odds_client=None,
             cache=cache, config=config, now_fn=lambda: now,
         )
-        assert _wait_until(lambda: run_log.has_run(EOD_JOB_ID, "2026-08-22"))
+        assert _wait_until(lambda: run_log.has_run(EOD_JOB_ID, _FUTURE_DAY_STR))
 
     assert mock_run_agent.call_count == 1
     assert mock_run_agent.call_args.kwargs["match_info"]["league"] == "E0"
@@ -279,11 +289,11 @@ def test_register_eod_job_skips_a_display_disabled_competition_even_with_its_cli
     wins over client wiring, so turning a competition off doesn't require
     also ripping out its client registration."""
     e0_fixture = NormalizedMatch(
-        match_id="m1", utc_date="2026-08-22T15:00:00Z", status="SCHEDULED",
+        match_id="m1", utc_date=f"{_FUTURE_DAY_STR}T15:00:00Z", status="SCHEDULED",
         home_team="Arsenal", away_team="Everton", home_goals=None, away_goals=None,
     )
     swe_fixture = NormalizedMatch(
-        match_id="sw1", utc_date="2026-08-22T17:00:00Z", status="SCHEDULED",
+        match_id="sw1", utc_date=f"{_FUTURE_DAY_STR}T17:00:00Z", status="SCHEDULED",
         home_team="Malmo FF", away_team="AIK", home_goals=None, away_goals=None,
     )
     fixtures_client = MagicMock()
@@ -293,7 +303,7 @@ def test_register_eod_job_skips_a_display_disabled_competition_even_with_its_cli
     cache = RecommendationCache(db_path=tmp_path / "cache.db")
     config = AgentConfig.default()
     run_log = JobRunLog(db_path=tmp_path / "job_runs.db")
-    now = datetime(2026, 8, 22, 23, 30, tzinfo=NY_TZ)
+    now = datetime(_FUTURE_DAY.year, _FUTURE_DAY.month, _FUTURE_DAY.day, 23, 30, tzinfo=NY_TZ)
     scheduler = RecoverableScheduler(run_log=run_log, now_fn=lambda: now)
 
     recommendation = {
@@ -309,7 +319,7 @@ def test_register_eod_job_skips_a_display_disabled_competition_even_with_its_cli
             cache=cache, config=config, now_fn=lambda: now,
             sweden_fixtures_client=sweden_fixtures_client,
         )
-        assert _wait_until(lambda: run_log.has_run(EOD_JOB_ID, "2026-08-22"))
+        assert _wait_until(lambda: run_log.has_run(EOD_JOB_ID, _FUTURE_DAY_STR))
 
     assert mock_run_agent.call_count == 1
     assert mock_run_agent.call_args.kwargs["match_info"]["league"] == "E0"
@@ -320,7 +330,7 @@ def test_register_eod_job_one_competitions_fixture_fetch_failure_does_not_block_
     """W62 acceptance: one competition's fixture-fetch failure must not
     block the other's batch."""
     e0_fixture = NormalizedMatch(
-        match_id="m1", utc_date="2026-08-22T15:00:00Z", status="SCHEDULED",
+        match_id="m1", utc_date=f"{_FUTURE_DAY_STR}T15:00:00Z", status="SCHEDULED",
         home_team="Arsenal", away_team="Everton", home_goals=None, away_goals=None,
     )
     fixtures_client = MagicMock()
@@ -330,7 +340,7 @@ def test_register_eod_job_one_competitions_fixture_fetch_failure_does_not_block_
     cache = RecommendationCache(db_path=tmp_path / "cache.db")
     config = AgentConfig.default()
     run_log = JobRunLog(db_path=tmp_path / "job_runs.db")
-    now = datetime(2026, 8, 22, 23, 30, tzinfo=NY_TZ)
+    now = datetime(_FUTURE_DAY.year, _FUTURE_DAY.month, _FUTURE_DAY.day, 23, 30, tzinfo=NY_TZ)
     scheduler = RecoverableScheduler(run_log=run_log, now_fn=lambda: now)
 
     recommendation = {
@@ -344,7 +354,7 @@ def test_register_eod_job_one_competitions_fixture_fetch_failure_does_not_block_
             cache=cache, config=config, now_fn=lambda: now,
             sweden_fixtures_client=sweden_fixtures_client,
         )
-        assert _wait_until(lambda: run_log.has_run(EOD_JOB_ID, "2026-08-22"))
+        assert _wait_until(lambda: run_log.has_run(EOD_JOB_ID, _FUTURE_DAY_STR))
 
     assert mock_run_agent.call_count == 1
     assert mock_run_agent.call_args.kwargs["match_info"]["league"] == "E0"
@@ -358,15 +368,15 @@ def test_register_eod_job_processes_e0_swe_and_sp1_when_all_clients_configured(t
     isolation (production wiring can pass the same underlying client for
     both)."""
     e0_fixture = NormalizedMatch(
-        match_id="m1", utc_date="2026-08-22T15:00:00Z", status="SCHEDULED",
+        match_id="m1", utc_date=f"{_FUTURE_DAY_STR}T15:00:00Z", status="SCHEDULED",
         home_team="Arsenal", away_team="Everton", home_goals=None, away_goals=None,
     )
     swe_fixture = NormalizedMatch(
-        match_id="sw1", utc_date="2026-08-22T17:00:00Z", status="SCHEDULED",
+        match_id="sw1", utc_date=f"{_FUTURE_DAY_STR}T17:00:00Z", status="SCHEDULED",
         home_team="Malmo FF", away_team="AIK", home_goals=None, away_goals=None,
     )
     sp1_fixture = NormalizedMatch(
-        match_id="sp1", utc_date="2026-08-22T19:00:00Z", status="SCHEDULED",
+        match_id="sp1", utc_date=f"{_FUTURE_DAY_STR}T19:00:00Z", status="SCHEDULED",
         home_team="Real Madrid", away_team="Sevilla FC", home_goals=None, away_goals=None,
     )
     fixtures_client = MagicMock()
@@ -378,7 +388,7 @@ def test_register_eod_job_processes_e0_swe_and_sp1_when_all_clients_configured(t
     cache = RecommendationCache(db_path=tmp_path / "cache.db")
     config = AgentConfig.default()
     run_log = JobRunLog(db_path=tmp_path / "job_runs.db")
-    now = datetime(2026, 8, 22, 23, 30, tzinfo=NY_TZ)
+    now = datetime(_FUTURE_DAY.year, _FUTURE_DAY.month, _FUTURE_DAY.day, 23, 30, tzinfo=NY_TZ)
     scheduler = RecoverableScheduler(run_log=run_log, now_fn=lambda: now)
 
     recommendation = {
@@ -395,12 +405,12 @@ def test_register_eod_job_processes_e0_swe_and_sp1_when_all_clients_configured(t
             sweden_fixtures_client=sweden_fixtures_client,
             la_liga_fixtures_client=la_liga_fixtures_client,
         )
-        assert _wait_until(lambda: run_log.has_run(EOD_JOB_ID, "2026-08-22"))
+        assert _wait_until(lambda: run_log.has_run(EOD_JOB_ID, _FUTURE_DAY_STR))
 
     leagues_seen = {call.kwargs["match_info"]["league"] for call in mock_run_agent.call_args_list}
     assert leagues_seen == {"E0", "SWE", "SP1"}
     la_liga_fixtures_client.get_fixtures.assert_called_once_with(
-        competition_code="PD", date_from="2026-08-23", date_to="2026-08-23"
+        competition_code="PD", date_from=_FUTURE_DAY_PLUS_1_STR, date_to=_FUTURE_DAY_PLUS_1_STR
     )
     assert run_log.has_run("t30_sp1", t30_run_at(sp1_fixture).isoformat())
 
@@ -410,7 +420,7 @@ def test_register_eod_job_skips_la_liga_gracefully_when_no_la_liga_client_config
     behaves exactly like before W81 -- only E0 (and SWE, if configured) run,
     no crash."""
     e0_fixture = NormalizedMatch(
-        match_id="m1", utc_date="2026-08-22T15:00:00Z", status="SCHEDULED",
+        match_id="m1", utc_date=f"{_FUTURE_DAY_STR}T15:00:00Z", status="SCHEDULED",
         home_team="Arsenal", away_team="Everton", home_goals=None, away_goals=None,
     )
     fixtures_client = MagicMock()
@@ -418,7 +428,7 @@ def test_register_eod_job_skips_la_liga_gracefully_when_no_la_liga_client_config
     cache = RecommendationCache(db_path=tmp_path / "cache.db")
     config = AgentConfig.default()
     run_log = JobRunLog(db_path=tmp_path / "job_runs.db")
-    now = datetime(2026, 8, 22, 23, 30, tzinfo=NY_TZ)
+    now = datetime(_FUTURE_DAY.year, _FUTURE_DAY.month, _FUTURE_DAY.day, 23, 30, tzinfo=NY_TZ)
     scheduler = RecoverableScheduler(run_log=run_log, now_fn=lambda: now)
 
     recommendation = {
@@ -431,7 +441,7 @@ def test_register_eod_job_skips_la_liga_gracefully_when_no_la_liga_client_config
             scheduler, fixtures_client=fixtures_client, odds_client=None,
             cache=cache, config=config, now_fn=lambda: now,
         )
-        assert _wait_until(lambda: run_log.has_run(EOD_JOB_ID, "2026-08-22"))
+        assert _wait_until(lambda: run_log.has_run(EOD_JOB_ID, _FUTURE_DAY_STR))
 
     assert mock_run_agent.call_count == 1
     assert mock_run_agent.call_args.kwargs["match_info"]["league"] == "E0"
