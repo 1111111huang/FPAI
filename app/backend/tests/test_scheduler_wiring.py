@@ -15,12 +15,15 @@ from unittest.mock import MagicMock, patch
 
 sys.path.append(str(Path(__file__).resolve().parents[3]))
 
+import requests
+
 from app.backend.football_data_client import NormalizedMatch
 from app.backend.odds_api_client import CreditCounter, FileCreditCounterStore
 from app.backend.recommendation_cache import RecommendationCache
 from app.backend.scheduler import NY_TZ, JobRunLog, RecoverableScheduler
 from app.backend.scheduler_wiring import (
     EOD_JOB_ID,
+    FallbackOddsClient,
     PersistingOddsClient,
     next_day_date_str,
     register_eod_job,
@@ -109,6 +112,46 @@ def test_persisting_odds_client_forwards_date_to_the_inner_client(tmp_path: Path
     client.get_odds(sport_key="soccer_sweden_allsvenskan", date="2026-08-10")
 
     inner_client.get_odds.assert_called_once_with(sport_key="soccer_sweden_allsvenskan", date="2026-08-10")
+
+
+def test_fallback_odds_client_uses_first_client_when_it_succeeds() -> None:
+    primary, secondary = MagicMock(), MagicMock()
+    primary.get_odds.return_value = ["primary odds"]
+
+    result = FallbackOddsClient([primary, secondary]).get_odds()
+
+    assert result == ["primary odds"]
+    secondary.get_odds.assert_not_called()
+
+
+def test_fallback_odds_client_falls_back_when_first_client_is_locally_exhausted() -> None:
+    primary, secondary = MagicMock(), MagicMock()
+    primary.get_odds.return_value = None  # local CreditCounter predicts exhaustion
+    secondary.get_odds.return_value = ["secondary odds"]
+
+    result = FallbackOddsClient([primary, secondary]).get_odds()
+
+    assert result == ["secondary odds"]
+
+
+def test_fallback_odds_client_falls_back_when_first_client_raises() -> None:
+    primary, secondary = MagicMock(), MagicMock()
+    primary.get_odds.side_effect = requests.HTTPError("401 out of credits")
+    secondary.get_odds.return_value = ["secondary odds"]
+
+    result = FallbackOddsClient([primary, secondary]).get_odds()
+
+    assert result == ["secondary odds"]
+
+
+def test_fallback_odds_client_returns_none_when_every_client_fails() -> None:
+    primary, secondary = MagicMock(), MagicMock()
+    primary.get_odds.return_value = None
+    secondary.get_odds.side_effect = requests.ConnectionError("network down")
+
+    result = FallbackOddsClient([primary, secondary]).get_odds()
+
+    assert result is None
 
 
 def test_register_eod_job_generates_recommendations_and_schedules_t30(tmp_path: Path) -> None:

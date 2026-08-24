@@ -10,7 +10,9 @@
       "Bash(sort -t'W' -k2 -n)",
       "Bash(sort -t'A' -k2 -n)",
       "Bash(xargs ls)",
-      "Bash(curl -s --max-time 30 \"https://fpai-production.up.railway.app/api/status\" -H \"x-app-token: fpai-test-8x2kQmZ4pR9vL7wN\")"
+      "Bash(curl -s --max-time 30 \"https://fpai-production.up.railway.app/api/status\" -H \"x-app-token: fpai-test-8x2kQmZ4pR9vL7wN\")",
+      "Bash(command -v railway)",
+      "Bash(railway whoami *)"
     ]
   }
 }
