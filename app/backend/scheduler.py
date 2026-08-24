@@ -25,6 +25,7 @@ from __future__ import annotations
 from datetime import datetime
 from pathlib import Path
 import sqlite3
+import threading
 from typing import Callable
 from zoneinfo import ZoneInfo
 
@@ -138,11 +139,38 @@ class RecoverableScheduler:
         exception-isolated there) -- an unguarded failure here would crash
         whoever is registering the job, at worst the whole app's startup.
         A failed run is also not marked as done, so the next registration
-        retries it rather than silently treating a failure as a success."""
-        try:
-            fn()
-        except Exception:
-            LOGGER.exception("RecoverableScheduler: job %r (run_key=%r) failed.", job_id, run_key)
+        retries it rather than silently treating a failure as a success.
+
+        Runs fn() on a dedicated thread, joined before returning, rather
+        than directly on the calling thread. Found live: register_eod_job()
+        is called from FastAPI's async lifespan startup, and its job body
+        (_eod_job in scheduler_wiring.py) calls asyncio.run() internally --
+        when the catch-up path fired (app restarted after today's scheduled
+        hour), fn() ran directly on lifespan's own thread, which already had
+        a running event loop attached, and asyncio.run() raised "cannot be
+        called from a running event loop". A dedicated thread is always
+        loop-free regardless of the caller's own context, so this can never
+        recur for any job body -- and .join() keeps this method's own
+        behavior synchronous/blocking from the caller's point of view,
+        unchanged (existing tests assert the catch-up path's side effects
+        are visible immediately after schedule_daily()/schedule_once()
+        return). APScheduler's own later trigger fires already ran on its
+        own background thread and are unaffected by this -- this just adds
+        the same isolation to the catch-up path, which previously lacked it."""
+        errors: list[BaseException] = []
+
+        def _target() -> None:
+            try:
+                fn()
+            except BaseException as exc:  # noqa: BLE001 -- re-logged on the calling thread below
+                errors.append(exc)
+
+        thread = threading.Thread(target=_target)
+        thread.start()
+        thread.join()
+
+        if errors:
+            LOGGER.error("RecoverableScheduler: job %r (run_key=%r) failed.", job_id, run_key, exc_info=errors[0])
             return
         self.run_log.mark_ran(job_id, run_key)
 

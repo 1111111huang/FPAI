@@ -7,6 +7,7 @@ without catching up -- confirmed via simulating a restart mid-day."""
 
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timedelta
 from pathlib import Path
 import sys
@@ -166,3 +167,38 @@ def test_a_failing_catchup_job_does_not_raise_and_is_not_marked_as_run(tmp_path:
     scheduler.schedule_daily("daily_eod", _boom, hour=23, minute=0)  # must not raise
 
     assert not run_log.has_run("daily_eod", "2026-07-12")
+
+
+def test_catchup_job_whose_body_calls_asyncio_run_works_from_inside_a_running_loop(tmp_path: Path) -> None:
+    """Regression, found live in production: register_eod_job() (app/backend/
+    scheduler_wiring.py) is called from FastAPI's async lifespan startup, and
+    its job body (_eod_job) calls asyncio.run() internally, once per league.
+    Before this fix, the catch-up path ran fn() directly on the calling
+    thread -- when the app restarted after today's scheduled EOD hour (the
+    catch-up condition), fn() ran on lifespan's own thread, which already
+    had a running event loop attached, and asyncio.run() raised "cannot be
+    called from a running event loop". The failure was caught and logged
+    (not a startup crash) but the job was never marked as run -- meaning
+    every restart after the scheduled hour silently failed to regenerate
+    recommendations, indefinitely, until a restart happened to land before
+    the scheduled hour instead. Reproduces the exact shape: schedule_daily()
+    invoked from inside a running event loop, whose job body itself calls
+    asyncio.run()."""
+    run_log = JobRunLog(db_path=tmp_path / "job_runs.db")
+    now = datetime(2026, 7, 12, 23, 30, tzinfo=NY_TZ)
+    calls = []
+
+    async def _async_work() -> None:
+        calls.append("ran")
+
+    def _job_like_eod_job() -> None:
+        asyncio.run(_async_work())
+
+    async def _register_from_inside_a_running_loop() -> None:
+        scheduler = RecoverableScheduler(run_log=run_log, now_fn=lambda: now)
+        scheduler.schedule_daily("daily_eod", _job_like_eod_job, hour=23, minute=0)
+
+    asyncio.run(_register_from_inside_a_running_loop())
+
+    assert calls == ["ran"]
+    assert run_log.has_run("daily_eod", "2026-07-12")
