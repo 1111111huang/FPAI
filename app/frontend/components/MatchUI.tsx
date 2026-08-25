@@ -17,6 +17,7 @@
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import {
+  ArrowDown,
   ArrowLeft,
   ArrowUp,
   CalendarBlank,
@@ -963,9 +964,12 @@ export function MatchCard({
               <div className="flex items-center gap-1 text-sm font-semibold text-ink">
                 {shown ? (
                   <>
-                    {pickCaption(shown.selection) && (
-                      <ArrowUp size={11} weight="bold" className="shrink-0 text-good" />
-                    )}
+                    {pickCaption(shown.selection) &&
+                      (shown.selection.startsWith("under") ? (
+                        <ArrowDown size={11} weight="bold" className="shrink-0 text-good" />
+                      ) : (
+                        <ArrowUp size={11} weight="bold" className="shrink-0 text-good" />
+                      ))}
                     <span className={`truncate ${hit === false ? "line-through" : ""}`}>
                       {pickLabel(match, shown.selection)}
                     </span>
@@ -1256,14 +1260,12 @@ export function DashboardPage() {
   }
 
   const shownMatches = matches ?? [];
-  const activeEdgesCount = shownMatches.filter(isActionable).length;
   // Mockup point 3: "N with positive edge" -- same predicate the
   // "Positive Edge" tag on each card itself uses.
   const positiveEdgeCount = shownMatches.filter(hasPositiveEdge).length;
-  // W108: the rail (Edge Distribution/Top Edges) and the Active Edges count
-  // above both stay computed over the full loaded set regardless of this
-  // filter -- it's a display concern for the list only, not a re-scoping of
-  // what "loaded" means.
+  // W108: the rail (Edge Distribution/Top Edges) stays computed over the
+  // full loaded set regardless of this filter -- it's a display concern for
+  // the list only, not a re-scoping of what "loaded" means.
   const visibleMatches = actionableOnly ? shownMatches.filter(isActionable) : shownMatches;
   // Date-group order always follows kickoff order, regardless of the
   // Kickoff/Edge % toggle below -- an edge-sorted list would scramble which
@@ -1278,7 +1280,6 @@ export function DashboardPage() {
     <>
       <AppShell
         active="dashboard"
-        activeEdgesCount={matches !== null ? activeEdgesCount : undefined}
         // Direct feedback: on small screens the rail should "squish with
         // the top part with the search bar", not be its own section --
         // this trigger opens the mobile-only overlay drawer below instead
@@ -1520,11 +1521,6 @@ export function MatchExplorerPage() {
     return result;
   }, [matches, query, actionableOnly]);
 
-  // Counted over the full loaded window (matches), not the search/actionable-
-  // filtered `rows` -- mirrors DashboardPage's semantics ("edges among what's
-  // loaded", not "edges among what's currently visible after filtering").
-  const activeEdgesCount = (matches ?? []).filter(isActionable).length;
-
   // Direct user request: league section headers, since this page has no
   // grouping at all today -- mirrors DashboardPage's own date-group panel
   // (same DATE_GROUP_WASHES/TIER_TAG_TINTS rotation, wrapping-panel shape),
@@ -1533,7 +1529,7 @@ export function MatchExplorerPage() {
   const leagueGroups = useMemo(() => (rows ? groupByLeague(rows) : null), [rows]);
 
   return (
-    <AppShell active="matches" activeEdgesCount={matches !== null ? activeEdgesCount : undefined}>
+    <AppShell active="matches">
       <h1 className="text-xl font-semibold tracking-tight text-ink">Match Explorer</h1>
       <p className="mt-1 text-sm text-ink-secondary">Search real upcoming fixtures (next 90 days).</p>
 
@@ -1758,7 +1754,8 @@ function pickLabel(match: Match, selection: string): string {
 
 /** A short direction word shown next to the pick -- "To Win" for a team
  * selection, "Over"/"Under" for a totals line. Draw has no direction to
- * name, so returns null (also gates whether the up-arrow icon renders). */
+ * name, so returns null (also gates whether the direction arrow renders,
+ * up for Over/To Win, down for Under). */
 function pickCaption(selection: string): string | null {
   if (selection === "home" || selection === "away") return "To Win";
   if (selection.startsWith("over")) return "Over";
