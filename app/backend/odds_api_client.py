@@ -8,13 +8,17 @@ parses a real response, matching the publicly documented v4 schema
 it was originally built against -- see test_odds_api_client.py's
 test_normalize_matches_a_real_captured_response for the real fixture.
 
-Two things that check surfaced, not yet addressed here (tracked, not bugs
-in _normalize() itself): (1) bookmakers[] ordering is confirmed *not*
-stable across events -- _normalize() only ever reads bookmakers[0], with
-no fallback if it lacks the h2h market; (2) real responses carry
-authoritative credit-usage headers (x-requests-remaining/x-requests-used)
-that CreditCounter never reads, relying only on a client-side cost
-estimate.
+W164: two things a live check previously surfaced here are now addressed.
+(1) bookmakers[] ordering is confirmed *not* stable across events, and not
+every bookmaker in the list carries every market -- confirmed live (W164)
+against a real key that of 21 UK bookmakers on one fixture, only 4 carried
+`totals`, and bookmakers[0] specifically never did. _first_priced_outcomes()
+(below) scans for the first bookmaker that actually has the requested
+market, used by both _normalize() (h2h) and _normalize_secondary()
+(totals/btts) -- one fix point instead of two copies of the same bug.
+(2) real responses carry authoritative credit-usage headers
+(x-requests-remaining/x-requests-used) that CreditCounter still never
+reads, relying only on a client-side cost estimate -- unaddressed, tracked.
 
 Separately (BUG-015, same live check): The Odds API and football-data.org
 spell a number of clubs differently ("Man United" vs "Manchester United",
@@ -49,6 +53,23 @@ class NormalizedOdds:
     home_odds: float | None
     draw_odds: float | None
     away_odds: float | None
+    # W164: needed to call get_event_odds() (the per-event endpoint, the
+    # only one The Odds API serves totals/btts on) for this exact fixture
+    # without a second lookup. "" for any caller/test predating this field
+    # (e.g. a hand-built NormalizedOdds with no real event behind it).
+    event_id: str = ""
+
+
+def _first_priced_outcomes(bookmakers: list[dict], market_key: str) -> list[dict] | None:
+    """Scans bookmakers in order for the first one that actually carries
+    `market_key`, returning its raw `outcomes` list -- not bookmakers[0]
+    blindly, since bookmakers[] ordering isn't stable and most don't carry
+    every market (see module docstring, W164)."""
+    for bookmaker in bookmakers:
+        for market in bookmaker.get("markets", []):
+            if market.get("key") == market_key:
+                return market.get("outcomes", [])
+    return None
 
 
 def _normalize(event: dict) -> NormalizedOdds:
@@ -56,24 +77,67 @@ def _normalize(event: dict) -> NormalizedOdds:
     away_team = event["away_team"]
     home_odds = draw_odds = away_odds = None
 
-    bookmakers = event.get("bookmakers") or []
-    if bookmakers:
-        for market in bookmakers[0].get("markets", []):
-            if market.get("key") != "h2h":
-                continue
-            for outcome in market.get("outcomes", []):
-                name, price = outcome.get("name"), outcome.get("price")
-                if name == home_team:
-                    home_odds = price
-                elif name == away_team:
-                    away_odds = price
-                elif name == "Draw":
-                    draw_odds = price
+    outcomes = _first_priced_outcomes(event.get("bookmakers") or [], "h2h")
+    for outcome in outcomes or []:
+        name, price = outcome.get("name"), outcome.get("price")
+        if name == home_team:
+            home_odds = price
+        elif name == away_team:
+            away_odds = price
+        elif name == "Draw":
+            draw_odds = price
 
     return NormalizedOdds(
         home_team=home_team, away_team=away_team, commence_time=event["commence_time"],
         home_odds=home_odds, draw_odds=draw_odds, away_odds=away_odds,
+        event_id=event.get("id", ""),
     )
+
+
+# W164: fixed reference lines, matching this codebase's own existing
+# convention for these exact markets -- graph.py's prompt already speaks of
+# total_goals as "over/under 2.5" (raw_matches' over25_odds/under25_odds
+# columns, backtest-only); schema.py's _ELIGIBLE_CONDITIONAL_MARKETS already
+# hardcodes ("home_corners"/"away_corners", "over_2.5"). Not reinventing a
+# line convention, just finally supplying live odds for the one that
+# already existed.
+_TOTAL_GOALS_LINE = 2.5
+
+
+@dataclass(frozen=True)
+class NormalizedSecondaryOdds:
+    """totals/btts odds for one fixture, fetched via the per-event endpoint
+    (W164) -- The Odds API doesn't serve these on the bulk /odds endpoint
+    (confirmed live: 422 "Markets not supported by this endpoint: btts").
+    None per field when no bookmaker priced that market for this fixture."""
+    total_goals: dict[str, float] | None  # {"over_2.5": .., "under_2.5": ..}
+    btts: dict[str, float] | None  # {"yes": .., "no": ..}
+
+
+def _normalize_secondary(payload: dict) -> NormalizedSecondaryOdds:
+    bookmakers = payload.get("bookmakers") or []
+
+    total_goals = None
+    totals_outcomes = _first_priced_outcomes(bookmakers, "totals")
+    for outcome in totals_outcomes or []:
+        if outcome.get("point") != _TOTAL_GOALS_LINE:
+            continue
+        name, price = outcome.get("name"), outcome.get("price")
+        if name == "Over":
+            total_goals = {**(total_goals or {}), "over_2.5": price}
+        elif name == "Under":
+            total_goals = {**(total_goals or {}), "under_2.5": price}
+
+    btts = None
+    btts_outcomes = _first_priced_outcomes(bookmakers, "btts")
+    for outcome in btts_outcomes or []:
+        name, price = outcome.get("name"), outcome.get("price")
+        if name == "Yes":
+            btts = {**(btts or {}), "yes": price}
+        elif name == "No":
+            btts = {**(btts or {}), "no": price}
+
+    return NormalizedSecondaryOdds(total_goals=total_goals, btts=btts)
 
 
 def _month_key(moment: datetime) -> str:
@@ -196,3 +260,37 @@ class OddsAPIClient:
         self._credit_counter.record_usage(cost)
 
         return [_normalize(event) for event in response.json()]
+
+    # W164: totals/btts require the per-event endpoint -- confirmed live,
+    # the bulk endpoint 422s ("Markets not supported by this endpoint")
+    # for either. Cost is markets x regions same as get_odds(), but per
+    # fixture rather than per league -- gated by the same CreditCounter so
+    # it degrades the same way (returns None, keep last-known/no secondary
+    # odds) rather than a separate budget with its own failure mode.
+    def get_event_odds(
+        self, sport_key: str, event_id: str, markets: tuple[str, ...] = ("totals", "btts"),
+    ) -> NormalizedSecondaryOdds | None:
+        cost = len(markets) * len(self._regions)
+
+        if self._credit_counter.would_exceed(cost, self._credit_limit, self._safety_margin):
+            LOGGER.warning(
+                "OddsAPIClient.get_event_odds: skipping event_id=%s, would cross safety margin "
+                "(used=%d cost=%d limit=%d safety_margin=%d).",
+                event_id, self._credit_counter.credits_used, cost, self._credit_limit, self._safety_margin,
+            )
+            return None
+
+        response = self._session.get(
+            f"{BASE_URL}/sports/{sport_key}/events/{event_id}/odds",
+            params={
+                "apiKey": self._api_key,
+                "regions": ",".join(self._regions),
+                "markets": ",".join(markets),
+                "oddsFormat": "decimal",
+            },
+            timeout=10,
+        )
+        response.raise_for_status()
+        self._credit_counter.record_usage(cost)
+
+        return _normalize_secondary(response.json())

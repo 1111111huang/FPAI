@@ -110,12 +110,22 @@ def has_kicked_off(fixture: NormalizedMatch, now: datetime) -> bool:
     return now >= kickoff
 
 
+def matched_odds_event(
+    fixture: NormalizedMatch, odds_by_teams: dict[tuple[str, str], NormalizedOdds]
+) -> NormalizedOdds | None:
+    """The raw matched NormalizedOdds (with event_id, W164), or None on no
+    match -- match_odds() (below) builds on this for its own dict-shaped
+    return; eod_batch.py's _generate_one uses this directly too, to get at
+    event_id for get_event_odds() without a second canonical-name lookup."""
+    mapper = TeamNameMapper(mapping_path=str(_TEAM_MAPPING_PATH))
+    key = (mapper.map_team(fixture.home_team), mapper.map_team(fixture.away_team))
+    return odds_by_teams.get(key)
+
+
 def match_odds(
     fixture: NormalizedMatch, odds_by_teams: dict[tuple[str, str], NormalizedOdds]
 ) -> dict[str, float] | None:
-    mapper = TeamNameMapper(mapping_path=str(_TEAM_MAPPING_PATH))
-    key = (mapper.map_team(fixture.home_team), mapper.map_team(fixture.away_team))
-    odds = odds_by_teams.get(key)
+    odds = matched_odds_event(fixture, odds_by_teams)
     if odds is None or odds.home_odds is None or odds.draw_odds is None or odds.away_odds is None:
         return None
     return {"home": odds.home_odds, "draw": odds.draw_odds, "away": odds.away_odds}
@@ -215,9 +225,34 @@ async def run_eod_batch(
             "home_team": fixture.home_team, "away_team": fixture.away_team,
             "date": fixture_date, "league": league,
         }
-        odds = match_odds(fixture, odds_by_teams_by_date.get(fixture_date, {}))
+        odds_by_teams = odds_by_teams_by_date.get(fixture_date, {})
+        odds = match_odds(fixture, odds_by_teams)
         if odds is not None:
             match_info["odds"] = odds
+
+            # W164: totals/btts, via the per-event endpoint -- only once a
+            # real h2h match exists (needs event_id from the same matched
+            # NormalizedOdds) and only for a client that actually has this
+            # method (get_event_odds is OddsAPIClient-specific; duck-typed
+            # rather than isinstance-checked so HistoricalOddsClient -- no
+            # per-event odds concept, sandbox/backtest-only -- is silently
+            # unaffected, same as it already is for the h2h path above).
+            # Folded into `odds` too (not just match_info), not only
+            # passed to the LLM -- so already_fresh()'s dedup compares
+            # against these prices as well, and a secondary-market price
+            # move alone (h2h unchanged) still triggers a real refresh
+            # instead of being silently masked as "unchanged".
+            odds_event = matched_odds_event(fixture, odds_by_teams)
+            get_event_odds = getattr(odds_client, "get_event_odds", None)
+            if get_event_odds is not None and odds_event is not None and odds_event.event_id:
+                secondary = get_event_odds(sport_key=sport_key, event_id=odds_event.event_id)
+                if secondary is not None:
+                    if secondary.total_goals:
+                        match_info["total_goals_odds"] = secondary.total_goals
+                        odds["total_goals"] = secondary.total_goals
+                    if secondary.btts:
+                        match_info["btts_odds"] = secondary.btts
+                        odds["btts"] = secondary.btts
 
         # W151: a prior pass (boot pregenerate, or tonight's own EOD run
         # catching a fixture pregenerate already covered) already produced

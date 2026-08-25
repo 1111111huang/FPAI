@@ -33,8 +33,10 @@ from app.backend.odds_api_client import (
     CreditCounter,
     FileCreditCounterStore,
     NormalizedOdds,
+    NormalizedSecondaryOdds,
     OddsAPIClient,
     _normalize,
+    _normalize_secondary,
 )
 
 _EVENT = {
@@ -116,6 +118,7 @@ def test_normalize_matches_a_real_captured_response() -> None:
     assert result == NormalizedOdds(
         home_team="Arsenal", away_team="Coventry City", commence_time="2026-08-21T19:00:00Z",
         home_odds=1.15, draw_odds=7.0, away_odds=17.0,
+        event_id="eb2553d10d63dc912b99f8fd0d675721",
     )
 
 
@@ -138,7 +141,7 @@ def test_get_odds_normalizes_h2h_market() -> None:
     assert odds == [
         NormalizedOdds(
             home_team="Arsenal", away_team="Coventry City", commence_time="2026-08-21T19:00:00Z",
-            home_odds=1.4, draw_odds=4.8, away_odds=7.5,
+            home_odds=1.4, draw_odds=4.8, away_odds=7.5, event_id="abc123",
         )
     ]
 
@@ -156,6 +159,100 @@ def test_get_odds_sends_correct_query_params() -> None:
     assert params["apiKey"] == "my-key"
     assert params["regions"] == "uk"
     assert params["markets"] == "h2h"
+
+
+def test_normalize_secondary_reads_totals_at_the_2_5_line_and_btts() -> None:
+    """W164: totals/btts come from the per-event endpoint's own event-odds
+    payload shape (bookmakers[].markets[].outcomes[] with a `point` field
+    for totals) -- confirmed live against a real key, not a guess."""
+    payload = {
+        "bookmakers": [
+            {"key": "betfred_uk", "markets": [{"key": "h2h", "outcomes": []}]},  # no totals/btts here
+            {"key": "williamhill", "markets": [
+                {"key": "totals", "outcomes": [
+                    {"name": "Over", "price": 1.9, "point": 2.5},
+                    {"name": "Under", "price": 1.95, "point": 2.5},
+                ]},
+            ]},
+            {"key": "coral", "markets": [
+                {"key": "btts", "outcomes": [{"name": "Yes", "price": 1.7}, {"name": "No", "price": 2.1}]},
+            ]},
+        ],
+    }
+
+    result = _normalize_secondary(payload)
+
+    assert result == NormalizedSecondaryOdds(
+        total_goals={"over_2.5": 1.9, "under_2.5": 1.95}, btts={"yes": 1.7, "no": 2.1},
+    )
+
+
+def test_normalize_secondary_ignores_non_2_5_totals_lines() -> None:
+    """A totals market can carry multiple lines (alternate_totals-style) --
+    only the 2.5 line matches this codebase's existing fixed-line
+    convention (schema.py's over_2.5/under_2.5)."""
+    payload = {"bookmakers": [{"markets": [{"key": "totals", "outcomes": [
+        {"name": "Over", "price": 1.4, "point": 1.5},
+        {"name": "Under", "price": 3.0, "point": 1.5},
+    ]}]}]}
+
+    result = _normalize_secondary(payload)
+
+    assert result.total_goals is None
+
+
+def test_normalize_secondary_none_when_no_bookmaker_has_the_market() -> None:
+    payload = {"bookmakers": [{"markets": [{"key": "h2h", "outcomes": []}]}]}
+
+    result = _normalize_secondary(payload)
+
+    assert result == NormalizedSecondaryOdds(total_goals=None, btts=None)
+
+
+def _mock_event_odds_session(payload: dict) -> MagicMock:
+    """Like _mock_session, but for the per-event endpoint -- which returns a
+    single event dict, not a list of events like the bulk endpoint does."""
+    session = MagicMock()
+    response = MagicMock()
+    response.raise_for_status.return_value = None
+    response.json.return_value = payload
+    session.get.return_value = response
+    return session
+
+
+def test_get_event_odds_sends_correct_url_and_params() -> None:
+    session = _mock_event_odds_session({"bookmakers": []})
+    counter = CreditCounter()
+    client = OddsAPIClient(api_key="my-key", credit_counter=counter, session=session)
+
+    client.get_event_odds(sport_key="soccer_epl", event_id="evt123")
+
+    url = session.get.call_args.args[0]
+    params = session.get.call_args.kwargs["params"]
+    assert url == "https://api.the-odds-api.com/v4/sports/soccer_epl/events/evt123/odds"
+    assert params["apiKey"] == "my-key"
+    assert params["markets"] == "totals,btts"
+
+
+def test_get_event_odds_costs_markets_times_regions() -> None:
+    session = _mock_event_odds_session({"bookmakers": []})
+    counter = CreditCounter(now_fn=lambda: datetime(2026, 7, 11, tzinfo=timezone.utc))
+    client = OddsAPIClient(api_key="fake-key", credit_counter=counter, session=session, regions=("uk", "eu"))
+
+    client.get_event_odds(sport_key="soccer_epl", event_id="evt123")
+
+    assert counter.credits_used == 4  # 2 markets (totals, btts) x 2 regions
+
+
+def test_get_event_odds_skips_call_when_it_would_exceed_the_safety_margin() -> None:
+    session = _mock_event_odds_session({"bookmakers": []})
+    counter = CreditCounter(credits_used=495)  # 500 limit - 50 safety margin = 450 usable, already over
+    client = OddsAPIClient(api_key="fake-key", credit_counter=counter, session=session)
+
+    result = client.get_event_odds(sport_key="soccer_epl", event_id="evt123")
+
+    assert result is None
+    session.get.assert_not_called()
 
 
 def test_a_simulated_month_of_calls_matches_hand_computed_usage() -> None:

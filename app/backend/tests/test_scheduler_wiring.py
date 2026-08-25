@@ -124,6 +124,20 @@ def test_persisting_odds_client_forwards_date_to_the_inner_client(tmp_path: Path
     inner_client.get_odds.assert_called_once_with(sport_key="soccer_sweden_allsvenskan", date="2026-08-10")
 
 
+def test_persisting_odds_client_get_event_odds_saves_counter_after_call(tmp_path: Path) -> None:
+    store = FileCreditCounterStore(tmp_path / "counter.json")
+    counter = CreditCounter()
+    inner_client = MagicMock()
+    inner_client.get_event_odds.return_value = "secondary odds"
+
+    client = PersistingOddsClient(client=inner_client, counter=counter, store=store)
+    result = client.get_event_odds(sport_key="soccer_epl", event_id="evt1")
+
+    assert result == "secondary odds"
+    inner_client.get_event_odds.assert_called_once_with(sport_key="soccer_epl", event_id="evt1", markets=("totals", "btts"))
+    assert (tmp_path / "counter.json").exists()
+
+
 def test_fallback_odds_client_uses_first_client_when_it_succeeds() -> None:
     primary, secondary = MagicMock(), MagicMock()
     primary.get_odds.return_value = ["primary odds"]
@@ -162,6 +176,20 @@ def test_fallback_odds_client_returns_none_when_every_client_fails() -> None:
     result = FallbackOddsClient([primary, secondary]).get_odds()
 
     assert result is None
+
+
+def test_fallback_odds_client_get_event_odds_falls_back_the_same_way() -> None:
+    """W164: get_event_odds() shares _try_each_client with get_odds() --
+    one test proving the shared plumbing forwards args/falls back correctly
+    for this second method too, not a full re-run of every get_odds() case."""
+    primary, secondary = MagicMock(), MagicMock()
+    primary.get_event_odds.return_value = None
+    secondary.get_event_odds.return_value = "secondary event odds"
+
+    result = FallbackOddsClient([primary, secondary]).get_event_odds(sport_key="soccer_epl", event_id="evt1")
+
+    assert result == "secondary event odds"
+    secondary.get_event_odds.assert_called_once_with(sport_key="soccer_epl", event_id="evt1", markets=("totals", "btts"))
 
 
 def test_register_eod_job_generates_recommendations_and_schedules_t30(tmp_path: Path) -> None:
