@@ -51,6 +51,15 @@ def build_evaluation_report(records: list[Any], bankroll_result: "BankrollResult
         "insufficient_data_rate": round(insufficient_data_rate, 6),
         "starting_bankroll": bankroll_result.starting_bankroll,
         "ending_bankroll": round(bankroll_result.ending_bankroll, 2),
+        # A83: already computed above (total_staked/total_profit locals) --
+        # just never returned. Needed by the agent performance dashboard's
+        # Main Metrics row (Total Stake, Money Won). Purely additive: every
+        # existing caller (main.py's agent-backtest/agent-train reporting,
+        # src/agent/comparison.py, recommendation_stats.py) reads specific
+        # keys or dumps the dict generically (print_report/save_report both
+        # iterate report.items()) -- nothing breaks from two new keys.
+        "total_staked": round(total_staked, 2),
+        "total_profit": round(total_profit, 2),
     }
 
 

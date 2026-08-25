@@ -54,6 +54,8 @@ def test_build_evaluation_report_computes_roi_and_hit_rate():
     assert report["bet_frequency"] == 0.5  # 1 bet / 2 matches
     assert report["insufficient_data_rate"] == 0.5
     assert report["matches_evaluated"] == 2
+    assert report["total_staked"] == 10.0
+    assert report["total_profit"] == 10.0
 
 
 def test_build_evaluation_report_handles_zero_bets():
@@ -66,6 +68,17 @@ def test_build_evaluation_report_handles_zero_bets():
     assert report["roi"] == 0.0
     assert report["hit_rate"] == 0.0
     assert report["bets_placed"] == 0
+
+
+def test_build_evaluation_report_total_staked_and_profit_zero_when_no_bets():
+    bankroll = BankrollResult(starting_bankroll=1000.0, ending_bankroll=1000.0, equity_curve=[1000.0], bets=[])
+
+    class _Rec:
+        recommendation = {"overall": "no_bet"}
+
+    report = build_evaluation_report([_Rec()], bankroll)
+    assert report["total_staked"] == 0.0
+    assert report["total_profit"] == 0.0
 
 
 def test_config_hash_deterministic_and_order_independent():
