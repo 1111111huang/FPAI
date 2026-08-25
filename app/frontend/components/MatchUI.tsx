@@ -1339,6 +1339,12 @@ export function DashboardPage() {
                     positive edge
                   </p>
                 )}
+                {/* W169: static, no API call -- UB is an abstract betting
+                    unit (A82), not a dollar figure, so there's nothing to
+                    fetch here, just an explanation of the convention. */}
+                <p className="mt-0.5 text-xs text-ink-secondary">
+                  UB = Unit Bet, your standard betting unit — bet 2 UB at odds 3.0, get 6 UB back.
+                </p>
               </div>
               {/* Edge % sort hidden (2026-08-13, W118) -- flagged as misleading
                   by direct user feedback. Kickoff is the only sort left, so the
