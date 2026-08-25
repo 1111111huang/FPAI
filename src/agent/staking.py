@@ -61,6 +61,22 @@ def simulate_flat_stake(
     return BankrollResult(starting_bankroll=starting_bankroll, ending_bankroll=bankroll, equity_curve=equity_curve, bets=bets)
 
 
+def kelly_fraction(value_edge: float, odds: float, max_fraction: float = 0.10) -> float:
+    """Kelly stake as a fraction of bankroll: value_edge / (odds - 1), capped
+    at max_fraction. Returns 0.0 for non-positive edge or odds <= 1.0 -- no
+    Kelly fraction is defined/worth taking there; callers must treat 0.0 as
+    "no stake", not a computation error.
+
+    Extracted (A80) from simulate_kelly_stake's own inline formula so
+    schema.py's unit_bet_multiplier enrichment (A82) and the app's
+    outcome-based ROI simulation (app/backend/recommendation_stats.py, W168)
+    reuse the exact same math backtesting already relies on, instead of a
+    second, potentially-drifting copy."""
+    if odds <= 1.0 or value_edge <= 0:
+        return 0.0
+    return min(value_edge / (odds - 1.0), max_fraction)
+
+
 def simulate_kelly_stake(
     records: list["BacktestRecord"],
     starting_bankroll: float = 1000.0,
@@ -82,9 +98,9 @@ def simulate_kelly_stake(
                 continue  # agent marked direct_bet with no odds found — cannot stake
             odds = float(m["current_odds"])
             value_edge = float(m.get("value_edge", 0.0))
-            if odds <= 1.0 or value_edge <= 0:
+            fraction = kelly_fraction(value_edge, odds, max_fraction)
+            if fraction <= 0:
                 continue
-            fraction = min(value_edge / (odds - 1.0), max_fraction)
             stake = bankroll * fraction
             won = bool(m["correct"])
             payout = stake * (odds - 1) if won else -stake
