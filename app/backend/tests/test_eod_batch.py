@@ -301,6 +301,131 @@ def test_secondary_odds_not_fetched_when_odds_client_lacks_get_event_odds(tmp_pa
     assert captured_match_info["odds"] == {"home": 1.8, "draw": 3.6, "away": 4.5}
 
 
+def _seeded_odds_client(event_id: str = "evt1") -> MagicMock:
+    odds_client = MagicMock()
+    odds_client.get_odds.return_value = [
+        NormalizedOdds(
+            home_team="Arsenal", away_team="Everton", commence_time="2026-08-22T15:00:00Z",
+            home_odds=1.8, draw_odds=3.6, away_odds=4.5, event_id=event_id,
+        ),
+    ]
+    return odds_client
+
+
+def test_secondary_odds_reused_from_cache_not_refetched_when_h2h_unchanged(tmp_path: Path) -> None:
+    """W164a: get_event_odds() costs real Odds-API credits per call --
+    confirmed live it was being paid on every pass, for every fixture,
+    regardless of whether already_fresh() was about to skip generation
+    anyway. Once a real check has already happened (cached row's odds carry
+    a total_goals/btts key, even null) and h2h hasn't moved since, reuse
+    that snapshot instead of paying for a fresh one."""
+    fixtures_client = MagicMock()
+    fixtures_client.get_fixtures.return_value = [_fixture("m1", "Arsenal", "Everton")]
+    odds_client = _seeded_odds_client()
+    cache = RecommendationCache(db_path=tmp_path / "cache.db")
+    config = AgentConfig.default()
+    agent_config_hash = compute_agent_config_hash(config)
+    cache.record_generation(
+        match_id="m1", date=_future_date(1), agent_config_hash=agent_config_hash,
+        odds={
+            "home": 1.8, "draw": 3.6, "away": 4.5,
+            "total_goals": {"over_2.5": 1.9, "under_2.5": 1.95}, "btts": {"yes": 1.7, "no": 2.1},
+        },
+        recommendation=_RECOMMENDATION, triggered_by="scheduled",
+    )
+    captured_match_info = {}
+
+    def _capture(match_info, config):
+        captured_match_info.update(match_info)
+        return _RECOMMENDATION
+
+    with patch("app.backend.recommendations.run_agent", side_effect=_capture):
+        result = asyncio.run(
+            run_eod_batch(
+                fixtures_client=fixtures_client, odds_client=odds_client, cache=cache, config=config,
+                schedule_t30=lambda f: None, date_str=_future_date(1),
+            )
+        )
+
+    odds_client.get_event_odds.assert_not_called()
+    assert result.unchanged == 1  # h2h AND secondary both matched the prior row -> already_fresh() short-circuits
+    assert result.generated == 0
+
+
+def test_secondary_odds_refetched_when_h2h_odds_moved(tmp_path: Path) -> None:
+    """A new h2h price is worth fully re-verifying, including secondary
+    markets that may have moved along with it."""
+    fixtures_client = MagicMock()
+    fixtures_client.get_fixtures.return_value = [_fixture("m1", "Arsenal", "Everton")]
+    odds_client = _seeded_odds_client()  # current h2h: 1.8/3.6/4.5
+    odds_client.get_event_odds.return_value = NormalizedSecondaryOdds(
+        total_goals={"over_2.5": 1.95, "under_2.5": 1.9}, btts={"yes": 1.75, "no": 2.05},
+    )
+    cache = RecommendationCache(db_path=tmp_path / "cache.db")
+    config = AgentConfig.default()
+    agent_config_hash = compute_agent_config_hash(config)
+    cache.record_generation(
+        match_id="m1", date=_future_date(1), agent_config_hash=agent_config_hash,
+        odds={
+            "home": 1.9, "draw": 3.5, "away": 4.4,  # different from the current 1.8/3.6/4.5 above
+            "total_goals": {"over_2.5": 1.9, "under_2.5": 1.95}, "btts": {"yes": 1.7, "no": 2.1},
+        },
+        recommendation=_RECOMMENDATION, triggered_by="scheduled",
+    )
+    captured_match_info = {}
+
+    def _capture(match_info, config):
+        captured_match_info.update(match_info)
+        return _RECOMMENDATION
+
+    with patch("app.backend.recommendations.run_agent", side_effect=_capture):
+        asyncio.run(
+            run_eod_batch(
+                fixtures_client=fixtures_client, odds_client=odds_client, cache=cache, config=config,
+                schedule_t30=lambda f: None, date_str=_future_date(1),
+            )
+        )
+
+    odds_client.get_event_odds.assert_called_once_with(sport_key="soccer_epl", event_id="evt1")
+    assert captured_match_info["total_goals_odds"] == {"over_2.5": 1.95, "under_2.5": 1.9}
+
+
+def test_secondary_odds_backfilled_once_for_a_cache_row_that_predates_the_feature(tmp_path: Path) -> None:
+    """A cache row from before W164 has no total_goals/btts keys at all
+    (not even null) -- that must read as 'never checked', not 'checked,
+    found nothing', or a pre-existing match would never get backfilled."""
+    fixtures_client = MagicMock()
+    fixtures_client.get_fixtures.return_value = [_fixture("m1", "Arsenal", "Everton")]
+    odds_client = _seeded_odds_client()  # same h2h as the pre-existing cache row below
+    odds_client.get_event_odds.return_value = NormalizedSecondaryOdds(
+        total_goals={"over_2.5": 1.9, "under_2.5": 1.95}, btts=None,
+    )
+    cache = RecommendationCache(db_path=tmp_path / "cache.db")
+    config = AgentConfig.default()
+    agent_config_hash = compute_agent_config_hash(config)
+    cache.record_generation(
+        match_id="m1", date=_future_date(1), agent_config_hash=agent_config_hash,
+        odds={"home": 1.8, "draw": 3.6, "away": 4.5},  # pre-W164 shape -- no secondary keys at all
+        recommendation=_RECOMMENDATION, triggered_by="scheduled",
+    )
+    captured_match_info = {}
+
+    def _capture(match_info, config):
+        captured_match_info.update(match_info)
+        return _RECOMMENDATION
+
+    with patch("app.backend.recommendations.run_agent", side_effect=_capture):
+        asyncio.run(
+            run_eod_batch(
+                fixtures_client=fixtures_client, odds_client=odds_client, cache=cache, config=config,
+                schedule_t30=lambda f: None, date_str=_future_date(1),
+            )
+        )
+
+    odds_client.get_event_odds.assert_called_once_with(sport_key="soccer_epl", event_id="evt1")
+    assert captured_match_info["total_goals_odds"] == {"over_2.5": 1.9, "under_2.5": 1.95}
+
+
 def test_odds_matched_via_canonical_team_name_despite_provider_spelling_differences(tmp_path: Path) -> None:
     """BUG-015: football-data.org and The Odds API spell many clubs
     differently (confirmed live against a real key -- 'Man United' vs
