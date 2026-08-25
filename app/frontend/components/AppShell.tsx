@@ -6,8 +6,8 @@ import { Montserrat } from "next/font/google";
 import { useState, useEffect } from "react";
 import { House, List, ListBullets, MagnifyingGlass, X, type Icon } from "@phosphor-icons/react";
 
-import { getFixtures, getStatus } from "@/lib/api";
-import type { Fixture, StatusResponse } from "@/lib/types";
+import { getFixtures } from "@/lib/api";
+import type { Fixture } from "@/lib/types";
 import { useSandboxAsOf } from "@/lib/useSandboxAsOf";
 
 function matchAnalysisHref(f: Fixture) {
@@ -47,12 +47,10 @@ const brandFont = Montserrat({ subsets: ["latin"], weight: ["600"] });
 
 export function AppShell({
   active,
-  activeEdgesCount,
   railTrigger,
   children,
 }: {
   active: "dashboard" | "matches" | "bets";
-  activeEdgesCount?: number;
   // Direct feedback: on small screens the right rail should "squish with
   // the top part with the search bar" instead of being its own section --
   // an optional slot next to the search input (mobile-only, lg:hidden) for
@@ -66,34 +64,13 @@ export function AppShell({
   // /api/sandbox/status per mount, not shared/cached. Cheap local read;
   // worth revisiting if AppShell ends up wrapping many more pages.
   const { asOf } = useSandboxAsOf();
-  const [status, setStatus] = useState<StatusResponse | null>(null);
   const [query, setQuery] = useState("");
   const [searchFixtures, setSearchFixtures] = useState<Fixture[]>([]);
   const [hasFocused, setHasFocused] = useState(false);
-  // Direct feedback: the whole left panel (menu/model info/footer) should
-  // be collapsible on a phone, and the expanded state should overlay the
-  // main content rather than sit inline and push it down.
+  // Direct feedback: the whole left panel (menu/footer) should be
+  // collapsible on a phone, and the expanded state should overlay the main
+  // content rather than sit inline and push it down.
   const [menuOpen, setMenuOpen] = useState(false);
-
-  useEffect(() => {
-    // Refetched on every mount -- AppShell is instantiated per-page like the
-    // DraftNav it replaces, not persisted across navigation; the sidebar
-    // footer briefly shows placeholders after each route change.
-    let cancelled = false;
-    (async () => {
-      try {
-        const s = await getStatus();
-        if (!cancelled) setStatus(s);
-      } catch {
-        // W17's StatusFooter precedent: a passive display, not worth an
-        // error state of its own -- the sidebar just shows "--" instead.
-        if (!cancelled) setStatus(null);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, []);
 
   useEffect(() => {
     // Lazy on purpose -- see this plan's "Before you start" note. Eagerly
@@ -132,63 +109,11 @@ export function AppShell({
           .filter((f) => f.home_team.toLowerCase().includes(q) || f.away_team.toLowerCase().includes(q))
           .slice(0, 8);
 
-  const dataFreshness = status?.data_freshness;
-  // US#110: model_status is keyed dynamically by competition_id (e.g. "E0",
-  // "SWE"), not a fixed "league" key -- sum every non-international bucket.
-  const leagueModelCount = Object.entries(status?.model_status ?? {})
-    .filter(([ctx]) => ctx !== "international")
-    .reduce((sum, [, models]) => sum + Object.keys(models).length, 0);
-  const internationalModelCount = Object.keys(status?.model_status.international ?? {}).length;
-  // W74: only worth a breakdown once a second competition actually exists --
-  // a single-entry by_league is by definition identical to the blended line
-  // above it, so showing both would just be noise.
-  const byLeagueEntries = Object.entries(dataFreshness?.by_league ?? {}).sort(([a], [b]) => a.localeCompare(b));
-
-  // Shared between the desktop <aside> and the mobile overlay drawer below
-  // -- same content, two different containers, rather than duplicated JSX.
   const brandBlock = (
     <div className="flex items-center gap-2.5">
       <OddseyLogo size={48} />
       <div className={`${brandFont.className} text-xl tracking-tight text-ink`}>Oddsey</div>
     </div>
-  );
-
-  const infoBlock = (
-    <>
-      {activeEdgesCount !== undefined && (
-        <div>
-          <div className="text-muted uppercase tracking-wide">Active Edges</div>
-          <div className="mt-0.5 font-mono text-base text-ink">{activeEdgesCount}</div>
-        </div>
-      )}
-      <div>
-        <div className="text-muted uppercase tracking-wide">Model Status</div>
-        <div className="mt-0.5 text-ink-secondary">
-          {status ? `league ${leagueModelCount} · international ${internationalModelCount}` : "—"}
-        </div>
-      </div>
-      <div>
-        <div className="text-muted uppercase tracking-wide">Last Updated</div>
-        <div className={`mt-0.5 ${dataFreshness?.is_stale ? "text-warning" : "text-ink-secondary"}`}>
-          {dataFreshness
-            ? `${dataFreshness.latest_match_date ?? "unknown"}${
-                dataFreshness.days_since_update !== null ? ` (${dataFreshness.days_since_update}d ago)` : ""
-              }${dataFreshness.is_stale ? " -- stale" : ""}`
-            : "—"}
-        </div>
-        {byLeagueEntries.length > 1 && (
-          <div className="mt-1 flex flex-col gap-0.5">
-            {byLeagueEntries.map(([league, freshness]) => (
-              <div key={league} className={freshness.is_stale ? "text-warning" : "text-ink-secondary"}>
-                <span className="font-medium">{league}</span>:{" "}
-                {freshness.days_since_update !== null ? `${freshness.days_since_update}d ago` : "unknown"}
-                {freshness.is_stale ? " -- stale" : ""}
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
-    </>
   );
 
   // Direct feedback: only the middle (page) content should scroll on
@@ -199,14 +124,14 @@ export function AppShell({
   return (
     <div className="min-h-screen lg:flex lg:h-screen lg:overflow-hidden">
       {/* Desktop sidebar -- unchanged content, now hidden lg:flex instead of
-          always visible: below `lg` the whole panel (menu/model info/
-          footer) collapses behind the mobile header bar + overlay drawer
-          below instead of always rendering inline. Mockup correction: the
+          always visible: below `lg` the whole panel (menu/footer) collapses
+          behind the mobile header bar + overlay drawer below instead of
+          always rendering inline. Mockup correction: the
           sidebar reads as the *same* plain page background as the main
           content (no fill of its own, just the border-r divider) -- the
           bg-surface tried earlier made it match the rail, when the
           reference actually has them looking different from each other. */}
-      <aside className="hidden shrink-0 flex-col justify-between px-5 py-6 lg:flex lg:h-screen lg:w-56 lg:border-r lg:border-border">
+      <aside className="hidden shrink-0 flex-col px-5 py-6 lg:flex lg:h-screen lg:w-56 lg:border-r lg:border-border">
         <div>
           {brandBlock}
           {/* W114: desktop-only -- below `lg` this list is replaced by the
@@ -231,15 +156,13 @@ export function AppShell({
             })}
           </nav>
         </div>
-
-        <div className="flex flex-col gap-3 border-t border-border pt-4 text-xs">{infoBlock}</div>
       </aside>
 
       {/* Mobile-only compact header: hamburger trigger + a small logo,
           replacing the sidebar's content that used to always render inline
           and push the page down. Direct feedback: the whole left panel
-          (menu/model info/footer) should collapse behind this, and expand
-          as an overlay on top of the main content, not inline above it. */}
+          (menu/footer) should collapse behind this, and expand as an
+          overlay on top of the main content, not inline above it. */}
       <div className="flex items-center justify-between border-b border-border bg-surface px-4 py-3 lg:hidden">
         <div className="flex items-center gap-2">
           <OddseyLogo size={36} />
@@ -271,7 +194,6 @@ export function AppShell({
                 <X size={20} />
               </button>
             </div>
-            <div className="mt-6 flex flex-col gap-3 border-t border-border pt-4 text-xs">{infoBlock}</div>
           </div>
         </>
       )}
