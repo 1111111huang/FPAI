@@ -351,16 +351,31 @@ def _reconcile_overall_with_markets(data: dict) -> dict:
     return data
 
 
+# A82, direct user definition: "the stake you'd risk for a 50/50 confidence
+# bet" -- deliberately NOT a Kelly-derived quantity (Kelly at a genuine
+# zero-edge 50/50 proposition, p=0.5 against fair 2.0 odds, is 0 -- there's
+# no "stake" to derive from that). This is a fixed, flat reference amount
+# instead: your standard bet size for a coin-flip proposition, independent
+# of any specific bet's odds/edge. unit_bet_multiplier (below) expresses
+# each recommendation's actual Kelly-sized stake as a multiple of this one
+# fixed baseline -- 1.0 means "bet your standard 50/50 amount," 3.0 means
+# "bet 3x that." 1% of bankroll is a conventional flat-unit size in sports
+# betting bankroll management (typically 1-2%); happens to equal
+# simulate_flat_stake's own default stake_pct (src/agent/staking.py), but
+# that's a shared, sensible convention, not a dependency -- this constant
+# is not read from or coupled to that function's own default parameter.
+UNIT_BET_BASELINE_FRACTION = 0.01
+
+
 def _attach_unit_bet_multiplier(data: dict) -> dict:
     """A82: deterministic stake-sizing suggestion for the recommendation's
     actual pick, expressed as a multiple of a standard "Unit Bet" (UB) --
     an abstract betting unit, not a dollar figure (bet 2 UB at odds 3.0,
-    get 6 UB back). Reuses the exact Kelly-fraction math staking.py already
-    computes for backtest sizing (A80's kelly_fraction) against the same
-    1%-of-bankroll baseline simulate_flat_stake calls "1x", so
-    unit_bet_multiplier=1.0 means "size this like staking.py's own flat
-    baseline" -- not an arbitrary new scale. kelly_fraction's own
-    max_fraction=0.10 default caps the result at 10.0 automatically, no
+    get 6 UB back). UB itself (UNIT_BET_BASELINE_FRACTION, above) is a
+    fixed reference stake, not Kelly-derived; the multiplier is
+    A80's kelly_fraction (the actual Kelly-optimal stake for this specific
+    pick) expressed as a multiple of that fixed reference. kelly_fraction's
+    own max_fraction=0.10 default caps the result at 10.0 automatically, no
     separate clamping needed here.
 
     Run last, after every downgrade pass and _reconcile_overall_with_markets:
@@ -375,7 +390,7 @@ def _attach_unit_bet_multiplier(data: dict) -> dict:
         data["unit_bet_multiplier"] = None
     else:
         fraction = kelly_fraction(picked.get("value_edge") or 0.0, picked["current_odds"])
-        data["unit_bet_multiplier"] = fraction / 0.01
+        data["unit_bet_multiplier"] = fraction / UNIT_BET_BASELINE_FRACTION
     return data
 
 
