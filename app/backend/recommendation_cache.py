@@ -161,6 +161,31 @@ class RecommendationCache:
             ).fetchall()
         return [self._row_to_entry(row) for row in rows]
 
+    def list_latest_per_match(self) -> list[CacheEntry]:
+        """One row per distinct (match_id, date) -- the single most recent
+        generation across any agent_config_hash, mirroring
+        get_latest_any_config()'s own "ignore the hash" fallback semantics
+        but for every cached match at once. Used by
+        recommendation_outcomes.py's resolution job (W167) to find every
+        match with a live-generated recommendation, not just ones a caller
+        already knows the key for."""
+        with self._connect() as conn:
+            # ponytail: correlated subquery over the whole table -- fine at today's
+            # scale (an on-demand diagnostics job, not a hot path); if
+            # recommendation_generations grows into the 100K+ row range, revisit with
+            # an index on (match_id, date, id) or a GROUP BY + IN pattern.
+            rows = conn.execute(
+                """
+                SELECT match_id, date, agent_config_hash, odds_json, recommendation_json, generated_at, triggered_by
+                FROM recommendation_generations rg
+                WHERE id = (
+                    SELECT MAX(id) FROM recommendation_generations rg2
+                    WHERE rg2.match_id = rg.match_id AND rg2.date = rg.date
+                )
+                """
+            ).fetchall()
+        return [self._row_to_entry(row) for row in rows]
+
     @staticmethod
     def _row_to_entry(row: tuple) -> CacheEntry:
         return CacheEntry(

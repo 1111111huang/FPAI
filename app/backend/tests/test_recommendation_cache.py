@@ -167,3 +167,24 @@ def test_agent_config_hash_changes_when_a_threshold_changes() -> None:
     h1 = compute_agent_config_hash(_config())
     h2 = compute_agent_config_hash(_config(min_odds_threshold=1.5))
     assert h1 != h2
+
+
+def test_list_latest_per_match_returns_one_row_per_match_regardless_of_hash(tmp_path: Path) -> None:
+    cache = RecommendationCache(db_path=tmp_path / "cache.db")
+    cache.record_generation("m1", "2026-08-22", "hash1", {}, {"overall": "direct_bet"}, "scheduled")
+    cache.record_generation("m1", "2026-08-22", "hash2", {}, {"overall": "conditional"}, "manual_regenerate")
+    cache.record_generation("m2", "2026-08-23", "hash1", {}, {"overall": "no_bet"}, "scheduled")
+
+    entries = cache.list_latest_per_match()
+
+    by_match = {e.match_id: e for e in entries}
+    assert len(entries) == 2
+    # m1's latest generation is the second one (hash2), not the first.
+    assert by_match["m1"].recommendation["overall"] == "conditional"
+    assert by_match["m1"].agent_config_hash == "hash2"
+    assert by_match["m2"].recommendation["overall"] == "no_bet"
+
+
+def test_list_latest_per_match_returns_empty_list_when_nothing_cached(tmp_path: Path) -> None:
+    cache = RecommendationCache(db_path=tmp_path / "cache.db")
+    assert cache.list_latest_per_match() == []
