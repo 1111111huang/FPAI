@@ -9,7 +9,7 @@ from __future__ import annotations
 import asyncio
 from contextlib import asynccontextmanager
 import dataclasses
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 import os
 from pathlib import Path
 import subprocess
@@ -19,7 +19,7 @@ from typing import Callable, Literal
 
 import duckdb
 from dotenv import load_dotenv
-from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import requests
@@ -41,6 +41,12 @@ from app.backend.sweden_fixtures_client import (
 )
 from app.backend.llm_check import check_llm_reachable
 from app.backend.recommendation_cache import DEFAULT_DB_PATH as RECOMMENDATION_CACHE_DB_PATH, RecommendationCache
+from app.backend.recommendation_outcomes import (
+    RecommendationOutcomeStore,
+    get_recommendation_outcome_store,
+    resolve_pending_recommendations,
+)
+from app.backend.recommendation_stats import compute_recommendation_stats
 from app.backend.bet_stats import compute_bet_stats
 from app.backend.recommendations import MatchRecommendationOut, RecommendationRequest, validate_and_degrade
 from app.backend.scheduler import JobRunLog, RecoverableScheduler
@@ -974,6 +980,59 @@ async def create_recommendation(
         triggered_by="manual_regenerate",
     )
     return result
+
+
+class RecommendationOutcomeOut(BaseModel):
+    id: int
+    match_id: str
+    date: str
+    competition: str | None
+    market: str
+    selection: str
+    recommendation_type: str
+    confidence: str | None
+    odds: float | None
+    value_edge: float | None
+    correct: bool
+    generated_at: str
+    resolved_at: str
+
+
+@app.post("/api/recommendations/settle-open")
+async def settle_open_recommendations(
+    cache: RecommendationCache = Depends(recommendations.get_cache),
+    store: RecommendationOutcomeStore = Depends(get_recommendation_outcome_store),
+) -> list[RecommendationOutcomeOut]:
+    """W167: on-demand resolution trigger, same trigger story as
+    /api/bets/settle-open -- not scheduler-tied. Diagnostics only, for the
+    user's own querying; the frontend never calls this. Calls
+    get_fixtures_client()/get_sweden_fixtures_client() as plain function
+    calls (not Depends()), exactly mirroring settle_open()'s own existing
+    shape immediately below -- both reuse the same fixtures/results client
+    and its shared rate-limit budget."""
+    client = get_fixtures_client()
+    sweden_client = get_sweden_fixtures_client()
+    resolved = await run_in_threadpool(resolve_pending_recommendations, cache, store, client, sweden_client)
+    return [RecommendationOutcomeOut(**dataclasses.asdict(r)) for r in resolved]
+
+
+@app.get("/api/recommendations/stats")
+async def get_recommendation_stats(
+    days: int = Query(30, ge=0, le=3650),
+    store: RecommendationOutcomeStore = Depends(get_recommendation_outcome_store),
+) -> dict:
+    """W168: hit-rate breakdown + Kelly ROI simulation over resolved
+    recommendation_outcomes, denominated in UB. Diagnostics only -- queried
+    directly by the user, no frontend surface.
+
+    Registered ahead of GET /api/recommendations/{match_id} below: FastAPI/
+    Starlette matches routes in registration order, and {match_id} is a
+    single-path-segment pattern that would otherwise swallow the literal
+    "stats" segment as match_id (then 422 on the missing required `date`
+    query param) if it came first."""
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).strftime("%Y-%m-%d")
+    outcomes = store.list_all(since=cutoff)
+    return compute_recommendation_stats(outcomes)
 
 
 @app.get("/api/recommendations/{match_id}")
