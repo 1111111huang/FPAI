@@ -46,6 +46,7 @@ from app.backend.recommendation_outcomes import (
     get_recommendation_outcome_store,
     resolve_pending_recommendations,
 )
+from app.backend.agent_performance_dashboard import compute_agent_performance_dashboard
 from app.backend.recommendation_stats import compute_recommendation_stats
 from app.backend.bet_stats import compute_bet_stats
 from app.backend.recommendations import MatchRecommendationOut, RecommendationRequest, validate_and_degrade
@@ -1033,6 +1034,28 @@ async def get_recommendation_stats(
     cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).strftime("%Y-%m-%d")
     outcomes = store.list_all(since=cutoff)
     return compute_recommendation_stats(outcomes)
+
+
+@app.get("/api/recommendations/performance-dashboard")
+async def get_agent_performance_dashboard(
+    days: int = Query(30, ge=0, le=3650),
+    top_n: int = Query(5, ge=1, le=50),
+    cache: RecommendationCache = Depends(recommendations.get_cache),
+    store: RecommendationOutcomeStore = Depends(get_recommendation_outcome_store),
+) -> dict:
+    """W171/W172: local-only diagnostics dashboard -- main metrics, segment
+    breakdowns, distributions, and top/bottom staked-bet examples, all in
+    one response. Not called by the deployed frontend's nav-linked pages;
+    reachable only via app/agent-performance/page.tsx, which is itself
+    unlinked from AppShell's nav (W174).
+
+    Registered ahead of GET /api/recommendations/{match_id} below, same
+    reason /stats already had to be: {match_id} is a single-path-segment
+    pattern that would otherwise swallow "performance-dashboard" as its
+    own match_id value."""
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).strftime("%Y-%m-%d")
+    outcomes = store.list_all(since=cutoff)
+    return compute_agent_performance_dashboard(outcomes, cache, top_n=top_n)
 
 
 @app.get("/api/recommendations/{match_id}")
