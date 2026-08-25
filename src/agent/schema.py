@@ -8,6 +8,8 @@ from typing import Literal, TypedDict
 import json_repair
 from pydantic import BaseModel, ValidationError
 
+from src.agent.market_resolution import pick_recommended_market
+from src.agent.staking import kelly_fraction
 from src.ingestion.common.team_mapping import TeamNameMapper
 
 _TEAM_MAPPING_PATH = Path(__file__).resolve().parent.parent.parent / "config" / "team_mapping.json"
@@ -41,6 +43,13 @@ class MatchRecommendation(TypedDict):
     confidence: Literal["low", "medium", "high"]
     limitations: list[str]
     prediction_basis: str
+    # A82: Kelly-derived stake-sizing suggestion for the recommendation's
+    # actual pick (pick_recommended_market), as a multiple of an abstract
+    # "Unit Bet" -- not a dollar figure. Computed here (like target_odds/
+    # A52), never by the LLM. None when there's no priced pick (no_bet/
+    # insufficient_data, or missing odds); 0.0 is a real, distinct value --
+    # a priced 'conditional' market whose edge doesn't clear the bar yet.
+    unit_bet_multiplier: float | None
     # W15: not populated by extract_recommendation() itself -- graph.py's
     # _build_recommendation() adds these afterward, read deterministically
     # from the forecast tool's own diagnostics rather than the LLM's JSON.
@@ -342,6 +351,34 @@ def _reconcile_overall_with_markets(data: dict) -> dict:
     return data
 
 
+def _attach_unit_bet_multiplier(data: dict) -> dict:
+    """A82: deterministic stake-sizing suggestion for the recommendation's
+    actual pick, expressed as a multiple of a standard "Unit Bet" (UB) --
+    an abstract betting unit, not a dollar figure (bet 2 UB at odds 3.0,
+    get 6 UB back). Reuses the exact Kelly-fraction math staking.py already
+    computes for backtest sizing (A80's kelly_fraction) against the same
+    1%-of-bankroll baseline simulate_flat_stake calls "1x", so
+    unit_bet_multiplier=1.0 means "size this like staking.py's own flat
+    baseline" -- not an arbitrary new scale. kelly_fraction's own
+    max_fraction=0.10 default caps the result at 10.0 automatically, no
+    separate clamping needed here.
+
+    Run last, after every downgrade pass and _reconcile_overall_with_markets:
+    needs each market's FINAL recommendation_type to pick the right one
+    (A81's pick_recommended_market). pick_recommended_market falls back to
+    ranking every market (no_bet included) when nothing in the recommendation
+    is actionable at all -- that fallback pick still carries a price, but
+    "no_bet" means there's nothing to size, so it's excluded here too, not
+    just a missing price."""
+    picked = pick_recommended_market(data.get("markets") or [])
+    if picked is None or picked.get("current_odds") is None or picked.get("recommendation_type") == "no_bet":
+        data["unit_bet_multiplier"] = None
+    else:
+        fraction = kelly_fraction(picked.get("value_edge") or 0.0, picked["current_odds"])
+        data["unit_bet_multiplier"] = fraction / 0.01
+    return data
+
+
 def reported_teams(match_field: dict) -> tuple[str, str] | None:
     """The two team names the agent's own `match` field claims this
     recommendation is about, tolerating the `home`/`away` key spelling the
@@ -477,6 +514,7 @@ def extract_recommendation(
         data = _downgrade_conditional_below_floor(data, min_conditional_odds_threshold)
         data = _compute_target_odds(data, min_value_edge)
         data = _reconcile_overall_with_markets(data)
+        data = _attach_unit_bet_multiplier(data)
         return data  # type: ignore[return-value]
 
     raise RecommendationParseError(text, f"no valid MatchRecommendation found ({last_error})")
