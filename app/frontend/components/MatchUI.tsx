@@ -1804,7 +1804,10 @@ const MARKET_LABEL: Record<string, { label: string; subtitle: string }> = {
   home_corners: { label: "Home Corners", subtitle: "Full Time" },
   away_corners: { label: "Away Corners", subtitle: "Full Time" },
 };
-function marketLabel(market: string): { label: string; subtitle: string | null } {
+// W174: exported so AgentPerformanceDashboard.tsx can reuse the same
+// human-readable market names ("3-Way Result" instead of "result_3way")
+// instead of duplicating MARKET_LABEL.
+export function marketLabel(market: string): { label: string; subtitle: string | null } {
   if (MARKET_LABEL[market]) return MARKET_LABEL[market];
   const spaced = market.replace(/_/g, " ");
   return { label: spaced.charAt(0).toUpperCase() + spaced.slice(1), subtitle: null };

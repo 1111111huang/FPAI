@@ -50,7 +50,12 @@ export function AppShell({
   railTrigger,
   children,
 }: {
-  active: "dashboard" | "matches" | "bets";
+  // W174: "agent-performance" has no NAV_ITEMS entry (the page itself is
+  // unlinked -- direct-URL-only, matching "bets"'s own existing precedent:
+  // NAV_ITEMS omits it too, but "bets" stays a valid `active` value here
+  // for BetTrackerPage's own unaffected use). Adding a value here never
+  // requires a matching NAV_ITEMS entry -- the two are independent.
+  active: "dashboard" | "matches" | "bets" | "agent-performance";
   // Direct feedback: on small screens the right rail should "squish with
   // the top part with the search bar" instead of being its own section --
   // an optional slot next to the search input (mobile-only, lg:hidden) for
