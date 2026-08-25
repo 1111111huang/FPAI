@@ -177,6 +177,32 @@ function finishedFixture(overrides: Partial<Fixture> = {}): Fixture {
 }
 
 describe("sandbox mode does not leak real results for fixtures still-future relative to as_of (W48)", () => {
+  // Long-documented pre-existing flake (first noted W61, reconfirmed in a
+  // dozen+ stories since) -- actually root-caused, not just worked around:
+  // useSandboxAsOf() (lib/useSandboxAsOf.ts) returns a real `new Date()`
+  // guess on first render, then a *second*, distinct Date object once
+  // getSandboxStatus() resolves and reports sandbox_mode -- MatchExplorerPage's
+  // fetch effect depends on `[asOf, retryTick]`, so that reference change
+  // triggers a second effect run whose load() unconditionally calls
+  // setMatches(null) again before re-fetching, visibly resetting the page
+  // back to its loading skeleton. In real usage this is a harmless, brief
+  // flicker (sandbox_mode is never true for a real production user -- see
+  // useSandboxAsOf's own doc comment). In these mocked tests, both fetches
+  // resolve on the same microtask tick (mockResolvedValue, not a real
+  // network delay), so a plain `findByText(...)` followed by a *synchronous*
+  // getByText(...) two lines later can land exactly in that transient
+  // null-reset window and fail -- not because anything was too slow, but
+  // because the assertion sampled a real, genuine mid-flight state. No
+  // amount of raising a timeout fixes a check that runs synchronously
+  // against whatever the DOM happens to look like at that instant.
+  //
+  // Fixed at the test level (not in the component): every assertion below
+  // that could observe this transient state is now inside one waitFor(...)
+  // block instead of a findByText(...) + separate synchronous checks --
+  // waitFor keeps retrying the *whole* set of assertions together until
+  // they're all simultaneously true, so a passing run only reports success
+  // once the page has genuinely converged on its final state, immune to
+  // which exact tick the flicker lands on.
   beforeEach(() => {
     vi.mocked(getFixtures).mockReset();
     vi.mocked(getSandboxStatus).mockReset();
@@ -192,24 +218,32 @@ describe("sandbox mode does not leak real results for fixtures still-future rela
 
     render(<MatchExplorerPage />);
 
-    expect(await screen.findByText("Arsenal")).toBeInTheDocument();
-    expect(screen.queryByText("2-1")).not.toBeInTheDocument();
-    expect(screen.getByText("Odds")).toBeInTheDocument();
-    expect(screen.queryByText("Result")).not.toBeInTheDocument();
-    expect(screen.getByText("Not yet generated")).toBeInTheDocument();
-    expect(screen.queryByText("Settled")).not.toBeInTheDocument();
+    await waitFor(() => {
+      expect(screen.getByText("Arsenal")).toBeInTheDocument();
+      expect(screen.queryByText("2-1")).not.toBeInTheDocument();
+      expect(screen.getByText("Odds")).toBeInTheDocument();
+      expect(screen.queryByText("Result")).not.toBeInTheDocument();
+      expect(screen.getByText("Not yet generated")).toBeInTheDocument();
+      expect(screen.queryByText("Settled")).not.toBeInTheDocument();
+    });
   });
 
   it("the same FINISHED fixture with sandbox mode off still renders as completed with its real score", async () => {
+    // sandbox_mode: false -- useSandboxAsOf's setState branch never fires,
+    // so asOf never changes after mount and this test isn't subject to the
+    // race described above. Still uses the same waitFor-everything pattern
+    // for consistency, not because it's strictly required here.
     vi.mocked(getSandboxStatus).mockResolvedValue({ sandbox_mode: false, as_of: null });
     vi.mocked(getFixtures).mockResolvedValue([finishedFixture()]);
 
     render(<MatchExplorerPage />);
 
-    expect(await screen.findByText("Arsenal")).toBeInTheDocument();
-    expect(screen.getByText("2-1")).toBeInTheDocument();
-    expect(screen.getByText("Result")).toBeInTheDocument();
-    expect(screen.getByText("Settled")).toBeInTheDocument();
+    await waitFor(() => {
+      expect(screen.getByText("Arsenal")).toBeInTheDocument();
+      expect(screen.getByText("2-1")).toBeInTheDocument();
+      expect(screen.getByText("Result")).toBeInTheDocument();
+      expect(screen.getByText("Settled")).toBeInTheDocument();
+    });
   });
 
   it("a FINISHED fixture dated on (not after) the sandbox as_of date still renders as completed", async () => {
@@ -218,10 +252,12 @@ describe("sandbox mode does not leak real results for fixtures still-future rela
 
     render(<MatchExplorerPage />);
 
-    expect(await screen.findByText("Arsenal")).toBeInTheDocument();
-    expect(screen.getByText("2-1")).toBeInTheDocument();
-    expect(screen.getByText("Result")).toBeInTheDocument();
-    expect(screen.getByText("Settled")).toBeInTheDocument();
+    await waitFor(() => {
+      expect(screen.getByText("Arsenal")).toBeInTheDocument();
+      expect(screen.getByText("2-1")).toBeInTheDocument();
+      expect(screen.getByText("Result")).toBeInTheDocument();
+      expect(screen.getByText("Settled")).toBeInTheDocument();
+    });
   });
 
   it("a recommendation can still be generated/cached for a fixture rendered as upcoming under the sandbox future-fixture rule", async () => {
@@ -249,8 +285,10 @@ describe("sandbox mode does not leak real results for fixtures still-future rela
     // click needed for a fixture rendered as upcoming under the sandbox
     // future-fixture rule to show its precomputed recommendation.
     await waitFor(() => expect(getCachedRecommendation).toHaveBeenCalledWith("future-finished", "2026-03-14"));
-    expect(await screen.findByText("Direct Bet")).toBeInTheDocument();
-    expect(screen.queryByText("Not yet generated")).not.toBeInTheDocument();
+    await waitFor(() => {
+      expect(screen.getByText("Direct Bet")).toBeInTheDocument();
+      expect(screen.queryByText("Not yet generated")).not.toBeInTheDocument();
+    });
     expect(generateRecommendation).not.toHaveBeenCalled();
   });
 });
