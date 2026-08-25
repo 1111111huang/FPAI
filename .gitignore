@@ -56,3 +56,6 @@ data/*.db.bak
 
 # Local git worktrees (superpowers:using-git-worktrees)
 .worktrees/
+
+# Superpowers brainstorming session artifacts (mockups, local only)
+.superpowers/
