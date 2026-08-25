@@ -82,6 +82,15 @@ class PersistingOddsClient:
         self._store.save(self._counter)
         return result
 
+    def get_event_odds(self, sport_key: str, event_id: str, markets: tuple[str, ...] = ("totals", "btts")):
+        # W164: same persist-after-call contract as get_odds() above --
+        # self._client here is OddsAPIClient specifically (not
+        # HistoricalOddsClient, which has no per-event odds concept at all;
+        # build_odds_client() only ever wraps OddsAPIClient in this class).
+        result = self._client.get_event_odds(sport_key=sport_key, event_id=event_id, markets=markets)
+        self._store.save(self._counter)
+        return result
+
 
 class FallbackOddsClient:
     """Tries each wrapped PersistingOddsClient (one per ODDS_API_KEY[_2] env
@@ -96,17 +105,26 @@ class FallbackOddsClient:
     def __init__(self, clients: list[PersistingOddsClient]) -> None:
         self._clients = clients
 
-    def get_odds(self, sport_key: str = "soccer_epl", date: str | None = None):
+    def _try_each_client(self, call: Callable[[PersistingOddsClient], object], op_name: str):
         for i, client in enumerate(self._clients):
             try:
-                result = client.get_odds(sport_key=sport_key, date=date)
+                result = call(client)
             except requests.RequestException as exc:
-                LOGGER.warning("FallbackOddsClient: key #%d failed (%s) -- trying next key.", i + 1, exc)
+                LOGGER.warning("FallbackOddsClient.%s: key #%d failed (%s) -- trying next key.", op_name, i + 1, exc)
                 continue
             if result is not None:
                 return result
-            LOGGER.info("FallbackOddsClient: key #%d exhausted (local budget) -- trying next key.", i + 1)
+            LOGGER.info("FallbackOddsClient.%s: key #%d exhausted (local budget) -- trying next key.", op_name, i + 1)
         return None
+
+    def get_odds(self, sport_key: str = "soccer_epl", date: str | None = None):
+        return self._try_each_client(lambda client: client.get_odds(sport_key=sport_key, date=date), "get_odds")
+
+    def get_event_odds(self, sport_key: str, event_id: str, markets: tuple[str, ...] = ("totals", "btts")):
+        return self._try_each_client(
+            lambda client: client.get_event_odds(sport_key=sport_key, event_id=event_id, markets=markets),
+            "get_event_odds",
+        )
 
 
 def _build_persisting_odds_client(api_key: str, counter_path: Path) -> PersistingOddsClient:

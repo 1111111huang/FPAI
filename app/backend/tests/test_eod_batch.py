@@ -20,7 +20,7 @@ sys.path.append(str(Path(__file__).resolve().parents[3]))
 from app.backend.agent_config_hash import compute_agent_config_hash
 from app.backend.eod_batch import run_eod_batch
 from app.backend.football_data_client import NormalizedMatch
-from app.backend.odds_api_client import NormalizedOdds
+from app.backend.odds_api_client import NormalizedOdds, NormalizedSecondaryOdds
 from app.backend.recommendation_cache import RecommendationCache
 from src.agent.agent_config import AgentConfig
 
@@ -219,6 +219,85 @@ def test_odds_matched_to_fixture_by_team_name(tmp_path: Path) -> None:
             )
         )
 
+    assert captured_match_info["odds"] == {"home": 1.8, "draw": 3.6, "away": 4.5}
+
+
+def test_secondary_odds_fetched_and_threaded_into_match_info_and_odds_dedup_key(tmp_path: Path) -> None:
+    """W164: once h2h odds are matched (real event_id), _generate_one also
+    fetches totals/btts via get_event_odds() and folds them into both
+    match_info (so the LLM prompt sees them, graph.py) and the `odds` dict
+    passed to cache.record_generation()/already_fresh() (so a secondary-
+    market price move alone still triggers a real refresh, not a silent
+    'unchanged')."""
+    fixtures_client = MagicMock()
+    fixtures_client.get_fixtures.return_value = [_fixture("m1", "Arsenal", "Everton")]
+    odds_client = MagicMock()
+    odds_client.get_odds.return_value = [
+        NormalizedOdds(
+            home_team="Arsenal", away_team="Everton", commence_time="2026-08-22T15:00:00Z",
+            home_odds=1.8, draw_odds=3.6, away_odds=4.5, event_id="evt1",
+        ),
+    ]
+    odds_client.get_event_odds.return_value = NormalizedSecondaryOdds(
+        total_goals={"over_2.5": 1.9, "under_2.5": 1.95}, btts={"yes": 1.7, "no": 2.1},
+    )
+    cache = RecommendationCache(db_path=tmp_path / "cache.db")
+    config = AgentConfig.default()
+    captured_match_info = {}
+
+    def _capture(match_info, config):
+        captured_match_info.update(match_info)
+        return _RECOMMENDATION
+
+    with patch("app.backend.recommendations.run_agent", side_effect=_capture):
+        asyncio.run(
+            run_eod_batch(
+                fixtures_client=fixtures_client, odds_client=odds_client, cache=cache, config=config,
+                schedule_t30=lambda f: None, date_str=_future_date(1),
+            )
+        )
+
+    odds_client.get_event_odds.assert_called_once_with(sport_key="soccer_epl", event_id="evt1")
+    assert captured_match_info["total_goals_odds"] == {"over_2.5": 1.9, "under_2.5": 1.95}
+    assert captured_match_info["btts_odds"] == {"yes": 1.7, "no": 2.1}
+
+    agent_config_hash = compute_agent_config_hash(config)
+    cached = cache.get_latest("m1", _future_date(1), agent_config_hash)
+    assert cached.odds["total_goals"] == {"over_2.5": 1.9, "under_2.5": 1.95}
+    assert cached.odds["btts"] == {"yes": 1.7, "no": 2.1}
+
+
+def test_secondary_odds_not_fetched_when_odds_client_lacks_get_event_odds(tmp_path: Path) -> None:
+    """HistoricalOddsClient (sandbox/backtest) has no per-event odds concept
+    at all -- duck-typed, not isinstance-checked, so it's silently
+    unaffected rather than needing its own get_event_odds() stub."""
+    fixtures_client = MagicMock()
+    fixtures_client.get_fixtures.return_value = [_fixture("m1", "Arsenal", "Everton")]
+    odds_client = MagicMock(spec=["get_odds"])  # no get_event_odds attribute at all
+    odds_client.get_odds.return_value = [
+        NormalizedOdds(
+            home_team="Arsenal", away_team="Everton", commence_time="2026-08-22T15:00:00Z",
+            home_odds=1.8, draw_odds=3.6, away_odds=4.5, event_id="evt1",
+        ),
+    ]
+    cache = RecommendationCache(db_path=tmp_path / "cache.db")
+    config = AgentConfig.default()
+    captured_match_info = {}
+
+    def _capture(match_info, config):
+        captured_match_info.update(match_info)
+        return _RECOMMENDATION
+
+    with patch("app.backend.recommendations.run_agent", side_effect=_capture):
+        asyncio.run(
+            run_eod_batch(
+                fixtures_client=fixtures_client, odds_client=odds_client, cache=cache, config=config,
+                schedule_t30=lambda f: None, date_str=_future_date(1),
+            )
+        )
+
+    assert "total_goals_odds" not in captured_match_info
+    assert "btts_odds" not in captured_match_info
     assert captured_match_info["odds"] == {"home": 1.8, "draw": 3.6, "away": 4.5}
 
 

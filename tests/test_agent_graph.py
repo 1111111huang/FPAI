@@ -422,6 +422,55 @@ def test_run_agent_includes_total_goals_odds_in_prompt_when_present():
     assert "under_2.5=1.95" in prompt_message.content
 
 
+def test_run_agent_includes_btts_odds_in_prompt_when_present():
+    """W164: btts_odds (from eod_batch.py's new get_event_odds() call) must
+    reach the LLM's prompt the same way total_goals_odds already does --
+    populating match_info alone is a no-op if the model never sees it."""
+    from unittest.mock import MagicMock, patch
+    from langchain_core.messages import AIMessage, HumanMessage
+    from src.agent.graph import run_agent
+    from src.agent import tools as agent_tools
+
+    agent_tools._snapshot_store.set_mode("live")
+    llm_json = json.dumps({
+        "match": {"home": "Man City", "away": "Arsenal", "date": "2026-06-21", "league": "E0"},
+        "overall": "no_bet", "markets": [], "explanation": "Balanced match.",
+        "confidence": "medium", "limitations": [], "prediction_basis": "team_history_and_market",
+    })
+    fake_forecast_result = {"result_3way": {"probabilities": {"home": 0.4}}, "data_quality": {"prediction_basis": "team_history_and_market"}}
+
+    with patch("src.agent.graph._build_llm") as mock_build_llm, \
+         patch("src.agent.graph._load_system_prompt", return_value="stub prompt"), \
+         patch("src.agent.tools._dated_web_search", return_value="No results found."), \
+         patch("src.forecast.forecast_service.ForecastService") as MockSvc, \
+         patch("src.agent.lessons.load_approved_lessons", return_value=[]), \
+         patch("src.utils.db_manager.DuckDBManager") as MockDB:
+        MockDB.return_value.connection.return_value.__enter__.return_value = MagicMock()
+        instance = MagicMock()
+        MockSvc.return_value = instance
+        instance.forecast_upcoming.return_value = fake_forecast_result
+
+        mock_llm = MagicMock()
+        mock_llm.bind_tools.return_value.invoke.return_value = AIMessage(content=llm_json)
+        mock_build_llm.return_value = mock_llm
+
+        cfg = _make_config()
+        run_agent(
+            match_info={
+                "home_team": "Man City", "away_team": "Arsenal", "date": "2026-06-21", "league": "E0",
+                "odds": {"home": 2.0, "draw": 3.4, "away": 3.6},
+                "btts_odds": {"yes": 1.7, "no": 2.1},
+            },
+            config=cfg,
+            tools=[],
+        )
+
+    messages = mock_llm.bind_tools.return_value.invoke.call_args[0][0]
+    prompt_message = next(m for m in messages if isinstance(m, HumanMessage) and "Analyse the upcoming match" in m.content)
+    assert "yes=1.7" in prompt_message.content
+    assert "no=2.1" in prompt_message.content
+
+
 def test_run_agent_retries_llm_call_on_transient_failure_then_succeeds():
     """W151/A64: a transient provider error (timeout/rate limit/5xx) on the
     first attempt no longer fails the whole match -- _invoke_with_retry

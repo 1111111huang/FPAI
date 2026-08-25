@@ -84,7 +84,7 @@ def test_get_odds_matches_the_normalizedodds_shape_odds_api_client_uses() -> Non
     from app.backend.odds_api_client import NormalizedOdds
 
     assert {f.name for f in dataclasses.fields(NormalizedOdds)} == {
-        "home_team", "away_team", "commence_time", "home_odds", "draw_odds", "away_odds",
+        "home_team", "away_team", "commence_time", "home_odds", "draw_odds", "away_odds", "event_id",
     }
 
 
