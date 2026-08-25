@@ -101,6 +101,10 @@ export type Match = {
   // W16: markets W02 dropped for failing type validation -- an honest note
   // beats silently showing fewer markets with no explanation.
   invalidMarketCount: number;
+  // A82/W169: Kelly-derived suggested stake for this recommendation's
+  // actual pick, as a multiple of an abstract Unit Bet -- not a dollar
+  // figure. null/undefined when there's no priced pick to suggest for.
+  unitBetMultiplier?: number | null;
 };
 
 // ---------------------------------------------------------------------------
@@ -182,6 +186,7 @@ function applyRecommendation(match: Match, rec: MatchRecommendationOut): Match {
     coldStartRisk: rec.cold_start_risk,
     featureCompleteness: rec.feature_completeness,
     unknownTeam: rec.unknown_team,
+    unitBetMultiplier: rec.unit_bet_multiplier ?? null,
     invalidMarketCount: rec.invalid_market_count,
     markets: rec.markets.map((m) => ({
       market: m.market,
@@ -992,6 +997,16 @@ export function MatchCard({
                 <div className={`flex items-center gap-1 text-xs font-medium ${hit ? "text-good" : "text-serious"}`}>
                   {hit ? <CheckCircle weight="fill" size={11} /> : <XCircle weight="fill" size={11} />}
                   {hit ? "Hit" : "Not Hit"}
+                </div>
+              )}
+              {/* A82/W169: Kelly-derived suggested stake for the actual
+                  pick, in UB (an abstract unit -- see the Daily Edges
+                  header explainer, not a dollar figure). Only meaningful
+                  pre-match -- a completed match has nothing left to size a
+                  stake for. */}
+              {!isCompleted && match.unitBetMultiplier != null && (
+                <div className="text-xs font-medium text-ink-secondary">
+                  Suggested: {match.unitBetMultiplier.toFixed(1)} UB
                 </div>
               )}
             </div>

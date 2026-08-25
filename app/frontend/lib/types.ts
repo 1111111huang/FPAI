@@ -52,6 +52,11 @@ export type MatchRecommendationOut = {
   cold_start_risk: boolean;
   feature_completeness: number | null;
   unknown_team: boolean;
+  // A82 (agent_user_stories.md): Kelly-derived stake-sizing suggestion for
+  // this recommendation's actual pick, as a multiple of an abstract "Unit
+  // Bet" -- not a dollar figure. null when there's no priced pick, or
+  // absent entirely on a pre-A82 cached row.
+  unit_bet_multiplier?: number | null;
 };
 
 // W12: mirrors app/backend/bets.py BetOut.

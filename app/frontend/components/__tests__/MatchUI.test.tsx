@@ -289,6 +289,53 @@ describe("MatchCard", () => {
     expect(screen.queryByText("Wait ≥")).not.toBeInTheDocument();
     expect(screen.getByText("Odds")).toBeInTheDocument();
   });
+
+  it("shows the suggested UB stake for an actionable upcoming card", () => {
+    const match = baseMatch({
+      overall: "direct_bet",
+      unitBetMultiplier: 2.3,
+      markets: [
+        {
+          market: "result_3way", selection: "home", recommendationType: "direct_bet",
+          currentOdds: 2.0, minOdds: 0, mlProbability: 0.55, impliedProbability: 0.5, valueEdge: 0.1,
+        },
+      ],
+    });
+    render(<MatchCard match={match} onUpdate={vi.fn()} />);
+    expect(screen.getByText("Suggested: 2.3 UB")).toBeInTheDocument();
+  });
+
+  it("shows nothing when unitBetMultiplier is null", () => {
+    const match = baseMatch({
+      overall: "no_bet",
+      unitBetMultiplier: null,
+      markets: [
+        {
+          market: "result_3way", selection: "home", recommendationType: "no_bet",
+          currentOdds: 2.0, minOdds: 0, mlProbability: 0.5, impliedProbability: 0.5, valueEdge: -0.01,
+        },
+      ],
+    });
+    render(<MatchCard match={match} onUpdate={vi.fn()} />);
+    expect(screen.queryByText(/Suggested:/)).not.toBeInTheDocument();
+  });
+
+  it("does not show the suggested stake on a completed card", () => {
+    const match = baseMatch({
+      status: "completed",
+      overall: "direct_bet",
+      unitBetMultiplier: 2.3,
+      result: { home: 2, away: 1 },
+      markets: [
+        {
+          market: "result_3way", selection: "home", recommendationType: "direct_bet",
+          currentOdds: 2.0, minOdds: 0, mlProbability: 0.55, impliedProbability: 0.5, valueEdge: 0.1,
+        },
+      ],
+    });
+    render(<MatchCard match={match} onUpdate={vi.fn()} />);
+    expect(screen.queryByText(/Suggested:/)).not.toBeInTheDocument();
+  });
 });
 
 describe("MatchCard -- W153: the top badge describes the shown market, not match.overall", () => {
