@@ -20,7 +20,7 @@ This design covers **Phase 1: diagnostics only** — durably resolving every liv
 - Diagnostics only, no new UI for it — a backend endpoint (or CLI) the user queries directly.
 - Kelly-sized ROI simulation, reusing `src/agent/staking.py`'s existing `simulate_kelly_stake` formula rather than a new one.
 - The live app **does** get one new user-facing element: a per-recommendation suggested-stake multiplier, expressed in "Unit Bets" (UB), with an explanatory line added under the existing "Daily Edges" header.
-- UB = average of the user's own logged bet stakes (`bet_tracker.list_bets()`), falling back to a documented constant ($5) when empty. **Caveat, surfaced explicitly:** bet-logging UI is currently hidden from the app (W106/W115 — "feature not ready yet"), so in practice UB will show the fallback default until that UI is re-enabled or bets are logged directly via the API. This design doesn't re-enable it; that's a separate decision.
+- **UB is an abstract unit, not a dollar figure.** Corrected mid-design (user): not an average of logged stakes, not a settings value, not anchored to any currency — it's the standard betting-unit convention (bet 2 UB at odds 3.0 → get 6 UB back), the same fraction-of-bankroll math `staking.py` already computes today (Kelly fraction / flat-stake %), just consistently labeled "UB" instead of implying dollars. No new storage, no per-user setting, no dollar fallback — this eliminates the earlier "average stake"/"$5 default" plumbing entirely.
 - Multiplier cap: 10× (reuses `staking.py`'s existing `max_fraction=0.10` Kelly cap against a 1%-of-bankroll baseline — same ceiling as backtesting, so live and simulated sizing never drift apart).
 
 ## Architecture
@@ -31,7 +31,7 @@ This design covers **Phase 1: diagnostics only** — durably resolving every liv
 2. **`pick_recommended_market(markets) -> MarketRec | None`** in `market_resolution.py` — ports `MatchUI.tsx`'s `bestMarket()` (prefer a non-`no_bet` market, break ties by `value_edge`) into Python, alongside that module's existing `RESOLVABLE_MARKETS`/`market_correct`/`build_actual_outcome`, which already exist specifically so the two language implementations don't drift.
 3. **`unit_bet_multiplier` enrichment** — a new deterministic post-validation pass in `schema.py`, alongside the existing `_downgrade_direct_bet_*` passes: for the recommendation's picked market (via `pick_recommended_market`), compute `kelly_fraction(value_edge, current_odds) / 0.01`, attach as `unit_bet_multiplier` (float, capped at 10.0) or `null` (no priced pick). Deterministic, never LLM-generated.
 
-### App-side (`app/backend/`, `app/frontend/` — W167–W170)
+### App-side (`app/backend/`, `app/frontend/` — W167–W169)
 
 4. **`recommendation_outcomes` table** (new, in `recommendation_cache.db`):
    ```sql
@@ -56,11 +56,9 @@ This design covers **Phase 1: diagnostics only** — durably resolving every liv
 
 5. **Resolution job** — `app/backend/recommendation_outcomes.py::resolve_pending_recommendations(cache, client, sweden_client=None)`, structurally mirrors `settlement.py::settle_open_bets()`: find latest cache rows per `(match_id, date)` with a past date and no existing outcome row, group by date, fetch results via the same `FootballDataClient`/`sweden_client`, resolve the picked market via `pick_recommended_market` + `market_correct`, insert. New endpoint `POST /api/recommendations/settle-open` triggers it on demand — same trigger story as `/api/bets/settle-open`, no scheduler change. Idempotent: the query guard plus `UNIQUE(match_id, date)` mean a re-run is a no-op for anything already resolved.
 
-6. **`GET /api/recommendations/stats?days=30`** — hit rate + sample size broken down by market, competition, and confidence bucket (adapted from `bet_stats.py`'s shape), **plus** a Kelly-sized ROI simulation over resolved outcomes: same mechanics as `simulate_kelly_stake`, but iterating `recommendation_outcomes` rows (ordered by `date`) instead of backtest records, reporting ROI/hit-rate/max-drawdown via the existing `evaluation.py` report shape.
+6. **`GET /api/recommendations/stats?days=30`** — hit rate + sample size broken down by market, competition, and confidence bucket (adapted from `bet_stats.py`'s shape), **plus** a Kelly-sized ROI simulation over resolved outcomes: same mechanics as `simulate_kelly_stake`, but iterating `recommendation_outcomes` rows (ordered by `date`) instead of backtest records, reporting ROI/hit-rate/max-drawdown via the existing `evaluation.py` report shape. `starting_bankroll`/`ending_bankroll` are plain numbers denominated in UB (e.g. `starting_bankroll=1000`), not dollars — no unit conversion needed, `staking.py`'s math was already unit-agnostic.
 
-7. **`GET /api/bets/stats` extended** with `unit_bet` (dollar value) and `unit_bet_is_default` (bool) — one extra aggregate over `tracker.list_bets()`, computed the same place `bet_stats.py` already computes ROI/hit-rate.
-
-8. **Frontend** — each actionable match card displays its `unit_bet_multiplier` (e.g. "Suggested: 2.3 UB"), sourced from the enriched recommendation payload (item 3). One explanatory line added under the existing "Daily Edges" subtitle stat row (`MatchUI.tsx:1317-1326`): *"UB = unit bet = your average logged stake ($X.XX)."*, fetched via the extended `/api/bets/stats` call.
+7. **Frontend** — each actionable match card displays its `unit_bet_multiplier` (e.g. "Suggested: 2.3 UB"), sourced from the enriched recommendation payload (item 3). One explanatory line added under the existing "Daily Edges" subtitle stat row (`MatchUI.tsx:1317-1326`) explaining the abstract-unit convention with a worked example: *"UB = Unit Bet, your standard betting unit — bet 2 UB at odds 3.0, get 6 UB back."* No API call needed for this line (no dollar value to fetch); it's static copy.
 
 ## Data flow
 
@@ -92,11 +90,11 @@ GET /api/recommendations/stats
 - New `tests/test_market_resolution.py` (or extend existing): `pick_recommended_market` cases (prefers actionable over no_bet, ties broken by value_edge), mirroring `MatchUI.tsx`'s own test coverage for `bestMarket`.
 - New `app/backend/tests/test_recommendation_outcomes.py`, mirroring `test_settlement.py`'s cases: resolves a won/lost pick, skips unresolvable markets, skips `no_bet`/`insufficient_data`, skips not-yet-finished matches, idempotent re-run.
 - Stats-aggregation test for `GET /api/recommendations/stats` (breakdown correctness, Kelly ROI simulation over a small fixed set of outcomes).
-- `bet_stats.py` test extended for `unit_bet`/`unit_bet_is_default`.
 
 ## Explicitly out of scope
 
 - Feeding `recommendation_outcomes` into `agent_lessons`/the critic loop (Phase 2, separate spec).
 - Any new dashboard UI beyond the two additions named above (per-card multiplier, one explainer line).
 - Resolving markets beyond `RESOLVABLE_MARKETS` (home/away corners) — same accepted, documented gap `market_resolution.py` already carries.
-- Re-enabling the hidden bet-logging UI (W106/W115) — UB works either way, just shows the default until that's a separate decision.
+- Converting the (currently hidden) Bet Tracker page's own stake/profit/bankroll display to UB — user scoped this design to the new recommendation-card suggestion only; revisit if/when that page is un-hidden (W106/W115).
+- Any dollar-denominated setting, average, or conversion for UB — it's an abstract unit throughout this feature, not a currency figure.

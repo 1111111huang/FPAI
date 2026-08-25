@@ -392,7 +392,7 @@ PHASE 19 (Serie A / Bundesliga / Ligue 1 Verification -- 2026-08-15 addition)
 
 ## PHASE 25: Live Recommendation Outcome Tracking & Kelly Stake Sizing
 
-> Direct user request (2026-08-25): live recommendations are generated but never durably tracked against actual results — no way to monitor the agent's live performance, and no live-mistake feedback loop into the lessons/critic system (that loop, Phase 26+, is deliberately deferred; this phase is the agent-side building blocks a later live-lessons phase and the app's own diagnostics (W167-W170, `app_user_stories.md`) both need). Design: `docs/superpowers/specs/2026-08-25-live-recommendation-tracking-design.md`.
+> Direct user request (2026-08-25): live recommendations are generated but never durably tracked against actual results — no way to monitor the agent's live performance, and no live-mistake feedback loop into the lessons/critic system (that loop, Phase 26+, is deliberately deferred; this phase is the agent-side building blocks a later live-lessons phase and the app's own diagnostics (W167-W169, `app_user_stories.md`) both need). Design: `docs/superpowers/specs/2026-08-25-live-recommendation-tracking-design.md`.
 
 | ID | Status | Description | Comments |
 |---|---|---|---|
