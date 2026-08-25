@@ -1,4 +1,5 @@
 import type {
+  AgentPerformanceDashboard,
   Bet,
   BetStats,
   Fixture,
@@ -169,6 +170,23 @@ export async function getSandboxStatus(): Promise<SandboxStatus> {
   const response = await apiFetch(`/api/sandbox/status`);
   if (!response.ok) {
     throw new ApiError(`Failed to load sandbox status (${response.status})`, response.status);
+  }
+  return response.json();
+}
+
+/** W172: local-only diagnostics dashboard -- not called from any nav-linked
+ * page, only app/agent-performance/page.tsx (W174, itself unlinked). */
+export async function getAgentPerformanceDashboard(
+  days?: number,
+  topN?: number
+): Promise<AgentPerformanceDashboard> {
+  const params = new URLSearchParams();
+  if (days !== undefined) params.set("days", String(days));
+  if (topN !== undefined) params.set("top_n", String(topN));
+  const query = params.toString();
+  const response = await apiFetch(`/api/recommendations/performance-dashboard${query ? `?${query}` : ""}`);
+  if (!response.ok) {
+    throw new ApiError(`Failed to load agent performance dashboard (${response.status})`, response.status);
   }
   return response.json();
 }

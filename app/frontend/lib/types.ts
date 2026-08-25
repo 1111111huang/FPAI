@@ -131,3 +131,61 @@ export type BetStats = {
   starting_bankroll: number;
   current_bankroll: number;
 };
+
+// W170/W171: app/backend/agent_performance_dashboard.py's return shape.
+export type HitRateSummary = {
+  sample_size: number;
+  correct: number;
+  hit_rate: number;
+};
+
+// Mirrors src/agent/evaluation.py's build_evaluation_report() return shape,
+// denominated in UB (an abstract Unit Bet, not dollars -- same convention
+// as the rest of this feature).
+export type SegmentMetrics = {
+  matches_evaluated: number;
+  bets_placed: number;
+  bets_won: number;
+  roi: number;
+  hit_rate: number;
+  bet_frequency: number;
+  max_drawdown: number;
+  insufficient_data_rate: number;
+  starting_bankroll: number;
+  ending_bankroll: number;
+  total_staked: number;
+  total_profit: number;
+};
+
+export type StakedBet = {
+  match_id: string;
+  market: string;
+  selection: string;
+  odds: number;
+  stake: number;
+  won: boolean;
+  payout: number;
+};
+
+// StakedBet plus match context, only populated for top_winners/top_losers
+// (W171) -- home_team/away_team are null on a cache miss, degraded, not absent.
+export type TopBet = StakedBet & {
+  date: string | null;
+  competition: string | null;
+  home_team: string | null;
+  away_team: string | null;
+};
+
+export type AgentPerformanceDashboard = {
+  overall: HitRateSummary;
+  by_market: Record<string, HitRateSummary>;
+  by_competition: Record<string, HitRateSummary>;
+  by_confidence: Record<string, HitRateSummary>;
+  kelly_roi_simulation: SegmentMetrics;
+  by_market_metrics: Record<string, SegmentMetrics>;
+  by_market_selection_metrics: Record<string, SegmentMetrics>;
+  by_league_metrics: Record<string, SegmentMetrics>;
+  staked_bets: StakedBet[];
+  top_winners: TopBet[];
+  top_losers: TopBet[];
+};
