@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from src.agent.backtest import BacktestRecord
-from src.agent.staking import simulate_flat_stake, simulate_kelly_stake
+from src.agent.staking import kelly_fraction, simulate_flat_stake, simulate_kelly_stake
 
 
 def _record(match_id: str, markets: list[dict]) -> BacktestRecord:
@@ -91,3 +91,22 @@ def test_kelly_stake_skips_negative_or_zero_edge():
     }]
     result = simulate_kelly_stake([_record("m1", markets)], starting_bankroll=1000.0)
     assert result.bets == []
+
+
+def test_kelly_fraction_positive_edge():
+    # 0.10 / (3.0 - 1) = 0.05
+    assert kelly_fraction(0.10, 3.0) == 0.05
+
+
+def test_kelly_fraction_caps_at_max_fraction():
+    assert kelly_fraction(0.9, 1.5, max_fraction=0.1) == 0.1
+
+
+def test_kelly_fraction_returns_zero_for_non_positive_edge():
+    assert kelly_fraction(-0.05, 2.0) == 0.0
+    assert kelly_fraction(0.0, 2.0) == 0.0
+
+
+def test_kelly_fraction_returns_zero_for_odds_at_or_below_one():
+    assert kelly_fraction(0.1, 1.0) == 0.0
+    assert kelly_fraction(0.1, 0.5) == 0.0

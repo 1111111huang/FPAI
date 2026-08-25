@@ -338,6 +338,12 @@ class MatchRecommendationOut(BaseModel):
     cold_start_risk: bool = False
     feature_completeness: float | None = None
     unknown_team: bool = False
+    # A82 (agent_user_stories.md): Kelly-derived stake-sizing suggestion for
+    # this recommendation's actual pick, as a multiple of an abstract "Unit
+    # Bet" -- not a dollar figure. None when there's no priced pick, or
+    # absent entirely on a pre-A82 cached row, same convention as
+    # target_odds/feature_completeness above.
+    unit_bet_multiplier: float | None = None
 
 
 def validate_and_degrade(
@@ -416,4 +422,5 @@ def validate_and_degrade(
         cold_start_risk=bool(raw.get("cold_start_risk", False)),
         feature_completeness=raw.get("feature_completeness"),
         unknown_team=bool(raw.get("unknown_team", False)),
+        unit_bet_multiplier=raw.get("unit_bet_multiplier"),
     )

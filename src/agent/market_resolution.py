@@ -57,3 +57,20 @@ def build_actual_outcome(home_goals: int, away_goals: int) -> dict[str, Any]:
         "total_goals": total_goals,
         "total_goals_side": "over_2.5" if total_goals > 2 else "under_2.5",
     }
+
+
+def pick_recommended_market(markets: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """Which single market a recommendation actually picked -- ports
+    MatchUI.tsx's bestMarket() into Python (A81) so the app's outcome
+    resolver (app/backend/recommendation_outcomes.py, W167) can determine
+    server-side the same market a completed card's Hit/Not-Hit badge
+    already reflects client-side. Prefers a non-'no_bet' market; falls back
+    to ranking among all markets (including no_bet) only when nothing is
+    actionable at all. Ties broken by value_edge, highest first -- Python's
+    max() returns the first maximal element on ties, matching a stable
+    descending sort's own tie-break order."""
+    if not markets:
+        return None
+    actionable = [m for m in markets if m.get("recommendation_type") != "no_bet"]
+    pool = actionable if actionable else markets
+    return max(pool, key=lambda m: m.get("value_edge") or 0.0)

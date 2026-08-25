@@ -230,3 +230,20 @@ describe("Match Explorer initial render is not blocked by the bulk cache check (
     expect(generateRecommendation).not.toHaveBeenCalled();
   });
 });
+
+describe("Daily Edges UB explainer line (W169)", () => {
+  beforeEach(() => {
+    vi.mocked(getFixtures).mockReset();
+    vi.mocked(getCachedRecommendation).mockReset();
+    vi.mocked(getSandboxStatus).mockReset();
+    vi.mocked(getSandboxStatus).mockResolvedValue({ sandbox_mode: false, as_of: "" });
+    vi.mocked(getFixtures).mockResolvedValue([]);
+  });
+
+  it("shows a static explanation of the UB (Unit Bet) convention under the header", async () => {
+    render(<DashboardPage />);
+    expect(
+      await screen.findByText(/UB = Unit Bet, your standard betting unit — bet 2 UB at odds 3\.0, get 6 UB back\./)
+    ).toBeInTheDocument();
+  });
+});

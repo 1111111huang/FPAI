@@ -101,6 +101,10 @@ export type Match = {
   // W16: markets W02 dropped for failing type validation -- an honest note
   // beats silently showing fewer markets with no explanation.
   invalidMarketCount: number;
+  // A82/W169: Kelly-derived suggested stake for this recommendation's
+  // actual pick, as a multiple of an abstract Unit Bet -- not a dollar
+  // figure. null/undefined when there's no priced pick to suggest for.
+  unitBetMultiplier?: number | null;
 };
 
 // ---------------------------------------------------------------------------
@@ -182,6 +186,7 @@ function applyRecommendation(match: Match, rec: MatchRecommendationOut): Match {
     coldStartRisk: rec.cold_start_risk,
     featureCompleteness: rec.feature_completeness,
     unknownTeam: rec.unknown_team,
+    unitBetMultiplier: rec.unit_bet_multiplier ?? null,
     invalidMarketCount: rec.invalid_market_count,
     markets: rec.markets.map((m) => ({
       market: m.market,
@@ -994,6 +999,16 @@ export function MatchCard({
                   {hit ? "Hit" : "Not Hit"}
                 </div>
               )}
+              {/* A82/W169: Kelly-derived suggested stake for the actual
+                  pick, in UB (an abstract unit -- see the Daily Edges
+                  header explainer, not a dollar figure). Only meaningful
+                  pre-match -- a completed match has nothing left to size a
+                  stake for. */}
+              {!isCompleted && match.unitBetMultiplier != null && (
+                <div className="text-xs font-medium text-ink-secondary">
+                  Suggested: {match.unitBetMultiplier.toFixed(1)} UB
+                </div>
+              )}
             </div>
 
             <div className="shrink-0 text-right">
@@ -1324,6 +1339,12 @@ export function DashboardPage() {
                     positive edge
                   </p>
                 )}
+                {/* W169: static, no API call -- UB is an abstract betting
+                    unit (A82), not a dollar figure, so there's nothing to
+                    fetch here, just an explanation of the convention. */}
+                <p className="mt-0.5 text-xs text-ink-secondary">
+                  UB = Unit Bet, your standard betting unit — bet 2 UB at odds 3.0, get 6 UB back.
+                </p>
               </div>
               {/* Edge % sort hidden (2026-08-13, W118) -- flagged as misleading
                   by direct user feedback. Kickoff is the only sort left, so the
