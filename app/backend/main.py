@@ -214,7 +214,7 @@ async def _cached_fixture_call(
             del _fixture_cache_pending[cache_key]
 
 
-_PREGENERATE_DEFAULT_DAYS_AHEAD = 5
+_PREGENERATE_DEFAULT_DAYS_AHEAD = 3
 # BUG-045: eod_batch.run_eod_batch()'s own default (5) is fine for the
 # scheduled nightly EOD job, which runs hours into a long-stable process.
 # Pregenerate (below) instead runs immediately inside lifespan's startup
@@ -226,6 +226,23 @@ _PREGENERATE_DEFAULT_DAYS_AHEAD = 5
 # so a single OOM becomes an infinite crash loop, never completing one
 # pregenerate pass. Lower, not equal to eod_batch's default -- deliberately
 # narrower than the value already proven safe for the nightly path.
+#
+# W165: 5 -> 3 (was memory-safety-only, never actually sized to what's
+# shown). Direct user point: no reason to eagerly regenerate a fixture that
+# won't reach the frontend soon -- MatchUI.tsx's Dashboard caps its own
+# display at the next 10 upcoming fixtures regardless of date
+# ("DashboardPage/MatchExplorerPage... next 10 matches going forward").
+# Confirmed live (2026-08-25) that fixture density right now needs exactly
+# 3 days to reach 10 fixtures across every league (2/4/10/47 fixtures at
+# days_ahead=1/2/3/5 respectively) -- 3 covers what's actually visible
+# without the other 37 fixtures 4-5 days out never getting looked at
+# regardless (EOD picks each of them up the night before their own date;
+# T-30 covers each again right before its own kickoff). Cuts pregenerate's
+# real-money LLM call count and Odds-API credit spend by ~79% on a typical
+# boot without leaving a currently-visible card blank. The admin endpoint
+# (POST /api/admin/pregenerate-recommendations?days_ahead=N) still accepts
+# a larger explicit override for a deliberate wider backfill (e.g. ahead of
+# a busy weekend) -- only the automatic boot-time default shrank.
 _PREGENERATE_DEFAULT_CONCURRENCY = 2
 _background_tasks: set[asyncio.Task] = set()
 

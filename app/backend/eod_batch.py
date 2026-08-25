@@ -230,28 +230,60 @@ async def run_eod_batch(
         if odds is not None:
             match_info["odds"] = odds
 
-            # W164: totals/btts, via the per-event endpoint -- only once a
-            # real h2h match exists (needs event_id from the same matched
-            # NormalizedOdds) and only for a client that actually has this
-            # method (get_event_odds is OddsAPIClient-specific; duck-typed
-            # rather than isinstance-checked so HistoricalOddsClient -- no
-            # per-event odds concept, sandbox/backtest-only -- is silently
-            # unaffected, same as it already is for the h2h path above).
-            # Folded into `odds` too (not just match_info), not only
-            # passed to the LLM -- so already_fresh()'s dedup compares
-            # against these prices as well, and a secondary-market price
-            # move alone (h2h unchanged) still triggers a real refresh
-            # instead of being silently masked as "unchanged".
-            odds_event = matched_odds_event(fixture, odds_by_teams)
-            get_event_odds = getattr(odds_client, "get_event_odds", None)
-            if get_event_odds is not None and odds_event is not None and odds_event.event_id:
-                secondary = get_event_odds(sport_key=sport_key, event_id=odds_event.event_id)
-                if secondary is not None:
-                    if secondary.total_goals:
-                        match_info["total_goals_odds"] = secondary.total_goals
+            # W164a: get_event_odds() costs real Odds-API credits per call --
+            # confirmed live this was being paid unconditionally, for every
+            # fixture, on every redeploy/EOD/pregenerate pass, even when
+            # nothing had changed and already_fresh() (below) was about to
+            # skip generation anyway. Reuse the prior cached secondary-market
+            # snapshot instead of re-fetching when h2h odds haven't moved
+            # since it AND that snapshot already reflects a real check (its
+            # own total_goals/btts keys are present, even if the values are
+            # null -- a row missing both keys entirely predates this feature
+            # and still needs its one-time backfill fetch below). Only pay
+            # for a fresh check when h2h moved (a new price snapshot worth
+            # fully re-verifying) or there's nothing to reuse yet.
+            cached_entry = cache.get_latest(fixture.match_id, fixture_date, agent_config_hash)
+            h2h_unchanged = cached_entry is not None and {
+                k: cached_entry.odds.get(k) for k in ("home", "draw", "away")
+            } == odds
+            already_checked_secondary = cached_entry is not None and (
+                "total_goals" in cached_entry.odds or "btts" in cached_entry.odds
+            )
+
+            if h2h_unchanged and already_checked_secondary:
+                if cached_entry.odds.get("total_goals"):
+                    match_info["total_goals_odds"] = cached_entry.odds["total_goals"]
+                if cached_entry.odds.get("btts"):
+                    match_info["btts_odds"] = cached_entry.odds["btts"]
+                odds["total_goals"] = cached_entry.odds.get("total_goals")
+                odds["btts"] = cached_entry.odds.get("btts")
+            else:
+                # W164: totals/btts, via the per-event endpoint -- only once
+                # a real h2h match exists (needs event_id from the same
+                # matched NormalizedOdds) and only for a client that
+                # actually has this method (get_event_odds is
+                # OddsAPIClient-specific; duck-typed rather than
+                # isinstance-checked so HistoricalOddsClient -- no per-event
+                # odds concept, sandbox/backtest-only -- is silently
+                # unaffected, same as it already is for the h2h path above).
+                # Folded into `odds` too (not just match_info), not only
+                # passed to the LLM -- so already_fresh()'s dedup compares
+                # against these prices as well, and a secondary-market
+                # price move alone (h2h unchanged) still triggers a real
+                # refresh instead of being silently masked as "unchanged".
+                # Set even when null (not just when truthy) so the *next*
+                # pass can tell "checked, found nothing" apart from "never
+                # checked" via key presence, per W164a above.
+                odds_event = matched_odds_event(fixture, odds_by_teams)
+                get_event_odds = getattr(odds_client, "get_event_odds", None)
+                if get_event_odds is not None and odds_event is not None and odds_event.event_id:
+                    secondary = get_event_odds(sport_key=sport_key, event_id=odds_event.event_id)
+                    if secondary is not None:
+                        if secondary.total_goals:
+                            match_info["total_goals_odds"] = secondary.total_goals
+                        if secondary.btts:
+                            match_info["btts_odds"] = secondary.btts
                         odds["total_goals"] = secondary.total_goals
-                    if secondary.btts:
-                        match_info["btts_odds"] = secondary.btts
                         odds["btts"] = secondary.btts
 
         # W151: a prior pass (boot pregenerate, or tonight's own EOD run

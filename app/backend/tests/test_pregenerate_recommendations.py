@@ -34,6 +34,17 @@ def _fixture(match_id: str, competition: str) -> NormalizedMatch:
     )
 
 
+def test_default_days_ahead_is_3_not_5():
+    """W165: the automatic boot-time default shrank from 5 -> 3, sized to
+    match the frontend's own "next 10 upcoming fixtures" display cap
+    (MatchUI.tsx) rather than the memory-safety-only value it started as --
+    a fixed constant, not logic, but a real behavior change worth a
+    regression check against silent reverts. The admin endpoint's own
+    explicit-override tests below are unaffected (they never rely on this
+    default)."""
+    assert main._PREGENERATE_DEFAULT_DAYS_AHEAD == 3
+
+
 def test_groups_fixtures_by_league_and_runs_one_batch_per_league(monkeypatch):
     monkeypatch.delenv("APP_ACCESS_TOKEN", raising=False)
     fixtures = [_fixture("m1", "E0"), _fixture("m2", "E0"), _fixture("m3", "SWE")]
