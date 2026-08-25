@@ -999,16 +999,6 @@ export function MatchCard({
                   {hit ? "Hit" : "Not Hit"}
                 </div>
               )}
-              {/* A82/W169: Kelly-derived suggested stake for the actual
-                  pick, in UB (an abstract unit -- see the Daily Edges
-                  header explainer, not a dollar figure). Only meaningful
-                  pre-match -- a completed match has nothing left to size a
-                  stake for. */}
-              {!isCompleted && match.unitBetMultiplier != null && (
-                <div className="text-xs font-medium text-ink-secondary">
-                  Suggested: {match.unitBetMultiplier.toFixed(1)} UB
-                </div>
-              )}
             </div>
 
             <div className="shrink-0 text-right">
@@ -1095,6 +1085,22 @@ export function MatchCard({
                 )
               )}
             </div>
+
+            {/* A82/W169: Kelly-derived suggested stake for the actual pick,
+                in UB (an abstract unit -- see the Daily Edges header
+                explainer, not a dollar figure). Its own column, same
+                weight as Market/Pick/Odds/Edge -- direct user feedback
+                that a small aside line under Pick undersold it. Only
+                meaningful pre-match -- a completed match has nothing left
+                to size a stake for. */}
+            {!isCompleted && match.unitBetMultiplier != null && (
+              <div className="shrink-0 text-right">
+                <div className="text-[10px] uppercase tracking-wide text-muted">Stake</div>
+                <div className="font-mono text-base font-bold text-ink">
+                  {match.unitBetMultiplier.toFixed(1)} UB
+                </div>
+              </div>
+            )}
           </div>
         </div>
 
@@ -1343,7 +1349,7 @@ export function DashboardPage() {
                     unit (A82), not a dollar figure, so there's nothing to
                     fetch here, just an explanation of the convention. */}
                 <p className="mt-0.5 text-xs text-ink-secondary">
-                  UB = Unit Bet, your standard betting unit — bet 2 UB at odds 3.0, get 6 UB back.
+                  UB = Unit Bet, your standard bet amount — the money you'd put on a 50/50 match bet.
                 </p>
               </div>
               {/* Edge % sort hidden (2026-08-13, W118) -- flagged as misleading

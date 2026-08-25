@@ -243,7 +243,7 @@ describe("Daily Edges UB explainer line (W169)", () => {
   it("shows a static explanation of the UB (Unit Bet) convention under the header", async () => {
     render(<DashboardPage />);
     expect(
-      await screen.findByText(/UB = Unit Bet, your standard betting unit — bet 2 UB at odds 3\.0, get 6 UB back\./)
+      await screen.findByText(/UB = Unit Bet, your standard bet amount — the money you'd put on a 50\/50 match bet\./)
     ).toBeInTheDocument();
   });
 });

@@ -302,7 +302,8 @@ describe("MatchCard", () => {
       ],
     });
     render(<MatchCard match={match} onUpdate={vi.fn()} />);
-    expect(screen.getByText("Suggested: 2.3 UB")).toBeInTheDocument();
+    expect(screen.getByText("Stake")).toBeInTheDocument();
+    expect(screen.getByText("2.3 UB")).toBeInTheDocument();
   });
 
   it("shows nothing when unitBetMultiplier is null", () => {
@@ -317,7 +318,7 @@ describe("MatchCard", () => {
       ],
     });
     render(<MatchCard match={match} onUpdate={vi.fn()} />);
-    expect(screen.queryByText(/Suggested:/)).not.toBeInTheDocument();
+    expect(screen.queryByText("Stake")).not.toBeInTheDocument();
   });
 
   it("does not show the suggested stake on a completed card", () => {
@@ -334,7 +335,7 @@ describe("MatchCard", () => {
       ],
     });
     render(<MatchCard match={match} onUpdate={vi.fn()} />);
-    expect(screen.queryByText(/Suggested:/)).not.toBeInTheDocument();
+    expect(screen.queryByText("Stake")).not.toBeInTheDocument();
   });
 });
 
