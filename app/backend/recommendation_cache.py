@@ -10,6 +10,26 @@ lightweight generation history (timestamp + odds snapshot per generation)
 lets a future consumer (W10) cheaply detect "no new data" before deciding
 whether to regenerate, and doubles as an audit trail. "The cache" for a key
 is simply its most recent row (get_latest); get_history returns the rest.
+
+W163: DEFAULT_DB_PATH resolves to repo-root data/ (three .parent hops from
+this file, under app/backend/), not app/data/ (two hops) -- found live via a
+direct user report: Railway's single mounted volume sits at /app/data
+(container root == repo root, confirmed from the service's own start
+command, no Root Directory override), covering the ML engine's own
+data/fpai_core.db (config_loader.py's bare "data/fpai_core.db", resolved
+against cwd) but never this file's two-hop path, which lands one directory
+deeper at /app/app/data -- silently unpersisted across every redeploy.
+Railway services get exactly one volume, so the fix is aligning every
+app/backend/ data path onto the repo-root data/ directory the volume
+already covers (this file, bet_tracker.py, scheduler.py's JobRunLog,
+sandbox_clock.py's sandbox_scoped_path(), scheduler_wiring.py's
+CREDIT_COUNTER_PATH[_2]) -- not requesting a second volume that isn't
+available, and not moving the volume itself (which would orphan
+fpai_core.db instead). recommendations.py's own
+_SANDBOX_SNAPSHOT_BASE_DIR/_CORPUS_BASE_DIR already used this same
+three-hop convention -- this bug was this file (and its siblings) not
+matching a pattern that already existed correctly elsewhere in this exact
+codebase.
 """
 
 from __future__ import annotations
@@ -21,7 +41,7 @@ from pathlib import Path
 import sqlite3
 from typing import Literal
 
-DEFAULT_DB_PATH = Path(__file__).parent.parent / "data" / "recommendation_cache.db"
+DEFAULT_DB_PATH = Path(__file__).parent.parent.parent / "data" / "recommendation_cache.db"
 
 TriggeredBy = Literal["scheduled", "manual_regenerate"]
 

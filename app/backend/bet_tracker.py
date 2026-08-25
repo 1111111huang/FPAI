@@ -1,7 +1,10 @@
 """W12: user_bets storage (D3a) -- logs bets the user actually placed, not
-automatic hypothetical tracking. SQLite-backed (app/data/user_bets.db, same
+automatic hypothetical tracking. SQLite-backed (data/user_bets.db, same
 pattern as W11's recommendation_cache), independent of both SnapshotStore and
 the recommendation cache -- a different concern entirely.
+
+W163: DEFAULT_DB_PATH resolves to repo-root data/, not app/data/ -- see
+recommendation_cache.py's own W163 note for why.
 
 profit_loss is computed at settlement time (W13 calls settle_bet()), not at
 creation -- every bet starts 'open' with profit_loss=None."""
@@ -15,7 +18,7 @@ from pathlib import Path
 import sqlite3
 from typing import Literal
 
-DEFAULT_DB_PATH = Path(__file__).parent.parent / "data" / "user_bets.db"
+DEFAULT_DB_PATH = Path(__file__).parent.parent.parent / "data" / "user_bets.db"
 
 Outcome = Literal["open", "won", "lost"]
 Source = Literal["from_recommendation", "manual"]

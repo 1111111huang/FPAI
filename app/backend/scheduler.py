@@ -39,7 +39,15 @@ LOGGER = get_logger(__name__)
 
 NY_TZ = ZoneInfo("America/New_York")
 
-DEFAULT_DB_PATH = Path(__file__).parent.parent / "data" / "job_runs.db"
+# W163: repo-root data/, not app/data/ -- see recommendation_cache.py's W163
+# note. Production's own RecoverableScheduler(run_log=None) falls back to
+# JobRunLog() (this default) -- only sandbox mode ever overrode it
+# (main.py's _SANDBOX_JOB_RUNS_DB_PATH, via sandbox_clock.sandbox_scoped_path,
+# already correctly repo-root-relative), so this exact bug -- the one
+# sandbox_scoped_path()'s own docstring names as "already caused one real
+# bug (W29)" -- was still live for every real production JobRunLog the
+# whole time, just masked by sandbox mode's separate, already-correct path.
+DEFAULT_DB_PATH = Path(__file__).parent.parent.parent / "data" / "job_runs.db"
 
 
 class JobRunLog:

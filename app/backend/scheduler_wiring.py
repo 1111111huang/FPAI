@@ -29,8 +29,9 @@ from src.utils.logger import get_logger
 
 LOGGER = get_logger(__name__)
 
-CREDIT_COUNTER_PATH = Path(__file__).parent.parent / "data" / "odds_api_credit_counter.json"
-CREDIT_COUNTER_PATH_2 = Path(__file__).parent.parent / "data" / "odds_api_credit_counter_2.json"
+# W163: repo-root data/, not app/data/ -- see recommendation_cache.py's W163 note.
+CREDIT_COUNTER_PATH = Path(__file__).parent.parent.parent / "data" / "odds_api_credit_counter.json"
+CREDIT_COUNTER_PATH_2 = Path(__file__).parent.parent.parent / "data" / "odds_api_credit_counter_2.json"
 EOD_JOB_ID = "eod_batch_generation"
 EOD_HOUR = 23
 EOD_MINUTE = 0
