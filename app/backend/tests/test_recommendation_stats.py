@@ -9,7 +9,7 @@ import sys
 sys.path.append(str(Path(__file__).resolve().parents[3]))
 
 from app.backend.recommendation_outcomes import RecommendationOutcome
-from app.backend.recommendation_stats import compute_recommendation_stats
+from app.backend.recommendation_stats import _segment_kelly_report, compute_recommendation_stats
 
 
 def _outcome(
@@ -67,3 +67,61 @@ def test_kelly_roi_simulation_skips_null_odds():
     outcomes = [_outcome(recommendation_type="direct_bet", odds=None, correct=True)]
     stats = compute_recommendation_stats(outcomes)
     assert stats["kelly_roi_simulation"]["bets_placed"] == 0
+
+
+def test_segment_kelly_report_groups_by_key_fn():
+    outcomes = [
+        _outcome(match_id="m1", market="result_3way", odds=2.0, value_edge=0.1, correct=True),
+        _outcome(match_id="m2", market="btts", odds=1.8, value_edge=0.1, correct=False),
+    ]
+    result = _segment_kelly_report(outcomes, lambda o: o.market)
+    assert set(result.keys()) == {"result_3way", "btts"}
+    assert result["result_3way"]["bets_placed"] == 1
+    assert result["result_3way"]["bets_won"] == 1
+    assert result["btts"]["bets_placed"] == 1
+    assert result["btts"]["bets_won"] == 0
+
+
+def test_segment_kelly_report_groups_none_key_as_unknown():
+    outcomes = [_outcome(match_id="m1", competition=None, odds=2.0, value_edge=0.1, correct=True)]
+    result = _segment_kelly_report(outcomes, lambda o: o.competition)
+    assert set(result.keys()) == {"unknown"}
+
+
+def test_by_market_metrics_present_on_compute_recommendation_stats():
+    outcomes = [_outcome(match_id="m1", market="result_3way", odds=2.0, value_edge=0.1, correct=True)]
+    stats = compute_recommendation_stats(outcomes)
+    assert stats["by_market_metrics"]["result_3way"]["bets_placed"] == 1
+    assert "total_staked" in stats["by_market_metrics"]["result_3way"]
+
+
+def test_by_market_selection_metrics_uses_composite_key():
+    outcomes = [_outcome(match_id="m1", market="result_3way", selection="home", odds=2.0, value_edge=0.1, correct=True)]
+    stats = compute_recommendation_stats(outcomes)
+    assert "result_3way:home" in stats["by_market_selection_metrics"]
+
+
+def test_by_league_metrics_uses_competition_field():
+    outcomes = [_outcome(match_id="m1", competition="E0", odds=2.0, value_edge=0.1, correct=True)]
+    stats = compute_recommendation_stats(outcomes)
+    assert "E0" in stats["by_league_metrics"]
+
+
+def test_staked_bets_is_a_list_of_plain_dicts():
+    outcomes = [_outcome(match_id="m1", odds=2.0, value_edge=0.1, correct=True, recommendation_type="direct_bet")]
+    stats = compute_recommendation_stats(outcomes)
+    assert isinstance(stats["staked_bets"], list)
+    assert len(stats["staked_bets"]) == 1
+    bet = stats["staked_bets"][0]
+    assert isinstance(bet, dict)
+    assert bet["match_id"] == "m1"
+    assert bet["won"] is True
+    assert bet["payout"] > 0
+
+
+def test_staked_bets_excludes_conditional_picks():
+    # simulate_kelly_stake only ever stakes direct_bet -- conditional picks
+    # never appear in staked_bets even though they're resolved outcomes.
+    outcomes = [_outcome(match_id="m1", recommendation_type="conditional", odds=2.0, value_edge=0.1, correct=True)]
+    stats = compute_recommendation_stats(outcomes)
+    assert stats["staked_bets"] == []

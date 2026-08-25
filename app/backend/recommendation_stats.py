@@ -12,7 +12,8 @@ parameter always was; see docs/superpowers/specs/2026-08-25-live-recommendation-
 from __future__ import annotations
 
 from collections import defaultdict
-from typing import Any
+import dataclasses
+from typing import Any, Callable
 
 from app.backend.recommendation_outcomes import RecommendationOutcome
 from src.agent.backtest import BacktestRecord
@@ -52,6 +53,27 @@ def _to_backtest_records(outcomes: list[RecommendationOutcome]) -> list[Backtest
     ]
 
 
+def _segment_kelly_report(
+    outcomes: list[RecommendationOutcome],
+    key_fn: Callable[[RecommendationOutcome], str | None],
+    starting_bankroll: float = DEFAULT_STARTING_BANKROLL,
+) -> dict[str, dict[str, Any]]:
+    """Same hit-rate-plus-Kelly-ROI report compute_recommendation_stats's
+    own kelly_roi_simulation produces, run once per group instead of once
+    overall -- powers the dashboard's Market / Market+Direction / League
+    breakdown tables (W170). None-valued keys (competition can be null)
+    group under "unknown", matching _breakdown_by's own convention."""
+    groups: dict[str, list[RecommendationOutcome]] = defaultdict(list)
+    for outcome in outcomes:
+        groups[key_fn(outcome) or "unknown"].append(outcome)
+    result: dict[str, dict[str, Any]] = {}
+    for group_key, group_outcomes in groups.items():
+        records = _to_backtest_records(group_outcomes)
+        bankroll_result = simulate_kelly_stake(records, starting_bankroll=starting_bankroll)
+        result[group_key] = build_evaluation_report(records, bankroll_result)
+    return result
+
+
 def compute_recommendation_stats(
     outcomes: list[RecommendationOutcome], starting_bankroll: float = DEFAULT_STARTING_BANKROLL
 ) -> dict[str, Any]:
@@ -64,4 +86,20 @@ def compute_recommendation_stats(
         "by_competition": _breakdown_by(outcomes, "competition"),
         "by_confidence": _breakdown_by(outcomes, "confidence"),
         "kelly_roi_simulation": build_evaluation_report(records, bankroll_result),
+        # W170: full (hit-rate + Kelly ROI) metrics per segment, for the
+        # dashboard's three breakdown tables -- distinct from by_market/
+        # by_competition above, which only report hit-rate across every
+        # resolved pick (conditional included). These three are scoped to
+        # the same staked (direct_bet-only) population as kelly_roi_simulation.
+        "by_market_metrics": _segment_kelly_report(outcomes, lambda o: o.market, starting_bankroll),
+        "by_market_selection_metrics": _segment_kelly_report(
+            outcomes, lambda o: f"{o.market}:{o.selection}", starting_bankroll
+        ),
+        "by_league_metrics": _segment_kelly_report(outcomes, lambda o: o.competition, starting_bankroll),
+        # Raw per-bet list (plain dicts, not BetOutcome instances -- always
+        # JSON-safe without relying on FastAPI's implicit dataclass
+        # handling) -- feeds the dashboard's odds/stake histograms (bucketed
+        # client-side) and is the source list compute_agent_performance_dashboard
+        # sorts for its top/bottom examples.
+        "staked_bets": [dataclasses.asdict(bet) for bet in bankroll_result.bets],
     }
