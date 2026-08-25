@@ -203,3 +203,14 @@ def test_missing_min_odds_defaults_instead_of_dropping_the_market_bug032():
     assert len(result.markets) == 1
     assert result.markets[0].min_odds == 0.0
     assert result.invalid_market_count == 0
+
+
+def test_unit_bet_multiplier_passes_through_unchanged():
+    raw = {**_VALID_RAW, "unit_bet_multiplier": 3.5}
+    result = validate_and_degrade(raw, "Arsenal", "Everton")
+    assert result.unit_bet_multiplier == 3.5
+
+
+def test_missing_unit_bet_multiplier_defaults_to_none_for_pre_a82_cached_data():
+    result = validate_and_degrade(_VALID_RAW, "Arsenal", "Everton")
+    assert result.unit_bet_multiplier is None
