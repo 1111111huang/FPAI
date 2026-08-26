@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import inspect
 import json
+from datetime import datetime, timezone
 
 import duckdb
 import pytest
@@ -18,6 +19,7 @@ from src.agent.lessons import (
     generate_rule_from_lesson,
     insert_lesson_candidate,
     insert_telemetry,
+    list_pending_by_source,
     load_approved_lessons,
     reject_lesson,
 )
@@ -36,6 +38,7 @@ def test_create_lessons_tables_creates_both_tables():
     assert lesson_cols == {
         "id", "lesson_text", "status", "competition_id", "tier", "scope",
         "source_match_id", "created_at", "reviewed_at", "reviewer", "rule_text",
+        "source", "auto_decision_reasoning",
     }
     assert telemetry_cols == {
         "match_id", "run_id", "competition_resolution", "research_evidence",
@@ -64,6 +67,54 @@ def test_insert_lesson_candidate_allows_null_competition_id():
     lesson_id = insert_lesson_candidate(conn, "WHEN evaluating international matches...", None, "general_purpose", "m2")
     row = conn.execute("SELECT competition_id, tier FROM agent_lessons WHERE id = ?", [lesson_id]).fetchone()
     assert row == (None, "general_purpose")
+
+
+def test_insert_lesson_candidate_defaults_source_to_train():
+    conn = _conn()
+    lesson_id = insert_lesson_candidate(conn, "text", "E0", "competition_specific", "m1")
+    source = conn.execute("SELECT source FROM agent_lessons WHERE id = ?", [lesson_id]).fetchone()[0]
+    assert source == "train"
+
+
+def test_insert_lesson_candidate_accepts_explicit_live_source():
+    conn = _conn()
+    lesson_id = insert_lesson_candidate(conn, "text", "E0", "competition_specific", "m1", source="live")
+    source = conn.execute("SELECT source FROM agent_lessons WHERE id = ?", [lesson_id]).fetchone()[0]
+    assert source == "live"
+
+
+def test_list_pending_by_source_excludes_other_sources_and_null():
+    conn = _conn()
+    live_id = insert_lesson_candidate(conn, "live text", "E0", "competition_specific", "m1", source="live")
+    train_id = insert_lesson_candidate(conn, "train text", "E0", "competition_specific", "m2", source="train")
+    # A pre-migration row -- source column exists but was never populated for it.
+    conn.execute(
+        "INSERT INTO agent_lessons (lesson_text, status, competition_id, tier, source_match_id, created_at) "
+        "VALUES ('legacy text', 'pending', 'E0', 'competition_specific', 'm3', ?)",
+        [datetime.now(timezone.utc)],
+    )
+
+    pending = list_pending_by_source(conn, source="live")
+
+    assert [p["id"] for p in pending] == [live_id]
+    assert pending[0]["lesson_text"] == "live text"
+    assert pending[0]["competition_id"] == "E0"
+    assert pending[0]["tier"] == "competition_specific"
+
+    # Proves this is a genuine source == ? match, not a hardcoded
+    # "source != 'train'" exclusion -- querying by "train" on this same
+    # fixture must return exactly the train row, not the live one.
+    train_pending = list_pending_by_source(conn, source="train")
+    assert [p["id"] for p in train_pending] == [train_id]
+    assert train_pending[0]["lesson_text"] == "train text"
+
+
+def test_list_pending_by_source_excludes_already_reviewed_rows():
+    conn = _conn()
+    live_id = insert_lesson_candidate(conn, "live text", "E0", "competition_specific", "m1", source="live")
+    reject_lesson(conn, live_id, reviewer="test")
+
+    assert list_pending_by_source(conn, source="live") == []
 
 
 def test_insert_telemetry_round_trips_json_fields():

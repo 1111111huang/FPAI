@@ -51,6 +51,22 @@ def create_lessons_tables(conn: duckdb.DuckDBPyConnection) -> None:
     # load_approved_lessons() reads ONLY rule_text, never lesson_text, so the
     # live agent's prompt never sees match-specific noise.
     conn.execute("ALTER TABLE agent_lessons ADD COLUMN IF NOT EXISTS rule_text TEXT")
+    # 2026-08-26 (autonomous live-lesson judging, Phase 1): source
+    # distinguishes an agent-train-sourced candidate ('train', the default
+    # below and the only source that ever existed before this) from a
+    # live-deployment-sourced one ('live', intended to be set by
+    # live_lessons.py's commit_lesson_batches once it's updated to pass
+    # source="live" -- not yet wired as of this commit, see Task 3).
+    # auto_decision_reasoning is the audit trail
+    # for an autonomous approve/reject decision -- a human reviewer's own
+    # judgment call is visible in the CLI transcript; this is the
+    # equivalent for a decision nobody watched happen. Both nullable/
+    # additive -- a pre-migration row simply carries NULL for both, and
+    # NULL is never matched by `source = 'live'` (SQL semantics), so
+    # existing rows are structurally excluded from live-lesson-only
+    # queries like list_pending_by_source() below, not just conventionally.
+    conn.execute("ALTER TABLE agent_lessons ADD COLUMN IF NOT EXISTS source TEXT")
+    conn.execute("ALTER TABLE agent_lessons ADD COLUMN IF NOT EXISTS auto_decision_reasoning TEXT")
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS agent_telemetry (
@@ -73,15 +89,21 @@ def insert_lesson_candidate(
     competition_id: str | None,
     tier: str,
     source_match_id: str,
+    source: str = "train",
 ) -> int:
-    """Insert a pending, unscoped lesson candidate. Returns its id."""
+    """Insert a pending, unscoped lesson candidate. Returns its id.
+
+    source: 'train' (default, preserves every pre-existing caller
+    unchanged -- agent-train's own CLI path) or 'live' (intended for
+    live_lessons.py's commit_lesson_batches to pass explicitly once it's
+    updated to do so -- not yet wired as of this commit, see Task 3)."""
     row = conn.execute(
         """
-        INSERT INTO agent_lessons (lesson_text, status, competition_id, tier, source_match_id, created_at)
-        VALUES (?, 'pending', ?, ?, ?, ?)
+        INSERT INTO agent_lessons (lesson_text, status, competition_id, tier, source_match_id, created_at, source)
+        VALUES (?, 'pending', ?, ?, ?, ?, ?)
         RETURNING id
         """,
-        [lesson_text, competition_id, tier, source_match_id, datetime.now(timezone.utc)],
+        [lesson_text, competition_id, tier, source_match_id, datetime.now(timezone.utc), source],
     ).fetchone()
     return int(row[0])
 
@@ -212,6 +234,22 @@ def load_approved_lessons(conn: duckdb.DuckDBPyConnection, competition_id: str |
     except duckdb.CatalogException:
         return []
     return [row[0] for row in rows]
+
+
+def list_pending_by_source(conn: duckdb.DuckDBPyConnection, source: str) -> list[dict[str, Any]]:
+    """Every pending lesson candidate from one source ('train'/'live') --
+    intended for use by the not-yet-built auto_judge_live_lessons() (Task 3,
+    src/live_lessons.py) to find only its own population. WHERE source = ?
+    naturally excludes both the other source and any pre-migration row
+    (source IS NULL, since SQL's `NULL = 'live'` is never true) --
+    agent-train's human-reviewed queue is structurally unreachable from
+    here, not just conventionally avoided."""
+    rows = conn.execute(
+        "SELECT id, lesson_text, competition_id, tier FROM agent_lessons "
+        "WHERE status = 'pending' AND source = ? ORDER BY created_at",
+        [source],
+    ).fetchall()
+    return [{"id": row[0], "lesson_text": row[1], "competition_id": row[2], "tier": row[3]} for row in rows]
 
 
 def find_conflicting_rule(new_rule_text: str, existing_rules: list[str], llm_invoke: Callable[[str], str]) -> str | None:
