@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 from collections import Counter
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Callable
 
@@ -295,6 +296,84 @@ def find_conflicting_rule(new_rule_text: str, existing_rules: list[str], llm_inv
     if not response or response.upper().startswith("NONE"):
         return None
     return response
+
+
+@dataclass
+class LessonDecision:
+    approve: bool
+    scope: str | None  # "competition" | "tier", only set when approve=True
+    reasoning: str      # always set -- the audit trail (agent_lessons.auto_decision_reasoning)
+
+
+def _parse_judge_json(raw: str) -> dict[str, Any]:
+    """Defensive unwrap for judge_lesson_candidate()'s response -- the
+    first JSON-structured LLM call in this module (every other function
+    here parses/returns plain prose). An LLM can still wrap valid JSON in
+    a markdown code fence despite an explicit "output nothing else"
+    instruction; strip one if present, then parse normally. Raises
+    json.JSONDecodeError (uncaught) on genuinely malformed input --
+    judge_lesson_candidate is responsible for catching that, matching this
+    module's existing per-function (not shared) error-handling convention."""
+    text = raw.strip()
+    if text.startswith("```"):
+        text = text.strip("`")
+        if text.lower().startswith("json"):
+            text = text[4:]
+        text = text.strip()
+    return json.loads(text)
+
+
+def judge_lesson_candidate(
+    lesson_text: str, competition_id: str | None, tier: str, llm_invoke: Callable[[str], str],
+) -> LessonDecision:
+    """2026-08-26 (autonomous live-lesson judging, Phase 1): decides
+    whether a live-deployment-sourced lesson candidate (see
+    live_lessons.py) is worth turning into a durable rule, and if so
+    whether it should apply narrowly (this competition) or broadly (every
+    competition sharing this tier) -- the same decision a human reviewer
+    makes via `agent-lessons approve --scope`. Never called for a
+    train-sourced candidate -- see live_lessons.py's auto_judge_live_lessons
+    for the source='live'-only query this feeds from.
+
+    Deliberately conservative: live-deployment batches are small (W177
+    batches one candidate per league per day), so the prompt is explicitly
+    instructed to default to reject on a thin sample or a pattern that
+    isn't clearly systematic -- a bad rule silently baked into the live
+    prompt is worse than one more day with no new rule. Mirrors the live
+    agent's own already-investigated conservative posture on value edges
+    (A71's DeepSeek decline-bias findings) -- conservative-by-default is
+    this system's existing house style, not a new invention.
+
+    Returns approve=False with a reasoning string on ANY failure (a raised
+    exception, malformed JSON, an invalid scope value, or a non-boolean
+    `approve` value) -- fail-closed, matching every other LLM-driven
+    function in this module's posture on the safe side of a coin flip."""
+    prompt = (
+        f"You are deciding whether to promote a batch of live betting-recommendation results into a "
+        f"standing rule for an automated agent's future recommendations in this competition "
+        f"(competition_id={competition_id!r}, tier={tier!r}).\n\n"
+        f"{lesson_text}\n\n"
+        "Only approve if the pattern is clearly systematic, not noise from a small sample -- when in "
+        "doubt, reject. If you approve, also decide scope: \"competition\" if the pattern is specific to "
+        "this one competition, \"tier\" if it reflects something general enough to apply to every "
+        "competition of this tier.\n\n"
+        "Respond with exactly one JSON object, nothing else, with \"approve\" as a JSON boolean literal "
+        "(not a string): "
+        '{"approve": true|false, "scope": "competition"|"tier"|null, "reasoning": "one or two sentences"}'
+    )
+    try:
+        parsed = _parse_judge_json(llm_invoke(prompt))
+        # ponytail: `is True` (not bool(...)) -- a stringified "false", a
+        # dict/list, or a nonzero int must all fail closed to reject, not
+        # silently coerce to approve. See the coordinator's exploit report.
+        approve = parsed["approve"] is True
+        scope = parsed.get("scope") if approve else None
+        reasoning = str(parsed.get("reasoning") or "").strip() or "(no reasoning given)"
+        if approve and scope not in _VALID_SCOPES:
+            return LessonDecision(approve=False, scope=None, reasoning=f"invalid scope {scope!r} returned -- defaulting to reject")
+        return LessonDecision(approve=approve, scope=scope, reasoning=reasoning)
+    except Exception as exc:
+        return LessonDecision(approve=False, scope=None, reasoning=f"judge call failed ({exc!r}) -- defaulting to reject")
 
 
 def extract_competition_scope(full_state: dict[str, Any]) -> tuple[str | None, str]:

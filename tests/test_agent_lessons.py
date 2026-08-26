@@ -19,6 +19,8 @@ from src.agent.lessons import (
     generate_rule_from_lesson,
     insert_lesson_candidate,
     insert_telemetry,
+    judge_lesson_candidate,
+    LessonDecision,
     list_pending_by_source,
     load_approved_lessons,
     reject_lesson,
@@ -478,6 +480,73 @@ def test_find_conflicting_rule_propagates_llm_exceptions():
 
     with pytest.raises(RuntimeError, match="API down"):
         find_conflicting_rule("NEVER do X.", ["some existing rule"], failing_invoke)
+
+
+def test_judge_lesson_candidate_parses_a_plain_json_approval():
+    captured = {}
+
+    def fake_invoke(prompt: str) -> str:
+        captured["prompt"] = prompt
+        return '{"approve": true, "scope": "competition", "reasoning": "Clear systematic pattern."}'
+
+    decision = judge_lesson_candidate("WHEN evaluating a batch...", "E0", "competition_specific", fake_invoke)
+
+    assert decision.approve is True
+    assert decision.scope == "competition"
+    assert decision.reasoning == "Clear systematic pattern."
+    assert "E0" in captured["prompt"]
+    assert "competition_specific" in captured["prompt"]
+
+
+def test_judge_lesson_candidate_parses_json_wrapped_in_a_markdown_fence():
+    def fake_invoke(prompt: str) -> str:
+        return '```json\n{"approve": false, "scope": null, "reasoning": "Sample too thin."}\n```'
+
+    decision = judge_lesson_candidate("WHEN evaluating a batch...", "E0", "competition_specific", fake_invoke)
+
+    assert decision.approve is False
+    assert decision.scope is None
+    assert decision.reasoning == "Sample too thin."
+
+
+def test_judge_lesson_candidate_rejects_on_invalid_scope_value():
+    def fake_invoke(prompt: str) -> str:
+        return '{"approve": true, "scope": "everywhere", "reasoning": "Broad pattern."}'
+
+    decision = judge_lesson_candidate("some lesson", "E0", "competition_specific", fake_invoke)
+
+    assert decision.approve is False
+    assert decision.scope is None
+    assert "everywhere" in decision.reasoning
+
+
+def test_judge_lesson_candidate_rejects_on_malformed_json():
+    def fake_invoke(prompt: str) -> str:
+        return "not json at all"
+
+    decision = judge_lesson_candidate("some lesson", "E0", "competition_specific", fake_invoke)
+
+    assert decision.approve is False
+    assert decision.scope is None
+
+
+def test_judge_lesson_candidate_rejects_on_llm_exception():
+    def failing_invoke(prompt: str) -> str:
+        raise RuntimeError("API down")
+
+    decision = judge_lesson_candidate("some lesson", "E0", "competition_specific", failing_invoke)
+
+    assert decision.approve is False
+    assert "API down" in decision.reasoning
+
+
+def test_judge_lesson_candidate_rejects_on_stringified_approve_false():
+    def fake_invoke(prompt: str) -> str:
+        return '{"approve": "false", "scope": "competition", "reasoning": "..."}'
+
+    decision = judge_lesson_candidate("some lesson", "E0", "competition_specific", fake_invoke)
+
+    assert decision.approve is False
 
 
 def test_generate_batch_lesson_text_handles_no_resolved_markets():
