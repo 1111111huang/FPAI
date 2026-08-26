@@ -4,6 +4,7 @@ mirroring test_settlement.py's own structure and cases."""
 from __future__ import annotations
 
 from pathlib import Path
+import sqlite3
 import sys
 from unittest.mock import MagicMock
 
@@ -86,6 +87,110 @@ def test_skips_unresolvable_markets(tmp_path: Path) -> None:
 
     assert resolved == []
     client.get_results.assert_not_called()
+
+
+def test_persists_the_verified_competition_id_not_the_self_reported_league(tmp_path: Path) -> None:
+    """W175: `competition` stays the LLM's self-reported string (existing,
+    unchanged behavior) -- the new `competition_id` is the real code the
+    results lookup actually matched against. Deliberately different values
+    here to prove these are two independent columns, not aliases."""
+    cache = RecommendationCache(db_path=tmp_path / "cache.db")
+    store = RecommendationOutcomeStore(db_path=tmp_path / "outcomes.db")
+    cache.record_generation(
+        "m1", "2026-08-22", "hash1", {},
+        _rec("direct_bet", "result_3way", "home", "direct_bet", 2.0, league="a made-up league name"),
+        "scheduled",
+    )
+    client = MagicMock()
+
+    def fake_get_results(competition_code, date_from, date_to):
+        return [_match("m1", 2, 1)] if competition_code == "PD" else []
+
+    client.get_results.side_effect = fake_get_results
+
+    resolved = resolve_pending_recommendations(cache, store, client)
+
+    assert resolved[0].competition == "a made-up league name"
+    assert resolved[0].competition_id == "SP1"
+
+
+def test_persists_the_raw_final_score(tmp_path: Path) -> None:
+    cache = RecommendationCache(db_path=tmp_path / "cache.db")
+    store = RecommendationOutcomeStore(db_path=tmp_path / "outcomes.db")
+    cache.record_generation("m1", "2026-08-22", "hash1", {}, _rec("direct_bet", "result_3way", "home", "direct_bet", 2.0), "scheduled")
+    client = MagicMock()
+    client.get_results.return_value = [_match("m1", 2, 1)]
+
+    resolved = resolve_pending_recommendations(cache, store, client)
+
+    assert resolved[0].home_goals == 2
+    assert resolved[0].away_goals == 1
+
+
+def test_persists_sweden_competition_id_via_the_sweden_client(tmp_path: Path) -> None:
+    cache = RecommendationCache(db_path=tmp_path / "cache.db")
+    store = RecommendationOutcomeStore(db_path=tmp_path / "outcomes.db")
+    cache.record_generation("m1", "2026-08-22", "hash1", {}, _rec("direct_bet", "result_3way", "home", "direct_bet", 2.0), "scheduled")
+    client = MagicMock()
+    client.get_results.return_value = []
+    sweden_client = MagicMock()
+    sweden_client.get_results.return_value = [_match("m1", 2, 1)]
+
+    resolved = resolve_pending_recommendations(cache, store, client, sweden_client)
+
+    assert resolved[0].competition_id == "SWE"
+
+
+def test_reopening_store_after_schema_migration_is_idempotent(tmp_path: Path) -> None:
+    """A genuine pre-W175 table: the original 13-column DDL (no
+    competition_id/home_goals/away_goals), with one real row inserted
+    directly via sqlite3 -- then opened through RecommendationOutcomeStore,
+    which must migrate it in place without raising and without losing the
+    row, and tolerate being opened a second time after that."""
+    db_path = tmp_path / "outcomes.db"
+    conn = sqlite3.connect(db_path)
+    conn.execute(
+        """
+        CREATE TABLE recommendation_outcomes (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            match_id TEXT NOT NULL,
+            date TEXT NOT NULL,
+            competition TEXT,
+            market TEXT NOT NULL,
+            selection TEXT NOT NULL,
+            recommendation_type TEXT NOT NULL,
+            confidence TEXT,
+            odds REAL,
+            value_edge REAL,
+            correct INTEGER NOT NULL,
+            generated_at TEXT NOT NULL,
+            resolved_at TEXT NOT NULL,
+            UNIQUE(match_id, date)
+        )
+        """
+    )
+    conn.execute(
+        """
+        INSERT INTO recommendation_outcomes
+        (match_id, date, competition, market, selection, recommendation_type,
+         confidence, odds, value_edge, correct, generated_at, resolved_at)
+        VALUES ('old-m1', '2020-01-01', 'E0', 'result_3way', 'home', 'direct_bet',
+                'medium', 2.0, 0.1, 1, '2020-01-01T00:00:00+00:00', '2020-01-01T00:00:00+00:00')
+        """
+    )
+    conn.commit()
+    conn.close()
+
+    store = RecommendationOutcomeStore(db_path=db_path)  # must migrate in place, not raise
+
+    rows = store.list_all()
+    assert len(rows) == 1
+    assert rows[0].match_id == "old-m1"
+    assert rows[0].competition_id is None
+    assert rows[0].home_goals is None
+    assert rows[0].away_goals is None
+
+    RecommendationOutcomeStore(db_path=db_path)  # second open must not raise
 
 
 def test_skips_not_yet_finished_matches(tmp_path: Path) -> None:

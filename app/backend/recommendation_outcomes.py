@@ -42,6 +42,15 @@ class RecommendationOutcome:
     correct: bool
     generated_at: str
     resolved_at: str
+    # W175: the verified football-data.org-routed code (E0/SP1/SWE/...),
+    # distinct from `competition` above (the LLM's own unverified
+    # match.league string) -- and the raw final score, so live_lessons.py
+    # (W177) can rebuild the exact actual-outcome dict without a second
+    # results fetch. All three nullable/additive -- a pre-migration row
+    # simply carries None, see resolve_pending_recommendations() below.
+    competition_id: str | None = None
+    home_goals: int | None = None
+    away_goals: int | None = None
 
 
 class RecommendationOutcomeStore:
@@ -75,6 +84,28 @@ class RecommendationOutcomeStore:
                 )
                 """
             )
+            # W175: additive migration for a table that may already exist
+            # (and have real rows) from before this column existed. The
+            # CREATE TABLE literal above is intentionally left as the
+            # original pre-W175 DDL, not updated to include the 3 new
+            # columns -- they're only ever added below, via ALTER TABLE, for
+            # every table, fresh or not. SQLite's ALTER TABLE ADD COLUMN has
+            # no IF NOT EXISTS clause (that's only valid on CREATE
+            # TABLE/INDEX), so idempotency is done by hand via PRAGMA
+            # table_info: every open runs this check; a brand-new table has
+            # none of the 3 columns yet (CREATE TABLE never added them), so
+            # all 3 ALTER statements always fire for it; a table that already
+            # went through this migration has all 3, so the PRAGMA guard
+            # turns every ALTER into a no-op. Same idempotent-migration
+            # discipline as lessons.py's own DuckDB ALTER TABLE for rule_text
+            # (A44). No backfill for rows resolved before this ships -- they
+            # simply never get batched into a lesson (see live_lessons.py's
+            # own NULL-competition_id skip, W177), an accepted small
+            # one-time gap rather than a migration script.
+            existing_columns = {row[1] for row in conn.execute("PRAGMA table_info(recommendation_outcomes)")}
+            for column, coltype in (("competition_id", "TEXT"), ("home_goals", "INTEGER"), ("away_goals", "INTEGER")):
+                if column not in existing_columns:
+                    conn.execute(f"ALTER TABLE recommendation_outcomes ADD COLUMN {column} {coltype}")
 
     def resolved_keys(self) -> set[tuple[str, str]]:
         with self._connect() as conn:
@@ -94,6 +125,9 @@ class RecommendationOutcomeStore:
         value_edge: float | None,
         correct: bool,
         generated_at: str,
+        competition_id: str | None = None,
+        home_goals: int | None = None,
+        away_goals: int | None = None,
     ) -> RecommendationOutcome:
         resolved_at = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
         with self._connect() as conn:
@@ -101,23 +135,27 @@ class RecommendationOutcomeStore:
                 """
                 INSERT INTO recommendation_outcomes
                 (match_id, date, competition, market, selection, recommendation_type,
-                 confidence, odds, value_edge, correct, generated_at, resolved_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 confidence, odds, value_edge, correct, generated_at, resolved_at,
+                 competition_id, home_goals, away_goals)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (match_id, date, competition, market, selection, recommendation_type,
-                 confidence, odds, value_edge, int(correct), generated_at, resolved_at),
+                 confidence, odds, value_edge, int(correct), generated_at, resolved_at,
+                 competition_id, home_goals, away_goals),
             )
             row_id = cursor.lastrowid
         return RecommendationOutcome(
             id=row_id, match_id=match_id, date=date, competition=competition, market=market,
             selection=selection, recommendation_type=recommendation_type, confidence=confidence,
             odds=odds, value_edge=value_edge, correct=correct, generated_at=generated_at, resolved_at=resolved_at,
+            competition_id=competition_id, home_goals=home_goals, away_goals=away_goals,
         )
 
     def list_all(self, since: str | None = None) -> list[RecommendationOutcome]:
         query = (
             "SELECT id, match_id, date, competition, market, selection, recommendation_type, "
-            "confidence, odds, value_edge, correct, generated_at, resolved_at FROM recommendation_outcomes"
+            "confidence, odds, value_edge, correct, generated_at, resolved_at, "
+            "competition_id, home_goals, away_goals FROM recommendation_outcomes"
         )
         params: tuple = ()
         if since is not None:
@@ -134,6 +172,7 @@ class RecommendationOutcomeStore:
             id=row[0], match_id=row[1], date=row[2], competition=row[3], market=row[4], selection=row[5],
             recommendation_type=row[6], confidence=row[7], odds=row[8], value_edge=row[9],
             correct=bool(row[10]), generated_at=row[11], resolved_at=row[12],
+            competition_id=row[13], home_goals=row[14], away_goals=row[15],
         )
 
 
@@ -192,12 +231,21 @@ def resolve_pending_recommendations(
     newly_resolved: list[RecommendationOutcome] = []
     for date, group in by_date.items():
         results_by_id = {}
-        for competition_code in FOOTBALL_DATA_CODE_BY_LEAGUE.values():
+        # W175: track which of our own competition ids (E0/SP1/I1/D1/F1,
+        # or SWE below) actually produced each result -- iterate .items()
+        # instead of the old .values()-only loop specifically so this is
+        # recoverable. The merge-everything-then-look-up-by-match_id shape
+        # (results_by_id) is unchanged; this just runs a second dict
+        # alongside it.
+        competition_id_by_match: dict[str, str] = {}
+        for internal_id, competition_code in FOOTBALL_DATA_CODE_BY_LEAGUE.items():
             for match in client.get_results(competition_code=competition_code, date_from=date, date_to=date):
                 results_by_id[match.match_id] = match
+                competition_id_by_match[match.match_id] = internal_id
         if sweden_client is not None:
             for match in sweden_client.get_results(date_from=date, date_to=date):
                 results_by_id[match.match_id] = match
+                competition_id_by_match[match.match_id] = "SWE"
 
         for entry, rec, picked in group:
             match = results_by_id.get(entry.match_id)
@@ -219,6 +267,9 @@ def resolve_pending_recommendations(
                 value_edge=picked.get("value_edge"),
                 correct=correct,
                 generated_at=entry.generated_at,
+                competition_id=competition_id_by_match.get(entry.match_id),
+                home_goals=match.home_goals,
+                away_goals=match.away_goals,
             )
             newly_resolved.append(outcome)
     return newly_resolved
