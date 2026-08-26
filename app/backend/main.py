@@ -51,7 +51,7 @@ from app.backend.recommendation_stats import compute_recommendation_stats
 from app.backend.bet_stats import compute_bet_stats
 from app.backend.recommendations import MatchRecommendationOut, RecommendationRequest, validate_and_degrade
 from app.backend.scheduler import JobRunLog, RecoverableScheduler
-from app.backend.scheduler_wiring import build_odds_client, build_schedule_t30, register_eod_job
+from app.backend.scheduler_wiring import build_odds_client, build_schedule_t30, register_eod_job, register_lessons_job
 from app.backend.settlement import settle_open_bets
 from src.agent.agent_config import AgentConfig
 from src.logic.competition_registry import list_display_enabled_competition_ids
@@ -372,6 +372,15 @@ async def lifespan(app: FastAPI):
             serie_a_fixtures_client=get_serie_a_fixtures_client(),
             bundesliga_fixtures_client=get_bundesliga_fixtures_client(),
             ligue1_fixtures_client=get_ligue1_fixtures_client(),
+        )
+        register_lessons_job(
+            scheduler,
+            cache=recommendations.get_cache(),
+            store=get_recommendation_outcome_store(),
+            client=get_fixtures_client(),
+            duckdb_manager=DuckDBManager(),
+            config=config,
+            sweden_client=get_sweden_fixtures_client(),
         )
         scheduler.start()
         LOGGER.info("W08/W09/W10 scheduler started (ENABLE_SCHEDULER=1).")

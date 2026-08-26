@@ -20,16 +20,22 @@ import requests
 from app.backend.football_data_client import NormalizedMatch
 from app.backend.odds_api_client import CreditCounter, FileCreditCounterStore
 from app.backend.recommendation_cache import RecommendationCache
+from app.backend.recommendation_outcomes import RecommendationOutcomeStore
 from app.backend.scheduler import NY_TZ, JobRunLog, RecoverableScheduler
 from app.backend.scheduler_wiring import (
+    EOD_HOUR,
     EOD_JOB_ID,
     FallbackOddsClient,
+    LESSONS_HOUR,
+    LESSONS_JOB_ID,
     PersistingOddsClient,
     next_day_date_str,
     register_eod_job,
+    register_lessons_job,
     t30_run_at,
 )
 from src.agent.agent_config import AgentConfig
+from src.utils.db_manager import DuckDBManager
 
 # eod_batch.has_kicked_off() (reused by run_eod_batch, called under the hood
 # by register_eod_job below) compares each fixture's utc_date against real
@@ -485,3 +491,37 @@ def test_next_day_date_str_uses_real_clock_when_sandbox_off(monkeypatch) -> None
     monkeypatch.delenv("SANDBOX_MODE", raising=False)
     real_tomorrow = (datetime.now(NY_TZ) + timedelta(days=1)).date().isoformat()
     assert next_day_date_str() == real_tomorrow
+
+
+def test_register_lessons_job_runs_at_a_different_hour_than_eod() -> None:
+    assert LESSONS_HOUR != EOD_HOUR
+
+
+def test_register_lessons_job_generates_a_candidate_and_marks_the_scheduler_run(tmp_path: Path) -> None:
+    cache = RecommendationCache(db_path=tmp_path / "cache.db")
+    store = RecommendationOutcomeStore(db_path=tmp_path / "outcomes.db")
+    store.insert(
+        match_id="m1", date="2026-08-22", competition="Premier League", market="result_3way",
+        selection="home", recommendation_type="direct_bet", confidence="medium", odds=2.0,
+        value_edge=0.1, correct=True, generated_at="2026-08-22T10:00:00+00:00",
+        competition_id="E0", home_goals=2, away_goals=1,
+    )
+    client = MagicMock()
+    client.get_results.return_value = []
+    duckdb_manager = DuckDBManager()
+    duckdb_manager.db_path = tmp_path / "fpai_core.db"
+    config = AgentConfig.default()
+    run_log = JobRunLog(db_path=tmp_path / "job_runs.db")
+
+    now = datetime(_FUTURE_DAY.year, _FUTURE_DAY.month, _FUTURE_DAY.day, 23, 30, tzinfo=NY_TZ)
+    scheduler = RecoverableScheduler(run_log=run_log, now_fn=lambda: now)
+
+    with patch("app.backend.scheduler_wiring._build_lessons_llm_invoke", return_value=None):
+        register_lessons_job(
+            scheduler, cache=cache, store=store, client=client,
+            duckdb_manager=duckdb_manager, config=config,
+        )
+        assert _wait_until(lambda: run_log.has_run(LESSONS_JOB_ID, now.date().isoformat()))
+
+    with duckdb_manager.connection(read_only=True) as conn:
+        assert conn.execute("SELECT COUNT(*) FROM agent_lessons").fetchone()[0] == 1

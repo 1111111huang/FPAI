@@ -17,14 +17,18 @@ import requests
 from app.backend.eod_batch import COMPETITION_CODE, LEAGUE_CODE, run_eod_batch
 from app.backend.football_data_client import FootballDataClient, NormalizedMatch
 from app.backend.historical_odds_client import HistoricalOddsClient
+from app.backend.live_lessons import generate_daily_lessons
 from app.backend.odds_api_client import CreditCounter, FileCreditCounterStore, OddsAPIClient
 from app.backend.recommendation_cache import RecommendationCache
+from app.backend.recommendation_outcomes import RecommendationOutcomeStore
 from app.backend.scheduler import NY_TZ, RecoverableScheduler
 from app.backend.sandbox_clock import sandbox_date, sandbox_now
 from app.backend.sweden_fixtures_client import SwedenFixturesClient
 from app.backend.t30_refresh import refresh_match_at_t30
 from src.agent.agent_config import AgentConfig
+from src.agent.lessons import create_lessons_tables
 from src.logic.competition_registry import list_display_enabled_competition_ids
+from src.utils.db_manager import DuckDBManager
 from src.utils.logger import get_logger
 
 LOGGER = get_logger(__name__)
@@ -35,6 +39,9 @@ CREDIT_COUNTER_PATH_2 = Path(__file__).parent.parent.parent / "data" / "odds_api
 EOD_JOB_ID = "eod_batch_generation"
 EOD_HOUR = 23
 EOD_MINUTE = 0
+LESSONS_JOB_ID = "daily_live_lessons"
+LESSONS_HOUR = 6
+LESSONS_MINUTE = 0
 
 # W62/W81/W140: every competition_specific league (match_info.py's
 # COMPETITION_ALLOWLIST) the nightly EOD batch/T-30 refresh knows how to
@@ -298,3 +305,51 @@ def register_eod_job(
             )
 
     scheduler.schedule_daily(EOD_JOB_ID, _eod_job, hour=EOD_HOUR, minute=EOD_MINUTE)
+
+
+def register_lessons_job(
+    scheduler: RecoverableScheduler,
+    cache: RecommendationCache,
+    store: RecommendationOutcomeStore,
+    client: FootballDataClient,
+    duckdb_manager: DuckDBManager,
+    config: AgentConfig,
+    sweden_client: object | None = None,
+) -> None:
+    """Registers the daily live-lessons job (W175-W178): resolves pending
+    recommendation_outcomes (W167) then batches whatever's newly unbatched
+    into agent_lessons candidates via live_lessons.generate_daily_lessons.
+    Runs at LESSONS_HOUR (06:00 ET, distinct from EOD_HOUR's 23:00, and
+    after football-data.org has typically posted the prior day's results)
+    -- same schedule_daily restart/catch-up guarantee as the EOD job.
+
+    duckdb_manager: a write-mode DuckDBManager (matches main.py's own
+    `agent-lessons approve` CLI pattern) -- distinct from lessons_node's
+    own read_only=True live-serving connection, since this job writes new
+    pending rows."""
+
+    def _lessons_job() -> None:
+        llm_invoke = _build_lessons_llm_invoke(config)
+        with duckdb_manager.connection() as conn:
+            create_lessons_tables(conn)
+            lesson_ids = generate_daily_lessons(cache, store, client, conn, sweden_client, llm_invoke)
+        LOGGER.info("Daily live lessons: %d candidate(s) generated.", len(lesson_ids))
+
+    scheduler.schedule_daily(LESSONS_JOB_ID, _lessons_job, hour=LESSONS_HOUR, minute=LESSONS_MINUTE)
+
+
+def _build_lessons_llm_invoke(config: AgentConfig) -> Callable[[str], str]:
+    """Deliberate small duplication of main.py's own _build_llm_invoke --
+    app/backend/ has never imported from the root main.py CLI script (nor
+    vice versa); a 6-line copy is a smaller, safer diff than making this
+    job the first thing to cross that boundary. Keep in sync with
+    main.py's _build_llm_invoke if its shape ever changes."""
+    from src.agent.graph import _build_llm, _extract_text
+
+    llm = _build_llm(config)
+
+    def _invoke(prompt: str) -> str:
+        response = llm.invoke(prompt)
+        return _extract_text(response.content)
+
+    return _invoke
