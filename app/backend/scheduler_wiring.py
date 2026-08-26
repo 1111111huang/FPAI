@@ -17,7 +17,7 @@ import requests
 from app.backend.eod_batch import COMPETITION_CODE, LEAGUE_CODE, run_eod_batch
 from app.backend.football_data_client import FootballDataClient, NormalizedMatch
 from app.backend.historical_odds_client import HistoricalOddsClient
-from app.backend.live_lessons import generate_daily_lessons
+from app.backend.live_lessons import commit_lesson_batches, prepare_lesson_batches
 from app.backend.odds_api_client import CreditCounter, FileCreditCounterStore, OddsAPIClient
 from app.backend.recommendation_cache import RecommendationCache
 from app.backend.recommendation_outcomes import RecommendationOutcomeStore
@@ -326,13 +326,33 @@ def register_lessons_job(
     duckdb_manager: a write-mode DuckDBManager (matches main.py's own
     `agent-lessons approve` CLI pattern) -- distinct from lessons_node's
     own read_only=True live-serving connection, since this job writes new
-    pending rows."""
+    pending rows. Deliberately not sandbox-routed, unlike its sibling
+    dependencies here -- agent_lessons is one persistent human-review queue
+    regardless of SANDBOX_MODE, matching lessons_node's own always-real-path
+    read behavior.
+
+    The DuckDB connection is opened only around the brief commit step
+    (commit_lesson_batches) -- prepare_lesson_batches does all the
+    network-bound (football-data.org results lookups, possibly
+    rate-limited) and LLM-bound (reflection) work first, with no DuckDB
+    connection open at all, so data/fpai_core.db's exclusive file lock is
+    never held across either (Task 4 code-quality review finding)."""
 
     def _lessons_job() -> None:
-        llm_invoke = _build_lessons_llm_invoke(config)
+        try:
+            llm_invoke = _build_lessons_llm_invoke(config)
+        except Exception:
+            LOGGER.warning(
+                "live_lessons: could not build an LLM client -- generating stats-only "
+                "lessons for today instead of failing the whole run.", exc_info=True,
+            )
+            llm_invoke = None
+
+        batches = prepare_lesson_batches(cache, store, client, sweden_client, llm_invoke)
+
         with duckdb_manager.connection() as conn:
             create_lessons_tables(conn)
-            lesson_ids = generate_daily_lessons(cache, store, client, conn, sweden_client, llm_invoke)
+            lesson_ids = commit_lesson_batches(conn, store, batches)
         LOGGER.info("Daily live lessons: %d candidate(s) generated.", len(lesson_ids))
 
     scheduler.schedule_daily(LESSONS_JOB_ID, _lessons_job, hour=LESSONS_HOUR, minute=LESSONS_MINUTE)

@@ -14,6 +14,7 @@ established for its own DB-touching enrichment)."""
 from __future__ import annotations
 
 from collections import defaultdict
+from dataclasses import dataclass
 from typing import Callable
 
 import duckdb
@@ -38,6 +39,23 @@ LIVE_SOURCE_NOTE = (
     "Live-sourced batch: reflects only the market actually recommended per "
     "match, not every market the agent evaluated."
 )
+
+
+@dataclass
+class PreparedLessonBatch:
+    """Output of prepare_lesson_batches() -- everything needed to write one
+    agent_lessons row, computed with NO DuckDB connection open. Kept
+    separate from the actual write (commit_lesson_batches()) specifically
+    so the DuckDB exclusive file lock is never held across network calls
+    (resolve_pending_recommendations' football-data.org lookups) or an LLM
+    reflection call -- found during Task 4's code-quality review, which
+    traced the lock being held across both in the original single-phase
+    generate_daily_lessons()."""
+    competition_id: str
+    tier: str
+    lesson_text: str
+    match_ids: str
+    outcome_ids: list[int]
 
 
 def _to_lesson_record(outcome: RecommendationOutcome, cache: RecommendationCache) -> BacktestRecord:
@@ -76,19 +94,19 @@ def _to_lesson_record(outcome: RecommendationOutcome, cache: RecommendationCache
     )
 
 
-def generate_daily_lessons(
+def prepare_lesson_batches(
     cache: RecommendationCache,
     store: RecommendationOutcomeStore,
     client: FootballDataClient,
-    duckdb_conn: duckdb.DuckDBPyConnection,
     sweden_client: object | None = None,
     llm_invoke: Callable[[str], str] | None = None,
-) -> list[int]:
-    """The daily job body (wired by scheduler_wiring.py's
-    register_lessons_job). Resolves pending outcomes first (W167) so this
-    runs as one unattended pipeline, then batches whatever hasn't yet been
-    folded into a lesson by (competition_id, date) -- one candidate per
-    league per day, per direct user decision.
+) -> list[PreparedLessonBatch]:
+    """All the network/LLM-bound work (resolving outcomes, grouping,
+    enrichment, stats + reflection generation) -- deliberately does NOT
+    touch DuckDB at all, so it can run for as long as it needs (rate-limited
+    results lookups, an LLM call) without holding data/fpai_core.db's
+    exclusive file lock. Call commit_lesson_batches() with the result to
+    actually write.
 
     llm_invoke=None skips generate_batch_reflection entirely (a stats-only
     candidate) -- used by callers that can't or don't want to pay for the
@@ -107,7 +125,7 @@ def generate_daily_lessons(
             continue
         groups[(outcome.competition_id, outcome.date)].append(outcome)
 
-    lesson_ids: list[int] = []
+    prepared: list[PreparedLessonBatch] = []
     for (competition_id, _date), group in groups.items():
         try:
             tier = get_competition_definition(competition_id).tier
@@ -129,9 +147,48 @@ def generate_daily_lessons(
             if reflection:
                 lesson_text = f"{lesson_text}\n\nReflection: {reflection}"
 
-        match_ids = ",".join(outcome.match_id for outcome in group)
-        lesson_id = insert_lesson_candidate(duckdb_conn, lesson_text, competition_id, tier, match_ids)
-        store.mark_lesson_batched([outcome.id for outcome in group])
-        lesson_ids.append(lesson_id)
+        prepared.append(PreparedLessonBatch(
+            competition_id=competition_id,
+            tier=tier,
+            lesson_text=lesson_text,
+            match_ids=",".join(outcome.match_id for outcome in group),
+            outcome_ids=[outcome.id for outcome in group],
+        ))
+    return prepared
 
+
+def commit_lesson_batches(
+    duckdb_conn: duckdb.DuckDBPyConnection,
+    store: RecommendationOutcomeStore,
+    batches: list[PreparedLessonBatch],
+) -> list[int]:
+    """The brief write phase -- no network or LLM calls happen here, only
+    DuckDB inserts and SQLite updates. Call with an already-open
+    duckdb_conn; hold it for only as long as this function runs."""
+    lesson_ids: list[int] = []
+    for batch in batches:
+        lesson_id = insert_lesson_candidate(
+            duckdb_conn, batch.lesson_text, batch.competition_id, batch.tier, batch.match_ids
+        )
+        store.mark_lesson_batched(batch.outcome_ids)
+        lesson_ids.append(lesson_id)
     return lesson_ids
+
+
+def generate_daily_lessons(
+    cache: RecommendationCache,
+    store: RecommendationOutcomeStore,
+    client: FootballDataClient,
+    duckdb_conn: duckdb.DuckDBPyConnection,
+    sweden_client: object | None = None,
+    llm_invoke: Callable[[str], str] | None = None,
+) -> list[int]:
+    """Thin orchestrator combining prepare_lesson_batches() +
+    commit_lesson_batches() -- kept for direct/test convenience where
+    lock-hold-duration doesn't matter (e.g. an in-memory DuckDB connection
+    in a test, or a one-off manual sanity check). The real daily job
+    (scheduler_wiring.py's register_lessons_job) calls the two phases
+    separately instead, opening the DuckDB connection only around the
+    commit step -- see that function's own docstring."""
+    batches = prepare_lesson_batches(cache, store, client, sweden_client, llm_invoke)
+    return commit_lesson_batches(duckdb_conn, store, batches)
