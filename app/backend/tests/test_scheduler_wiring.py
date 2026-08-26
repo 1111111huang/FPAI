@@ -527,6 +527,45 @@ def test_register_lessons_job_generates_a_candidate_and_marks_the_scheduler_run(
         assert conn.execute("SELECT COUNT(*) FROM agent_lessons").fetchone()[0] == 1
 
 
+def test_register_lessons_job_auto_judges_generated_candidates(tmp_path: Path) -> None:
+    """End-to-end: a finished match generates a candidate, and that same
+    job run judges it too -- proves auto_judge_live_lessons is actually
+    reachable from the real daily job, not just unit-tested in isolation."""
+    cache = RecommendationCache(db_path=tmp_path / "cache.db")
+    store = RecommendationOutcomeStore(db_path=tmp_path / "outcomes.db")
+    store.insert(
+        match_id="m1", date="2026-08-22", competition="Premier League", market="result_3way",
+        selection="home", recommendation_type="direct_bet", confidence="medium", odds=2.0,
+        value_edge=0.1, correct=True, generated_at="2026-08-22T10:00:00+00:00",
+        competition_id="E0", home_goals=2, away_goals=1,
+    )
+    client = MagicMock()
+    client.get_results.return_value = []
+    duckdb_manager = DuckDBManager()
+    duckdb_manager.db_path = tmp_path / "fpai_core.db"
+    config = AgentConfig.default()
+    run_log = JobRunLog(db_path=tmp_path / "job_runs.db")
+
+    now = datetime(_FUTURE_DAY.year, _FUTURE_DAY.month, _FUTURE_DAY.day, 23, 30, tzinfo=NY_TZ)
+    scheduler = RecoverableScheduler(run_log=run_log, now_fn=lambda: now)
+
+    def fake_llm_invoke(prompt: str) -> str:
+        return '{"approve": false, "scope": null, "reasoning": "Single-match sample, too thin to judge."}'
+
+    with patch("app.backend.scheduler_wiring._build_lessons_llm_invoke", return_value=fake_llm_invoke):
+        register_lessons_job(
+            scheduler, cache=cache, store=store, client=client,
+            duckdb_manager=duckdb_manager, config=config,
+        )
+        assert _wait_until(lambda: run_log.has_run(LESSONS_JOB_ID, now.date().isoformat()))
+
+    with duckdb_manager.connection(read_only=True) as conn:
+        row = conn.execute("SELECT status, source, auto_decision_reasoning FROM agent_lessons").fetchone()
+    assert row[0] == "rejected"
+    assert row[1] == "live"
+    assert row[2] == "Single-match sample, too thin to judge."
+
+
 def test_register_lessons_job_degrades_to_stats_only_when_llm_build_fails(tmp_path: Path) -> None:
     """Task 4 code-quality review: a broken/misconfigured LLM provider must
     not fail the whole day's run -- _lessons_job() catches the build

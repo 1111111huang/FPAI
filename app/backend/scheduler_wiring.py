@@ -17,7 +17,7 @@ import requests
 from app.backend.eod_batch import COMPETITION_CODE, LEAGUE_CODE, run_eod_batch
 from app.backend.football_data_client import FootballDataClient, NormalizedMatch
 from app.backend.historical_odds_client import HistoricalOddsClient
-from app.backend.live_lessons import commit_lesson_batches, prepare_lesson_batches
+from app.backend.live_lessons import auto_judge_live_lessons, commit_lesson_batches, prepare_lesson_batches
 from app.backend.odds_api_client import CreditCounter, FileCreditCounterStore, OddsAPIClient
 from app.backend.recommendation_cache import RecommendationCache
 from app.backend.recommendation_outcomes import RecommendationOutcomeStore
@@ -354,6 +354,9 @@ def register_lessons_job(
             create_lessons_tables(conn)
             lesson_ids = commit_lesson_batches(conn, store, batches)
         LOGGER.info("Daily live lessons: %d candidate(s) generated.", len(lesson_ids))
+
+        judged = auto_judge_live_lessons(duckdb_manager, llm_invoke)
+        LOGGER.info("Daily live lessons: %d candidate(s) auto-judged.", len(judged))
 
     scheduler.schedule_daily(LESSONS_JOB_ID, _lessons_job, hour=LESSONS_HOUR, minute=LESSONS_MINUTE)
 
