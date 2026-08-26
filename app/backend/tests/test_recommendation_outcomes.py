@@ -259,6 +259,68 @@ def test_groups_api_calls_by_date_not_per_candidate(tmp_path: Path) -> None:
     assert client.get_results.call_count == len(FOOTBALL_DATA_CODE_BY_LEAGUE)
 
 
+def test_list_unbatched_for_lessons_excludes_already_batched(tmp_path: Path) -> None:
+    store = RecommendationOutcomeStore(db_path=tmp_path / "outcomes.db")
+    o1 = store.insert(
+        match_id="m1", date="2026-08-22", competition="E0", market="result_3way", selection="home",
+        recommendation_type="direct_bet", confidence="medium", odds=2.0, value_edge=0.1, correct=True,
+        generated_at="2026-08-22T10:00:00+00:00", competition_id="E0", home_goals=2, away_goals=1,
+    )
+    store.insert(
+        match_id="m2", date="2026-08-22", competition="E0", market="result_3way", selection="away",
+        recommendation_type="direct_bet", confidence="medium", odds=2.0, value_edge=0.1, correct=False,
+        generated_at="2026-08-22T10:00:00+00:00", competition_id="E0", home_goals=0, away_goals=1,
+    )
+
+    store.mark_lesson_batched([o1.id])
+
+    unbatched = store.list_unbatched_for_lessons()
+    assert [o.match_id for o in unbatched] == ["m2"]
+
+
+def test_mark_lesson_batched_handles_multiple_ids_in_one_call(tmp_path: Path) -> None:
+    """The realistic production case (a whole day's batch of several
+    matches) -- exercises the comma-joined placeholder-building logic,
+    unlike the other tests here which only ever pass a single id."""
+    store = RecommendationOutcomeStore(db_path=tmp_path / "outcomes.db")
+    outcomes = [
+        store.insert(
+            match_id=f"m{i}", date="2026-08-22", competition="E0", market="result_3way", selection="home",
+            recommendation_type="direct_bet", confidence="medium", odds=2.0, value_edge=0.1, correct=True,
+            generated_at="2026-08-22T10:00:00+00:00", competition_id="E0", home_goals=2, away_goals=1,
+        )
+        for i in range(3)
+    ]
+    still_unbatched = store.insert(
+        match_id="m-unbatched", date="2026-08-22", competition="E0", market="result_3way", selection="away",
+        recommendation_type="direct_bet", confidence="medium", odds=2.0, value_edge=0.1, correct=False,
+        generated_at="2026-08-22T10:00:00+00:00", competition_id="E0", home_goals=0, away_goals=1,
+    )
+
+    store.mark_lesson_batched([o.id for o in outcomes])
+
+    unbatched = store.list_unbatched_for_lessons()
+    assert [o.match_id for o in unbatched] == [still_unbatched.match_id]
+
+
+def test_mark_lesson_batched_is_a_noop_for_an_empty_list(tmp_path: Path) -> None:
+    store = RecommendationOutcomeStore(db_path=tmp_path / "outcomes.db")
+    store.mark_lesson_batched([])  # must not raise
+
+
+def test_list_unbatched_for_lessons_has_no_date_filter(tmp_path: Path) -> None:
+    """Unlike list_all(since=...) -- a prior run could have resolved an
+    outcome it never got to batch (e.g. a crash between steps), and that
+    must still surface here no matter how old it is."""
+    store = RecommendationOutcomeStore(db_path=tmp_path / "outcomes.db")
+    store.insert(
+        match_id="old", date="2020-01-01", competition="E0", market="result_3way", selection="home",
+        recommendation_type="direct_bet", confidence="medium", odds=2.0, value_edge=0.1, correct=True,
+        generated_at="2020-01-01T10:00:00+00:00", competition_id="E0", home_goals=1, away_goals=0,
+    )
+    assert len(store.list_unbatched_for_lessons()) == 1
+
+
 def test_uses_sweden_client_when_provided(tmp_path: Path) -> None:
     cache = RecommendationCache(db_path=tmp_path / "cache.db")
     store = RecommendationOutcomeStore(db_path=tmp_path / "outcomes.db")
