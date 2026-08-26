@@ -284,6 +284,26 @@ def auto_judge_live_lessons(
     with duckdb_manager.connection() as conn:
         for result in results:
             try:
+                # Re-check status right before writing -- a human can run
+                # `agent-lessons approve/reject <id>` on this exact row (the
+                # CLI applies to any row id, no source filter) at any point
+                # during this function's judge/distill/conflict-check phase
+                # above, which holds no DuckDB connection open and can run
+                # for a while (LLM calls). Without this, our write here would
+                # silently clobber that human decision with a stale one
+                # computed before it happened. Applied uniformly to
+                # approve/reject/defer -- a defer that hits a changed-status
+                # row just skips harmlessly too, same as the others.
+                current_status = conn.execute(
+                    "SELECT status FROM agent_lessons WHERE id = ?", [result["id"]]
+                ).fetchone()
+                if current_status is None or current_status[0] != "pending":
+                    LOGGER.warning(
+                        "live_lessons: skipping auto-judge write for lesson id=%s -- "
+                        "already reviewed (status=%s) since this run started.",
+                        result["id"], current_status[0] if current_status else "missing",
+                    )
+                    continue
                 if result["action"] == "approve":
                     approve_lesson(conn, result["id"], result["scope"], reviewer="agent-auto", rule_text=result["rule_text"])
                 elif result["action"] == "reject":

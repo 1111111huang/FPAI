@@ -471,3 +471,51 @@ def test_auto_judge_live_lessons_isolates_a_write_failure_to_its_own_candidate(t
     assert row1[1] is None  # untouched -- the write for id1 never got past reject_lesson raising
     assert row2[0] == "rejected"
     assert row2[1] == "Sample too thin."
+
+
+def test_auto_judge_live_lessons_does_not_clobber_a_concurrent_human_decision(tmp_path: Path) -> None:
+    """A human can run `agent-lessons approve/reject <id>` on a live-sourced
+    row (the CLI applies to any row id, no source filter) at any point during
+    auto_judge_live_lessons's judge/distill/conflict-check phase, which holds
+    no DuckDB connection open and can run for a while. The write phase must
+    re-check status right before writing and skip (not overwrite) a row a
+    human already reviewed in the meantime."""
+    dm = _dm(tmp_path)
+    with dm.connection() as conn:
+        create_lessons_tables(conn)
+        lesson_id = insert_lesson_candidate(
+            conn, "Live-sourced batch: pattern.", "E0", "competition_specific", "m1", source="live",
+        )
+
+    from src.agent.lessons import judge_lesson_candidate as real_judge_lesson_candidate
+
+    def judge_then_human_intervenes(lesson_text, competition_id, tier, llm_invoke):
+        decision = real_judge_lesson_candidate(lesson_text, competition_id, tier, llm_invoke)
+        # Simulate a human approving this exact row via the CLI while the
+        # job is still mid-flight (i.e. before this function's own write
+        # phase runs).
+        with dm.connection() as human_conn:
+            approve_lesson(
+                human_conn, lesson_id, "tier", reviewer="human-reviewer",
+                rule_text="ALWAYS bet result_3way -- human call.",
+            )
+        return decision
+
+    def fake_invoke(prompt: str) -> str:
+        if "deciding whether to promote" in prompt:
+            return '{"approve": false, "scope": null, "reasoning": "Sample too thin."}'
+        raise AssertionError(f"unexpected prompt: {prompt}")
+
+    with patch("app.backend.live_lessons.judge_lesson_candidate", side_effect=judge_then_human_intervenes):
+        auto_judge_live_lessons(dm, fake_invoke)
+
+    with dm.connection(read_only=True) as conn:
+        row = conn.execute(
+            "SELECT status, scope, rule_text, reviewer, auto_decision_reasoning FROM agent_lessons WHERE id = ?",
+            [lesson_id],
+        ).fetchone()
+    assert row[0] == "approved"
+    assert row[1] == "tier"
+    assert row[2] == "ALWAYS bet result_3way -- human call."
+    assert row[3] == "human-reviewer"
+    assert row[4] is None  # auto_decision_reasoning untouched -- the job's write was skipped entirely

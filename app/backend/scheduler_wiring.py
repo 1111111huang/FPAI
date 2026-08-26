@@ -7,6 +7,7 @@ module focused on HTTP concerns.
 from __future__ import annotations
 
 import asyncio
+from collections import Counter
 from datetime import datetime, timedelta
 import os
 from pathlib import Path
@@ -356,7 +357,11 @@ def register_lessons_job(
         LOGGER.info("Daily live lessons: %d candidate(s) generated.", len(lesson_ids))
 
         judged = auto_judge_live_lessons(duckdb_manager, llm_invoke)
-        LOGGER.info("Daily live lessons: %d candidate(s) auto-judged.", len(judged))
+        action_counts = Counter(j["action"] for j in judged)
+        LOGGER.info(
+            "Daily live lessons: %d candidate(s) auto-judged (approved=%d, rejected=%d, deferred=%d).",
+            len(judged), action_counts["approve"], action_counts["reject"], action_counts["defer"],
+        )
 
     scheduler.schedule_daily(LESSONS_JOB_ID, _lessons_job, hour=LESSONS_HOUR, minute=LESSONS_MINUTE)
 
