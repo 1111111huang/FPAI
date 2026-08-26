@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 from dataclasses import dataclass
-from typing import Callable
+from typing import Any, Callable
 
 import duckdb
 
@@ -27,10 +27,22 @@ from app.backend.recommendation_outcomes import (
     resolve_pending_recommendations,
 )
 from src.agent.backtest import BacktestRecord
-from src.agent.lessons import generate_batch_lesson_text, generate_batch_reflection, insert_lesson_candidate
+from src.agent.lessons import (
+    approve_lesson,
+    find_conflicting_rule,
+    generate_batch_lesson_text,
+    generate_batch_reflection,
+    generate_rule_from_lesson,
+    insert_lesson_candidate,
+    judge_lesson_candidate,
+    list_pending_by_source,
+    load_approved_lessons,
+    reject_lesson,
+)
 from src.agent.market_resolution import build_actual_outcome
 from src.agent.schema import reported_teams
 from src.logic.competition_registry import get_competition_definition
+from src.utils.db_manager import DuckDBManager
 from src.utils.logger import get_logger
 
 LOGGER = get_logger(__name__)
@@ -168,7 +180,7 @@ def commit_lesson_batches(
     lesson_ids: list[int] = []
     for batch in batches:
         lesson_id = insert_lesson_candidate(
-            duckdb_conn, batch.lesson_text, batch.competition_id, batch.tier, batch.match_ids
+            duckdb_conn, batch.lesson_text, batch.competition_id, batch.tier, batch.match_ids, source="live",
         )
         store.mark_lesson_batched(batch.outcome_ids)
         lesson_ids.append(lesson_id)
@@ -192,3 +204,99 @@ def generate_daily_lessons(
     commit step -- see that function's own docstring."""
     batches = prepare_lesson_batches(cache, store, client, sweden_client, llm_invoke)
     return commit_lesson_batches(duckdb_conn, store, batches)
+
+
+def auto_judge_live_lessons(
+    duckdb_manager: DuckDBManager,
+    llm_invoke: Callable[[str], str] | None,
+) -> list[dict[str, Any]]:
+    """2026-08-26 (autonomous live-lesson judging, Phase 1): approves/
+    rejects each pending source='live' candidate right after it's created,
+    mirroring what a human currently decides via `agent-lessons
+    approve/reject` -- but never touches source='train' (or pre-migration
+    source IS NULL) rows, which stay 100% human-reviewed (list_pending_by_source
+    structurally excludes them, not just conventionally).
+
+    llm_invoke=None means the daily job's own LLM client failed to build
+    (see scheduler_wiring.py's register_lessons_job try/except) -- there's
+    no judging without an LLM, so this is a no-op; every pending candidate
+    is simply left for the next day's run to judge once the LLM client is
+    available again.
+
+    Three phases, same discipline as prepare_lesson_batches/
+    commit_lesson_batches: a brief read, all LLM work with no DuckDB
+    connection open, then a brief write. Both the per-candidate conflict
+    check and the per-candidate write are isolated in their own try/except
+    -- a failure in either (a raised exception, not just a found conflict)
+    only defers/skips that one candidate and is logged, it never discards
+    the rest of the batch's already-computed decisions. Returns a list of
+    dicts (one per candidate processed) for logging -- {id, action,
+    reasoning}."""
+    if llm_invoke is None:
+        return []
+
+    with duckdb_manager.connection(read_only=True) as conn:
+        pending = list_pending_by_source(conn, source="live")
+
+    results: list[dict[str, Any]] = []
+    for candidate in pending:
+        decision = judge_lesson_candidate(
+            candidate["lesson_text"], candidate["competition_id"], candidate["tier"], llm_invoke,
+        )
+        action = "reject" if not decision.approve else "approve"
+        scope = decision.scope
+        rule_text: str | None = None
+        reasoning = decision.reasoning
+
+        if decision.approve:
+            rule_text = generate_rule_from_lesson(candidate["lesson_text"], llm_invoke)
+            if rule_text is None:
+                action = "defer"
+                reasoning = f"{decision.reasoning} (rule distillation failed -- left pending for retry)"
+            else:
+                # find_conflicting_rule deliberately doesn't catch its own
+                # exceptions (see its docstring) -- callers decide fail-open
+                # vs fail-closed. Unlike main.py's run_agent_lessons_approve
+                # (a human is right there, so it fails open), there's no
+                # human backstop on this autonomous path -- approving a rule
+                # whose conflict-check silently never ran is worse than
+                # deferring it, so this fails CLOSED to defer.
+                try:
+                    with duckdb_manager.connection(read_only=True) as conn:
+                        existing_rules = load_approved_lessons(conn, candidate["competition_id"], candidate["tier"])
+                    conflict = find_conflicting_rule(rule_text, existing_rules, llm_invoke)
+                except Exception as exc:
+                    action = "defer"
+                    reasoning = f"{decision.reasoning} (conflict check failed: {exc!r} -- left pending for retry)"
+                    LOGGER.warning(
+                        "live_lessons: conflict check failed for lesson candidate id=%s.", candidate["id"], exc_info=True,
+                    )
+                else:
+                    if conflict is not None:
+                        action = "defer"
+                        reasoning = f"Would approve, but a conflict was found: {conflict}"
+
+        results.append({
+            "id": candidate["id"], "action": action, "scope": scope,
+            "rule_text": rule_text, "reasoning": reasoning,
+        })
+
+    with duckdb_manager.connection() as conn:
+        for result in results:
+            try:
+                if result["action"] == "approve":
+                    approve_lesson(conn, result["id"], result["scope"], reviewer="agent-auto", rule_text=result["rule_text"])
+                elif result["action"] == "reject":
+                    reject_lesson(conn, result["id"], reviewer="agent-auto")
+                # "defer" -- leave status as-is, just record the reasoning below.
+                conn.execute(
+                    "UPDATE agent_lessons SET auto_decision_reasoning = ? WHERE id = ?",
+                    [result["reasoning"], result["id"]],
+                )
+            except Exception:
+                LOGGER.warning(
+                    "live_lessons: failed to write auto-judge decision for lesson id=%s -- left as-is for retry.",
+                    result["id"], exc_info=True,
+                )
+
+    return results
