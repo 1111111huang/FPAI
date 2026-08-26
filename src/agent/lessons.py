@@ -55,10 +55,8 @@ def create_lessons_tables(conn: duckdb.DuckDBPyConnection) -> None:
     # 2026-08-26 (autonomous live-lesson judging, Phase 1): source
     # distinguishes an agent-train-sourced candidate ('train', the default
     # below and the only source that ever existed before this) from a
-    # live-deployment-sourced one ('live', intended to be set by
-    # live_lessons.py's commit_lesson_batches once it's updated to pass
-    # source="live" -- not yet wired as of this commit, see Task 3).
-    # auto_decision_reasoning is the audit trail
+    # live-deployment-sourced one ('live', set by app/backend/live_lessons.py's
+    # commit_lesson_batches). auto_decision_reasoning is the audit trail
     # for an autonomous approve/reject decision -- a human reviewer's own
     # judgment call is visible in the CLI transcript; this is the
     # equivalent for a decision nobody watched happen. Both nullable/
@@ -95,9 +93,9 @@ def insert_lesson_candidate(
     """Insert a pending, unscoped lesson candidate. Returns its id.
 
     source: 'train' (default, preserves every pre-existing caller
-    unchanged -- agent-train's own CLI path) or 'live' (intended for
-    live_lessons.py's commit_lesson_batches to pass explicitly once it's
-    updated to do so -- not yet wired as of this commit, see Task 3)."""
+    unchanged -- agent-train's own CLI path) or 'live'
+    (app/backend/live_lessons.py's commit_lesson_batches, the only caller
+    that passes this explicitly)."""
     row = conn.execute(
         """
         INSERT INTO agent_lessons (lesson_text, status, competition_id, tier, source_match_id, created_at, source)
@@ -239,9 +237,9 @@ def load_approved_lessons(conn: duckdb.DuckDBPyConnection, competition_id: str |
 
 def list_pending_by_source(conn: duckdb.DuckDBPyConnection, source: str) -> list[dict[str, Any]]:
     """Every pending lesson candidate from one source ('train'/'live') --
-    intended for use by the not-yet-built auto_judge_live_lessons() (Task 3,
-    src/live_lessons.py) to find only its own population. WHERE source = ?
-    naturally excludes both the other source and any pre-migration row
+    used by app/backend/live_lessons.py's auto_judge_live_lessons() to find
+    only its own population. WHERE source = ? naturally excludes both the
+    other source and any pre-migration row
     (source IS NULL, since SQL's `NULL = 'live'` is never true) --
     agent-train's human-reviewed queue is structurally unreachable from
     here, not just conventionally avoided."""
