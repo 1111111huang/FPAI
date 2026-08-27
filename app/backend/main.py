@@ -297,7 +297,25 @@ async def _pregenerate_recommendations(
     today = _current_real_date()
     date_from = today.isoformat()
     date_to = (today + timedelta(days=days_ahead)).isoformat()
-    fixtures = await get_fixtures(date_from=date_from, date_to=date_to)
+    # W179: found live (2026-08-27) -- get_fixtures() deliberately raises a
+    # clean HTTPException(503) on an upstream 429/outage (see
+    # _fetch_and_cache_fixtures's own docstring), the right contract for its
+    # primary caller (the /api/fixtures HTTP route). But this caller is a
+    # fire-and-forget background task (_fire_and_forget), not a request --
+    # there's no handler to turn that HTTPException into a response, so it
+    # propagated as an unhandled exception ("Task exception was never
+    # retrieved"), skipping every league's pregenerate for the whole boot
+    # even though only one upstream competition call actually failed.
+    # Isolated the same way the per-league loop below already isolates a
+    # single league's own eod_batch failure from every other league's.
+    try:
+        fixtures = await get_fixtures(date_from=date_from, date_to=date_to)
+    except Exception:
+        LOGGER.warning(
+            "Pregenerate: get_fixtures failed (days_ahead=%d) -- upstream fixture provider "
+            "unavailable, skipping this pregenerate pass entirely.", days_ahead, exc_info=True,
+        )
+        return {}
 
     fixtures_by_league: dict[str, list] = {}
     for fixture in fixtures:

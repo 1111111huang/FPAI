@@ -161,6 +161,26 @@ def test_one_leagues_batch_failure_does_not_block_the_others(monkeypatch):
     assert results["SWE"] == {"generated": 1, "skipped": 0, "unchanged": 0}
 
 
+def test_get_fixtures_failure_skips_the_whole_pass_instead_of_crashing_unretrieved(monkeypatch):
+    """W179 regression: found live (2026-08-27) -- get_fixtures() raises
+    HTTPException(503) on an upstream 429/outage, the right contract for its
+    HTTP-route caller but fatal here: this runs as a fire-and-forget
+    background task with no request to turn that into a response, so it
+    surfaced only as an unhandled "Task exception was never retrieved"."""
+    monkeypatch.delenv("APP_ACCESS_TOKEN", raising=False)
+    from fastapi import HTTPException
+
+    with patch(
+        "app.backend.main.get_fixtures",
+        new=AsyncMock(side_effect=HTTPException(status_code=503, detail="Fixture data is temporarily unavailable")),
+    ), patch("app.backend.eod_batch.run_eod_batch") as mock_run_eod_batch:
+        import asyncio
+        results = asyncio.run(main._pregenerate_recommendations(days_ahead=5, scheduler=None))
+
+    assert results == {}
+    mock_run_eod_batch.assert_not_called()
+
+
 def test_admin_endpoint_returns_immediately_without_waiting_for_pregenerate(monkeypatch):
     monkeypatch.delenv("APP_ACCESS_TOKEN", raising=False)
     # _fire_and_forget itself deliberately left real here (not mocked) --
