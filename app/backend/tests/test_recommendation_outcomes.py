@@ -242,6 +242,51 @@ def test_resolves_a_non_epl_league_via_the_correct_competition_code(tmp_path: Pa
     assert resolved[0].competition == "SP1"
 
 
+def test_one_competitions_connection_error_does_not_abort_the_others(tmp_path: Path) -> None:
+    """W178 regression: found live (2026-08-27) that a single competition's
+    transient RemoteDisconnected propagated straight out of
+    resolve_pending_recommendations, aborting the whole daily_live_lessons
+    job -- every other league's candidates went unresolved too, not just
+    the flaky one's."""
+    import requests
+
+    cache = RecommendationCache(db_path=tmp_path / "cache.db")
+    store = RecommendationOutcomeStore(db_path=tmp_path / "outcomes.db")
+    cache.record_generation("m1", "2026-08-22", "hash1", {}, _rec("direct_bet", "result_3way", "home", "direct_bet", 2.0, league="SP1"), "scheduled")
+    client = MagicMock()
+
+    def _get_results(competition_code, date_from, date_to):
+        if competition_code == "PL":
+            raise requests.exceptions.ConnectionError("Remote end closed connection without response")
+        return [_match("m1", 2, 1)] if competition_code == "PD" else []
+
+    client.get_results.side_effect = _get_results
+
+    resolved = resolve_pending_recommendations(cache, store, client)
+
+    assert len(resolved) == 1
+    assert resolved[0].correct is True
+    # Every competition code was still tried -- PL's failure didn't short-circuit the loop.
+    assert client.get_results.call_count == len(FOOTBALL_DATA_CODE_BY_LEAGUE)
+
+
+def test_sweden_clients_connection_error_does_not_abort_football_data_resolution(tmp_path: Path) -> None:
+    import requests
+
+    cache = RecommendationCache(db_path=tmp_path / "cache.db")
+    store = RecommendationOutcomeStore(db_path=tmp_path / "outcomes.db")
+    cache.record_generation("m1", "2026-08-22", "hash1", {}, _rec("direct_bet", "result_3way", "home", "direct_bet", 2.0), "scheduled")
+    client = MagicMock()
+    client.get_results.return_value = [_match("m1", 2, 1)]
+    sweden_client = MagicMock()
+    sweden_client.get_results.side_effect = requests.exceptions.ConnectionError("boom")
+
+    resolved = resolve_pending_recommendations(cache, store, client, sweden_client=sweden_client)
+
+    assert len(resolved) == 1
+    assert resolved[0].correct is True
+
+
 def test_groups_api_calls_by_date_not_per_candidate(tmp_path: Path) -> None:
     cache = RecommendationCache(db_path=tmp_path / "cache.db")
     store = RecommendationOutcomeStore(db_path=tmp_path / "outcomes.db")
