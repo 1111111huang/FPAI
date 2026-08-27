@@ -18,11 +18,16 @@ from datetime import datetime, timezone
 from pathlib import Path
 import sqlite3
 
+import requests
+
 from app.backend.football_data_client import FootballDataClient
 from app.backend.football_data_competition_codes import FOOTBALL_DATA_CODE_BY_LEAGUE
 from app.backend.recommendation_cache import RecommendationCache
 from app.backend.sandbox_clock import is_sandbox_mode, sandbox_scoped_path
 from src.agent.market_resolution import RESOLVABLE_MARKETS, build_actual_outcome, market_correct, pick_recommended_market
+from src.utils.logger import get_logger
+
+LOGGER = get_logger(__name__)
 
 DEFAULT_DB_PATH = Path(__file__).parent.parent.parent / "data" / "recommendation_outcomes.db"
 
@@ -284,12 +289,41 @@ def resolve_pending_recommendations(
         # (results_by_id) is unchanged; this just runs a second dict
         # alongside it.
         competition_id_by_match: dict[str, str] = {}
+        # W178: each call isolated with its own try/except -- found live
+        # (2026-08-27) that a single competition's transient connection
+        # error (RemoteDisconnected) propagated straight up through this
+        # function, aborting outcome resolution *and* the daily_live_lessons
+        # job that calls it (prepare_lesson_batches -> here) for every other
+        # league and every other date in the same run, not just the one
+        # flaky call. A skipped competition/date just leaves its candidates
+        # unresolved for this pass -- already_resolved's dedup means the
+        # next run (tomorrow, or a manual retry) picks them up again for
+        # free, same as any other "no result yet" case this loop already
+        # handles via the `match is None` check below.
         for internal_id, competition_code in FOOTBALL_DATA_CODE_BY_LEAGUE.items():
-            for match in client.get_results(competition_code=competition_code, date_from=date, date_to=date):
+            try:
+                results = client.get_results(competition_code=competition_code, date_from=date, date_to=date)
+            except requests.exceptions.RequestException as exc:
+                LOGGER.warning(
+                    "resolve_pending_recommendations: get_results failed for competition_code=%s date=%s "
+                    "(%s) -- skipping, other leagues/dates unaffected.",
+                    competition_code, date, exc,
+                )
+                continue
+            for match in results:
                 results_by_id[match.match_id] = match
                 competition_id_by_match[match.match_id] = internal_id
         if sweden_client is not None:
-            for match in sweden_client.get_results(date_from=date, date_to=date):
+            try:
+                sweden_results = sweden_client.get_results(date_from=date, date_to=date)
+            except requests.exceptions.RequestException as exc:
+                LOGGER.warning(
+                    "resolve_pending_recommendations: sweden_client.get_results failed for date=%s (%s) "
+                    "-- skipping, other leagues/dates unaffected.",
+                    date, exc,
+                )
+                sweden_results = []
+            for match in sweden_results:
                 results_by_id[match.match_id] = match
                 competition_id_by_match[match.match_id] = "SWE"
 
