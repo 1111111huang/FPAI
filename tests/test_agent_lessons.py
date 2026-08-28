@@ -221,6 +221,25 @@ def test_load_approved_lessons_matches_tier_scope_regardless_of_competition():
     assert result == ["tier rule"]
 
 
+def test_load_approved_lessons_dedupes_identical_rule_text_across_rows():
+    """W185 code-quality follow-up: auto_judge_live_lessons' weekly grouped
+    judge approves a group of N pending candidates together by looping
+    approve_lesson once per row with the SAME rule_text -- without dedup
+    here, the live prompt would show that one rule N times. Two genuinely
+    different rules for the same scope must still both survive."""
+    conn = _conn()
+    id1 = insert_lesson_candidate(conn, "day one", "E0", "competition_specific", "m1")
+    id2 = insert_lesson_candidate(conn, "day two", "E0", "competition_specific", "m2")
+    id3 = insert_lesson_candidate(conn, "unrelated", "E0", "competition_specific", "m3")
+    approve_lesson(conn, id1, "competition", "agent-auto", "NEVER bet the draw as the only positive edge.")
+    approve_lesson(conn, id2, "competition", "agent-auto", "NEVER bet the draw as the only positive edge.")
+    approve_lesson(conn, id3, "competition", "agent-auto", "ALWAYS check injury reports first.")
+
+    result = load_approved_lessons(conn, "E0", "competition_specific")
+
+    assert result == ["NEVER bet the draw as the only positive edge.", "ALWAYS check injury reports first."]
+
+
 def test_load_approved_lessons_excludes_approved_rows_with_null_rule_text():
     """A44: an approved row with no rule_text (only reachable pre-A44, since
     approve_lesson now requires one) must never leak lesson_text into the
