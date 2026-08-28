@@ -240,8 +240,11 @@ describe("sandbox mode does not leak real results for fixtures still-future rela
 
     await waitFor(() => {
       expect(screen.getByText("Arsenal")).toBeInTheDocument();
-      expect(screen.getByText("2-1")).toBeInTheDocument();
-      expect(screen.getByText("Result")).toBeInTheDocument();
+      // Score moved next to the team names (direct user request) -- three
+      // separate text nodes (home/dash/away), not one "2-1" string.
+      expect(screen.getByText("2")).toBeInTheDocument();
+      expect(screen.getByText("1")).toBeInTheDocument();
+      expect(screen.getByText("Money Won")).toBeInTheDocument();
       expect(screen.getByText("Settled")).toBeInTheDocument();
     });
   });
@@ -254,8 +257,9 @@ describe("sandbox mode does not leak real results for fixtures still-future rela
 
     await waitFor(() => {
       expect(screen.getByText("Arsenal")).toBeInTheDocument();
-      expect(screen.getByText("2-1")).toBeInTheDocument();
-      expect(screen.getByText("Result")).toBeInTheDocument();
+      expect(screen.getByText("2")).toBeInTheDocument();
+      expect(screen.getByText("1")).toBeInTheDocument();
+      expect(screen.getByText("Money Won")).toBeInTheDocument();
       expect(screen.getByText("Settled")).toBeInTheDocument();
     });
   });

@@ -112,3 +112,46 @@ describe("MatchCard -- hit/miss indicator for a completed match", () => {
     expect(screen.queryByText("Not Hit")).not.toBeInTheDocument();
   });
 });
+
+describe("MatchCard -- money won for a completed match (direct user request, replaces the Odds box)", () => {
+  it("shows profit (stake * (odds - 1)) when the pick hit", () => {
+    // recommended "home" @ 1.8, actually 2-0 -> hit. 2.0 UB * (1.8 - 1) = 1.6 UB.
+    const match = baseMatch({ unitBetMultiplier: 2.0 });
+    render(<MatchCard match={match} onUpdate={vi.fn()} />);
+    expect(screen.getByText("Money Won")).toBeInTheDocument();
+    expect(screen.getByText("+1.6 UB")).toHaveClass("text-good");
+  });
+
+  it("shows a loss (-stake) when the pick missed", () => {
+    const match = baseMatch({ unitBetMultiplier: 2.0, result: { home: 0, away: 1 } }); // recommended "home", actual "away"
+    render(<MatchCard match={match} onUpdate={vi.fn()} />);
+    expect(screen.getByText("-2.0 UB")).toHaveClass("text-serious");
+  });
+
+  it("shows '—' for an unresolvable market (corners) -- no hit/miss to compute money won from", () => {
+    const match = baseMatch({
+      unitBetMultiplier: 1.5,
+      markets: [{ market: "home_corners", selection: "over_2.5", recommendationType: "direct_bet", currentOdds: 1.5, minOdds: 0, mlProbability: 0.6, impliedProbability: 0.5, valueEdge: 0.1 }],
+    });
+    render(<MatchCard match={match} onUpdate={vi.fn()} />);
+    const label = screen.getByText("Money Won");
+    expect(label.nextElementSibling).toHaveTextContent("—");
+  });
+
+  it("shows '—' for a conditional pick -- it was never actually bet at current_odds, even though it can still carry a stake number", () => {
+    const match = baseMatch({
+      unitBetMultiplier: 1.5,
+      markets: [{ market: "result_3way", selection: "home", recommendationType: "conditional", currentOdds: 1.8, minOdds: 0, mlProbability: 0.6, impliedProbability: 0.56, valueEdge: 0.04, targetOdds: 2.0 }],
+    });
+    render(<MatchCard match={match} onUpdate={vi.fn()} />);
+    const label = screen.getByText("Money Won");
+    expect(label.nextElementSibling).toHaveTextContent("—");
+  });
+
+  it("shows '—' when unitBetMultiplier is null (e.g. a no_bet pick)", () => {
+    const match = baseMatch({ unitBetMultiplier: null });
+    render(<MatchCard match={match} onUpdate={vi.fn()} />);
+    const label = screen.getByText("Money Won");
+    expect(label.nextElementSibling).toHaveTextContent("—");
+  });
+});

@@ -244,7 +244,9 @@ describe("Dashboard -- live and today's-completed matches (direct user request)"
     render(<DashboardPage />);
 
     expect(await screen.findByText("finished-today")).toBeInTheDocument();
-    expect(screen.getByText("2-1")).toBeInTheDocument();
+    // Score renders as separate home/dash/away text nodes, not one "2-1" string.
+    expect(screen.getByText("2")).toBeInTheDocument();
+    expect(screen.getByText("1")).toBeInTheDocument();
   });
 
   it("still excludes a match completed on an earlier day (defensive -- the forward-only fetch window can't actually produce this, but the filter checks the date explicitly rather than relying on that)", async () => {
