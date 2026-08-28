@@ -28,6 +28,10 @@ from app.backend.scheduler_wiring import (
     FallbackOddsClient,
     LESSONS_HOUR,
     LESSONS_JOB_ID,
+    LESSONS_WEEKLY_DAY_OF_WEEK,
+    LESSONS_WEEKLY_HOUR,
+    LESSONS_WEEKLY_JOB_ID,
+    LESSONS_WEEKLY_MINUTE,
     PersistingOddsClient,
     next_day_date_str,
     register_eod_job,
@@ -527,18 +531,18 @@ def test_register_lessons_job_generates_a_candidate_and_marks_the_scheduler_run(
         assert conn.execute("SELECT COUNT(*) FROM agent_lessons").fetchone()[0] == 1
 
 
-def test_register_lessons_job_auto_judges_generated_candidates(tmp_path: Path) -> None:
-    """End-to-end: a finished match generates a candidate, and that same
-    job run judges it too -- proves auto_judge_live_lessons is actually
-    reachable from the real daily job, not just unit-tested in isolation."""
+def test_register_lessons_job_weekly_review_judges_accumulated_candidates(tmp_path: Path) -> None:
+    """End-to-end: a candidate already sitting pending (as it would after
+    a week of daily-only generation, since the daily job no longer judges)
+    gets judged once the weekly job's own trigger day/time arrives --
+    proves the weekly review is actually reachable from register_lessons_job,
+    not just unit-tested in isolation. Pre-seeding the pending row directly
+    (rather than relying on the daily job's own same-run catch-up to create
+    it) avoids a real race between two independently-threaded catch-up
+    fires that can happen when 'now' is past both jobs' trigger times at
+    once, exactly as it is here."""
     cache = RecommendationCache(db_path=tmp_path / "cache.db")
     store = RecommendationOutcomeStore(db_path=tmp_path / "outcomes.db")
-    store.insert(
-        match_id="m1", date="2026-08-22", competition="Premier League", market="result_3way",
-        selection="home", recommendation_type="direct_bet", confidence="medium", odds=2.0,
-        value_edge=0.1, correct=True, generated_at="2026-08-22T10:00:00+00:00",
-        competition_id="E0", home_goals=2, away_goals=1,
-    )
     client = MagicMock()
     client.get_results.return_value = []
     duckdb_manager = DuckDBManager()
@@ -546,7 +550,13 @@ def test_register_lessons_job_auto_judges_generated_candidates(tmp_path: Path) -
     config = AgentConfig.default()
     run_log = JobRunLog(db_path=tmp_path / "job_runs.db")
 
-    now = datetime(_FUTURE_DAY.year, _FUTURE_DAY.month, _FUTURE_DAY.day, 23, 30, tzinfo=NY_TZ)
+    from src.agent.lessons import create_lessons_tables, insert_lesson_candidate
+    with duckdb_manager.connection() as conn:
+        create_lessons_tables(conn)
+        insert_lesson_candidate(conn, "Live-sourced batch: pattern.", "E0", "competition_specific", "m1", source="live")
+
+    assert LESSONS_WEEKLY_DAY_OF_WEEK == 6  # Sunday -- 2026-08-23 below must match
+    now = datetime(2026, 8, 23, LESSONS_WEEKLY_HOUR, LESSONS_WEEKLY_MINUTE + 5, tzinfo=NY_TZ)
     scheduler = RecoverableScheduler(run_log=run_log, now_fn=lambda: now)
 
     def fake_llm_invoke(prompt: str) -> str:
@@ -557,7 +567,7 @@ def test_register_lessons_job_auto_judges_generated_candidates(tmp_path: Path) -
             scheduler, cache=cache, store=store, client=client,
             duckdb_manager=duckdb_manager, config=config,
         )
-        assert _wait_until(lambda: run_log.has_run(LESSONS_JOB_ID, now.date().isoformat()))
+        assert _wait_until(lambda: run_log.has_run(LESSONS_WEEKLY_JOB_ID, "2026-08-23"))
 
     with duckdb_manager.connection(read_only=True) as conn:
         row = conn.execute("SELECT status, source, auto_decision_reasoning FROM agent_lessons").fetchone()
