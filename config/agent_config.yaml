@@ -14,13 +14,25 @@ temperature: 0.0                # lower = more deterministic/stable
 max_tool_calls: 10              # per-match tool budget
 
 # Value detection thresholds (A29, 2026-07-11: widened from a 2.0-only floor)
-min_odds_threshold: 1.2         # never recommend direct_bet below this (decimal) / -500 American
-max_odds_threshold: 11.0        # never recommend direct_bet above this (decimal) / +1000 American
+# Direct user request (2026-08-28): tightened from [1.2, 11.0] to the
+# -140/+300 American range below -- production only, every posture/
+# deepseek/backtest config keeps the wider [1.2, 11.0] band unchanged
+# (docs/superpowers/specs/2026-08-21-agent-risk-posture-design.md's own
+# "safety rails, not a posture dial" framing no longer holds for this one
+# config specifically, by explicit user choice).
+min_odds_threshold: 1.71        # never recommend direct_bet below this (decimal) / -140 American
+max_odds_threshold: 4.0         # never recommend direct_bet above this (decimal) / +300 American
 # A66, 2026-08-17: a 'conditional' (wait-for-a-better-price) market below this is too short
 # a price for that strategy to be realistic -- downgraded to no_bet instead. Also the floor
 # that makes a degenerate/missing-data current_odds (e.g. 0.0) impossible to pass through as
-# a real price.
-min_conditional_odds_threshold: 1.5   # decimal / roughly -200 American
+# a real price. Raised to match min_odds_threshold above (2026-08-28).
+min_conditional_odds_threshold: 1.71   # decimal / -140 American
+# New ceiling (2026-08-28, direct user request): a 'conditional' market
+# above this is downgraded to no_bet too -- without it, a direct_bet priced
+# above max_odds_threshold would downgrade to conditional (A29) and sail
+# through with no upper bound at all. Every other config leaves this unset
+# (unbounded default -- see AgentConfig.max_conditional_odds_threshold).
+max_conditional_odds_threshold: 4.0    # decimal / +300 American
 min_value_edge: 0.05            # model prob must exceed implied prob by at least this
 
 # Markets the agent evaluates per match

@@ -37,6 +37,13 @@ class AgentConfig:
     # qualifying value_edge no matter how the prompt is worded. Optional --
     # defaults to False (unchanged) for any config that doesn't set it.
     suppress_forecast_uncertainty: bool = False
+    # Direct user request (2026-08-28): symmetric ceiling to
+    # min_conditional_odds_threshold above -- see
+    # src/agent/schema.py's _downgrade_conditional_above_ceiling. Optional/
+    # defaults to unbounded (today's real, pre-existing behavior) so every
+    # config that doesn't explicitly set this is unaffected; only
+    # config/agent_config.yaml (the live default) sets a real value.
+    max_conditional_odds_threshold: float = float("inf")
 
     @classmethod
     def from_yaml(cls, path: str | Path) -> "AgentConfig":
@@ -50,6 +57,7 @@ class AgentConfig:
             raise ValueError(f"Missing required fields in agent config: {sorted(missing)}")
         kwargs = {k: data[k] for k in _REQUIRED}
         kwargs["suppress_forecast_uncertainty"] = data.get("suppress_forecast_uncertainty", False)
+        kwargs["max_conditional_odds_threshold"] = data.get("max_conditional_odds_threshold", float("inf"))
         return cls(**kwargs)
 
     @classmethod

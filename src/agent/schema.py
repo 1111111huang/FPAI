@@ -282,6 +282,34 @@ def _downgrade_conditional_below_floor(data: dict, min_conditional_odds_threshol
     return data
 
 
+def _downgrade_conditional_above_ceiling(data: dict, max_conditional_odds_threshold: float) -> dict:
+    """Direct user request (2026-08-28): a hard ceiling on top of A29's own
+    direct_bet ceiling -- without this, a direct_bet priced above
+    max_odds_threshold downgrades to 'conditional' (A29's own rule) and
+    would otherwise sail through with no upper bound at all, since this
+    codebase's own conditional handling previously only had a floor (A66),
+    never a ceiling. Same downgrade target/precedent as A66's floor: 'no_bet',
+    not left as 'conditional' -- a price this long isn't a "wait for a
+    better number" situation, it's simply outside the range the user wants
+    recommended at all. Default is unbounded (float('inf')) so every config
+    that doesn't explicitly set max_conditional_odds_threshold keeps
+    today's real, pre-existing no-ceiling behavior unchanged."""
+    limitations = list(data.get("limitations") or [])
+    for market in data.get("markets", []):
+        if market["recommendation_type"] != "conditional":
+            continue
+        odds = market["current_odds"]
+        if odds is None or odds <= max_conditional_odds_threshold:
+            continue
+        market["recommendation_type"] = "no_bet"
+        limitations.append(
+            f"Downgraded {market['market']!r}/{market['selection']!r} from conditional to no_bet: "
+            f"current_odds {odds} is above the {max_conditional_odds_threshold} ceiling."
+        )
+    data["limitations"] = limitations
+    return data
+
+
 def _compute_target_odds(data: dict, min_value_edge: float) -> dict:
     """A52: for each 'conditional' market with real current_odds, compute the
     price it would need to reach to actually clear the value-edge bar --
@@ -430,6 +458,7 @@ def extract_recommendation(
     min_odds_threshold: float = 1.2,
     max_odds_threshold: float = 11.0,
     min_conditional_odds_threshold: float = 1.5,
+    max_conditional_odds_threshold: float = float("inf"),
     min_value_edge: float = 0.05,
     home_team: str | None = None,
     away_team: str | None = None,
@@ -527,6 +556,7 @@ def extract_recommendation(
         data = _downgrade_direct_bet_outside_odds_bounds(data, min_odds_threshold, max_odds_threshold)
         data = _restrict_conditional_to_eligible_markets(data)
         data = _downgrade_conditional_below_floor(data, min_conditional_odds_threshold)
+        data = _downgrade_conditional_above_ceiling(data, max_conditional_odds_threshold)
         data = _compute_target_odds(data, min_value_edge)
         data = _reconcile_overall_with_markets(data)
         data = _attach_unit_bet_multiplier(data)
