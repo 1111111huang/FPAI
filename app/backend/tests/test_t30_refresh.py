@@ -16,7 +16,7 @@ sys.path.append(str(Path(__file__).resolve().parents[3]))
 
 from app.backend.agent_config_hash import compute_agent_config_hash
 from app.backend.football_data_client import NormalizedMatch
-from app.backend.odds_api_client import NormalizedOdds
+from app.backend.odds_api_client import NormalizedOdds, NormalizedSecondaryOdds
 from app.backend.recommendation_cache import RecommendationCache
 from app.backend.t30_refresh import refresh_match_at_t30
 from src.agent.agent_config import AgentConfig
@@ -230,6 +230,93 @@ def test_no_odds_client_at_all_skips_gracefully(tmp_path: Path) -> None:
 
     mock_run_agent.assert_not_called()
     assert result.outcome == "skipped_no_odds"
+
+
+def test_secondary_odds_fetched_and_threaded_into_match_info_and_odds_dedup_key(tmp_path: Path) -> None:
+    """W164 fixed EOD generation only -- t30_refresh.py never gained the
+    equivalent get_event_odds() call, so every T-30 refresh regenerated on
+    1X2 odds alone, degrading straight back into "most picks are draws"
+    for every match once it went through its T-30 refresh. This must fetch
+    totals/btts the same way run_eod_batch does, and fold them into both
+    match_info (the LLM prompt) and the odds dict (cache dedup key)."""
+    config = AgentConfig.default()
+    cache = RecommendationCache(db_path=tmp_path / "cache.db")
+    odds_client = MagicMock()
+    odds_client.get_odds.return_value = [
+        NormalizedOdds(home_team="Arsenal", away_team="Everton", commence_time="2026-08-22T15:00:00Z",
+                        home_odds=1.8, draw_odds=3.6, away_odds=4.5, event_id="evt1"),
+    ]
+    odds_client.get_event_odds.return_value = NormalizedSecondaryOdds(
+        total_goals={"over_2.5": 1.9, "under_2.5": 1.95}, btts={"yes": 1.7, "no": 2.1},
+    )
+    captured_match_info = {}
+
+    def _capture(match_info, config):
+        captured_match_info.update(match_info)
+        return _RECOMMENDATION
+
+    with patch("app.backend.recommendations.run_agent", side_effect=_capture):
+        result = refresh_match_at_t30(_fixture(), odds_client=odds_client, cache=cache, config=config, date_str=_future_date(1))
+
+    odds_client.get_event_odds.assert_called_once_with(sport_key="soccer_epl", event_id="evt1")
+    assert result.outcome == "refreshed"
+    assert captured_match_info["total_goals_odds"] == {"over_2.5": 1.9, "under_2.5": 1.95}
+    assert captured_match_info["btts_odds"] == {"yes": 1.7, "no": 2.1}
+    agent_config_hash = compute_agent_config_hash(config)
+    cached = cache.get_latest("m1", _future_date(1), agent_config_hash)
+    assert cached.odds["total_goals"] == {"over_2.5": 1.9, "under_2.5": 1.95}
+    assert cached.odds["btts"] == {"yes": 1.7, "no": 2.1}
+
+
+def test_secondary_odds_reused_from_cache_not_refetched_when_h2h_unchanged(tmp_path: Path) -> None:
+    """W164a's credit-saving reuse must also apply at T-30, not just EOD."""
+    config = AgentConfig.default()
+    cache = RecommendationCache(db_path=tmp_path / "cache.db")
+    agent_config_hash = compute_agent_config_hash(config)
+    cache.record_generation(
+        match_id="m1", date=_future_date(1), agent_config_hash=agent_config_hash,
+        odds={
+            "home": 1.8, "draw": 3.6, "away": 4.5,
+            "total_goals": {"over_2.5": 1.9, "under_2.5": 1.95}, "btts": {"yes": 1.7, "no": 2.1},
+        },
+        recommendation=_RECOMMENDATION, triggered_by="scheduled",
+    )
+    odds_client = MagicMock()
+    odds_client.get_odds.return_value = [
+        NormalizedOdds(home_team="Arsenal", away_team="Everton", commence_time="2026-08-22T15:00:00Z",
+                        home_odds=1.8, draw_odds=3.6, away_odds=4.5, event_id="evt1"),  # unchanged h2h
+    ]
+
+    with patch("app.backend.recommendations.run_agent") as mock_run_agent:
+        result = refresh_match_at_t30(_fixture(), odds_client=odds_client, cache=cache, config=config, date_str=_future_date(1))
+
+    odds_client.get_event_odds.assert_not_called()
+    mock_run_agent.assert_not_called()  # h2h AND secondary both matched the prior row -> already_fresh() short-circuits
+    assert result.outcome == "skipped_no_change"
+
+
+def test_secondary_odds_not_fetched_when_odds_client_lacks_get_event_odds(tmp_path: Path) -> None:
+    """HistoricalOddsClient (sandbox/backtest) has no per-event odds concept
+    at all -- duck-typed, not isinstance-checked, so it's silently
+    unaffected."""
+    config = AgentConfig.default()
+    cache = RecommendationCache(db_path=tmp_path / "cache.db")
+    odds_client = MagicMock(spec=["get_odds"])  # no get_event_odds attribute at all
+    odds_client.get_odds.return_value = [
+        NormalizedOdds(home_team="Arsenal", away_team="Everton", commence_time="2026-08-22T15:00:00Z",
+                        home_odds=1.8, draw_odds=3.6, away_odds=4.5, event_id="evt1"),
+    ]
+    captured_match_info = {}
+
+    def _capture(match_info, config):
+        captured_match_info.update(match_info)
+        return _RECOMMENDATION
+
+    with patch("app.backend.recommendations.run_agent", side_effect=_capture):
+        refresh_match_at_t30(_fixture(), odds_client=odds_client, cache=cache, config=config, date_str=_future_date(1))
+
+    assert "total_goals_odds" not in captured_match_info
+    assert "btts_odds" not in captured_match_info
 
 
 def test_skips_refresh_when_kickoff_already_passed(tmp_path: Path) -> None:

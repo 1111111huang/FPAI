@@ -24,7 +24,9 @@ from datetime import timezone
 
 from app.backend import recommendations
 from app.backend.agent_config_hash import compute_agent_config_hash
-from app.backend.eod_batch import LEAGUE_CODE, already_fresh, has_kicked_off, match_odds, odds_lookup
+from app.backend.eod_batch import (
+    LEAGUE_CODE, add_secondary_odds, already_fresh, has_kicked_off, match_odds, odds_lookup,
+)
 from app.backend.football_data_client import NormalizedMatch
 from app.backend.odds_api_client import OddsAPIClient
 from app.backend.odds_sport_keys import ODDS_SPORT_KEY_BY_COMPETITION
@@ -90,7 +92,8 @@ def refresh_match_at_t30(
         )
         return T30RefreshResult(match_id=fixture.match_id, outcome="skipped_no_odds")
 
-    fresh_odds = match_odds(fixture, odds_lookup(odds_events))
+    odds_by_teams = odds_lookup(odds_events)
+    fresh_odds = match_odds(fixture, odds_by_teams)
     if fresh_odds is None:
         LOGGER.info(
             "T-30 refresh: skipping match_id=%s -- no matching odds event found "
@@ -99,16 +102,30 @@ def refresh_match_at_t30(
         return T30RefreshResult(match_id=fixture.match_id, outcome="skipped_no_odds")
 
     agent_config_hash = compute_agent_config_hash(config)
+    match_info = {
+        "home_team": fixture.home_team, "away_team": fixture.away_team,
+        "date": date_str, "league": league, "odds": fresh_odds,
+    }
+    # W164 fixed EOD generation's odds to include totals/btts, not just
+    # 1X2 -- t30_refresh.py never got the equivalent call, so every T-30
+    # refresh regenerated on 1X2 odds alone, silently reintroducing the
+    # exact "most picks are draws" bug W164 fixed (the agent's own prompt
+    # rule is "if you don't have a real current price for a market, don't
+    # recommend it at all" -- config/prompts/agent_v1.txt -- so no
+    # totals/btts odds structurally means no totals/btts picks). Must run
+    # before already_fresh() below: it folds totals/btts into fresh_odds
+    # too, so a secondary-market-only price move still counts as a change.
+    add_secondary_odds(
+        match_info, fresh_odds, odds_client, cache, fixture, date_str,
+        agent_config_hash, ODDS_SPORT_KEY_BY_COMPETITION[league], odds_by_teams,
+    )
+
     # W151: shared with eod_batch.py's own EOD-pass dedup check -- one
     # "does this need regenerating" rule for both scheduled entry points.
     if already_fresh(cache, fixture.match_id, date_str, agent_config_hash, fresh_odds):
         LOGGER.info("T-30 refresh: no new data, refresh skipped for match_id=%s.", fixture.match_id)
         return T30RefreshResult(match_id=fixture.match_id, outcome="skipped_no_change")
 
-    match_info = {
-        "home_team": fixture.home_team, "away_team": fixture.away_team,
-        "date": date_str, "league": league, "odds": fresh_odds,
-    }
     try:
         raw = recommendations.run_agent(match_info=match_info, config=config)
     except Exception as exc:
