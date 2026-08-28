@@ -206,50 +206,76 @@ def generate_daily_lessons(
     return commit_lesson_batches(duckdb_conn, store, batches)
 
 
+def _format_group_lesson_text(candidates: list[dict[str, Any]]) -> str:
+    """Joins one (competition_id, tier) group's individual daily
+    candidates into a single combined lesson_text, in date order, each
+    section labeled with its own date and source match ids -- so a week's
+    worth of daily reports reads as one document instead of a single day's,
+    giving judge_lesson_candidate real sample size to apply its existing
+    "reject if noise, approve if clearly systematic" test to, rather than
+    the n=1 it always got when judged one candidate at a time."""
+    ordered = sorted(candidates, key=lambda c: c["created_at"])
+    sections = [
+        f"--- {c['created_at'].date()} (match_ids: {c['source_match_id']}) ---\n{c['lesson_text']}"
+        for c in ordered
+    ]
+    return "\n\n".join(sections)
+
+
 def auto_judge_live_lessons(
     duckdb_manager: DuckDBManager,
     llm_invoke: Callable[[str], str] | None,
 ) -> list[dict[str, Any]]:
-    """2026-08-26 (autonomous live-lesson judging, Phase 1): approves/
-    rejects each pending source='live' candidate right after it's created,
-    mirroring what a human currently decides via `agent-lessons
-    approve/reject` -- but never touches source='train' (or pre-migration
-    source IS NULL) rows, which stay 100% human-reviewed (list_pending_by_source
-    structurally excludes them, not just conventionally).
+    """2026-08-27 (W183-W185, superseding the 2026-08-26 per-candidate
+    version): judges every still-pending source='live' candidate for a
+    (competition_id, tier) *together*, once a week, instead of one
+    candidate at a time right after it's created. A single day's batch is
+    typically n=1 match -- judge_lesson_candidate's own "reject on a thin
+    sample" prompt could never clear that bar even when the exact same
+    failure mode recurred for weeks, since it never saw more than one
+    day's evidence. Grouping several days' already-computed lesson_text
+    into one combined document (_format_group_lesson_text) gives it real
+    sample size instead, with zero changes to judge_lesson_candidate,
+    generate_rule_from_lesson, or find_conflicting_rule themselves.
 
-    llm_invoke=None means the daily job's own LLM client failed to build
-    (see scheduler_wiring.py's register_lessons_job try/except) -- there's
-    no judging without an LLM, so this is a no-op; every pending candidate
-    is simply left for the next day's run to judge once the LLM client is
-    available again.
+    Never touches source='train' (or pre-migration, source IS NULL) rows --
+    list_pending_by_source(source='live') structurally excludes both.
+
+    llm_invoke=None means the weekly job's own LLM client failed to build --
+    a no-op; every pending candidate simply waits for the following week.
 
     Three phases, same discipline as prepare_lesson_batches/
     commit_lesson_batches: a brief read, all LLM work with no DuckDB
-    connection open, then a brief write. Both the per-candidate conflict
-    check and the per-candidate write are isolated in their own try/except
-    -- a failure in either (a raised exception, not just a found conflict)
-    only defers/skips that one candidate and is logged, it never discards
-    the rest of the batch's already-computed decisions. Returns a list of
-    dicts (one per candidate processed) for logging -- {id, action,
-    reasoning}."""
+    connection open, then a brief write. Both the per-group conflict check
+    and the per-row write are isolated in their own try/except -- a
+    failure in either only defers/skips what it was working on, never
+    discarding another group's (or another row's) already-computed
+    decision. Returns a list of dicts, one per underlying row (a group of
+    N candidates contributes N entries, all sharing the same decision) --
+    {id, action, reasoning}."""
     if llm_invoke is None:
         return []
 
     with duckdb_manager.connection(read_only=True) as conn:
         pending = list_pending_by_source(conn, source="live")
 
-    results: list[dict[str, Any]] = []
+    groups: dict[tuple[str | None, str], list[dict[str, Any]]] = defaultdict(list)
     for candidate in pending:
-        decision = judge_lesson_candidate(
-            candidate["lesson_text"], candidate["competition_id"], candidate["tier"], llm_invoke,
-        )
+        groups[(candidate["competition_id"], candidate["tier"])].append(candidate)
+
+    results: list[dict[str, Any]] = []
+    for (competition_id, tier), candidates in groups.items():
+        combined_text = _format_group_lesson_text(candidates)
+        row_ids = [candidate["id"] for candidate in candidates]
+
+        decision = judge_lesson_candidate(combined_text, competition_id, tier, llm_invoke)
         action = "reject" if not decision.approve else "approve"
         scope = decision.scope
         rule_text: str | None = None
         reasoning = decision.reasoning
 
         if decision.approve:
-            rule_text = generate_rule_from_lesson(candidate["lesson_text"], llm_invoke)
+            rule_text = generate_rule_from_lesson(combined_text, llm_invoke)
             if rule_text is None:
                 action = "defer"
                 reasoning = f"{decision.reasoning} (rule distillation failed -- left pending for retry)"
@@ -263,23 +289,25 @@ def auto_judge_live_lessons(
                 # deferring it, so this fails CLOSED to defer.
                 try:
                     with duckdb_manager.connection(read_only=True) as conn:
-                        existing_rules = load_approved_lessons(conn, candidate["competition_id"], candidate["tier"])
+                        existing_rules = load_approved_lessons(conn, competition_id, tier)
                     conflict = find_conflicting_rule(rule_text, existing_rules, llm_invoke)
                 except Exception as exc:
                     action = "defer"
                     reasoning = f"{decision.reasoning} (conflict check failed: {exc!r} -- left pending for retry)"
                     LOGGER.warning(
-                        "live_lessons: conflict check failed for lesson candidate id=%s.", candidate["id"], exc_info=True,
+                        "live_lessons: conflict check failed for lesson group competition_id=%s tier=%s.",
+                        competition_id, tier, exc_info=True,
                     )
                 else:
                     if conflict is not None:
                         action = "defer"
                         reasoning = f"Would approve, but a conflict was found: {conflict}"
 
-        results.append({
-            "id": candidate["id"], "action": action, "scope": scope,
-            "rule_text": rule_text, "reasoning": reasoning,
-        })
+        for row_id in row_ids:
+            results.append({
+                "id": row_id, "action": action, "scope": scope,
+                "rule_text": rule_text, "reasoning": reasoning,
+            })
 
     with duckdb_manager.connection() as conn:
         for result in results:
