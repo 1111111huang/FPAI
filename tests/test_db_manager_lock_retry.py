@@ -64,6 +64,33 @@ def test_retries_and_succeeds_once_a_transient_lock_conflict_clears(
     assert calls == [1.0, 1.0]  # slept between attempts 1->2 and 2->3, not after the final success
 
 
+def test_retries_on_connection_exception_too_not_just_io_exception(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """W185 code-quality review: duckdb.ConnectionException (raised live
+    when two RecoverableScheduler jobs' catch-up threads both open a
+    connection to the same file at nearly the same instant -- confirmed
+    via the new weekly live-lesson review job racing the existing daily
+    one) is a sibling of IOException, not a subclass, so the retry loop
+    silently never covered it before this fix."""
+    manager = _make_manager(tmp_path)
+    real_connect = duckdb.connect
+    attempt = {"n": 0}
+
+    def _flaky_connect(path, read_only=False):
+        attempt["n"] += 1
+        if attempt["n"] < 2:
+            raise duckdb.ConnectionException("Can't open a connection to same database file with a different configuration")
+        return real_connect(path, read_only=read_only)
+
+    monkeypatch.setattr(duckdb, "connect", _flaky_connect)
+
+    with manager.connection(sleep_fn=lambda _: None) as conn:
+        conn.execute("CREATE TABLE t (x INTEGER)")
+
+    assert attempt["n"] == 2  # 1 failure + 1 success -- retried instead of raising immediately
+
+
 def test_raises_the_original_exception_once_retries_are_exhausted(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

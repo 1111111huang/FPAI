@@ -99,17 +99,26 @@ class DuckDBManager:
             max_retries = self.default_max_retries
         if retry_delay_seconds is None:
             retry_delay_seconds = self.default_retry_delay_seconds
-        last_exc: duckdb.IOException | None = None
+        # W185 code-quality review: duckdb.ConnectionException (raised when
+        # two threads concurrently duckdb.connect() the same file with
+        # different configs -- confirmed live via the new weekly live-lesson
+        # review job racing the existing daily one on RecoverableScheduler's
+        # own concurrent-catch-up threads, W160) is a sibling of
+        # IOException, not a subclass -- the retry loop below silently
+        # never covered it before. Widened rather than added a second loop:
+        # both are "another connection is in the way right now, try again
+        # shortly" cases, same transient-collision reasoning as W95 above.
+        last_exc: duckdb.IOException | duckdb.ConnectionException | None = None
         conn: duckdb.DuckDBPyConnection | None = None
         for attempt in range(max_retries + 1):
             try:
                 conn = duckdb.connect(str(self.db_path), read_only=read_only)
                 break
-            except duckdb.IOException as exc:
+            except (duckdb.IOException, duckdb.ConnectionException) as exc:
                 last_exc = exc
                 if attempt < max_retries:
                     LOGGER.warning(
-                        "DuckDB file locked (attempt %d/%d), retrying in %.1fs: %s",
+                        "DuckDB connection failed (attempt %d/%d), retrying in %.1fs: %s",
                         attempt + 1, max_retries + 1, retry_delay_seconds, exc,
                     )
                     sleep_fn(retry_delay_seconds)

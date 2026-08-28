@@ -127,6 +127,61 @@ def test_schedule_once_not_triggered_early(tmp_path: Path) -> None:
     assert calls == []
 
 
+def test_weekly_job_catches_up_when_trigger_day_and_time_already_passed(tmp_path: Path) -> None:
+    """2026-08-23 is a Sunday. 'now' is past that Sunday's 09:00 trigger and
+    the job hasn't run yet this week -- must run immediately, not wait for
+    next Sunday's cron fire."""
+    run_log = JobRunLog(db_path=tmp_path / "job_runs.db")
+    calls = []
+    now = datetime(2026, 8, 23, 9, 30, tzinfo=NY_TZ)
+
+    scheduler = RecoverableScheduler(run_log=run_log, now_fn=lambda: now)
+    scheduler.schedule_weekly("weekly_review", lambda: calls.append("ran"), day_of_week=6, hour=9, minute=0)
+
+    assert _wait_until(lambda: run_log.has_run("weekly_review", "2026-08-23"))
+    assert calls == ["ran"]
+
+
+def test_weekly_job_does_not_catch_up_on_a_different_weekday_even_past_the_trigger_time(tmp_path: Path) -> None:
+    """2026-08-24 is a Monday -- 09:30 is past 09:00, but this isn't the
+    target weekday (Sunday=6), so schedule_daily()'s own 'hour:minute
+    already passed today' catch-up logic must NOT fire here."""
+    run_log = JobRunLog(db_path=tmp_path / "job_runs.db")
+    calls = []
+    now = datetime(2026, 8, 24, 9, 30, tzinfo=NY_TZ)
+
+    RecoverableScheduler(run_log=run_log, now_fn=lambda: now).schedule_weekly(
+        "weekly_review", lambda: calls.append("ran"), day_of_week=6, hour=9, minute=0
+    )
+
+    assert calls == []
+
+
+def test_weekly_job_not_triggered_early_on_the_target_weekday(tmp_path: Path) -> None:
+    run_log = JobRunLog(db_path=tmp_path / "job_runs.db")
+    calls = []
+    now = datetime(2026, 8, 23, 3, 0, tzinfo=NY_TZ)  # Sunday, well before 09:00
+
+    RecoverableScheduler(run_log=run_log, now_fn=lambda: now).schedule_weekly(
+        "weekly_review", lambda: calls.append("ran"), day_of_week=6, hour=9, minute=0
+    )
+
+    assert calls == []
+
+
+def test_weekly_job_does_not_rerun_once_already_run_this_week(tmp_path: Path) -> None:
+    run_log = JobRunLog(db_path=tmp_path / "job_runs.db")
+    run_log.mark_ran("weekly_review", "2026-08-23")
+    calls = []
+    now = datetime(2026, 8, 23, 9, 30, tzinfo=NY_TZ)
+
+    RecoverableScheduler(run_log=run_log, now_fn=lambda: now).schedule_weekly(
+        "weekly_review", lambda: calls.append("ran"), day_of_week=6, hour=9, minute=0
+    )
+
+    assert calls == []
+
+
 def test_restart_mid_day_detects_and_runs_a_missed_job_only_once(tmp_path: Path) -> None:
     """Explicit restart narrative: process A registers today's daily job
     before its trigger time (no catch-up yet); process A then crashes

@@ -4,6 +4,7 @@ candidates via src/agent/lessons.py's existing, unmodified functions."""
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from pathlib import Path
 import sys
 from unittest.mock import MagicMock, patch
@@ -15,6 +16,7 @@ sys.path.append(str(Path(__file__).resolve().parents[3]))
 from app.backend.football_data_client import NormalizedMatch
 from app.backend.live_lessons import (
     PreparedLessonBatch,
+    _format_group_lesson_text,
     _to_lesson_record,
     auto_judge_live_lessons,
     commit_lesson_batches,
@@ -265,10 +267,62 @@ def test_commit_lesson_batches_writes_source_live(tmp_path: Path) -> None:
     assert source == "live"
 
 
+def test_format_group_lesson_text_orders_by_date_and_labels_each_section() -> None:
+    candidates = [
+        {"created_at": datetime(2026, 8, 26, tzinfo=timezone.utc), "source_match_id": "m2", "lesson_text": "second day's text"},
+        {"created_at": datetime(2026, 8, 24, tzinfo=timezone.utc), "source_match_id": "m1", "lesson_text": "first day's text"},
+    ]
+
+    combined = _format_group_lesson_text(candidates)
+
+    assert combined.index("first day's text") < combined.index("second day's text")
+    assert "2026-08-24" in combined
+    assert "2026-08-26" in combined
+    assert "match_ids: m1" in combined
+    assert "match_ids: m2" in combined
+
+
 def _dm(tmp_path: Path) -> DuckDBManager:
     dm = DuckDBManager()
     dm.db_path = tmp_path / "fpai_core.db"
     return dm
+
+
+def test_auto_judge_live_lessons_groups_same_competition_and_tier_candidates_into_one_judge_call(tmp_path: Path) -> None:
+    """W185: two daily candidates for the same (competition_id, tier) --
+    simulating two days' worth of accumulated pending rows now that daily
+    auto-judging is removed -- must be judged together with ONE combined
+    LLM call, not two independent ones, so the judge finally sees real
+    sample size instead of n=1 every time."""
+    dm = _dm(tmp_path)
+    with dm.connection() as conn:
+        create_lessons_tables(conn)
+        insert_lesson_candidate(conn, "Live-sourced batch: day one, 0/1 correct.", "SP1", "competition_specific", "m1", source="live")
+        insert_lesson_candidate(conn, "Live-sourced batch: day two, 0/1 correct.", "SP1", "competition_specific", "m2", source="live")
+
+    judge_prompts = []
+
+    def fake_invoke(prompt: str) -> str:
+        if "deciding whether to promote" in prompt:
+            judge_prompts.append(prompt)
+            return '{"approve": true, "scope": "competition", "reasoning": "Recurs across both days."}'
+        if "Extract ONLY the single most programmatic" in prompt:
+            return "NEVER bet the draw as the only positive-edge market against a strong favorite."
+        if "checking a new proposed rule" in prompt:
+            return "NONE"
+        raise AssertionError(f"unexpected prompt: {prompt}")
+
+    results = auto_judge_live_lessons(dm, fake_invoke)
+
+    assert len(judge_prompts) == 1  # one combined call, not one per candidate
+    assert "day one" in judge_prompts[0]
+    assert "day two" in judge_prompts[0]
+    assert len(results) == 2  # the one decision applied to both rows
+    with dm.connection(read_only=True) as conn:
+        rows = conn.execute("SELECT status, rule_text FROM agent_lessons WHERE source = 'live'").fetchall()
+    assert len(rows) == 2
+    assert all(row[0] == "approved" for row in rows)
+    assert all(row[1] == "NEVER bet the draw as the only positive-edge market against a strong favorite." for row in rows)
 
 
 def test_auto_judge_live_lessons_approves_a_good_candidate(tmp_path: Path) -> None:
@@ -399,18 +453,21 @@ def test_auto_judge_live_lessons_is_a_noop_when_llm_invoke_is_none(tmp_path: Pat
     assert status == "pending"
 
 
-def test_auto_judge_live_lessons_isolates_a_conflict_check_failure_to_its_own_candidate(tmp_path: Path) -> None:
+def test_auto_judge_live_lessons_isolates_a_conflict_check_failure_to_its_own_group(tmp_path: Path) -> None:
     """A raised exception from find_conflicting_rule (fail-closed by
-    design -- see its own docstring) must defer only the candidate it was
-    checking, not silently discard a sibling candidate's already-computed
-    decision in the same batch."""
+    design -- see its own docstring) must defer only the group it was
+    checking, not silently discard a sibling group's already-computed
+    decision in the same run. Two different competition_ids so pattern A
+    and pattern B land in separate (competition_id, tier) groups -- with
+    grouped judging, two candidates sharing the same competition_id/tier
+    would be joined into one group and judged together instead."""
     dm = _dm(tmp_path)
     with dm.connection() as conn:
         create_lessons_tables(conn)
         existing_id = insert_lesson_candidate(conn, "existing text", "E0", "competition_specific", "m0", source="train")
         approve_lesson(conn, existing_id, scope="competition", reviewer="test", rule_text="ALWAYS bet result_3way when confident.")
         insert_lesson_candidate(conn, "Live-sourced batch: pattern A.", "E0", "competition_specific", "m1", source="live")
-        insert_lesson_candidate(conn, "Live-sourced batch: pattern B.", "E0", "competition_specific", "m2", source="live")
+        insert_lesson_candidate(conn, "Live-sourced batch: pattern B.", "SP1", "competition_specific", "m2", source="live")
 
     def fake_invoke(prompt: str) -> str:
         if "deciding whether to promote" in prompt:

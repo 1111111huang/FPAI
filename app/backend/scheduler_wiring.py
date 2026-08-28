@@ -43,6 +43,17 @@ EOD_MINUTE = 0
 LESSONS_JOB_ID = "daily_live_lessons"
 LESSONS_HOUR = 6
 LESSONS_MINUTE = 0
+# W183-W185: judging moved off the daily job onto its own weekly one (see
+# docs/superpowers/specs/2026-08-27-weekly-lesson-judging-design.md) --
+# 10 minutes after the daily job's own slot, on the daily job's own
+# schedule_daily trigger day, so a Sunday's own freshly-generated candidate
+# is always included in that same week's review rather than deferred to
+# the following week, and the weekly job's read never races the daily
+# job's write for the same morning.
+LESSONS_WEEKLY_JOB_ID = "weekly_live_lesson_review"
+LESSONS_WEEKLY_DAY_OF_WEEK = 6  # Sunday (0=Monday..6=Sunday)
+LESSONS_WEEKLY_HOUR = 6
+LESSONS_WEEKLY_MINUTE = 10
 
 # W62/W81/W140: every competition_specific league (match_info.py's
 # COMPETITION_ALLOWLIST) the nightly EOD batch/T-30 refresh knows how to
@@ -317,27 +328,34 @@ def register_lessons_job(
     config: AgentConfig,
     sweden_client: object | None = None,
 ) -> None:
-    """Registers the daily live-lessons job (W175-W178): resolves pending
-    recommendation_outcomes (W167) then batches whatever's newly unbatched
-    into agent_lessons candidates via live_lessons.generate_daily_lessons.
-    Runs at LESSONS_HOUR (06:00 ET, distinct from EOD_HOUR's 23:00, and
-    after football-data.org has typically posted the prior day's results)
-    -- same schedule_daily restart/catch-up guarantee as the EOD job.
+    """Registers two jobs (W175-W185): the daily live-lessons job resolves
+    pending recommendation_outcomes (W167) and batches whatever's newly
+    unbatched into agent_lessons candidates via live_lessons.py's
+    prepare_lesson_batches/commit_lesson_batches, at LESSONS_HOUR (06:00 ET,
+    distinct from EOD_HOUR's 23:00, and after football-data.org has
+    typically posted the prior day's results) -- same schedule_daily
+    restart/catch-up guarantee as the EOD job. It no longer judges anything
+    itself (W183-W185): a separate weekly job (LESSONS_WEEKLY_*) judges
+    every candidate still pending, grouped by (competition_id, tier), via
+    auto_judge_live_lessons -- see docs/superpowers/specs/
+    2026-08-27-weekly-lesson-judging-design.md for why judging moved off
+    the daily cadence.
 
     duckdb_manager: a write-mode DuckDBManager (matches main.py's own
     `agent-lessons approve` CLI pattern) -- distinct from lessons_node's
-    own read_only=True live-serving connection, since this job writes new
-    pending rows. Deliberately not sandbox-routed, unlike its sibling
-    dependencies here -- agent_lessons is one persistent human-review queue
-    regardless of SANDBOX_MODE, matching lessons_node's own always-real-path
-    read behavior.
+    own read_only=True live-serving connection, since both jobs write.
+    Deliberately not sandbox-routed, unlike its sibling dependencies here --
+    agent_lessons is one persistent human-review queue regardless of
+    SANDBOX_MODE, matching lessons_node's own always-real-path read
+    behavior.
 
-    The DuckDB connection is opened only around the brief commit step
-    (commit_lesson_batches) -- prepare_lesson_batches does all the
-    network-bound (football-data.org results lookups, possibly
-    rate-limited) and LLM-bound (reflection) work first, with no DuckDB
-    connection open at all, so data/fpai_core.db's exclusive file lock is
-    never held across either (Task 4 code-quality review finding)."""
+    Each job's own DuckDB connection is opened only around its brief write
+    step -- prepare_lesson_batches/auto_judge_live_lessons both do all
+    their network-bound (football-data.org results lookups, possibly
+    rate-limited) and LLM-bound (reflection, judging) work first, with no
+    DuckDB connection open at all, so data/fpai_core.db's exclusive file
+    lock is never held across either (Task 4 code-quality review finding,
+    unchanged by this split)."""
 
     def _lessons_job() -> None:
         try:
@@ -356,14 +374,29 @@ def register_lessons_job(
             lesson_ids = commit_lesson_batches(conn, store, batches)
         LOGGER.info("Daily live lessons: %d candidate(s) generated.", len(lesson_ids))
 
+    def _weekly_review_job() -> None:
+        try:
+            llm_invoke = _build_lessons_llm_invoke(config)
+        except Exception:
+            LOGGER.warning(
+                "live_lessons: could not build an LLM client -- skipping this week's "
+                "auto-judge review (every pending candidate waits for next week's run).",
+                exc_info=True,
+            )
+            llm_invoke = None
+
         judged = auto_judge_live_lessons(duckdb_manager, llm_invoke)
         action_counts = Counter(j["action"] for j in judged)
         LOGGER.info(
-            "Daily live lessons: %d candidate(s) auto-judged (approved=%d, rejected=%d, deferred=%d).",
+            "Weekly live-lesson review: %d candidate(s) auto-judged (approved=%d, rejected=%d, deferred=%d).",
             len(judged), action_counts["approve"], action_counts["reject"], action_counts["defer"],
         )
 
     scheduler.schedule_daily(LESSONS_JOB_ID, _lessons_job, hour=LESSONS_HOUR, minute=LESSONS_MINUTE)
+    scheduler.schedule_weekly(
+        LESSONS_WEEKLY_JOB_ID, _weekly_review_job,
+        day_of_week=LESSONS_WEEKLY_DAY_OF_WEEK, hour=LESSONS_WEEKLY_HOUR, minute=LESSONS_WEEKLY_MINUTE,
+    )
 
 
 def _build_lessons_llm_invoke(config: AgentConfig) -> Callable[[str], str]:

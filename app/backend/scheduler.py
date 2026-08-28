@@ -139,6 +139,29 @@ class RecoverableScheduler:
         if self._now_fn() >= run_at and not self.run_log.has_run(job_id, run_key):
             self._run_and_mark(job_id, fn, run_key, wait=False)
 
+    def schedule_weekly(self, job_id: str, fn: Callable[[], None], day_of_week: int, hour: int, minute: int) -> None:
+        """Same restart-safe catch-up contract as schedule_daily(), scoped to
+        one weekday instead of every day. day_of_week: 0=Monday..6=Sunday --
+        Python's own datetime.weekday() convention, which APScheduler's
+        CronTrigger day_of_week integer form also uses, so the catch-up
+        check below can compare them directly with no translation.
+
+        Without the day_of_week condition in the catch-up check, a restart
+        on any day past `hour:minute` would incorrectly look identical to
+        schedule_daily()'s own "missed today's run" case and fire
+        immediately regardless of which weekday it actually is."""
+        self._scheduler.add_job(
+            lambda: self._run_and_mark(job_id, fn, run_key=self._now_fn().date().isoformat()),
+            trigger=CronTrigger(day_of_week=day_of_week, hour=hour, minute=minute, timezone=self.timezone),
+            id=job_id,
+            replace_existing=True,
+        )
+        now = self._now_fn()
+        trigger_today = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+        run_key = now.date().isoformat()
+        if now.weekday() == day_of_week and now >= trigger_today and not self.run_log.has_run(job_id, run_key):
+            self._run_and_mark(job_id, fn, run_key, wait=False)
+
     def _run_and_mark(self, job_id: str, fn: Callable[[], None], run_key: str, wait: bool = True) -> None:
         """Never lets a job's own exception propagate -- an unguarded failure
         here would crash whoever calls this, at worst the whole app's

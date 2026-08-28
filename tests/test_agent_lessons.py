@@ -111,6 +111,19 @@ def test_list_pending_by_source_excludes_other_sources_and_null():
     assert train_pending[0]["lesson_text"] == "train text"
 
 
+def test_list_pending_by_source_includes_created_at_and_source_match_id():
+    """New fields needed by app/backend/live_lessons.py's weekly grouped
+    judge to label each candidate's section when joining several days'
+    lesson_texts into one combined document (W184)."""
+    conn = _conn()
+    insert_lesson_candidate(conn, "live text", "E0", "competition_specific", "m1,m2", source="live")
+
+    pending = list_pending_by_source(conn, source="live")
+
+    assert pending[0]["source_match_id"] == "m1,m2"
+    assert isinstance(pending[0]["created_at"], datetime)
+
+
 def test_list_pending_by_source_excludes_already_reviewed_rows():
     conn = _conn()
     live_id = insert_lesson_candidate(conn, "live text", "E0", "competition_specific", "m1", source="live")
