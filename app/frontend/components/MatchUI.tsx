@@ -412,6 +412,14 @@ export function formatEdge(v: number) {
   return v >= 0 ? `+${pct}%` : `${pct}%`;
 }
 
+// BUG-053 follow-up: same abstract UB unit the Stake column already uses
+// (schema.py's UNIT_BET_BASELINE_FRACTION docstring -- "bet 2 UB at odds
+// 3.0, get 6 UB back"), just signed like formatEdge above.
+export function formatMoneyWon(v: number) {
+  const ub = v.toFixed(1);
+  return v >= 0 ? `+${ub} UB` : `${ub} UB`;
+}
+
 // W107: plain-language explanations for jargon labels, reused everywhere
 // each label renders (via a native `title` tooltip -- no tooltip library).
 const EDGE_EXPLAIN = "How much better the model's estimate is than the market price. Positive means the price looks better than it should be.";
@@ -825,6 +833,24 @@ export function MatchCard({
     isCompleted && match.hasRecommendation && shown && match.result
       ? marketCorrect(shown.market, shown.selection, buildActualOutcome(match.result.home, match.result.away))
       : null;
+  // BUG-053 follow-up (direct user request): money actually won/lost on the
+  // pick, in UB, replacing the Odds/Result box once a match completes.
+  // Deliberately narrower than `hit !== null` alone -- a `conditional`
+  // market ("wait for a better price") can still carry a non-null
+  // unitBetMultiplier (schema.py's _attach_unit_bet_multiplier only
+  // excludes no_bet, not conditional) despite never having been an actual
+  // bet at currentOdds, so this also requires recommendationType ===
+  // "direct_bet" specifically. profit = stake*(odds-1) on a hit, -stake on
+  // a miss -- the same formula src/agent/staking.py's simulate_flat_stake/
+  // simulate_kelly_stake and app/backend/bet_tracker.py's real settlement
+  // all already use.
+  const moneyWon =
+    isCompleted && hit !== null && shown?.recommendationType === "direct_bet" &&
+    shown.currentOdds != null && match.unitBetMultiplier != null
+      ? hit
+        ? match.unitBetMultiplier * (shown.currentOdds - 1)
+        : -match.unitBetMultiplier
+      : null;
   // The fallback list spans many different days (W46/W51's 90-day window),
   // so the day label must show on every card, not just ones with no market
   // to display -- previously `shown ? market/selection : day` hid it
@@ -935,15 +961,19 @@ export function MatchCard({
           <span className="truncate text-base font-semibold text-ink">{match.away}</span>
         </div>
 
-        {/* Live score -- separate from the Market/Pick/Odds/Edge row below,
-            deliberately: that row still shows the original pre-kickoff
-            recommendation and its odds at generation time (unchanged,
-            same as it already does for a completed match), not something
-            that updates live -- this app has no in-play odds feed, only a
-            live score (football-data.org updates home_goals/away_goals
-            during play). Conflating the two in one number would imply the
-            odds are live when they aren't. */}
-        {isLive && match.result && (
+        {/* Live/final score -- separate from the Market/Pick/Odds/Edge row
+            below, deliberately: that row still shows the original
+            pre-kickoff recommendation and its odds at generation time
+            (unchanged, same as it already does for a completed match), not
+            something that updates live -- this app has no in-play odds
+            feed, only a live/final score (football-data.org updates
+            home_goals/away_goals during and after play). Conflating the
+            two in one number would imply the odds are live when they
+            aren't. Extended to isCompleted (direct user request) once the
+            Odds/Result box below became a money-won figure instead of the
+            score -- this is now the only place a completed match's final
+            score renders at all. */}
+        {(isLive || isCompleted) && match.result && (
           <div className="mt-2 flex items-center justify-center gap-3 font-mono text-2xl font-bold text-ink">
             <span>{match.result.home}</span>
             <span className="text-muted">-</span>
@@ -1032,19 +1062,30 @@ export function MatchCard({
                     <div className="font-mono text-[10px] text-ink-secondary">now {shown.currentOdds.toFixed(2)}</div>
                   )}
                 </>
+              ) : isCompleted ? (
+                // Direct user request: the final score moved up next to the
+                // team names (isLive already showed it there; this box now
+                // shows money won/lost on the pick instead) -- "—" for
+                // anything that was never an actual bet (conditional/no_bet)
+                // or an unresolvable market (hit === null, e.g. corners),
+                // same null-propagation contract HitBadge already uses.
+                <>
+                  <div className="text-[10px] uppercase tracking-wide text-muted">Money Won</div>
+                  <div
+                    className={`font-mono text-base font-bold ${
+                      moneyWon == null ? "text-muted" : moneyWon > 0 ? "text-good" : moneyWon < 0 ? "text-serious" : "text-ink"
+                    }`}
+                  >
+                    {moneyWon != null ? formatMoneyWon(moneyWon) : "—"}
+                  </div>
+                </>
               ) : (
                 <>
-                  <div className="text-[10px] uppercase tracking-wide text-muted">
-                    {isCompleted ? "Result" : "Odds"}
-                  </div>
+                  <div className="text-[10px] uppercase tracking-wide text-muted">Odds</div>
                   <div className="font-mono text-base font-bold text-ink">
-                    {isCompleted && match.result
-                      ? `${match.result.home}-${match.result.away}`
-                      : shown?.currentOdds
-                      ? shown.currentOdds.toFixed(2)
-                      : "—"}
+                    {shown?.currentOdds ? shown.currentOdds.toFixed(2) : "—"}
                   </div>
-                  {!isCompleted && shown?.currentOdds != null && (
+                  {shown?.currentOdds != null && (
                     <span className="mt-1 inline-block rounded border border-border px-1.5 py-0.5 text-[10px] text-ink-secondary">
                       Decimal
                     </span>
@@ -1090,15 +1131,22 @@ export function MatchCard({
                 in UB (an abstract unit -- see the Daily Edges header
                 explainer, not a dollar figure). Its own column, same
                 weight as Market/Pick/Odds/Edge -- direct user feedback
-                that a small aside line under Pick undersold it. Only
-                meaningful pre-match -- a completed match has nothing left
-                to size a stake for. */}
-            {!isCompleted && match.unitBetMultiplier != null && (
+                that a small aside line under Pick undersold it.
+                BUG-053: previously hidden once completed ("nothing left to
+                size a stake for") -- kept visible instead, mirroring the
+                Edge column's own precedent for the identical case (plain
+                value, a "Pre-match stake" badge instead of disappearing). */}
+            {match.unitBetMultiplier != null && (
               <div className="shrink-0 text-right">
                 <div className="text-[10px] uppercase tracking-wide text-muted">Stake</div>
                 <div className="font-mono text-base font-bold text-ink">
                   {match.unitBetMultiplier.toFixed(1)} UB
                 </div>
+                {isCompleted && (
+                  <span className="mt-1 inline-block rounded-full border border-border-strong bg-surface px-1.5 py-0.5 text-[10px] text-muted">
+                    Pre-match stake
+                  </span>
+                )}
               </div>
             )}
           </div>

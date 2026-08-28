@@ -321,7 +321,7 @@ describe("MatchCard", () => {
     expect(screen.queryByText("Stake")).not.toBeInTheDocument();
   });
 
-  it("does not show the suggested stake on a completed card", () => {
+  it("BUG-053: still shows the suggested stake on a completed card, tagged as pre-match", () => {
     const match = baseMatch({
       status: "completed",
       overall: "direct_bet",
@@ -335,7 +335,9 @@ describe("MatchCard", () => {
       ],
     });
     render(<MatchCard match={match} onUpdate={vi.fn()} />);
-    expect(screen.queryByText("Stake")).not.toBeInTheDocument();
+    expect(screen.getByText("Stake")).toBeInTheDocument();
+    expect(screen.getByText("2.3 UB")).toBeInTheDocument();
+    expect(screen.getByText("Pre-match stake")).toBeInTheDocument();
   });
 });
 

@@ -126,3 +126,28 @@ describe("MatchCard -- completed match, edge column", () => {
     expect(screen.queryByText("Pre-match edge")).not.toBeInTheDocument();
   });
 });
+
+describe("MatchCard -- completed match, odds column becomes money won (direct user request)", () => {
+  // Money-won hit/miss/conditional/unresolvable math is covered by
+  // MatchUI.hitMiss.test.tsx -- this block only covers the box swap and the
+  // final score's new home (next to the team names) that made room for it.
+  it("shows 'Money Won', not 'Odds', once a match completes", () => {
+    render(<MatchCard match={baseMatch()} onUpdate={vi.fn()} />);
+    expect(screen.getByText("Money Won")).toBeInTheDocument();
+    expect(screen.queryByText("Odds")).not.toBeInTheDocument();
+  });
+
+  it("shows the final score next to the team names, not inside the Market/Pick/Odds/Edge row", () => {
+    render(<MatchCard match={baseMatch()} onUpdate={vi.fn()} />); // baseMatch() result: 3-0
+    expect(screen.getByText("3")).toBeInTheDocument();
+    expect(screen.getByText("0")).toBeInTheDocument();
+  });
+
+  it("upcoming match is unchanged -- still shows 'Odds' and the numeric price, no 'Money Won', no score", () => {
+    const match = baseMatch({ status: "upcoming", result: undefined });
+    render(<MatchCard match={match} onUpdate={vi.fn()} />);
+    expect(screen.getByText("Odds")).toBeInTheDocument();
+    expect(screen.getByText("3.00")).toBeInTheDocument(); // baseMatch()'s currentOdds
+    expect(screen.queryByText("Money Won")).not.toBeInTheDocument();
+  });
+});
