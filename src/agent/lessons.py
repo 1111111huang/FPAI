@@ -242,13 +242,23 @@ def list_pending_by_source(conn: duckdb.DuckDBPyConnection, source: str) -> list
     other source and any pre-migration row
     (source IS NULL, since SQL's `NULL = 'live'` is never true) --
     agent-train's human-reviewed queue is structurally unreachable from
-    here, not just conventionally avoided."""
+    here, not just conventionally avoided.
+
+    created_at/source_match_id (W184) let a caller group several rows
+    together and label each one when combining them (auto_judge_live_lessons'
+    weekly grouped judge) -- unused before that caller existed."""
     rows = conn.execute(
-        "SELECT id, lesson_text, competition_id, tier FROM agent_lessons "
+        "SELECT id, lesson_text, competition_id, tier, created_at, source_match_id FROM agent_lessons "
         "WHERE status = 'pending' AND source = ? ORDER BY created_at",
         [source],
     ).fetchall()
-    return [{"id": row[0], "lesson_text": row[1], "competition_id": row[2], "tier": row[3]} for row in rows]
+    return [
+        {
+            "id": row[0], "lesson_text": row[1], "competition_id": row[2], "tier": row[3],
+            "created_at": row[4], "source_match_id": row[5],
+        }
+        for row in rows
+    ]
 
 
 def find_conflicting_rule(new_rule_text: str, existing_rules: list[str], llm_invoke: Callable[[str], str]) -> str | None:
