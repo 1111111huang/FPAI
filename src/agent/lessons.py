@@ -217,7 +217,17 @@ def load_approved_lessons(conn: duckdb.DuckDBPyConnection, competition_id: str |
     prompt). Tolerates a missing agent_lessons table (e.g. agent-train has
     never been run yet) by returning no lessons rather than raising -- live
     recommendation runs must never fail just because train mode hasn't
-    produced anything yet."""
+    produced anything yet.
+
+    W185 code-quality follow-up: auto_judge_live_lessons' weekly grouped
+    judge approves an entire group of N pending candidates together via N
+    separate approve_lesson calls, all given the SAME rule_text -- without
+    dedup here, that one rule would show up N times in the live prompt.
+    Deduped in Python (not via SQL DISTINCT) since DISTINCT's own ORDER BY
+    rule requires every ORDER BY column to also appear in the SELECT list,
+    which created_at doesn't -- would mean either dropping the ordering or
+    selecting a column just to satisfy that constraint. A plain seen-set
+    loop keeps the query as-is and preserves first-seen (created_at) order."""
     try:
         rows = conn.execute(
             """
@@ -232,7 +242,13 @@ def load_approved_lessons(conn: duckdb.DuckDBPyConnection, competition_id: str |
         ).fetchall()
     except duckdb.CatalogException:
         return []
-    return [row[0] for row in rows]
+    seen: set[str] = set()
+    deduped: list[str] = []
+    for row in rows:
+        if row[0] not in seen:
+            seen.add(row[0])
+            deduped.append(row[0])
+    return deduped
 
 
 def list_pending_by_source(conn: duckdb.DuckDBPyConnection, source: str) -> list[dict[str, Any]]:
