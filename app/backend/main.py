@@ -587,6 +587,54 @@ def sync_lessons(lessons: list[_LessonSyncItem]) -> dict:
     return {"inserted": inserted, "skipped_duplicates": skipped}
 
 
+@app.get("/api/admin/lessons")
+def list_lessons(
+    status: Literal["pending", "approved", "rejected"] | None = None,
+    source: Literal["train", "live"] | None = None,
+    limit: int = Query(50, ge=1, le=500),
+) -> dict:
+    """Read-only browse of agent_lessons, newest first -- there was no way to
+    see what the daily live-lessons job (register_lessons_job) has actually
+    been writing in a deployed instance short of a raw DB query; this mirrors
+    /api/admin/sync-lessons' own DuckDBManager/create_lessons_tables pattern
+    but only ever issues a SELECT -- not opened read_only since
+    create_lessons_tables' CREATE TABLE IF NOT EXISTS/ALTER TABLE guard (a
+    no-op once the table already exists, which it always will in a real
+    deployment) needs a writable connection to run at all. status/source
+    filter with plain SQL equality (both are already-columns, no derived
+    logic); omitting either returns every value including legacy NULL
+    source rows (pre-2026-08-26 rows never had one set)."""
+    from src.agent.lessons import create_lessons_tables
+
+    db = DuckDBManager()
+    with db.connection() as conn:
+        create_lessons_tables(conn)
+        clauses, params = [], []
+        if status is not None:
+            clauses.append("status = ?")
+            params.append(status)
+        if source is not None:
+            clauses.append("source = ?")
+            params.append(source)
+        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        params.append(limit)
+        rows = conn.execute(
+            f"""
+            SELECT id, lesson_text, rule_text, status, competition_id, tier, scope,
+                   source_match_id, source, created_at, reviewed_at, reviewer,
+                   auto_decision_reasoning
+            FROM agent_lessons {where} ORDER BY created_at DESC LIMIT ?
+            """,
+            params,
+        ).fetchall()
+    columns = (
+        "id", "lesson_text", "rule_text", "status", "competition_id", "tier", "scope",
+        "source_match_id", "source", "created_at", "reviewed_at", "reviewer",
+        "auto_decision_reasoning",
+    )
+    return {"lessons": [dict(zip(columns, row)) for row in rows]}
+
+
 _REFRESH_LEAGUE_NAMES = Literal["E0", "SP1", "SWE", "I1", "D1", "F1"]
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 
