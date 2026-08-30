@@ -11,7 +11,15 @@ provider: "deepseek"            # "ollama" | "anthropic" | "groq" | "gemini" | "
 # provider swap above) -- only reduces sampling noise on top of whatever the model would
 # otherwise produce for identical inputs.
 temperature: 0.0                # lower = more deterministic/stable
-max_tool_calls: 10              # per-match tool budget
+# Cut 10 -> 3 (2026-08-30, direct user request): both Tavily accounts hit
+# their plan's usage limit in production -- research_node's 2 guaranteed
+# baseline searches (availability, form) run on every run_agent() call
+# regardless of this knob and aren't touched; this only bounds the agent's
+# own *extra* discretionary web_search calls on top of that floor.
+# ponytail: 3 is an untuned guess at "enough headroom for one genuine
+# follow-up search without runaway cost" -- watch real tool_call_count usage
+# and raise if matches are frequently hitting the cap before enough evidence.
+max_tool_calls: 3                # per-match tool budget
 
 # Value detection thresholds (A29, 2026-07-11: widened from a 2.0-only floor)
 # Direct user request (2026-08-28): tightened from [1.2, 11.0] to the

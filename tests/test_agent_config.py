@@ -124,21 +124,37 @@ def test_all_three_posture_configs_keep_every_other_field_identical_to_default()
     -- DeepSeek showed a strong decline bias not reproduced by gemini/anthropic
     on identical inputs (agent_user_stories.md), so the three posture configs
     moved to gemini-3.6-flash while the shared default config is untouched.
-    Everything else (temperature, max_tool_calls, markets) still must match.
+    temperature/markets still must match.
 
-    Odds thresholds are the one deliberate exception since 2026-08-28: the
-    live production default's own bounds were tightened to -140/+300
-    American (see test_default_config_has_2026_08_28_odds_range) while the
-    posture configs were explicitly left at A29/A66's original wider band
-    (see test_posture_and_backtest_configs_keep_the_original_a29_a66_odds_bounds)
+    Odds thresholds are one deliberate exception since 2026-08-28: the live
+    production default's own bounds were tightened to -140/+300 American
+    (see test_default_config_has_2026_08_28_odds_range) while the posture
+    configs were explicitly left at A29/A66's original wider band (see
+    test_posture_and_backtest_configs_keep_the_original_a29_a66_odds_bounds)
     -- reversing this file's own prior 2026-08-21 "safety rails, not a
     posture dial" framing for these three fields specifically, by direct
-    user choice. Not asserted equal-to-default here anymore."""
+    user choice. Not asserted equal-to-default here anymore.
+
+    max_tool_calls is a second deliberate exception since 2026-08-30: cut
+    10 -> 3 in the production default only, to bound Tavily quota burn
+    after both configured API keys hit their plan's usage limit in
+    production (see test_production_config_has_2026_08_30_tool_call_cut
+    below) -- posture configs are untouched, still 10."""
     default = AgentConfig.default()
     for posture in ("conservative", "balanced", "aggressive"):
         cfg = AgentConfig.from_yaml(f"config/agent_config_{posture}.yaml")
         assert cfg.provider == "gemini"
         assert cfg.model == "gemini-3.6-flash"
         assert cfg.temperature == default.temperature
-        assert cfg.max_tool_calls == default.max_tool_calls
         assert cfg.markets == default.markets
+
+
+def test_production_config_has_2026_08_30_tool_call_cut():
+    default = AgentConfig.default()
+    assert default.max_tool_calls == 3
+
+
+def test_posture_configs_keep_the_original_pre_cut_tool_call_budget():
+    for posture in ("conservative", "balanced", "aggressive"):
+        cfg = AgentConfig.from_yaml(f"config/agent_config_{posture}.yaml")
+        assert cfg.max_tool_calls == 10
