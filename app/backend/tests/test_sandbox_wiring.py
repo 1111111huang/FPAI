@@ -79,6 +79,40 @@ def test_build_odds_client_returns_live_client_when_sandbox_inactive(monkeypatch
     assert not isinstance(client, HistoricalOddsClient)
 
 
+def _wired_api_keys(client) -> list[str]:
+    """Reaches into FallbackOddsClient's wrapped PersistingOddsClients to
+    read back which real ODDS_API_KEY* values actually got wired, in order --
+    mirrors this file's own private-attribute-inspection convention
+    (cache._db_path etc.) rather than adding a getter used nowhere else."""
+    return [c._client._api_key for c in client._clients]
+
+
+def test_build_odds_client_odds_api_key_3_falls_back_to_primary_when_unset(monkeypatch) -> None:
+    """BUG-056/2026-08-30: local/dev setups that only ever configure
+    ODDS_API_KEY shouldn't need a second real key just to exercise the
+    3-key fallback code path -- ODDS_API_KEY_3 defaults to ODDS_API_KEY's
+    own value. Production sets ODDS_API_KEY_3 explicitly (see next test)."""
+    monkeypatch.delenv("SANDBOX_MODE", raising=False)
+    monkeypatch.setenv("ODDS_API_KEY", "primary-key")
+    monkeypatch.delenv("ODDS_API_KEY_2", raising=False)
+    monkeypatch.delenv("ODDS_API_KEY_3", raising=False)
+
+    client = build_odds_client()
+
+    assert _wired_api_keys(client) == ["primary-key", "primary-key"]
+
+
+def test_build_odds_client_honors_explicit_odds_api_key_3(monkeypatch) -> None:
+    monkeypatch.delenv("SANDBOX_MODE", raising=False)
+    monkeypatch.setenv("ODDS_API_KEY", "primary-key")
+    monkeypatch.setenv("ODDS_API_KEY_2", "secondary-key")
+    monkeypatch.setenv("ODDS_API_KEY_3", "third-key")
+
+    client = build_odds_client()
+
+    assert _wired_api_keys(client) == ["primary-key", "secondary-key", "third-key"]
+
+
 def test_sandbox_job_runs_db_path_lives_under_app_data_sandbox_not_app_backend_data() -> None:
     """Regression: main.py lives in app/backend/, so its sandbox path
     constant needs .parent.parent (matching recommendations.py's/bets.py's

@@ -37,6 +37,7 @@ LOGGER = get_logger(__name__)
 # W163: repo-root data/, not app/data/ -- see recommendation_cache.py's W163 note.
 CREDIT_COUNTER_PATH = Path(__file__).parent.parent.parent / "data" / "odds_api_credit_counter.json"
 CREDIT_COUNTER_PATH_2 = Path(__file__).parent.parent.parent / "data" / "odds_api_credit_counter_2.json"
+CREDIT_COUNTER_PATH_3 = Path(__file__).parent.parent.parent / "data" / "odds_api_credit_counter_3.json"
 EOD_JOB_ID = "eod_batch_generation"
 EOD_HOUR = 23
 EOD_MINUTE = 0
@@ -158,16 +159,24 @@ def build_odds_client() -> OddsAPIClient | HistoricalOddsClient | FallbackOddsCl
     live-current-odds-only); otherwise the real, live OddsAPIClient(s) --
     None if no ODDS_API_KEY is configured.
 
-    ODDS_API_KEY_2, when also set, is wired in as a fallback: each key gets
-    its own CreditCounter file (CREDIT_COUNTER_PATH / _PATH_2), since credits
-    are tracked per-key by the API itself, not shared across keys."""
+    ODDS_API_KEY_2/_3, when also set, are wired in as fallbacks in order:
+    each key gets its own CreditCounter file (CREDIT_COUNTER_PATH / _PATH_2 /
+    _PATH_3), since credits are tracked per-key by the API itself, not shared
+    across keys. ODDS_API_KEY_3 (2026-08-30, after both configured keys hit a
+    real 401 Unauthorized on Serie A/Ligue 1 -- BUG-056, documents/bugs.md)
+    falls back to ODDS_API_KEY's own value when unset, so local/dev setups that only
+    ever configure one real key don't need a second env var just to exercise
+    the 3-key code path; production sets ODDS_API_KEY_3 to a genuinely
+    distinct key."""
     override_date = sandbox_date()
     if override_date is not None:
         return HistoricalOddsClient(sandbox_date=override_date.isoformat())
 
+    primary_key = os.environ.get("ODDS_API_KEY", "")
     keys_and_paths = [
-        (os.environ.get("ODDS_API_KEY", ""), CREDIT_COUNTER_PATH),
+        (primary_key, CREDIT_COUNTER_PATH),
         (os.environ.get("ODDS_API_KEY_2", ""), CREDIT_COUNTER_PATH_2),
+        (os.environ.get("ODDS_API_KEY_3") or primary_key, CREDIT_COUNTER_PATH_3),
     ]
     clients = [_build_persisting_odds_client(key, path) for key, path in keys_and_paths if key]
     if not clients:
