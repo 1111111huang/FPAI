@@ -213,6 +213,58 @@ def test_historical_results_from_raw_matches_normalizes_null_goals_to_none():
     ]
 
 
+def test_get_results_falls_back_to_second_key_when_first_is_rejected() -> None:
+    """BUG-056/W189: a single bad key used to have no recovery path at all --
+    mirrors FallbackOddsClient's own try-each-in-order discipline."""
+    import requests
+
+    session = MagicMock()
+    unauthorized = MagicMock()
+    unauthorized.raise_for_status.side_effect = requests.HTTPError("401 Unauthorized")
+    ok = MagicMock()
+    ok.raise_for_status.return_value = None
+    ok.json.return_value = [_COMPLETED_EVENT]
+    session.get.side_effect = [unauthorized, ok]
+
+    client = SwedenFixturesClient(api_key="bad-key", session=session, fallback_api_keys=("good-key",))
+    results = client.get_results(date_from="2026-07-20", date_to="2026-07-20")
+
+    assert len(results) == 1
+    assert session.get.call_count == 2
+    assert session.get.call_args_list[0].kwargs["params"]["apiKey"] == "bad-key"
+    assert session.get.call_args_list[1].kwargs["params"]["apiKey"] == "good-key"
+
+
+def test_get_results_raises_once_every_key_is_exhausted() -> None:
+    import requests
+
+    session = MagicMock()
+    unauthorized = MagicMock()
+    unauthorized.raise_for_status.side_effect = requests.HTTPError("401 Unauthorized")
+    session.get.return_value = unauthorized
+
+    client = SwedenFixturesClient(api_key="bad-key", session=session, fallback_api_keys=("also-bad",))
+
+    try:
+        client.get_results(date_from="2026-07-20", date_to="2026-07-20")
+        assert False, "expected HTTPError to propagate once every key is exhausted"
+    except requests.HTTPError:
+        pass
+    assert session.get.call_count == 2
+
+
+def test_empty_fallback_keys_filtered_out_not_tried_as_empty_string() -> None:
+    """The default (no ODDS_API_KEY_2/_3 configured) passes empty strings
+    through -- these must be dropped, not tried as a literal empty apiKey."""
+    session = _mock_session([_COMPLETED_EVENT])
+    client = SwedenFixturesClient(api_key="only-key", session=session, fallback_api_keys=("", ""))
+
+    client.get_results(date_from="2026-07-20", date_to="2026-07-20")
+
+    assert session.get.call_count == 1
+    assert session.get.call_args.kwargs["params"]["apiKey"] == "only-key"
+
+
 def test_historical_results_from_raw_matches_degrades_to_empty_list_on_db_failure():
     """W71 code review Fix 2: a DuckDBManager()/connection failure (e.g.
     missing config.yaml, or no raw_matches table in this environment) must

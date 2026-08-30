@@ -126,10 +126,18 @@ def get_sweden_fixtures_client() -> SwedenFixturesClient:
     """W57: Sweden (Allsvenskan) fixtures/results, sourced from The Odds API
     rather than football-data.org -- W55 confirmed football-data.org's free
     tier has no Allsvenskan coverage at all. FastAPI dependency -- overridden
-    in tests via patching this function, same pattern as get_fixtures_client."""
+    in tests via patching this function, same pattern as get_fixtures_client.
+
+    BUG-056/W189 (2026-08-30): this used to hardcode a single ODDS_API_KEY
+    with no fallback at all -- a bad key here had no recovery path, unlike
+    build_odds_client()'s FallbackOddsClient (W166/W188). Now wired to the
+    same ODDS_API_KEY/_2/_3 keys in the same order."""
     global _sweden_fixtures_client
     if _sweden_fixtures_client is None:
-        _sweden_fixtures_client = SwedenFixturesClient(api_key=os.environ.get("ODDS_API_KEY", ""))
+        _sweden_fixtures_client = SwedenFixturesClient(
+            api_key=os.environ.get("ODDS_API_KEY", ""),
+            fallback_api_keys=(os.environ.get("ODDS_API_KEY_2", ""), os.environ.get("ODDS_API_KEY_3", "")),
+        )
     return _sweden_fixtures_client
 
 

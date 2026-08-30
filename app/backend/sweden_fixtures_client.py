@@ -78,20 +78,41 @@ class SwedenFixturesClient:
         api_key: str,
         session: requests.Session | None = None,
         sport_key: str = SPORT_KEY,
+        fallback_api_keys: tuple[str, ...] = (),
     ) -> None:
-        self._api_key = api_key
+        # BUG-056 (2026-08-30): this used to be a single key with no
+        # fallback at all -- unlike build_odds_client()'s FallbackOddsClient
+        # (W166/W188), a bad key here had nowhere to fail over to. Mirrors
+        # that same try-each-in-order discipline, just inline rather than a
+        # separate wrapper class, since this client only has two methods.
+        # Empty/unset keys filtered out, same "local dev only ever
+        # configures one real key" convenience as build_odds_client()'s own
+        # ODDS_API_KEY_3-falls-back-to-ODDS_API_KEY default.
+        self._api_keys = tuple(k for k in (api_key, *fallback_api_keys) if k)
         self._session = session or requests.Session()
         self._sport_key = sport_key
+
+    def _get(self, path: str, params: dict[str, str | int]) -> requests.Response:
+        last_exc: requests.RequestException | None = None
+        for i, key in enumerate(self._api_keys):
+            try:
+                response = self._session.get(
+                    f"{BASE_URL}/sports/{self._sport_key}/{path}",
+                    params={**params, "apiKey": key},
+                    timeout=10,
+                )
+                response.raise_for_status()
+                return response
+            except requests.RequestException as exc:
+                _LOG.warning("SwedenFixturesClient.%s: key #%d failed (%s) -- trying next key.", path, i + 1, exc)
+                last_exc = exc
+        assert last_exc is not None  # unreachable with an empty key tuple -- caller always configures >=1
+        raise last_exc
 
     def get_fixtures(
         self, date_from: str | None = None, date_to: str | None = None,
     ) -> list[NormalizedMatch]:
-        response = self._session.get(
-            f"{BASE_URL}/sports/{self._sport_key}/events",
-            params={"apiKey": self._api_key},
-            timeout=10,
-        )
-        response.raise_for_status()
+        response = self._get("events", {})
         return [
             _normalize_event(event, "SCHEDULED")
             for event in response.json()
@@ -107,12 +128,7 @@ class SwedenFixturesClient:
         # The Odds API's /scores endpoint rejects daysFrom outside [1, 3]
         # (confirmed live: daysFrom=5 -> 422 INVALID_SCORES_DAYS_FROM).
         clamped_days_from = max(1, min(3, days_from))
-        response = self._session.get(
-            f"{BASE_URL}/sports/{self._sport_key}/scores",
-            params={"apiKey": self._api_key, "daysFrom": clamped_days_from},
-            timeout=10,
-        )
-        response.raise_for_status()
+        response = self._get("scores", {"daysFrom": clamped_days_from})
         return [
             _normalize_event(event, "FINISHED")
             for event in response.json()
