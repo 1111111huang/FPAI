@@ -264,16 +264,29 @@ def resolve_pending_recommendations(
     extended from one competition code to all of them."""
     already_resolved = store.resolved_keys()
     candidates: list[tuple] = []
+    total_latest = already_resolved_count = not_actionable_count = unresolvable_market_count = 0
     for entry in cache.list_latest_per_match():
+        total_latest += 1
         if (entry.match_id, entry.date) in already_resolved:
+            already_resolved_count += 1
             continue
         rec = entry.recommendation
         if rec.get("overall") not in ("direct_bet", "conditional"):
+            not_actionable_count += 1
             continue
         picked = pick_recommended_market(rec.get("markets") or [])
         if picked is None or picked.get("market") not in RESOLVABLE_MARKETS:
+            unresolvable_market_count += 1
             continue
         candidates.append((entry, rec, picked))
+    # 2026-08-30 debugging aid (see the two per-candidate LOGGER.info calls
+    # below too): a run that resolves nothing new is otherwise indistinguishable
+    # from "genuinely nothing to do" -- this makes every candidate's fate visible.
+    LOGGER.info(
+        "resolve_pending_recommendations: cached=%d already_resolved=%d not_actionable=%d "
+        "unresolvable_market=%d candidates=%d",
+        total_latest, already_resolved_count, not_actionable_count, unresolvable_market_count, len(candidates),
+    )
 
     by_date: dict[str, list[tuple]] = {}
     for candidate in candidates:
@@ -330,10 +343,29 @@ def resolve_pending_recommendations(
         for entry, rec, picked in group:
             match = results_by_id.get(entry.match_id)
             if match is None or match.home_goals is None or match.away_goals is None:
+                # 2026-08-30 debugging aid: this and the `correct is None`
+                # branch below were both silent -- a real candidate could
+                # sit unresolved indefinitely with zero log trace of why,
+                # indistinguishable from "nothing to do" from the outside.
+                # Found live chasing a real case (BUG-tracked separately)
+                # where the match's real result was independently confirmed
+                # available from the same provider/date the very same
+                # minute, yet this loop never resolved it.
+                LOGGER.info(
+                    "resolve_pending_recommendations: no result yet for match_id=%s date=%s -- "
+                    "found_in_results_by_id=%s (partial score if found: home=%s away=%s)",
+                    entry.match_id, entry.date, entry.match_id in results_by_id,
+                    getattr(match, "home_goals", None), getattr(match, "away_goals", None),
+                )
                 continue
             actual = build_actual_outcome(match.home_goals, match.away_goals)
             correct = market_correct(picked, actual)
             if correct is None:
+                LOGGER.info(
+                    "resolve_pending_recommendations: market_correct undetermined for match_id=%s "
+                    "market=%s selection=%s actual=%s",
+                    entry.match_id, picked.get("market"), picked.get("selection"), actual,
+                )
                 continue
             outcome = store.insert(
                 match_id=entry.match_id,
