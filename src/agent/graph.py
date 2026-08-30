@@ -86,10 +86,49 @@ def _build_llm(config: AgentConfig) -> Any:
 
 
 def _load_system_prompt(config: AgentConfig) -> str:
+    """Every prompt file's "Value Calculation" section states the same
+    value-edge/odds thresholds `extract_recommendation()` (schema.py) then
+    code-enforces -- these used to be a second, hardcoded copy of the same
+    numbers baked into the prompt text. Confirmed live: config/agent_config.yaml's
+    2026-08-28 tightening of min/max_odds_threshold (1.2/11.0 -> 1.71/4.0,
+    production only) was never reflected here, so the LLM kept reasoning
+    under the stale 1.2/11.0 bounds, correctly called a market direct_bet by
+    its own (outdated) stated rule, and the code-enforced downgrade -- using
+    the real config -- then silently rejected it: a self-contradictory
+    recommendation whose own explanation argued for a bet the app refused to
+    place (and which, in the one case that surfaced this, would have won).
+    Substituted from `config` here instead, so the prompt can't drift out of
+    sync with the real enforced thresholds again, for any config profile."""
     path = _PROMPTS_DIR / f"agent_{config.system_prompt_version}.txt"
     if not path.exists():
         raise FileNotFoundError(f"System prompt not found: {path}")
-    return path.read_text()
+    text = path.read_text()
+    if config.max_conditional_odds_threshold == float("inf"):
+        max_conditional_clause = ""
+    else:
+        max_conditional_clause = (
+            f' Also never use it above {config.max_conditional_odds_threshold:g} (decimal) -- '
+            'that\'s outside any realistic "wait for it to improve" window.'
+        )
+    if config.min_value_edge_result_3way_draw is None:
+        draw_value_edge_clause = ""
+    else:
+        draw_value_edge_clause = (
+            f" result_3way's draw selection specifically needs value_edge >= "
+            f"{config.min_value_edge_result_3way_draw:g} to qualify for direct_bet -- higher than "
+            "the floor above. This market/selection has an independently measured reliability "
+            "problem (past draw picks hit far less often than their apparent edge implied); a "
+            "direct_bet call on it below this floor will be downgraded to no_bet automatically."
+        )
+    return (
+        text
+        .replace("{{MIN_VALUE_EDGE}}", f"{config.min_value_edge:g}")
+        .replace("{{MIN_ODDS_THRESHOLD}}", f"{config.min_odds_threshold:g}")
+        .replace("{{MAX_ODDS_THRESHOLD}}", f"{config.max_odds_threshold:g}")
+        .replace("{{MIN_CONDITIONAL_ODDS_THRESHOLD}}", f"{config.min_conditional_odds_threshold:g}")
+        .replace("{{MAX_CONDITIONAL_ODDS_CLAUSE}}", max_conditional_clause)
+        .replace("{{DRAW_VALUE_EDGE_CLAUSE}}", draw_value_edge_clause)
+    )
 
 
 def _extract_text(content: str | list) -> str:
@@ -270,6 +309,7 @@ def _build_recommendation(
             min_conditional_odds_threshold=config.min_conditional_odds_threshold,
             max_conditional_odds_threshold=config.max_conditional_odds_threshold,
             min_value_edge=config.min_value_edge,
+            min_value_edge_result_3way_draw=config.min_value_edge_result_3way_draw,
             home_team=match_info.get("home_team"),
             away_team=match_info.get("away_team"),
         )

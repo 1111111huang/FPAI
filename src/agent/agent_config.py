@@ -44,6 +44,13 @@ class AgentConfig:
     # config that doesn't explicitly set this is unaffected; only
     # config/agent_config.yaml (the live default) sets a real value.
     max_conditional_odds_threshold: float = float("inf")
+    # Agent-side guardrail (direct user request, 2026-08-29): result_3way's
+    # draw selection has an independently measured reliability problem the
+    # ML model itself can't currently fix (src/agent/schema.py's own
+    # _downgrade_direct_bet_below_draw_value_edge_floor docstring has the
+    # full root-cause record). None (default) preserves every existing
+    # config's behavior unchanged; only config/agent_config.yaml sets one.
+    min_value_edge_result_3way_draw: float | None = None
 
     @classmethod
     def from_yaml(cls, path: str | Path) -> "AgentConfig":
@@ -58,6 +65,7 @@ class AgentConfig:
         kwargs = {k: data[k] for k in _REQUIRED}
         kwargs["suppress_forecast_uncertainty"] = data.get("suppress_forecast_uncertainty", False)
         kwargs["max_conditional_odds_threshold"] = data.get("max_conditional_odds_threshold", float("inf"))
+        kwargs["min_value_edge_result_3way_draw"] = data.get("min_value_edge_result_3way_draw")
         return cls(**kwargs)
 
     @classmethod

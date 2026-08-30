@@ -23,6 +23,7 @@ def compute_agent_config_hash(config: AgentConfig) -> str:
             "min_conditional_odds_threshold": config.min_conditional_odds_threshold,
             "max_conditional_odds_threshold": config.max_conditional_odds_threshold,
             "min_value_edge": config.min_value_edge,
+            "min_value_edge_result_3way_draw": config.min_value_edge_result_3way_draw,
             "markets": config.markets,
             "system_prompt_version": config.system_prompt_version,
         },

@@ -104,6 +104,42 @@ def test_web_search_tavily_failure_degrades_instead_of_raising():
     assert "usage limit" in result
 
 
+def test_web_search_falls_back_to_secondary_key_when_primary_fails():
+    """Primary key raises (quota/rate-limit); secondary key succeeds -- the
+    call should return real results, not degrade to unavailable."""
+    from src.agent.tools import _web_search_impl
+
+    primary = MagicMock()
+    primary.search.side_effect = RuntimeError("quota exceeded")
+    secondary = MagicMock()
+    secondary.search.return_value = {"results": [{"title": "T", "content": "C", "url": "U"}]}
+
+    def fake_client(api_key):
+        return primary if api_key == "primary-key" else secondary
+
+    with patch.dict("os.environ", {"TAVILY_API_KEY": "primary-key", "TAVILY_API_KEY_FALLBACK": "fallback-key"}, clear=True), \
+         patch("tavily.TavilyClient", side_effect=fake_client):
+        result = _web_search_impl("Arsenal Chelsea injury news")
+
+    assert "T" in result
+    assert primary.search.call_count == 1
+    assert secondary.search.call_count == 1
+
+
+def test_web_search_both_keys_failing_degrades_instead_of_raising():
+    from src.agent.tools import _web_search_impl
+
+    instance = MagicMock()
+    instance.search.side_effect = RuntimeError("still exceeds usage limit")
+
+    with patch.dict("os.environ", {"TAVILY_API_KEY": "primary-key", "TAVILY_API_KEY_FALLBACK": "fallback-key"}, clear=True), \
+         patch("tavily.TavilyClient", return_value=instance):
+        result = _web_search_impl("Arsenal Chelsea injury news")
+
+    assert "TOOL_PERMANENTLY_UNAVAILABLE" in result
+    assert instance.search.call_count == 2
+
+
 def test_web_search_unavailable_message_bypasses_snapshot_key_consistently():
     # No TAVILY_API_KEY in this process env by default in CI; record mode without
     # a key returns the fixed unavailable message both times — proves wrap() doesn't

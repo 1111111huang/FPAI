@@ -122,31 +122,47 @@ def _looks_like_post_match_result(title: str, content: str) -> bool:
 def _web_search_impl(query: str) -> str:
     from tavily import TavilyClient
 
-    api_key = os.environ.get("TAVILY_API_KEY")
-    if not api_key:
+    # Second key (TAVILY_API_KEY_FALLBACK) is tried when the primary is
+    # missing/exhausted -- e.g. quota hit on the primary account. dict.fromkeys
+    # dedupes in case both env vars are set to the same value.
+    api_keys = list(dict.fromkeys(
+        k for k in (
+            os.environ.get("TAVILY_API_KEY"),
+            os.environ.get("TAVILY_API_KEY_FALLBACK"),
+        )
+        if k
+    ))
+    if not api_keys:
         return (
             "TOOL_PERMANENTLY_UNAVAILABLE: web_search has no API key configured. "
             "Do NOT call web_search again — it will always return this message. "
             "Output your final JSON recommendation now using only the forecast data already retrieved."
         )
 
-    client = TavilyClient(api_key=api_key)
-    try:
-        response = client.search(query=query, max_results=5)
-    except Exception as exc:
-        # A53: any Tavily-side failure (quota exhausted, rate limit, network
-        # error, ...) previously raised uncaught all the way to a raw 500 at
-        # the FastAPI endpoint -- crashing the *entire* recommendation for a
-        # single research call, including research_node's own deterministic
-        # baseline searches (pipeline.py), which have no try/except of their
-        # own around this. Degrades exactly like the missing-key case above:
-        # the prompt already has a first-class stop rule for this sentinel
-        # ("do NOT call it again"), so a real API failure gets the same
+    response = None
+    last_exc: Exception | None = None
+    for key in api_keys:
+        try:
+            response = TavilyClient(api_key=key).search(query=query, max_results=5)
+            break
+        except Exception as exc:
+            # A53: any Tavily-side failure (quota exhausted, rate limit, network
+            # error, ...) previously raised uncaught all the way to a raw 500 at
+            # the FastAPI endpoint -- crashing the *entire* recommendation for a
+            # single research call, including research_node's own deterministic
+            # baseline searches (pipeline.py), which have no try/except of their
+            # own around this. A second key lets a quota/rate-limit failure on
+            # one account fall through to another instead of degrading right away.
+            _LOG.warning("web_search | tavily_request_failed | query=%r | %s", query, exc)
+            last_exc = exc
+    if response is None:
+        # Degrades exactly like the missing-key case above: the prompt already
+        # has a first-class stop rule for this sentinel ("do NOT call it
+        # again"), so real API failure (on all configured keys) gets the same
         # safe, resumable behavior as a missing key instead of a distinct
         # failure mode every caller would need to special-case.
-        _LOG.warning("web_search | tavily_request_failed | query=%r | %s", query, exc)
         return (
-            f"TOOL_PERMANENTLY_UNAVAILABLE: web_search failed ({exc}). "
+            f"TOOL_PERMANENTLY_UNAVAILABLE: web_search failed ({last_exc}). "
             "Do NOT call web_search again — it will keep failing this run. "
             "Output your final JSON recommendation now using only the forecast data already retrieved."
         )

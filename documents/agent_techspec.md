@@ -146,7 +146,7 @@ All three tools are plain `@tool`-decorated functions, registered via `get_defau
 
 ### 4.1 `web_search(query: str) -> str`
 
-Wraps `tavily.TavilyClient`. Reads `TAVILY_API_KEY` from the environment — **this requires `load_dotenv()` to have run first** (see Section 6). If the key is missing, returns a fixed string:
+Wraps `tavily.TavilyClient`. Reads `TAVILY_API_KEY` from the environment — **this requires `load_dotenv()` to have run first** (see Section 6). If `TAVILY_API_KEY_FALLBACK` is also set, it's tried when the primary key is unset or its search call raises (quota exhausted, rate limit, network error, ...) — a failure on the second key degrades exactly like the missing-key case. If no key is configured at all, returns a fixed string:
 
 ```
 TOOL_PERMANENTLY_UNAVAILABLE: web_search has no API key configured.

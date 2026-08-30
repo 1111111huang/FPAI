@@ -168,6 +168,54 @@ def _downgrade_direct_bet_below_value_edge_floor(data: dict, min_value_edge: flo
     return data
 
 
+def _downgrade_direct_bet_below_draw_value_edge_floor(data: dict, min_value_edge_result_3way_draw: float | None) -> dict:
+    """Agent-side guardrail (direct user request, 2026-08-29): result_3way's
+    draw selection has an independently measured reliability problem the ML
+    model itself can't currently fix -- the "draw-framing fallacy" lesson
+    (documents/agent_techspec.md) found only a 23-38% hit rate (28%
+    aggregate across 85 picks, 5 leagues) despite an apparently-positive
+    value_edge. Root-caused to result_3way's training-time class-balance
+    sample weighting inflating the model's own predicted P(draw) relative to
+    the market (docs/superpowers/specs/2026-08-20-result-3way-sample-weight-retune-design.md)
+    -- both obvious ML-side fixes (loading the existing calibration sidecar
+    at serving time, dampening the sample weighting further) were already
+    tried and confirmed live not to fix it, so this raises the value_edge
+    bar for this one already-proven-unreliable market/selection instead,
+    same downgrade precedent as A67's own
+    _downgrade_direct_bet_below_value_edge_floor just above.
+
+    None (the default) leaves every existing config's behavior unchanged --
+    opt-in per config, not a silent global behavior change. Deliberately
+    scoped to 'direct_bet' + market == 'result_3way' + selection == 'draw'
+    only: home/away don't share this documented failure mode (if anything
+    the model under-predicts their probability), and 'conditional' can
+    never apply to result_3way at all (A54 already forces it to no_bet).
+
+    ponytail: 0.15 (config/agent_config.yaml) is a first-pass heuristic
+    picked from the observed inflation magnitude, not a backtested-optimal
+    value -- validate/retune via agent-backtest once enough post-fix data
+    exists."""
+    if min_value_edge_result_3way_draw is None:
+        return data
+    limitations = list(data.get("limitations") or [])
+    for market in data.get("markets", []):
+        if market["recommendation_type"] != "direct_bet":
+            continue
+        if market["market"] != "result_3way" or market["selection"] != "draw":
+            continue
+        if market["value_edge"] >= min_value_edge_result_3way_draw:
+            continue
+        market["recommendation_type"] = "no_bet"
+        limitations.append(
+            f"Downgraded 'result_3way'/'draw' from direct_bet to no_bet: value_edge "
+            f"{market['value_edge']} is below the draw-specific {min_value_edge_result_3way_draw} "
+            "floor -- result_3way draw picks have an independently measured reliability problem "
+            "(see documents/agent_techspec.md's draw-framing fallacy lesson)."
+        )
+    data["limitations"] = limitations
+    return data
+
+
 def _downgrade_direct_bet_with_null_odds(data: dict) -> dict:
     """BUG-013: recommendation_type='direct_bet' requires a non-null
     current_odds -- downgrade to 'no_bet' (the only other value valid for this
@@ -460,6 +508,7 @@ def extract_recommendation(
     min_conditional_odds_threshold: float = 1.5,
     max_conditional_odds_threshold: float = float("inf"),
     min_value_edge: float = 0.05,
+    min_value_edge_result_3way_draw: float | None = None,
     home_team: str | None = None,
     away_team: str | None = None,
 ) -> MatchRecommendation:
@@ -552,6 +601,7 @@ def extract_recommendation(
                 continue
 
         data = _downgrade_direct_bet_below_value_edge_floor(data, min_value_edge)
+        data = _downgrade_direct_bet_below_draw_value_edge_floor(data, min_value_edge_result_3way_draw)
         data = _downgrade_direct_bet_with_null_odds(data)
         data = _downgrade_direct_bet_outside_odds_bounds(data, min_odds_threshold, max_odds_threshold)
         data = _restrict_conditional_to_eligible_markets(data)

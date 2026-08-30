@@ -111,6 +111,20 @@ describe("MatchCard -- hit/miss indicator for a completed match", () => {
     expect(screen.queryByText("Hit")).not.toBeInTheDocument();
     expect(screen.queryByText("Not Hit")).not.toBeInTheDocument();
   });
+
+  it("shows neither badge when the shown market was no_bet, even if its selection happened to match the result", () => {
+    // Direct user report: a no_bet card still showed a green "Hit" badge --
+    // bestMarket()'s own "least-bad no_bet" fallback pick coincidentally
+    // matching the actual result isn't the same as a recommended bet
+    // paying off, and shouldn't read as one.
+    const match = baseMatch({
+      overall: "no_bet",
+      markets: [{ market: "result_3way", selection: "home", recommendationType: "no_bet", currentOdds: 1.8, minOdds: 0, mlProbability: 0.6, impliedProbability: 0.56, valueEdge: 0.04 }],
+    });
+    render(<MatchCard match={match} onUpdate={vi.fn()} />);
+    expect(screen.queryByText("Hit")).not.toBeInTheDocument();
+    expect(screen.queryByText("Not Hit")).not.toBeInTheDocument();
+  });
 });
 
 describe("MatchCard -- money won for a completed match (direct user request, replaces the Odds box)", () => {

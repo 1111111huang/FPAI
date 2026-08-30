@@ -34,6 +34,24 @@ min_conditional_odds_threshold: 1.71   # decimal / -140 American
 # (unbounded default -- see AgentConfig.max_conditional_odds_threshold).
 max_conditional_odds_threshold: 4.0    # decimal / +300 American
 min_value_edge: 0.05            # model prob must exceed implied prob by at least this
+# Agent-side guardrail (direct user request, 2026-08-29): result_3way's draw
+# selection has an independently measured reliability problem the ML model
+# itself can't currently fix -- the "draw-framing fallacy" lesson found only
+# a 23-38% hit rate (28% aggregate across 85 picks, 5 leagues) despite an
+# apparently-positive value_edge, root-caused to result_3way's training-time
+# class-balance sample weighting inflating the model's own predicted P(draw)
+# (docs/superpowers/specs/2026-08-20-result-3way-sample-weight-retune-design.md).
+# Both obvious ML-side fixes (loading the existing-but-unused calibration
+# sidecar at serving time; dampening the sample weighting further, already
+# tried 2026-08-20) were confirmed live NOT to fix it -- see that spec's own
+# results/2026-08-20-result-3way-verification.md. Production only, same
+# scoping precedent as the odds-threshold tightening above; every other
+# config leaves this unset (see AgentConfig.min_value_edge_result_3way_draw).
+# ponytail: 0.15 is a first-pass heuristic sized off the observed inflation
+# magnitude (e.g. a real 13.4% "edge" draw pick that was actually no_bet-grade,
+# BUG-054/055), not a backtested-optimal value -- retune via agent-backtest
+# once enough post-fix data exists.
+min_value_edge_result_3way_draw: 0.15   # direct_bet on result_3way/draw needs this much edge, not just 0.05
 
 # Markets the agent evaluates per match
 markets:

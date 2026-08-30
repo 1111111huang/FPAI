@@ -826,11 +826,16 @@ export function MatchCard({
   const isCompleted = match.status === "completed";
   const isLive = match.status === "live";
   const shown = bestMarket(match);
-  // null covers "not completed yet", "no recommendation", and "market
-  // unresolvable" (e.g. corners) identically -- HitBadge only renders for a
-  // real true/false.
+  // null covers "not completed yet", "no recommendation", "no bet was
+  // actually recommended", and "market unresolvable" (e.g. corners)
+  // identically -- HitBadge only renders for a real true/false. Direct user
+  // report: a `no_bet` card still showed a green "Hit" badge (the app's own
+  // "least-bad no_bet" fallback market, bestMarket(), happening to land on
+  // the correct outcome) -- misleading, since Hit/Not Hit should describe
+  // whether an actual recommended pick paid off, not whether an unactioned
+  // market's own selection happened to match the result.
   const hit =
-    isCompleted && match.hasRecommendation && shown && match.result
+    isCompleted && match.hasRecommendation && shown && shown.recommendationType !== "no_bet" && match.result
       ? marketCorrect(shown.market, shown.selection, buildActualOutcome(match.result.home, match.result.away))
       : null;
   // BUG-053 follow-up (direct user request): money actually won/lost on the

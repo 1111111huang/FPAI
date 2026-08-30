@@ -169,6 +169,17 @@ def test_agent_config_hash_changes_when_a_threshold_changes() -> None:
     assert h1 != h2
 
 
+def test_agent_config_hash_changes_when_the_draw_value_edge_floor_changes() -> None:
+    """2026-08-29 agent-side guardrail: a config toggling/retuning
+    min_value_edge_result_3way_draw must invalidate the cache the same way
+    every other threshold field already does, or a stale pre-guardrail
+    direct_bet recommendation would keep serving under the new config
+    forever (already_fresh() never seeing a reason to regenerate)."""
+    h1 = compute_agent_config_hash(_config())  # default None
+    h2 = compute_agent_config_hash(_config(min_value_edge_result_3way_draw=0.15))
+    assert h1 != h2
+
+
 def test_list_latest_per_match_returns_one_row_per_match_regardless_of_hash(tmp_path: Path) -> None:
     cache = RecommendationCache(db_path=tmp_path / "cache.db")
     cache.record_generation("m1", "2026-08-22", "hash1", {}, {"overall": "direct_bet"}, "scheduled")
