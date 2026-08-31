@@ -78,3 +78,13 @@ def test_prompt_mentions_composite_score_balance_instruction():
     text = _load_system_prompt(_BASE)
     assert "composite_score" in text
     assert "hit probability" in text or "ml_probability" in text.lower()
+
+
+def test_prompt_discloses_the_self_consistency_downgrade():
+    """Code-quality review gap (2026-08-31, Task 6): A91's self-consistency
+    guardrail (src/agent/schema.py) silently downgrades recommendation_pick
+    to no_bet if a rejected candidate self-reports a higher composite_score
+    -- the model needs to know this exists to have any chance of avoiding
+    it, rather than it being an unexplained trap."""
+    text = _load_system_prompt(_BASE)
+    assert "highest among your other still-eligible" in text
