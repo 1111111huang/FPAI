@@ -1,8 +1,12 @@
 """Regression tests for A82: attach a deterministic unit_bet_multiplier to
 every extracted recommendation -- a Kelly-derived stake-sizing suggestion
-for the recommendation's actual pick (A81's pick_recommended_market),
+for the recommendation's actual pick (A88's resolve_recommendation_pick),
 expressed as a multiple of an abstract "Unit Bet" (UB), not a dollar
-figure. See documents/agent_user_stories.md A82."""
+figure. See documents/agent_user_stories.md A82.
+
+A88 (2026-08-31): reworked for the single-recommendation schema -- `markets`
+is now `candidates` (richer: adds composite_score/reason) plus a
+`recommendation_pick` pointer naming which candidate is the actual pick."""
 
 from __future__ import annotations
 
@@ -10,7 +14,7 @@ import json
 
 from src.agent.schema import extract_recommendation
 
-_VALID_MARKET = {
+_VALID_CANDIDATE = {
     "market": "result_3way",
     "selection": "home",
     "recommendation_type": "direct_bet",
@@ -19,12 +23,17 @@ _VALID_MARKET = {
     "ml_probability": 0.55,
     "implied_probability": 0.33,
     "value_edge": 0.10,
+    "composite_score": 0.62,
+    "reason": "Clears the edge floor with a well-supported home win probability.",
 }
+
+_VALID_PICK = {"market": "result_3way", "selection": "home"}
 
 _VALID = {
     "match": {"home": "Arsenal", "away": "Chelsea", "date": "2026-06-15", "league": "E0"},
     "overall": "direct_bet",
-    "markets": [_VALID_MARKET],
+    "candidates": [_VALID_CANDIDATE],
+    "recommendation_pick": _VALID_PICK,
     "explanation": "Value found on the home win.",
     "confidence": "medium",
     "limitations": [],
@@ -43,15 +52,15 @@ def test_direct_bet_gets_a_positive_multiplier():
 
 
 def test_multiplier_capped_at_ten():
-    market = {**_VALID_MARKET, "current_odds": 1.5, "value_edge": 0.9}
-    data = {**_VALID, "markets": [market]}
+    candidate = {**_VALID_CANDIDATE, "current_odds": 1.5, "value_edge": 0.9}
+    data = {**_VALID, "candidates": [candidate]}
     rec = extract_recommendation(_wrap_json(data))
     assert rec["unit_bet_multiplier"] == 10.0
 
 
 def test_no_bet_overall_gets_no_multiplier():
-    market = {**_VALID_MARKET, "recommendation_type": "no_bet"}
-    data = {**_VALID, "overall": "no_bet", "markets": [market]}
+    candidate = {**_VALID_CANDIDATE, "recommendation_type": "no_bet"}
+    data = {**_VALID, "overall": "no_bet", "candidates": [candidate], "recommendation_pick": None}
     rec = extract_recommendation(_wrap_json(data))
     assert rec["unit_bet_multiplier"] is None
 
@@ -59,11 +68,12 @@ def test_no_bet_overall_gets_no_multiplier():
 def test_missing_odds_gets_no_multiplier():
     # A67/BUG-013 already forbid direct_bet with null odds, but a
     # conditional market can legitimately have current_odds=None.
-    market = {
-        **_VALID_MARKET, "market": "btts", "selection": "yes",
+    candidate = {
+        **_VALID_CANDIDATE, "market": "btts", "selection": "yes",
         "recommendation_type": "conditional", "current_odds": None,
     }
-    data = {**_VALID, "overall": "conditional", "markets": [market]}
+    data = {**_VALID, "overall": "conditional", "candidates": [candidate],
+             "recommendation_pick": {"market": "btts", "selection": "yes"}}
     rec = extract_recommendation(_wrap_json(data))
     assert rec["unit_bet_multiplier"] is None
 
@@ -71,10 +81,11 @@ def test_missing_odds_gets_no_multiplier():
 def test_conditional_below_value_floor_gets_zero_not_null():
     # A real price exists but doesn't clear the value bar yet -- "wait, 0
     # UB for now" is meaningfully different from "no price at all".
-    market = {
-        **_VALID_MARKET, "market": "btts", "selection": "yes",
+    candidate = {
+        **_VALID_CANDIDATE, "market": "btts", "selection": "yes",
         "recommendation_type": "conditional", "current_odds": 1.6, "value_edge": -0.02,
     }
-    data = {**_VALID, "overall": "conditional", "markets": [market]}
+    data = {**_VALID, "overall": "conditional", "candidates": [candidate],
+             "recommendation_pick": {"market": "btts", "selection": "yes"}}
     rec = extract_recommendation(_wrap_json(data))
     assert rec["unit_bet_multiplier"] == 0.0

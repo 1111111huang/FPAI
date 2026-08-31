@@ -222,3 +222,51 @@ def test_home_away_swap_alone_is_not_a_match_mismatch():
     data = {**_VALID, "match": {"home": "Chelsea", "away": "Arsenal"}}
     rec = extract_recommendation(_wrap_json(data), home_team="Arsenal", away_team="Chelsea")
     assert rec["overall"] == "direct_bet"
+
+
+def test_overall_syncs_to_the_resolved_picks_actual_type():
+    """A90 (2026-08-31 design): replaces A65's _reconcile_overall_with_markets.
+    The LLM claims overall='direct_bet' but the picked candidate's own price
+    is outside the configured odds bounds -- Task 3's already-adapted
+    _downgrade_direct_bet_outside_odds_bounds downgrades the candidate to
+    'conditional'; overall must follow it, not stay stuck at the LLM's
+    original, now-stale self-report.
+
+    Market/selection overridden to an eligible pair (total_goals/over_2.5):
+    _VALID_CANDIDATE's default (result_3way/home) is never eligible to
+    *stay* 'conditional' -- A54's _restrict_conditional_to_eligible_markets
+    (Task 3, unmodified here) always downgrades it straight through to
+    'no_bet', which would defeat the point of this test (verifying overall
+    follows a pick that lands on 'conditional', not 'no_bet')."""
+    candidate = {**_VALID_CANDIDATE, "market": "total_goals", "selection": "over_2.5", "current_odds": 15.0}
+    pick = {"market": "total_goals", "selection": "over_2.5"}
+    data = {**_VALID, "candidates": [candidate], "recommendation_pick": pick}
+    rec = extract_recommendation(_wrap_json(data), min_odds_threshold=1.2, max_odds_threshold=11.0)
+    assert rec["overall"] == "conditional"
+    assert rec["recommendation_pick"] == pick  # still a real pick, just re-typed
+
+
+def test_pick_downgraded_to_no_bet_is_nulled_and_overall_follows():
+    candidate = {**_VALID_CANDIDATE, "value_edge": -0.02}
+    data = {**_VALID, "candidates": [candidate], "recommendation_pick": _VALID_PICK}
+    rec = extract_recommendation(_wrap_json(data), min_value_edge=0.05)
+    assert rec["overall"] == "no_bet"
+    assert rec["recommendation_pick"] is None
+
+
+def test_pick_naming_a_candidate_absent_from_candidates_is_treated_as_no_pick():
+    dangling_pick = {"market": "btts", "selection": "yes"}
+    data = {**_VALID, "recommendation_pick": dangling_pick}
+    rec = extract_recommendation(_wrap_json(data))
+    assert rec["recommendation_pick"] is None
+    assert any("not present in candidates" in note for note in rec["limitations"])
+
+
+def test_never_upgrades_insufficient_data():
+    """Downgrade-only, same direction A65 already established -- a
+    legitimately empty candidates list (the graph's own no-forecast
+    short-circuit) with overall already 'insufficient_data' must stay that
+    way, not get bumped to 'no_bet' just because there's no resolvable pick."""
+    data = {**_VALID, "overall": "insufficient_data", "candidates": [], "recommendation_pick": None}
+    rec = extract_recommendation(_wrap_json(data))
+    assert rec["overall"] == "insufficient_data"

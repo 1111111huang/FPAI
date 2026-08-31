@@ -8,7 +8,7 @@ from typing import Literal, TypedDict
 import json_repair
 from pydantic import BaseModel, ValidationError
 
-from src.agent.market_resolution import pick_recommended_market
+from src.agent.market_resolution import resolve_recommendation_pick
 from src.agent.staking import kelly_fraction
 from src.ingestion.common.team_mapping import TeamNameMapper
 
@@ -436,36 +436,45 @@ _RANK_TO_OVERALL = ["insufficient_data", "no_bet", "conditional", "direct_bet"]
 _OVERALL_RANK = {name: rank for rank, name in enumerate(_RANK_TO_OVERALL)}
 
 
-def _reconcile_overall_with_markets(data: dict) -> dict:
-    """A65: 'overall' is the LLM's own top-level self-report, written
-    before the code-enforced downgrade passes above ever run -- A29's
-    odds-bounds check (direct_bet -> conditional) and A54's eligible-
-    markets check (conditional -> no_bet) mutate individual markets'
-    recommendation_type but never touched this field. Confirmed live: a
-    Dashboard card showed a 'Direct Bet' badge (from 'overall') over a
-    market whose own recommendation_type had already been downgraded to
-    'conditional' by A29's odds-bounds check -- the badge and the market
-    it was describing told two different stories. Caps 'overall' at the
-    strongest recommendation_type any market still actually has, same
-    downgrade-only direction as every pass above -- never claims a
-    stronger state than the LLM itself originally reported, only a
-    weaker, more honest one when the markets no longer support what it
-    said. A no-op when `markets` is empty (nothing to reconcile against;
-    that shape is reserved for the graph's own no-forecast short-circuit,
-    which never reaches this function at all)."""
-    markets = data.get("candidates") or []
-    if not markets:
+def _resolve_recommendation_pick(data: dict) -> dict:
+    """Replaces A65's _reconcile_overall_with_markets now that there's at
+    most one real pick instead of an array to reconcile against. Runs last
+    among the downgrade passes (after Task 3's seven per-candidate checks
+    and A91's self-consistency check below have already mutated whichever
+    candidate recommendation_pick names) -- looks that candidate up via
+    resolve_recommendation_pick() and syncs `overall`/`recommendation_pick`
+    to its now-possibly-downgraded state.
+
+    A pick that no longer resolves at all (recommendation_pick is null, or
+    names a market/selection absent from candidates -- the LLM pointed at
+    something it never actually listed) is treated identically to a pick
+    downgraded to 'no_bet': no real recommendation, overall capped at
+    'no_bet' -- never claims a stronger state than the candidates actually
+    support, same downgrade-only direction A65 already established. A
+    dangling pick additionally gets its own limitations note, distinguishing
+    "the model pointed at nothing real" from an ordinary no_bet."""
+    pick = data.get("recommendation_pick")
+    candidates = data.get("candidates") or []
+    resolved = resolve_recommendation_pick(candidates, pick)
+
+    if resolved is None:
+        if pick is not None:
+            limitations = list(data.get("limitations") or [])
+            limitations.append(
+                "recommendation_pick named a market/selection not present in candidates -- "
+                "treated as no recommendation."
+            )
+            data["limitations"] = limitations
+        data["recommendation_pick"] = None
+        if _OVERALL_RANK[data["overall"]] > _OVERALL_RANK["no_bet"]:
+            data["overall"] = "no_bet"
         return data
-    strongest = max(_OVERALL_RANK[m["recommendation_type"]] for m in markets)
-    if _OVERALL_RANK[data["overall"]] > strongest:
-        old_overall = data["overall"]
-        data["overall"] = _RANK_TO_OVERALL[strongest]
-        limitations = list(data.get("limitations") or [])
-        limitations.append(
-            f"Downgraded overall from {old_overall!r} to {data['overall']!r}: no market actually "
-            f"supports {old_overall!r} after the downgrade passes above."
-        )
-        data["limitations"] = limitations
+
+    if resolved["recommendation_type"] == "no_bet":
+        data["recommendation_pick"] = None
+        data["overall"] = "no_bet"
+    else:
+        data["overall"] = resolved["recommendation_type"]
     return data
 
 
@@ -496,19 +505,23 @@ def _attach_unit_bet_multiplier(data: dict) -> dict:
     own max_fraction=0.10 default caps the result at 10.0 automatically, no
     separate clamping needed here.
 
-    Run last, after every downgrade pass and _reconcile_overall_with_markets:
-    needs each market's FINAL recommendation_type to pick the right one
-    (A81's pick_recommended_market). pick_recommended_market falls back to
-    ranking every market (no_bet included) when nothing in the recommendation
-    is actionable at all -- that fallback pick still carries a price, but
-    "no_bet" means there's nothing to size, so it's excluded here too, not
-    just a missing price."""
-    picked = pick_recommended_market(data.get("candidates") or [])
+    Run last, after _resolve_recommendation_pick: by that point
+    recommendation_pick is either null (nothing to size) or names a
+    candidate whose recommendation_type genuinely survived every guardrail
+    above -- A88 (2026-08-31 design) replaces A81's pick_recommended_market
+    reduction with a direct pointer lookup, since there's only one real
+    candidate left to resolve."""
+    picked = resolve_recommendation_pick(data.get("candidates") or [], data.get("recommendation_pick"))
     if picked is None or picked.get("current_odds") is None or picked.get("recommendation_type") == "no_bet":
         data["unit_bet_multiplier"] = None
     else:
         fraction = kelly_fraction(picked.get("value_edge") or 0.0, picked["current_odds"])
         data["unit_bet_multiplier"] = fraction / UNIT_BET_BASELINE_FRACTION
+    return data
+
+
+def _downgrade_recommendation_below_top_composite_score(data: dict) -> dict:
+    """A91 -- implemented in Task 5. Stub: no-op until then."""
     return data
 
 
@@ -650,7 +663,8 @@ def extract_recommendation(
         data = _downgrade_conditional_below_floor(data, min_conditional_odds_threshold)
         data = _downgrade_conditional_above_ceiling(data, max_conditional_odds_threshold)
         data = _compute_target_odds(data, min_value_edge)
-        data = _reconcile_overall_with_markets(data)
+        data = _downgrade_recommendation_below_top_composite_score(data)
+        data = _resolve_recommendation_pick(data)
         data = _attach_unit_bet_multiplier(data)
         return data  # type: ignore[return-value]
 
