@@ -35,7 +35,7 @@ class MarketCandidate(TypedDict):
     reason: str
 
 
-class MarketPick(TypedDict):
+class RecommendationPick(TypedDict):
     market: Literal["result_3way", "btts", "total_goals", "home_corners", "away_corners"]
     selection: Literal["home", "draw", "away", "yes", "no", "over_2.5", "under_2.5"]
 
@@ -44,7 +44,7 @@ class MatchRecommendation(TypedDict):
     match: dict
     overall: Literal["direct_bet", "conditional", "no_bet", "insufficient_data"]
     candidates: list[MarketCandidate]
-    recommendation_pick: MarketPick | None
+    recommendation_pick: RecommendationPick | None
     # One bullet per aspect (value edge, team news, form, market caveats,
     # ...) instead of one narrative paragraph -- direct user request. A plain
     # string (a pre-this-change cached row, or a model that ignores the
@@ -77,7 +77,7 @@ class MarketCandidateModel(BaseModel):
     """A88 (2026-08-31 design): replaces MarketRecommendationModel. Every
     market with a real matched current price gets one entry here -- the LLM
     is asked to list candidates it's rejecting too, not just the one it
-    picks (see RecommendationPick below), so this comparison survives for
+    picks (see RecommendationPickModel below), so this comparison survives for
     settlement/frontend transparency the same way the old `markets` array
     did.
 
@@ -127,7 +127,7 @@ class MarketCandidateModel(BaseModel):
     reason: str
 
 
-class RecommendationPick(BaseModel):
+class RecommendationPickModel(BaseModel):
     """A88 (2026-08-31 design): which candidate is the actual pick --
     deliberately just the two Literal fields that identify it, not a
     duplicate copy of its numeric fields. resolve_recommendation_pick()
@@ -150,7 +150,7 @@ class MatchRecommendationModel(BaseModel):
     src/agent/graph.py, not just used internally by extract_recommendation().
 
     A88 (2026-08-31 design): `markets` replaced by `candidates` +
-    `recommendation_pick` -- see MarketCandidateModel/RecommendationPick
+    `recommendation_pick` -- see MarketCandidateModel/RecommendationPickModel
     above. `recommendation_pick` defaults to None (not in _REQUIRED_KEYS)
     since a genuine no_bet/insufficient_data response may omit it entirely
     rather than write a literal null."""
@@ -158,7 +158,7 @@ class MatchRecommendationModel(BaseModel):
     match: dict
     overall: Literal["direct_bet", "conditional", "no_bet", "insufficient_data"]
     candidates: list[MarketCandidateModel]
-    recommendation_pick: RecommendationPick | None = None
+    recommendation_pick: RecommendationPickModel | None = None
     explanation: list[str]
     confidence: Literal["low", "medium", "high"]
     limitations: list[str]

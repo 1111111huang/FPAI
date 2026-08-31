@@ -331,7 +331,7 @@ def resolve_recommendation_pick(
     candidates: list[dict[str, Any]], pick: dict[str, Any] | None
 ) -> dict[str, Any] | None:
     """A88 (2026-08-31 design): the new single-recommendation schema's
-    lookup -- `pick` is the LLM's own stated choice (RecommendationPick,
+    lookup -- `pick` is the LLM's own stated choice (RecommendationPickModel,
     src/agent/schema.py: market+selection only, no duplicated numeric
     fields), and this finds the matching full entry in `candidates`. Unlike
     pick_recommended_market() above (a max(value_edge) reduction, kept
