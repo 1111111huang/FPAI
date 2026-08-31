@@ -1,7 +1,7 @@
 # Single-Recommendation Decision Mechanism — Design
 
 **Date:** 2026-08-31
-**Status:** approved, pending implementation plan
+**Status:** implemented (A88-A91, `documents/agent_user_stories.md` Phase 29)
 **Origin:** direct user request, following a conversation about how `pick_recommended_market()`/`bestMarket()` reduce an agent-produced `markets` array down to "the one shown on the web app." The user's own framing: "I want the agent to look at all markets together, with the news, odds to make one bet recommendation, preferably balance the edge and the hit probability."
 
 ## The problem this replaces
@@ -66,7 +66,7 @@ The snippet above only shows fields that change shape. `unit_bet_multiplier`, `c
 
 `config/prompts/agent_v1.txt` and its three posture siblings (conservative/balanced/aggressive) gain three things:
 
-1. **Every guardrail threshold, templated in as a real number.** Extends the pattern A84/A85 already established (`{{DRAW_VALUE_EDGE_CLAUSE}}`) to all six: min/max odds bounds (A29), conditional floor/ceiling (A66/A84), the base value-edge floor, and the draw-specific floor (A85). New instruction alongside them: a candidate that would fail one of these checks may still appear in `candidates` for transparency, but must not be the `recommendation_pick` — pick a different eligible one, or if none clear every check, set `overall` to `no_bet` and leave `recommendation_pick` null.
+1. **Every guardrail threshold, already a real number.** Corrected during implementation (2026-08-31): all six thresholds (`{{MIN_VALUE_EDGE}}`, `{{MIN_ODDS_THRESHOLD}}`, `{{MAX_ODDS_THRESHOLD}}`, `{{MIN_CONDITIONAL_ODDS_THRESHOLD}}`, `{{MAX_CONDITIONAL_ODDS_CLAUSE}}`, `{{DRAW_VALUE_EDGE_CLAUSE}}`) were already templated into every prompt file before this project started (`src/agent/graph.py:_load_system_prompt`) — this spec's original claim that only two were templated, extending A84/A85's pattern to the rest, was inaccurate. What's actually new: an explicit pre-commit eligibility instruction alongside the existing thresholds — a candidate that would fail one of these checks may still appear in `candidates` for transparency, but must not be the `recommendation_pick`; pick a different eligible one, or if none clear every check, set `overall` to `no_bet` and leave `recommendation_pick` null.
 2. **The balance instruction.** A smaller edge backed by a materially higher hit probability should generally beat a larger edge resting on high uncertainty; `composite_score` should reflect that judgment, not restate `value_edge`. This is guidance, not something code trusts blindly (see the self-consistency guardrail below) — this codebase has hit LLM numeric-rule unreliability before (BUG-019, BUG-023).
 3. **Output structure.** Evaluate every market with real matched odds, write one `candidates` entry each (including ones being rejected, each with `composite_score` and a one-line `reason`), then set `recommendation_pick` to the winner. `explanation` must carry the actual cross-market tradeoff reasoning, not a per-market walkthrough — same discipline already enforced in the current prompt.
 
@@ -84,12 +84,18 @@ The six existing `_downgrade_*` functions in `src/agent/schema.py` (`_downgrade_
 
 TDD, matching this codebase's existing convention:
 
-- **Schema validation**: `MarketCandidateModel`/`RecommendationPick` field/enum tests, mirroring `test_agent_schema_validation.py`'s existing shape; a new case for "pick points at a candidate absent from `candidates`" degrading cleanly to `insufficient_data`.
+- **Schema validation**: `MarketCandidateModel`/`RecommendationPickModel` field/enum tests, mirroring `test_agent_schema_validation.py`'s existing shape; a new case for "pick points at a candidate absent from `candidates`" degrading cleanly (treated as no recommendation, `overall` capped at `no_bet`).
 - **Guardrails**: each of the six adapted `_downgrade_*` functions gets its existing test file reworked from "asserts on one downgraded entry in a list" to "asserts on the single resolved object" — same test intent, updated shape, not new coverage. New `tests/test_agent_self_consistency_guardrail.py`: picked candidate already has the top `composite_score` → unchanged; a higher-scoring rejected candidate exists → downgrades to `no_bet`.
-- **Prompt-level**: extends `test_agent_prompt_thresholds.py`'s existing pattern to the newly-templated guardrail values (all six, not just A84/A85's two).
+- **Prompt-level**: `tests/test_agent_prompt_thresholds.py`'s existing five threshold tests were already correct and untouched; two new tests cover the new output-shape/balance instructions instead (see the corrected point 1 above — no threshold templating needed adding).
 - **No cross-language parity test** — out of scope, since `bestMarket()`/`pick_recommended_market()` are being deleted, not kept in sync.
 
 ## Explicitly out of scope here
 
 - Live serving wiring, settlement, frontend rendering, and cache-compatibility for rows already written under the old schema — sub-project #2.
 - `agent-backtest`/`agent-train`, `BacktestRecord`, `evaluation.py`, `staking.py`, and the historical lessons adapter moving onto this shape — sub-project #3.
+
+## Implementation notes (added 2026-08-31, post-build)
+
+- **`RecommendationPick` → `RecommendationPickModel`.** A code-quality review during Task 1 found the Pydantic model (paired with the `MarketCandidate`/`MarketCandidateModel` TypedDict/BaseModel convention already established in this file) should carry the `Model` suffix like every other pair — the TypedDict is `RecommendationPick`, the Pydantic model is `RecommendationPickModel`. Every reference above naming just `RecommendationPick` for the Pydantic model reflects the original design intent; the actual class name differs by this suffix.
+- **`src/agent/graph.py` needed a small, necessary touch — not scope creep into sub-project #2.** Three degenerate-path recommendation constructions (`_finalize_recommendation`'s no-forecast backstop, `output_node`'s parse-failure and no-forecast branches) still built `{"markets": [], ...}` directly — a real correctness bug once `MatchRecommendationModel` required `candidates` (Task 1), not just a stale test, since these are graph.py's own literal dict constructions, not LLM output needing `extract_recommendation()`. Fixed to `{"candidates": [], "recommendation_pick": None, ...}`. This is categorically different from sub-project #2's actual deferred scope (consuming/resolving `recommendation_pick` in live serving, settlement, frontend) — it's the minimal fix required to keep `graph.py`'s existing degenerate paths structurally valid against the new schema, with zero new behavior.
+- **Overall's sync semantic is bidirectional, not just downgrade-only, in the resolved-pick case.** `_resolve_recommendation_pick`'s main branch (`else: data["overall"] = resolved["recommendation_type"]`) can raise `overall` above the LLM's own stale self-report, not just cap it — deliberate, since there's exactly one validated candidate to trust once every guardrail has run, unlike A65's array-scan precedent. Both directions are covered by dedicated tests in `tests/test_agent_schema_validation.py`.
