@@ -535,7 +535,54 @@ def _attach_unit_bet_multiplier(data: dict) -> dict:
 
 
 def _downgrade_recommendation_below_top_composite_score(data: dict) -> dict:
-    """A91 -- implemented in Task 5. Stub: no-op until then."""
+    """A91 (2026-08-31 design): the LLM self-reports composite_score per
+    candidate to balance value_edge against ml_probability (the "hit
+    probability") -- unlike the checks in Task 3, there's no fixed formula
+    for code to verify this number against, so this can't validate the
+    *number* itself, only self-consistency: did the model's own stated pick
+    actually have the best score among its own listed candidates?
+
+    A rejected candidate self-reporting a strictly higher composite_score
+    than the one actually picked is the model contradicting its own
+    numbers -- same class of self-contradiction BUG-027/BUG-019 already
+    found this model prone to elsewhere. Downgrades straight to 'no_bet',
+    same downgrade-only direction as every guardrail in this file -- never
+    auto-substitutes the higher-scoring candidate instead (that candidate
+    was never itself vetted as the pick, and might fail one of Task 3's
+    checks for all this function knows).
+
+    Only compares against candidates whose recommendation_type still
+    survives (not 'no_bet') at this point in the pipeline -- an already-
+    disqualified candidate was never a real alternative, so out-scoring it
+    isn't a contradiction. Runs after every Task 3 guardrail (judging final,
+    validated recommendation_type, not a stale pre-downgrade one) and
+    before _resolve_recommendation_pick (which reacts to this function's
+    own downgrade the same way it reacts to any other)."""
+    pick = data.get("recommendation_pick")
+    candidates = data.get("candidates") or []
+    resolved = resolve_recommendation_pick(candidates, pick)
+    if resolved is None or resolved["recommendation_type"] == "no_bet":
+        return data
+
+    own_score = resolved["composite_score"]
+    better = [
+        c for c in candidates
+        if c is not resolved and c["recommendation_type"] != "no_bet" and c["composite_score"] > own_score
+    ]
+    if not better:
+        return data
+
+    top = max(better, key=lambda c: c["composite_score"])
+    original_type = resolved["recommendation_type"]
+    resolved["recommendation_type"] = "no_bet"
+    limitations = list(data.get("limitations") or [])
+    limitations.append(
+        f"Downgraded {resolved['market']!r}/{resolved['selection']!r} from {original_type!r} to "
+        f"no_bet: self-reported composite_score {own_score} is lower than {top['market']!r}/"
+        f"{top['selection']!r}'s own {top['composite_score']} -- the pick contradicts its own "
+        "listed candidates."
+    )
+    data["limitations"] = limitations
     return data
 
 
