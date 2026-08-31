@@ -443,16 +443,30 @@ def _resolve_recommendation_pick(data: dict) -> dict:
     and A91's self-consistency check below have already mutated whichever
     candidate recommendation_pick names) -- looks that candidate up via
     resolve_recommendation_pick() and syncs `overall`/`recommendation_pick`
-    to its now-possibly-downgraded state.
+    to its state.
 
-    A pick that no longer resolves at all (recommendation_pick is null, or
-    names a market/selection absent from candidates -- the LLM pointed at
-    something it never actually listed) is treated identically to a pick
-    downgraded to 'no_bet': no real recommendation, overall capped at
-    'no_bet' -- never claims a stronger state than the candidates actually
-    support, same downgrade-only direction A65 already established. A
-    dangling pick additionally gets its own limitations note, distinguishing
-    "the model pointed at nothing real" from an ordinary no_bet."""
+    IMPORTANT, not the same direction as A65: when a pick DOES resolve, the
+    main branch below (`else: data["overall"] = resolved["recommendation_type"]`)
+    is a direct, bidirectional sync, not a downgrade-only cap -- it can also
+    RAISE `overall` above whatever the LLM originally self-reported, if the
+    resolved pick's own (guardrail-validated) type outranks it (e.g. the LLM
+    said 'conditional' but its own picked candidate is a clean, still-valid
+    'direct_bet'). This is deliberate: A65's downgrade-only rule existed
+    because a self-reported `overall` could legitimately outrank every
+    market in an *array* with no single one of them being "the" ground
+    truth to sync to. Now there's exactly one resolved, validated candidate
+    left once every guardrail above has run -- syncing to it in either
+    direction is more honest than leaving `overall` artificially capped at
+    a stale, understated self-report.
+
+    Only the OTHER branch below (no resolved pick at all -- null, or
+    dangling: recommendation_pick names a market/selection absent from
+    candidates, the LLM pointed at something it never actually listed) is
+    still downgrade-only, same direction A65 already established: no real
+    recommendation, overall capped at 'no_bet' -- never claims a stronger
+    state than the candidates actually support. A dangling pick additionally
+    gets its own limitations note, distinguishing "the model pointed at
+    nothing real" from an ordinary no_bet."""
     pick = data.get("recommendation_pick")
     candidates = data.get("candidates") or []
     resolved = resolve_recommendation_pick(candidates, pick)

@@ -35,7 +35,8 @@ def _valid_llm_json(**overrides) -> str:
     data = {
         "match": {"home": "A", "away": "B", "date": "2026-08-22", "league": "E0"},
         "overall": "direct_bet",
-        "markets": [],
+        "candidates": [],
+        "recommendation_pick": None,
         "explanation": "Looks good.",
         "confidence": "high",
         "limitations": [],
@@ -74,7 +75,12 @@ def test_build_recommendation_enriches_even_when_llm_json_omits_the_fields():
 
     assert recommendation["cold_start_risk"] is True
     assert recommendation["feature_completeness"] == 0.4
-    assert recommendation["overall"] == "direct_bet"
+    # A90 (2026-08-31 design): _valid_llm_json()'s default overall="direct_bet"
+    # has no real candidates/recommendation_pick behind it -- _resolve_recommendation_pick
+    # correctly caps that down to "no_bet" now (nothing survived to support the claim).
+    # This test's own concern is enrichment (cold_start_risk/feature_completeness),
+    # not this value -- it must just reflect what overall honestly ends up as.
+    assert recommendation["overall"] == "no_bet"
 
 
 def test_build_recommendation_enriches_the_parse_failure_fallback_too():
@@ -106,7 +112,7 @@ def test_backstop_forces_insufficient_data_when_forecast_payload_is_none():
     )
 
     assert recommendation["overall"] == "insufficient_data"
-    assert recommendation["markets"] == []
+    assert recommendation["candidates"] == []
     assert recommendation["prediction_basis"] == "unknown"
     assert any("Forced insufficient_data" in note for note in recommendation["limitations"])
 
@@ -127,10 +133,11 @@ def test_backstop_forces_insufficient_data_when_forecast_payload_has_an_error():
 def test_backstop_leaves_a_genuine_forecast_backed_no_bet_untouched():
     cfg = _make_config()
     payload = _forecast_payload(cold_start_risk=False, feature_completeness=1.0, unknown_team=False)
-    llm_json = _valid_llm_json(overall="no_bet", markets=[{
+    llm_json = _valid_llm_json(overall="no_bet", candidates=[{
         "market": "btts", "selection": "yes", "recommendation_type": "no_bet",
         "current_odds": None, "min_odds": 1.5, "ml_probability": 0.5,
         "implied_probability": 0.5, "value_edge": 0.0,
+        "composite_score": 0.2, "reason": "No real price to act on.",
     }])
 
     recommendation = _build_recommendation(
@@ -139,7 +146,7 @@ def test_backstop_leaves_a_genuine_forecast_backed_no_bet_untouched():
     )
 
     assert recommendation["overall"] == "no_bet"
-    assert len(recommendation["markets"]) == 1
+    assert len(recommendation["candidates"]) == 1
 
 
 # --- A32 research coverage downgrade ---

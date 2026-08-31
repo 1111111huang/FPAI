@@ -339,7 +339,7 @@ def test_run_agent_produces_recommendation_when_forecast_succeeds():
     agent_tools._snapshot_store.set_mode("live")
     llm_json = json.dumps({
         "match": {"home": "Man City", "away": "Arsenal", "date": "2026-06-21", "league": "E0"},
-        "overall": "no_bet", "markets": [], "explanation": "Balanced match.",
+        "overall": "no_bet", "candidates": [], "recommendation_pick": None, "explanation": "Balanced match.",
         "confidence": "medium", "limitations": [], "prediction_basis": "team_history_and_market",
     })
     fake_forecast_result = {"result_3way": {"probabilities": {"home": 0.4}}, "data_quality": {"prediction_basis": "team_history_and_market"}}
@@ -385,7 +385,7 @@ def test_run_agent_includes_total_goals_odds_in_prompt_when_present():
     agent_tools._snapshot_store.set_mode("live")
     llm_json = json.dumps({
         "match": {"home": "Man City", "away": "Arsenal", "date": "2026-06-21", "league": "E0"},
-        "overall": "no_bet", "markets": [], "explanation": "Balanced match.",
+        "overall": "no_bet", "candidates": [], "recommendation_pick": None, "explanation": "Balanced match.",
         "confidence": "medium", "limitations": [], "prediction_basis": "team_history_and_market",
     })
     fake_forecast_result = {"result_3way": {"probabilities": {"home": 0.4}}, "data_quality": {"prediction_basis": "team_history_and_market"}}
@@ -434,7 +434,7 @@ def test_run_agent_includes_btts_odds_in_prompt_when_present():
     agent_tools._snapshot_store.set_mode("live")
     llm_json = json.dumps({
         "match": {"home": "Man City", "away": "Arsenal", "date": "2026-06-21", "league": "E0"},
-        "overall": "no_bet", "markets": [], "explanation": "Balanced match.",
+        "overall": "no_bet", "candidates": [], "recommendation_pick": None, "explanation": "Balanced match.",
         "confidence": "medium", "limitations": [], "prediction_basis": "team_history_and_market",
     })
     fake_forecast_result = {"result_3way": {"probabilities": {"home": 0.4}}, "data_quality": {"prediction_basis": "team_history_and_market"}}
@@ -481,7 +481,7 @@ def test_run_agent_retries_llm_call_on_transient_failure_then_succeeds():
 
     llm_json = json.dumps({
         "match": {"home": "Man City", "away": "Arsenal", "date": "2026-06-21", "league": "E0"},
-        "overall": "no_bet", "markets": [], "explanation": "Balanced match.",
+        "overall": "no_bet", "candidates": [], "recommendation_pick": None, "explanation": "Balanced match.",
         "confidence": "medium", "limitations": [], "prediction_basis": "team_history_and_market",
     })
     fake_forecast_result = {"result_3way": {"probabilities": {"home": 0.4}}, "data_quality": {"prediction_basis": "team_history_and_market"}}
@@ -569,7 +569,7 @@ def test_run_agent_degrades_when_llm_hallucinates_a_different_match():
     agent_tools._snapshot_store.set_mode("live")
     llm_json = json.dumps({
         "match": {"home_team": "Manchester City", "away_team": "Liverpool"},
-        "overall": "direct_bet", "markets": [], "explanation": "Man City to win.",
+        "overall": "direct_bet", "candidates": [], "recommendation_pick": None, "explanation": "Man City to win.",
         "confidence": "medium", "limitations": [], "prediction_basis": "team_history_and_market",
     })
     fake_forecast_result = {"result_3way": {"probabilities": {"home": 0.4}}, "data_quality": {"prediction_basis": "team_history_and_market"}}
@@ -604,7 +604,7 @@ def test_run_agent_degrades_when_llm_hallucinates_a_different_match():
         "home_team": "Brentford", "away_team": "Wolverhampton", "date": "2026-03-16", "league": "E0",
         "odds": {"home": 2.0, "draw": 3.4, "away": 3.6},
     }
-    assert recommendation["markets"] == []
+    assert recommendation["candidates"] == []
 
 
 def test_run_agent_injects_lessons_message_before_llm_call_in_live_mode():
@@ -617,7 +617,7 @@ def test_run_agent_injects_lessons_message_before_llm_call_in_live_mode():
     try:
         llm_json = json.dumps({
             "match": {"home": "Man City", "away": "Arsenal", "date": "2026-06-21", "league": "E0"},
-            "overall": "no_bet", "markets": [], "explanation": "Balanced match.",
+            "overall": "no_bet", "candidates": [], "recommendation_pick": None, "explanation": "Balanced match.",
             "confidence": "medium", "limitations": [], "prediction_basis": "team_history_and_market",
         })
         fake_forecast_result = {"result_3way": {"probabilities": {"home": 0.4}}, "data_quality": {"prediction_basis": "team_history_and_market"}}
@@ -665,7 +665,7 @@ def _structured_model(**overrides):
     data = dict(
         match={"home": "A", "away": "B", "date": "2026-08-22", "league": "E0"},
         overall="direct_bet",
-        markets=[],
+        candidates=[],
         explanation=["Structured call produced this."],
         confidence="high",
         limitations=[],
@@ -776,7 +776,7 @@ def test_run_agent_falls_back_to_free_text_on_ollama_when_structured_output_fail
     agent_tools._snapshot_store.set_mode("live")
     llm_json = json.dumps({
         "match": {"home": "Man City", "away": "Arsenal", "date": "2026-06-21", "league": "E0"},
-        "overall": "no_bet", "markets": [], "explanation": "Balanced match.",
+        "overall": "no_bet", "candidates": [], "recommendation_pick": None, "explanation": "Balanced match.",
         "confidence": "medium", "limitations": [], "prediction_basis": "team_history_and_market",
     })
     fake_forecast_result = {
@@ -827,7 +827,7 @@ def test_run_agent_never_attempts_structured_output_on_non_ollama_providers():
     agent_tools._snapshot_store.set_mode("live")
     llm_json = json.dumps({
         "match": {"home": "Man City", "away": "Arsenal", "date": "2026-06-21", "league": "E0"},
-        "overall": "no_bet", "markets": [], "explanation": "Balanced match.",
+        "overall": "no_bet", "candidates": [], "recommendation_pick": None, "explanation": "Balanced match.",
         "confidence": "medium", "limitations": [], "prediction_basis": "team_history_and_market",
     })
     fake_forecast_result = {

@@ -214,7 +214,8 @@ def _apply_a30_backstop(recommendation: dict, forecast_payload: dict | None) -> 
     if recommendation.get("overall") != "insufficient_data":
         limitations.append(f"Forced insufficient_data: {reason}")
     recommendation["overall"] = "insufficient_data"
-    recommendation["markets"] = []
+    recommendation["candidates"] = []
+    recommendation["recommendation_pick"] = None
     recommendation["prediction_basis"] = "unknown"
     recommendation["limitations"] = limitations
     return recommendation
@@ -319,7 +320,8 @@ def _build_recommendation(
         recommendation = {
             "match": match_info,
             "overall": "insufficient_data",
-            "markets": [],
+            "candidates": [],
+            "recommendation_pick": None,
             "explanation": [f"Agent did not produce a parseable recommendation. Raw output: {text[:800]}"],
             "confidence": "low",
             "limitations": ["Agent output could not be parsed as a structured recommendation"],
@@ -386,7 +388,8 @@ def build_graph(config: AgentConfig, tools: list):
             return {"recommendation": {
                 "match": match_info,
                 "overall": "insufficient_data",
-                "markets": [],
+                "candidates": [],
+                "recommendation_pick": None,
                 "explanation": [f"No ML forecast is available for this match: {reason}"],
                 "confidence": "low",
                 "limitations": [f"Forecast step failed or was skipped: {reason}"],
