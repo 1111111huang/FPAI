@@ -15,7 +15,7 @@ from src.ingestion.common.team_mapping import TeamNameMapper
 _TEAM_MAPPING_PATH = Path(__file__).resolve().parent.parent.parent / "config" / "team_mapping.json"
 
 
-class MarketRecommendation(TypedDict):
+class MarketCandidate(TypedDict):
     market: Literal["result_3way", "btts", "total_goals", "home_corners", "away_corners"]
     selection: Literal["home", "draw", "away", "yes", "no", "over_2.5", "under_2.5"]
     recommendation_type: Literal["direct_bet", "conditional", "no_bet"]
@@ -28,12 +28,23 @@ class MarketRecommendation(TypedDict):
     # never by the LLM -- the price a 'conditional' market would need to reach
     # to clear min_value_edge, or None when not applicable/computable.
     target_odds: float | None
+    # A88 (2026-08-31 design): the LLM's own self-reported balance of
+    # value_edge against ml_probability -- see MarketCandidateModel below.
+    composite_score: float
+    # A88: one line -- why this candidate won or lost.
+    reason: str
+
+
+class MarketPick(TypedDict):
+    market: Literal["result_3way", "btts", "total_goals", "home_corners", "away_corners"]
+    selection: Literal["home", "draw", "away", "yes", "no", "over_2.5", "under_2.5"]
 
 
 class MatchRecommendation(TypedDict):
     match: dict
     overall: Literal["direct_bet", "conditional", "no_bet", "insufficient_data"]
-    markets: list[MarketRecommendation]
+    candidates: list[MarketCandidate]
+    recommendation_pick: MarketPick | None
     # One bullet per aspect (value edge, team news, form, market caveats,
     # ...) instead of one narrative paragraph -- direct user request. A plain
     # string (a pre-this-change cached row, or a model that ignores the
@@ -44,11 +55,11 @@ class MatchRecommendation(TypedDict):
     limitations: list[str]
     prediction_basis: str
     # A82: Kelly-derived stake-sizing suggestion for the recommendation's
-    # actual pick (pick_recommended_market), as a multiple of an abstract
-    # "Unit Bet" -- not a dollar figure. Computed here (like target_odds/
-    # A52), never by the LLM. None when there's no priced pick (no_bet/
-    # insufficient_data, or missing odds); 0.0 is a real, distinct value --
-    # a priced 'conditional' market whose edge doesn't clear the bar yet.
+    # actual pick, as a multiple of an abstract "Unit Bet" -- not a dollar
+    # figure. Computed here (like target_odds/A52), never by the LLM. None
+    # when there's no priced pick (no_bet/insufficient_data, or missing
+    # odds); 0.0 is a real, distinct value -- a priced 'conditional' market
+    # whose edge doesn't clear the bar yet.
     unit_bet_multiplier: float | None
     # W15: not populated by extract_recommendation() itself -- graph.py's
     # _build_recommendation() adds these afterward, read deterministically
@@ -58,15 +69,17 @@ class MatchRecommendation(TypedDict):
     unknown_team: bool
 
 
-_REQUIRED_KEYS = {"match", "overall", "markets", "explanation", "confidence", "limitations", "prediction_basis"}
+_REQUIRED_KEYS = {"match", "overall", "candidates", "explanation", "confidence", "limitations", "prediction_basis"}
 _VALID_OVERALL = {"direct_bet", "conditional", "no_bet", "insufficient_data"}
 
 
-class MarketRecommendationModel(BaseModel):
-    """A28: type/enum validation for every market-level field. current_odds is
-    nullable -- that's a legitimate state (odds simply weren't found for this
-    market) -- the direct_bet + null-odds combination (BUG-013) is a separate
-    semantic rule applied after this structural validation passes.
+class MarketCandidateModel(BaseModel):
+    """A88 (2026-08-31 design): replaces MarketRecommendationModel. Every
+    market with a real matched current price gets one entry here -- the LLM
+    is asked to list candidates it's rejecting too, not just the one it
+    picks (see RecommendationPick below), so this comparison survives for
+    settlement/frontend transparency the same way the old `markets` array
+    did.
 
     `market`/`selection` were plain `str` (any value accepted) until this
     codebase's prompt (config/prompts/agent_v1.txt) already specified this
@@ -87,14 +100,9 @@ class MarketRecommendationModel(BaseModel):
     current_odds: float | None
     # BUG-032: defaulted, not required -- confirmed live, DeepSeek output
     # regularly omits this field on some markets within an otherwise-valid
-    # recommendation (real example: a btts market missing min_odds entirely).
-    # Before this default, that single missing field failed
-    # MatchRecommendationModel validation for the *whole* candidate,
-    # discarding every other market's real data along with it. min_odds is
-    # also effectively vestigial now that A52's target_odds is the verified,
-    # code-computed replacement the UI actually shows (W84/W87) -- there's
-    # no remaining reason a missing value here should sink an entire
-    # recommendation.
+    # recommendation. min_odds is also effectively vestigial now that A52's
+    # target_odds is the verified, code-computed replacement the UI
+    # actually shows (W84/W87).
     min_odds: float = 0.0
     ml_probability: float
     implied_probability: float
@@ -103,6 +111,33 @@ class MarketRecommendationModel(BaseModel):
     # writes this field itself) still validates -- _compute_target_odds()
     # populates the real value after this structural pass runs.
     target_odds: float | None = None
+    # A88 (2026-08-31 design): the LLM's own self-reported balance of
+    # value_edge against ml_probability (the "hit probability") -- not a
+    # code-computed formula, since the whole point is capturing the model's
+    # own judgment about the tradeoff, not restating value_edge under a new
+    # name. Only ever used by A91's self-consistency guardrail below (does
+    # the picked candidate's own score beat every other candidate's) --
+    # never trusted as a betting decision on its own, the same "guidance,
+    # not a rule code blindly follows" posture as every LLM-self-reported
+    # number in this file.
+    composite_score: float
+    # A88: one line -- why this candidate won or lost, required so the
+    # comparison is genuinely legible later (settlement/frontend/lessons),
+    # not just a bare number.
+    reason: str
+
+
+class RecommendationPick(BaseModel):
+    """A88 (2026-08-31 design): which candidate is the actual pick --
+    deliberately just the two Literal fields that identify it, not a
+    duplicate copy of its numeric fields. resolve_recommendation_pick()
+    (src/agent/market_resolution.py) looks the real candidate up in
+    `candidates` by matching both fields -- this makes it structurally
+    impossible for "the pick" and "its own listed numbers" to quietly
+    disagree, since there's only ever one copy of the data."""
+
+    market: Literal["result_3way", "btts", "total_goals", "home_corners", "away_corners"]
+    selection: Literal["home", "draw", "away", "yes", "no", "over_2.5", "under_2.5"]
 
 
 class MatchRecommendationModel(BaseModel):
@@ -112,11 +147,18 @@ class MatchRecommendationModel(BaseModel):
     A37: also used directly as the schema passed to
     llm.with_structured_output() for the final-answer synthesis call --
     public (no leading underscore) since it's now imported cross-module by
-    src/agent/graph.py, not just used internally by extract_recommendation()."""
+    src/agent/graph.py, not just used internally by extract_recommendation().
+
+    A88 (2026-08-31 design): `markets` replaced by `candidates` +
+    `recommendation_pick` -- see MarketCandidateModel/RecommendationPick
+    above. `recommendation_pick` defaults to None (not in _REQUIRED_KEYS)
+    since a genuine no_bet/insufficient_data response may omit it entirely
+    rather than write a literal null."""
 
     match: dict
     overall: Literal["direct_bet", "conditional", "no_bet", "insufficient_data"]
-    markets: list[MarketRecommendationModel]
+    candidates: list[MarketCandidateModel]
+    recommendation_pick: RecommendationPick | None = None
     explanation: list[str]
     confidence: Literal["low", "medium", "high"]
     limitations: list[str]
@@ -153,7 +195,7 @@ def _downgrade_direct_bet_below_value_edge_floor(data: dict, min_value_edge: flo
     now, that's the entire premise of "wait for a better price to clear
     it later" (A52's target_odds computation)."""
     limitations = list(data.get("limitations") or [])
-    for market in data.get("markets", []):
+    for market in data.get("candidates", []):
         if market["recommendation_type"] != "direct_bet":
             continue
         if market["value_edge"] >= min_value_edge:
@@ -198,7 +240,7 @@ def _downgrade_direct_bet_below_draw_value_edge_floor(data: dict, min_value_edge
     if min_value_edge_result_3way_draw is None:
         return data
     limitations = list(data.get("limitations") or [])
-    for market in data.get("markets", []):
+    for market in data.get("candidates", []):
         if market["recommendation_type"] != "direct_bet":
             continue
         if market["market"] != "result_3way" or market["selection"] != "draw":
@@ -221,7 +263,7 @@ def _downgrade_direct_bet_with_null_odds(data: dict) -> dict:
     current_odds -- downgrade to 'no_bet' (the only other value valid for this
     market-level field) instead of passing the incoherent combination through."""
     limitations = list(data.get("limitations") or [])
-    for market in data.get("markets", []):
+    for market in data.get("candidates", []):
         if market["recommendation_type"] == "direct_bet" and market["current_odds"] is None:
             market["recommendation_type"] = "no_bet"
             limitations.append(
@@ -242,7 +284,7 @@ def _downgrade_direct_bet_outside_odds_bounds(
     non-bet. A null current_odds is out of scope here -- BUG-013's rule
     (above) already downgraded that case to 'no_bet' before this runs."""
     limitations = list(data.get("limitations") or [])
-    for market in data.get("markets", []):
+    for market in data.get("candidates", []):
         if market["recommendation_type"] != "direct_bet":
             continue
         odds = market["current_odds"]
@@ -282,7 +324,7 @@ def _restrict_conditional_to_eligible_markets(data: dict) -> dict:
     A52's target_odds computation, so an ineligible market never gets one
     (it's no longer 'conditional' by the time that pass runs)."""
     limitations = list(data.get("limitations") or [])
-    for market in data.get("markets", []):
+    for market in data.get("candidates", []):
         if market["recommendation_type"] != "conditional":
             continue
         if (market["market"], market["selection"]) in _CONDITIONAL_ELIGIBLE_MARKETS:
@@ -314,7 +356,7 @@ def _downgrade_conditional_below_floor(data: dict, min_conditional_odds_threshol
     downgraded market never gets one (it's no longer 'conditional' by the
     time that pass runs)."""
     limitations = list(data.get("limitations") or [])
-    for market in data.get("markets", []):
+    for market in data.get("candidates", []):
         if market["recommendation_type"] != "conditional":
             continue
         odds = market["current_odds"]
@@ -343,7 +385,7 @@ def _downgrade_conditional_above_ceiling(data: dict, max_conditional_odds_thresh
     that doesn't explicitly set max_conditional_odds_threshold keeps
     today's real, pre-existing no-ceiling behavior unchanged."""
     limitations = list(data.get("limitations") or [])
-    for market in data.get("markets", []):
+    for market in data.get("candidates", []):
         if market["recommendation_type"] != "conditional":
             continue
         odds = market["current_odds"]
@@ -377,7 +419,7 @@ def _compute_target_odds(data: dict, min_value_edge: float) -> dict:
     downgrade case: current_odds already too high, so 'wait for it to rise'
     would be backwards). Both degrade to None, same as needed_prob <= 0
     (no price fixes an ml_probability that's already below the edge floor)."""
-    for market in data.get("markets", []):
+    for market in data.get("candidates", []):
         if market["recommendation_type"] != "conditional" or market["current_odds"] is None:
             market["target_odds"] = None
             continue
@@ -411,7 +453,7 @@ def _reconcile_overall_with_markets(data: dict) -> dict:
     said. A no-op when `markets` is empty (nothing to reconcile against;
     that shape is reserved for the graph's own no-forecast short-circuit,
     which never reaches this function at all)."""
-    markets = data.get("markets") or []
+    markets = data.get("candidates") or []
     if not markets:
         return data
     strongest = max(_OVERALL_RANK[m["recommendation_type"]] for m in markets)
@@ -461,7 +503,7 @@ def _attach_unit_bet_multiplier(data: dict) -> dict:
     is actionable at all -- that fallback pick still carries a price, but
     "no_bet" means there's nothing to size, so it's excluded here too, not
     just a missing price."""
-    picked = pick_recommended_market(data.get("markets") or [])
+    picked = pick_recommended_market(data.get("candidates") or [])
     if picked is None or picked.get("current_odds") is None or picked.get("recommendation_type") == "no_bet":
         data["unit_bet_multiplier"] = None
     else:

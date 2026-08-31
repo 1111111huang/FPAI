@@ -4,7 +4,11 @@ direct_bet with a null current_odds) at extraction time rather than passing
 it through to crash downstream. Covers the three specific gaps documented in
 agent_techspec.md Section 17 (value_edge as a string, confidence as an empty
 string, an arbitrary recommendation_type string) plus BUG-013's null-odds
-case."""
+case.
+
+A88 (2026-08-31): reworked for the single-recommendation schema -- `markets`
+is now `candidates` (richer: adds composite_score/reason) plus a
+`recommendation_pick` pointer naming which candidate is the actual pick."""
 
 from __future__ import annotations
 
@@ -14,7 +18,7 @@ import pytest
 
 from src.agent.schema import RecommendationParseError, extract_recommendation
 
-_VALID_MARKET = {
+_VALID_CANDIDATE = {
     "market": "result_3way",
     "selection": "home",
     "recommendation_type": "direct_bet",
@@ -23,12 +27,17 @@ _VALID_MARKET = {
     "ml_probability": 0.55,
     "implied_probability": 0.48,
     "value_edge": 0.07,
+    "composite_score": 0.62,
+    "reason": "Clears the edge floor with a well-supported home win probability.",
 }
+
+_VALID_PICK = {"market": "result_3way", "selection": "home"}
 
 _VALID = {
     "match": {"home": "Arsenal", "away": "Chelsea", "date": "2026-06-15", "league": "E0"},
     "overall": "direct_bet",
-    "markets": [_VALID_MARKET],
+    "candidates": [_VALID_CANDIDATE],
+    "recommendation_pick": _VALID_PICK,
     "explanation": "Value found on the home win.",
     "confidence": "medium",
     "limitations": [],
@@ -40,15 +49,44 @@ def _wrap_json(data: dict) -> str:
     return f"Some reasoning here.\n\n```json\n{json.dumps(data)}\n```"
 
 
-def test_fully_valid_output_with_a_real_market_still_parses_unchanged():
-    """Regression: existing valid outputs (now including a populated markets
-    list, not just the empty-list case in test_agent_schema.py) must be
-    completely unaffected by the new validation layer."""
+def test_fully_valid_output_with_a_real_candidate_still_parses_unchanged():
+    """Regression: a valid single-recommendation output (candidates +
+    recommendation_pick) must parse cleanly with no downgrades."""
     rec = extract_recommendation(_wrap_json(_VALID))
     assert rec["overall"] == "direct_bet"
-    assert rec["markets"][0]["recommendation_type"] == "direct_bet"
-    assert rec["markets"][0]["current_odds"] == 2.1
+    assert rec["candidates"][0]["recommendation_type"] == "direct_bet"
+    assert rec["candidates"][0]["current_odds"] == 2.1
+    assert rec["candidates"][0]["composite_score"] == 0.62
+    assert rec["recommendation_pick"] == _VALID_PICK
     assert rec["limitations"] == []
+
+
+def test_missing_composite_score_raises():
+    """composite_score/reason are new, required MarketCandidateModel fields
+    -- a candidate missing either fails validation the same way a missing
+    ml_probability already does, not silently defaulted (unlike min_odds,
+    BUG-032 -- composite_score is new and load-bearing for A91's
+    self-consistency guardrail, not vestigial)."""
+    bad_candidate = {k: v for k, v in _VALID_CANDIDATE.items() if k != "composite_score"}
+    bad = {**_VALID, "candidates": [bad_candidate]}
+    with pytest.raises(RecommendationParseError, match="composite_score"):
+        extract_recommendation(_wrap_json(bad))
+
+
+def test_recommendation_pick_missing_selection_raises():
+    bad_pick = {"market": "result_3way"}
+    bad = {**_VALID, "recommendation_pick": bad_pick}
+    with pytest.raises(RecommendationParseError, match="selection"):
+        extract_recommendation(_wrap_json(bad))
+
+
+def test_recommendation_pick_can_be_null():
+    """A no_bet call with nothing actionable: recommendation_pick is null,
+    candidates can still list what was considered (or be empty)."""
+    data = {**_VALID, "overall": "no_bet", "recommendation_pick": None,
+             "candidates": [{**_VALID_CANDIDATE, "recommendation_type": "no_bet"}]}
+    rec = extract_recommendation(_wrap_json(data))
+    assert rec["recommendation_pick"] is None
 
 
 def test_missing_min_odds_no_longer_sinks_the_whole_recommendation():
@@ -58,25 +96,19 @@ def test_missing_min_odds_no_longer_sinks_the_whole_recommendation():
     candidate, discarding every other market's real data along with it.
     min_odds is also effectively vestigial now that A52's target_odds is the
     verified, code-computed field the UI actually shows (W84/W87)."""
-    # extract_recommendation validates against the Pydantic model but
-    # returns the original parsed dict, not the model's own filled-in
-    # defaults -- a market missing min_odds simply stays absent here (the
-    # default only guarantees this candidate isn't rejected outright); the
-    # app-layer MarketRecommendationOut (app/backend/recommendations.py)
-    # supplies the same 0.0 default when it reads this dict downstream.
-    market_missing_min_odds = {k: v for k, v in _VALID_MARKET.items() if k != "min_odds"}
-    data = {**_VALID, "markets": [market_missing_min_odds]}
+    candidate_missing_min_odds = {k: v for k, v in _VALID_CANDIDATE.items() if k != "min_odds"}
+    data = {**_VALID, "candidates": [candidate_missing_min_odds]}
 
     rec = extract_recommendation(_wrap_json(data))
 
-    assert rec["markets"][0]["recommendation_type"] == "direct_bet"
-    assert rec["markets"][0]["current_odds"] == 2.1
-    assert "min_odds" not in rec["markets"][0]
+    assert rec["candidates"][0]["recommendation_type"] == "direct_bet"
+    assert rec["candidates"][0]["current_odds"] == 2.1
+    assert "min_odds" not in rec["candidates"][0]
 
 
 def test_value_edge_as_string_raises():
-    bad_market = {**_VALID_MARKET, "value_edge": "high"}
-    bad = {**_VALID, "markets": [bad_market]}
+    bad_candidate = {**_VALID_CANDIDATE, "value_edge": "high"}
+    bad = {**_VALID, "candidates": [bad_candidate]}
     with pytest.raises(RecommendationParseError, match="value_edge"):
         extract_recommendation(_wrap_json(bad))
 
@@ -88,8 +120,8 @@ def test_confidence_empty_string_raises():
 
 
 def test_arbitrary_recommendation_type_raises():
-    bad_market = {**_VALID_MARKET, "recommendation_type": "maybe_bet"}
-    bad = {**_VALID, "markets": [bad_market]}
+    bad_candidate = {**_VALID_CANDIDATE, "recommendation_type": "maybe_bet"}
+    bad = {**_VALID, "candidates": [bad_candidate]}
     with pytest.raises(RecommendationParseError, match="recommendation_type"):
         extract_recommendation(_wrap_json(bad))
 
@@ -98,13 +130,13 @@ def test_direct_bet_with_null_odds_downgraded_to_no_bet():
     """BUG-013: a market marked direct_bet with current_odds=null must be
     downgraded to no_bet with an explanatory limitations note, not passed
     through as-is and not raised as a parse error."""
-    bad_market = {**_VALID_MARKET, "current_odds": None}
-    bad = {**_VALID, "markets": [bad_market]}
+    bad_candidate = {**_VALID_CANDIDATE, "current_odds": None}
+    bad = {**_VALID, "candidates": [bad_candidate]}
 
     rec = extract_recommendation(_wrap_json(bad))
 
-    assert rec["markets"][0]["recommendation_type"] == "no_bet"
-    assert rec["markets"][0]["current_odds"] is None
+    assert rec["candidates"][0]["recommendation_type"] == "no_bet"
+    assert rec["candidates"][0]["current_odds"] is None
     assert any("direct_bet" in note and "no_bet" in note for note in rec["limitations"])
 
 
@@ -112,15 +144,16 @@ def test_conditional_market_with_null_odds_is_not_touched():
     """The downgrade rule is specific to direct_bet -- a conditional market
     with null current_odds (a legitimate state) must be left alone. A54:
     market/selection overridden to an eligible pair (btts/yes) -- result_3way
-    (the shared _VALID_MARKET default) is no longer eligible to stay
+    (the shared _VALID_CANDIDATE default) is no longer eligible to stay
     conditional at all, tested separately in
     test_agent_conditional_market_eligibility.py."""
-    market = {**_VALID_MARKET, "market": "btts", "selection": "yes", "recommendation_type": "conditional", "current_odds": None}
-    data = {**_VALID, "overall": "conditional", "markets": [market]}
+    candidate = {**_VALID_CANDIDATE, "market": "btts", "selection": "yes", "recommendation_type": "conditional", "current_odds": None}
+    data = {**_VALID, "overall": "conditional", "candidates": [candidate],
+            "recommendation_pick": {"market": "btts", "selection": "yes"}}
 
     rec = extract_recommendation(_wrap_json(data))
 
-    assert rec["markets"][0]["recommendation_type"] == "conditional"
+    assert rec["candidates"][0]["recommendation_type"] == "conditional"
     assert rec["limitations"] == []
 
 
@@ -168,8 +201,8 @@ def test_non_canonical_market_name_raises():
     ("Asian Handicap", a team name used as the market itself) -- confirmed
     live in the sandbox cache. config/prompts/agent_v1.txt already specifies
     the fixed vocabulary; nothing enforced it until now."""
-    bad_market = {**_VALID_MARKET, "market": "1X2"}
-    bad = {**_VALID, "markets": [bad_market]}
+    bad_candidate = {**_VALID_CANDIDATE, "market": "1X2"}
+    bad = {**_VALID, "candidates": [bad_candidate]}
     with pytest.raises(RecommendationParseError, match="market"):
         extract_recommendation(_wrap_json(bad))
 
@@ -177,8 +210,8 @@ def test_non_canonical_market_name_raises():
 def test_non_canonical_selection_raises():
     """Observed live: a result_3way selection reported as a team name
     ("Vasteras SK") or "home_win" instead of the specified home/draw/away."""
-    bad_market = {**_VALID_MARKET, "selection": "home_win"}
-    bad = {**_VALID, "markets": [bad_market]}
+    bad_candidate = {**_VALID_CANDIDATE, "selection": "home_win"}
+    bad = {**_VALID, "candidates": [bad_candidate]}
     with pytest.raises(RecommendationParseError, match="selection"):
         extract_recommendation(_wrap_json(bad))
 
