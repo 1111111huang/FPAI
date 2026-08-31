@@ -412,8 +412,8 @@ def _compute_target_odds(data: dict, min_value_edge: float) -> dict:
 
     needed_prob = ml_probability - min_value_edge is the ML-probability floor
     this market would still need at whatever price we solve for; its
-    break-even price is candidate = 1 / needed_prob. That's only a genuine
-    forward target when it's strictly above current_odds -- candidate <=
+    break-even price is target_price = 1 / needed_prob. That's only a genuine
+    forward target when it's strictly above current_odds -- target_price <=
     current_odds means the current price already clears the bar (nothing to
     wait for) or sits on the wrong side of it entirely (A29's ceiling-
     downgrade case: current_odds already too high, so 'wait for it to rise'
