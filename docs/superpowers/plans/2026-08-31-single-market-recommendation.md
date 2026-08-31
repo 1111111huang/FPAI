@@ -657,6 +657,8 @@ Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>"
 
 ---
 
+**Plan correction (found during Task 4's code-quality review, fixed directly):** running the full `tests/` suite (not just this plan's own file list) after Task 4 surfaced a real, separate gap the plan never accounted for: `src/agent/graph.py` (`_finalize_recommendation`, `output_node`'s parse-failure and no-forecast branches) still constructed `{"markets": [], ...}` directly in three places -- a genuine correctness bug once `MatchRecommendationModel` required `candidates` (Task 1), not just a stale test. Fixed all three to `{"candidates": [], "recommendation_pick": None}`, and reworked the two test files this exposed (`tests/test_agent_forecast_diagnostics.py`, `tests/test_agent_graph.py` -- both test `graph.py`'s own functions), plus `tests/test_agent_unit_bet_multiplier.py`'s sibling `tests/test_agent_schema.py` (pre-existing since Task 1, never in any task's file list). As of this fix, `pytest tests/` is fully green except one pre-existing, confirmed-unrelated local-environment failure (a missing DuckDB file). Task 7's Step 1 full-suite check should find nothing left to do for `tests/` itself -- its remaining real job is the `app/backend/tests/` run and the spec/user-story corrections. Confirmed NOT collateral, deliberately untouched: `app/backend/tests/*` (~17 files, genuinely sub-project #2/#3), `tests/test_backtest.py`/`tests/test_staking.py` (backtest harness, sub-project #3), `tests/test_agent_config.py` (its one "markets" hit is `AgentConfig.markets`, an unrelated field).
+
 ### Task 5: Self-consistency guardrail — `_downgrade_recommendation_below_top_composite_score`
 
 **Files:**
