@@ -65,3 +65,16 @@ def test_no_leftover_placeholder_tokens_in_any_posture_prompt():
     for version in ("v1", "v1_aggressive", "v1_balanced", "v1_conservative"):
         prompt = _load_system_prompt(replace(_BASE, system_prompt_version=version))
         assert "{{" not in prompt, f"unsubstituted placeholder left in {version}"
+
+
+def test_prompt_output_format_uses_candidates_and_recommendation_pick():
+    text = _load_system_prompt(_BASE)
+    assert '"candidates"' in text
+    assert '"recommendation_pick"' in text
+    assert '"markets"' not in text
+
+
+def test_prompt_mentions_composite_score_balance_instruction():
+    text = _load_system_prompt(_BASE)
+    assert "composite_score" in text
+    assert "hit probability" in text or "ml_probability" in text.lower()

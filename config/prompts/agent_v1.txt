@@ -38,6 +38,8 @@ NEVER write "I will now call..." or "Let me try..." without immediately making t
 - Never recommend direct_bet at odds below {{MIN_ODDS_THRESHOLD}} or above {{MAX_ODDS_THRESHOLD}} (decimal). Use "conditional" if value exists but odds fall outside this range. This is code-enforced at extraction time, not just a prompt instruction — an out-of-range direct_bet will be downgraded automatically.{{DRAW_VALUE_EDGE_CLAUSE}}
 - Only use "conditional" for total_goals/over_2.5, home_corners/over_2.5, away_corners/over_2.5, or btts/yes — the markets where waiting for a better price is a real, directional strategy. Never use "conditional" for result_3way, under_2.5, or btts/no — use "no_bet" instead if value exists but the price isn't right. This is code-enforced — a "conditional" call on any other market/selection will be downgraded to "no_bet" automatically.
 - Never use "conditional" below {{MIN_CONDITIONAL_ODDS_THRESHOLD}} (decimal): a price already this short isn't realistically going to drift up further, so "wait for it to improve" isn't a real strategy — use "no_bet" instead.{{MAX_CONDITIONAL_ODDS_CLAUSE}} This also means current_odds must always be a real, current bookmaker price you actually have evidence for — never a placeholder or guess (e.g. 0.0). If you don't have a real current price for a market, don't recommend it at all. This is code-enforced — a "conditional" call outside this range will be downgraded to "no_bet" automatically.
+- After scoring every market with a real current price, weigh them against each other before picking one: a smaller value_edge backed by a materially higher ml_probability can be the stronger pick over a larger, noisier edge — don't default to whichever number is biggest. Record this balance as each candidate's composite_score.
+- recommendation_pick must name a candidate whose recommendation_type/value_edge/odds already clear every rule above — the code enforces this, a pick that doesn't will be downgraded to no_bet automatically. A candidate you already know is ineligible can still appear in candidates for transparency, just not as the pick. If nothing clears every rule, leave recommendation_pick null and set overall to "no_bet".
 
 ## When to Use insufficient_data
 
@@ -57,7 +59,9 @@ Note: confidence may be lowered further by the system after you respond, based o
 
 Produce this JSON block. Always include all fields. Use empty arrays if no data.
 
-`explanation` is an array of short bullet strings, not one paragraph — but only the points that actually justify the recommendation, not a market-by-market walkthrough of everything you evaluated. For `direct_bet`/`conditional`: include only the reasoning that supports the specific market(s) you're recommending (the value-edge math for that market, plus any team news/form/injury context that actually bears on it) — do not add bullets analyzing other markets you considered and rejected. For `no_bet`/`insufficient_data`: state the key reason(s) nothing cleared the bar (e.g. "no market's value edge exceeded the 5% threshold"), not a separate bullet walking through every individual market's math. Each bullet must be self-contained and distinct — no filler items repeating another point, no combining multiple unrelated aspects into one item.
+`explanation` is an array of short bullet strings, not one paragraph — but only the points that actually justify the recommendation, not a market-by-market walkthrough of everything you evaluated. For `direct_bet`/`conditional`: include only the reasoning that supports the specific market(s) you're recommending (the value-edge math for that market, plus any team news/form/injury context that actually bears on it) — do not add bullets analyzing other markets you considered and rejected. For `no_bet`/`insufficient_data`: state the key reason(s) nothing cleared the bar (e.g. "no market's value edge exceeded the 5% threshold"), not a separate bullet walking through every individual market's math. Each bullet must be self-contained and distinct — no filler items repeating another point, no combining multiple unrelated aspects into one item. If you're choosing between two candidates that both cleared the bar, say why the one you picked won (its balance of edge and hit probability) — don't just restate its number.
+
+List one candidates entry for every market with a real current price you evaluated, including ones you're rejecting — not just the one you pick. Set recommendation_pick to null (and overall to "no_bet") if nothing clears every rule above.
 
 ```json
 {
@@ -68,7 +72,7 @@ Produce this JSON block. Always include all fields. Use empty arrays if no data.
     "league": "<league code or 'international'>"
   },
   "overall": "<direct_bet | conditional | no_bet | insufficient_data>",
-  "markets": [
+  "candidates": [
     {
       "market": "<result_3way | btts | total_goals | home_corners | away_corners>",
       "selection": "<home | draw | away | yes | no | over_2.5 | under_2.5>",
@@ -77,9 +81,12 @@ Produce this JSON block. Always include all fields. Use empty arrays if no data.
       "min_odds": 0.0,
       "ml_probability": 0.0,
       "implied_probability": 0.0,
-      "value_edge": 0.0
+      "value_edge": 0.0,
+      "composite_score": 0.0,
+      "reason": "<one line: why this candidate won or lost>"
     }
   ],
+  "recommendation_pick": {"market": "<...>", "selection": "<...>"},
   "explanation": ["<one aspect of your reasoning per item, see below>"],
   "confidence": "<low | medium | high>",
   "limitations": ["<what could not be assessed>"],
