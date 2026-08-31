@@ -5,7 +5,13 @@ settlement job now depend on it."""
 
 from __future__ import annotations
 
-from src.agent.market_resolution import RESOLVABLE_MARKETS, build_actual_outcome, market_correct, pick_recommended_market
+from src.agent.market_resolution import (
+    RESOLVABLE_MARKETS,
+    build_actual_outcome,
+    market_correct,
+    pick_recommended_market,
+    resolve_recommendation_pick,
+)
 
 
 def test_resolvable_markets_excludes_corners():
@@ -98,3 +104,26 @@ def test_pick_recommended_market_stable_on_tie_picks_first():
     ]
     picked = pick_recommended_market(markets)
     assert picked["market"] == "btts"
+
+
+def test_resolve_recommendation_pick_finds_the_matching_candidate():
+    candidates = [
+        {"market": "result_3way", "selection": "home", "value_edge": 0.02},
+        {"market": "btts", "selection": "no", "value_edge": 0.08},
+    ]
+    pick = {"market": "btts", "selection": "no"}
+    assert resolve_recommendation_pick(candidates, pick) == candidates[1]
+
+
+def test_resolve_recommendation_pick_returns_none_for_null_pick():
+    candidates = [{"market": "result_3way", "selection": "home", "value_edge": 0.02}]
+    assert resolve_recommendation_pick(candidates, None) is None
+
+
+def test_resolve_recommendation_pick_returns_none_when_pick_not_in_candidates():
+    """The LLM pointed recommendation_pick at a market/selection it never
+    actually listed in candidates -- a real, new failure mode this schema
+    makes detectable for the first time."""
+    candidates = [{"market": "result_3way", "selection": "home", "value_edge": 0.02}]
+    pick = {"market": "btts", "selection": "yes"}
+    assert resolve_recommendation_pick(candidates, pick) is None

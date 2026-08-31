@@ -74,3 +74,32 @@ def pick_recommended_market(markets: list[dict[str, Any]]) -> dict[str, Any] | N
     actionable = [m for m in markets if m.get("recommendation_type") != "no_bet"]
     pool = actionable if actionable else markets
     return max(pool, key=lambda m: m.get("value_edge") or 0.0)
+
+
+def resolve_recommendation_pick(
+    candidates: list[dict[str, Any]], pick: dict[str, Any] | None
+) -> dict[str, Any] | None:
+    """A88 (2026-08-31 design): the new single-recommendation schema's
+    lookup -- `pick` is the LLM's own stated choice (RecommendationPickModel,
+    src/agent/schema.py: market+selection only, no duplicated numeric
+    fields), and this finds the matching full entry in `candidates`. Unlike
+    pick_recommended_market() above (a max(value_edge) reduction, kept
+    unchanged -- still used by app/backend/recommendation_outcomes.py's
+    settlement path until that migrates in a follow-up phase), this is a
+    plain equality lookup: there is nothing to rank, `pick` already names
+    the one candidate that matters.
+
+    Returns None both when `pick` is None (no recommendation offered) and
+    when `pick` names a market/selection absent from `candidates` (the LLM
+    pointed at something it never actually listed) -- both mean "nothing to
+    recommend" to every caller, deliberately collapsed into one return
+    value rather than distinguished, since the caller's reaction is
+    identical either way (src/agent/schema.py's
+    _resolve_recommendation_pick adds a distinguishing limitations note for
+    the second case, but treats both as no-pick)."""
+    if pick is None:
+        return None
+    for candidate in candidates:
+        if candidate["market"] == pick["market"] and candidate["selection"] == pick["selection"]:
+            return candidate
+    return None
