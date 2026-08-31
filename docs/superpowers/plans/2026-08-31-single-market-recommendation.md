@@ -374,15 +374,19 @@ Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>"
 
 ### Task 3: Adapt the six existing guardrail functions + `_compute_target_odds` to `candidates`
 
+**Plan correction (found during Task 1):** Task 1's implementer, of necessity, already mechanically renamed every `data.get("markets", ...)` lookup inside the seven functions below to `data.get("candidates", ...)` — required for `test_agent_schema_validation.py`'s own BUG-013 downgrade test to pass. This task's own field-rename work may already be done; verify first (`grep -n '"markets"' src/agent/schema.py`), and if so, this task's real remaining work is: (a) the `market` → `candidate` loop-variable rename for clarity (cosmetic, still worth doing — it's what this task's own diff will look like in git blame), and (b) reworking the seven test files below, which are still on the old fixture shape regardless of what Task 1 did to the source. Also: the original plan missed `tests/test_agent_target_odds.py` (covers `_compute_target_odds`, in scope here) — added below.
+
 **Files:**
 - Modify: `src/agent/schema.py` (six `_downgrade_*`/`_restrict_conditional_to_eligible_markets` functions + `_compute_target_odds`, currently `~lines 139-390`)
-- Modify: `tests/test_agent_odds_bounds.py`, `tests/test_agent_value_edge_floor.py`, `tests/test_agent_draw_value_edge_floor.py`, `tests/test_agent_conditional_market_eligibility.py`, `tests/test_agent_conditional_odds_floor.py`, `tests/test_agent_conditional_odds_ceiling.py`
+- Modify: `tests/test_agent_odds_bounds.py`, `tests/test_agent_value_edge_floor.py`, `tests/test_agent_draw_value_edge_floor.py`, `tests/test_agent_conditional_market_eligibility.py`, `tests/test_agent_conditional_odds_floor.py`, `tests/test_agent_conditional_odds_ceiling.py`, `tests/test_agent_target_odds.py`
 
 Every one of these seven functions has the identical shape today: `for market in data.get("markets", []): ... market["recommendation_type"] = ...`. The only change needed in every single one is `data.get("markets", [])` → `data.get("candidates", [])` (rename the loop variable `market` → `candidate` for clarity while touching the line; every `market[...]` reference inside the loop body becomes `candidate[...]`, and every f-string `market['market']!r`/`market['selection']!r` becomes `candidate['market']!r`/`candidate['selection']!r`). No other logic changes — same thresholds, same conditions, same downgrade targets.
 
 - [ ] **Step 1: Update the seven functions in `src/agent/schema.py`**
 
-Apply the rename above to: `_downgrade_direct_bet_below_value_edge_floor`, `_downgrade_direct_bet_below_draw_value_edge_floor`, `_downgrade_direct_bet_with_null_odds`, `_downgrade_direct_bet_outside_odds_bounds`, `_restrict_conditional_to_eligible_markets`, `_downgrade_conditional_below_floor`, `_downgrade_conditional_above_ceiling`, `_compute_target_odds`. For example, `_downgrade_direct_bet_with_null_odds` (the shortest, fully shown as the worked example — apply the identical pattern to the other six):
+First run `grep -n '"markets"' src/agent/schema.py`. If it returns nothing inside these seven functions (Task 1 already did the field rename out of necessity), skip straight to the `market` → `candidate` loop-variable rename below (still do it — it's this task's own attribution in git blame, and makes the diff match what's described here). If `"markets"` is still present, do both the field rename and the variable rename together.
+
+Apply the rename below to: `_downgrade_direct_bet_below_value_edge_floor`, `_downgrade_direct_bet_below_draw_value_edge_floor`, `_downgrade_direct_bet_with_null_odds`, `_downgrade_direct_bet_outside_odds_bounds`, `_restrict_conditional_to_eligible_markets`, `_downgrade_conditional_below_floor`, `_downgrade_conditional_above_ceiling`, `_compute_target_odds`. For example, `_downgrade_direct_bet_with_null_odds` (the shortest, fully shown as the worked example — apply the identical pattern to the other six):
 
 ```python
 def _downgrade_direct_bet_with_null_odds(data: dict) -> dict:
@@ -402,9 +406,9 @@ def _downgrade_direct_bet_with_null_odds(data: dict) -> dict:
 
 Every docstring's own prose can stay as-is (they describe *why* the rule exists, not the `markets`/`candidates` variable name) — only the code body changes.
 
-- [ ] **Step 2: Rework the six guardrail test files to the new fixture shape**
+- [ ] **Step 2: Rework the seven test files to the new fixture shape**
 
-Each of the six files listed above follows the exact `_VALID_MARKET`/`_VALID` (or `_DRAW_MARKET`/`_VALID` in `test_agent_draw_value_edge_floor.py`) pattern Task 1 already reworked in `tests/test_agent_schema_validation.py`. Apply the identical two substitutions to each file:
+Each of the seven files listed above (six guardrail files plus `tests/test_agent_target_odds.py`) follows the exact `_VALID_MARKET`/`_VALID` (or `_DRAW_MARKET`/`_VALID` in `test_agent_draw_value_edge_floor.py`) pattern Task 1 already reworked in `tests/test_agent_schema_validation.py`. Apply the identical two substitutions to each file:
 
 1. Rename the module-level candidate fixture (`_VALID_MARKET` or `_DRAW_MARKET`) by adding two new required keys, `"composite_score": 0.6` and `"reason": "<short reason matching the test's own scenario>"`, and rename `"markets": [...]` → `"candidates": [...]` everywhere it's built into a payload dict, adding `"recommendation_pick": {"market": <candidate's own market>, "selection": <candidate's own selection>}` alongside every such payload (matching whichever candidate that specific test is exercising — most tests build one candidate and pick it; a test asserting on an *ineligible* candidate should still set `recommendation_pick` to name it, since the whole point of these tests is checking that a picked-but-ineligible candidate gets downgraded).
 2. Rename every assertion `rec["markets"][0][...]` → `rec["candidates"][0][...]`.
@@ -441,17 +445,17 @@ _VALID = {
 
 with every downstream test in that file changed by the same two substitution rules (e.g. a test building `bad_market = {**_VALID_MARKET, "current_odds": 0.9}` becomes `bad_candidate = {**_VALID_CANDIDATE, "current_odds": 0.9}`, and `{**_VALID, "markets": [bad_market]}` becomes `{**_VALID, "candidates": [bad_candidate], "recommendation_pick": _VALID_PICK}`; its assertion `rec["markets"][0]["recommendation_type"] == "conditional"` becomes `rec["candidates"][0]["recommendation_type"] == "conditional"`).
 
-Apply this same rule to the remaining five files. `tests/test_agent_draw_value_edge_floor.py`'s fixture is named `_DRAW_MARKET` (not `_VALID_MARKET`) — rename it to `_DRAW_CANDIDATE` instead of `_VALID_CANDIDATE`, same two new keys, same substitution rule otherwise.
+Apply this same rule to the remaining six files (including `tests/test_agent_target_odds.py`). `tests/test_agent_draw_value_edge_floor.py`'s fixture is named `_DRAW_MARKET` (not `_VALID_MARKET`) — rename it to `_DRAW_CANDIDATE` instead of `_VALID_CANDIDATE`, same two new keys, same substitution rule otherwise.
 
 - [ ] **Step 3: Run tests to verify they pass**
 
-Run: `python -m pytest tests/test_agent_odds_bounds.py tests/test_agent_value_edge_floor.py tests/test_agent_draw_value_edge_floor.py tests/test_agent_conditional_market_eligibility.py tests/test_agent_conditional_odds_floor.py tests/test_agent_conditional_odds_ceiling.py -v`
-Expected: PASS, every test across all six files.
+Run: `python -m pytest tests/test_agent_odds_bounds.py tests/test_agent_value_edge_floor.py tests/test_agent_draw_value_edge_floor.py tests/test_agent_conditional_market_eligibility.py tests/test_agent_conditional_odds_floor.py tests/test_agent_conditional_odds_ceiling.py tests/test_agent_target_odds.py -v`
+Expected: PASS, every test across all seven files.
 
 - [ ] **Step 4: Commit**
 
 ```bash
-git add src/agent/schema.py tests/test_agent_odds_bounds.py tests/test_agent_value_edge_floor.py tests/test_agent_draw_value_edge_floor.py tests/test_agent_conditional_market_eligibility.py tests/test_agent_conditional_odds_floor.py tests/test_agent_conditional_odds_ceiling.py
+git add src/agent/schema.py tests/test_agent_odds_bounds.py tests/test_agent_value_edge_floor.py tests/test_agent_draw_value_edge_floor.py tests/test_agent_conditional_market_eligibility.py tests/test_agent_conditional_odds_floor.py tests/test_agent_conditional_odds_ceiling.py tests/test_agent_target_odds.py
 git commit -m "feat(agent): A90 -- adapt the six guardrails + target_odds to candidates
 
 Same thresholds, same logic -- loops over candidates instead of markets.
@@ -463,9 +467,12 @@ Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>"
 
 ### Task 4: Replace `_reconcile_overall_with_markets` with `_resolve_recommendation_pick`; update `_attach_unit_bet_multiplier`; rewire the pipeline
 
+**Plan correction (found during Task 1):** the original plan missed `tests/test_agent_unit_bet_multiplier.py` (covers `_attach_unit_bet_multiplier`, in scope here) — added below. It follows the same `_VALID_MARKET`/`_VALID` pattern as every other file in this project; rework it with the identical two substitutions Task 3 used (`_VALID_MARKET`→`_VALID_CANDIDATE`, `markets`→`candidates`+`recommendation_pick`, `rec["markets"][0]`→`rec["candidates"][0]`).
+
 **Files:**
 - Modify: `src/agent/schema.py` (`_reconcile_overall_with_markets` → deleted, `_attach_unit_bet_multiplier` at `~line 446`, `extract_recommendation`'s pipeline at `~lines 603-613`)
 - Modify: `tests/test_agent_schema.py` (or wherever `_reconcile_overall_with_markets`'s own regression tests live — grep first: `grep -rn "_reconcile_overall_with_markets\|reconcile.*overall" tests/*.py`)
+- Modify: `tests/test_agent_unit_bet_multiplier.py`
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -631,13 +638,15 @@ Expected: PASS, all tests in this file.
 
 Then check for `_reconcile_overall_with_markets`'s own dedicated tests: run `grep -rln "_reconcile_overall_with_markets\|reconcile_overall" tests/*.py`. If any file other than `test_agent_schema_validation.py` references it directly (by name, e.g. importing the private function), delete those specific test functions — the behavior they covered is superseded by this task's four new tests above, and the function itself no longer exists.
 
-Run: `python -m pytest tests/ -k "agent_schema or agent_odds_bounds or agent_value_edge or agent_conditional or agent_draw" -v`
+Rework `tests/test_agent_unit_bet_multiplier.py` to the new fixture shape now too (same two substitutions as Task 3: `_VALID_MARKET`→`_VALID_CANDIDATE` with `composite_score`/`reason` added, `markets`→`candidates`+`recommendation_pick`, `rec["markets"][0]`→`rec["candidates"][0]`).
+
+Run: `python -m pytest tests/ -k "agent_schema or agent_odds_bounds or agent_value_edge or agent_conditional or agent_draw or agent_target_odds or agent_unit_bet_multiplier" -v`
 Expected: PASS, every test across every file this and Task 3 touched.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/agent/schema.py tests/test_agent_schema_validation.py
+git add src/agent/schema.py tests/test_agent_schema_validation.py tests/test_agent_unit_bet_multiplier.py
 git commit -m "feat(agent): A90 -- _resolve_recommendation_pick replaces A65's reconcile
 
 overall now syncs directly from the resolved pick's own state instead of
