@@ -270,3 +270,34 @@ def test_never_upgrades_insufficient_data():
     data = {**_VALID, "overall": "insufficient_data", "candidates": [], "recommendation_pick": None}
     rec = extract_recommendation(_wrap_json(data))
     assert rec["overall"] == "insufficient_data"
+
+
+def test_overall_syncs_upward_when_resolved_pick_outranks_the_llms_stale_overall():
+    """A90 (2026-08-31 design): unlike A65's old array-scan (which only ever
+    capped overall, never raised it, because a self-reported overall could
+    legitimately outrank every individual market in an array), the new
+    single-pick world has exactly one validated candidate to trust once
+    every guardrail above has run -- syncing overall to match it, even
+    upward, is more honest than leaving it artificially capped at a stale,
+    understated self-report. The LLM says overall='conditional' but its own
+    resolved pick is a fully clean, still-direct_bet candidate (real odds
+    inside every bound, real edge) -- overall must follow it up to
+    'direct_bet', not stay stuck at 'conditional'."""
+    data = {**_VALID, "overall": "conditional"}
+    rec = extract_recommendation(_wrap_json(data), min_odds_threshold=1.2, max_odds_threshold=11.0, min_value_edge=0.05)
+    assert rec["overall"] == "direct_bet"
+    assert rec["recommendation_pick"] == _VALID_PICK
+
+
+def test_overall_downgrades_from_direct_bet_when_pick_is_null_with_no_candidates():
+    """The `_OVERALL_RANK[...] > _OVERALL_RANK["no_bet"]` downgrade branch,
+    exercised at a starting rank above 'no_bet' (unlike
+    test_never_upgrades_insufficient_data, which only proves the *floor*
+    ('insufficient_data', rank 0) is left alone) -- a genuinely empty
+    candidates list with no pick and an LLM-claimed 'direct_bet' overall
+    must still be capped down to 'no_bet', since nothing survived to
+    support it."""
+    data = {**_VALID, "overall": "direct_bet", "candidates": [], "recommendation_pick": None}
+    rec = extract_recommendation(_wrap_json(data))
+    assert rec["overall"] == "no_bet"
+    assert rec["recommendation_pick"] is None
