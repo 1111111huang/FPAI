@@ -11,7 +11,7 @@ import pytest
 
 from src.agent.schema import extract_recommendation
 
-_VALID_MARKET = {
+_VALID_CANDIDATE = {
     "market": "result_3way",
     "selection": "home",
     "recommendation_type": "direct_bet",
@@ -20,12 +20,17 @@ _VALID_MARKET = {
     "ml_probability": 0.55,
     "implied_probability": 0.48,
     "value_edge": 0.07,
+    "composite_score": 0.6,
+    "reason": "Clears the edge floor at a realistic price.",
 }
+
+_VALID_PICK = {"market": "result_3way", "selection": "home"}
 
 _VALID = {
     "match": {"home": "Arsenal", "away": "Chelsea", "date": "2026-06-15", "league": "E0"},
     "overall": "direct_bet",
-    "markets": [_VALID_MARKET],
+    "candidates": [_VALID_CANDIDATE],
+    "recommendation_pick": _VALID_PICK,
     "explanation": "Value found on the home win.",
     "confidence": "medium",
     "limitations": [],
@@ -46,17 +51,18 @@ def test_organic_conditional_market_gets_a_target_odds_above_current_odds():
     straight to no_bet -- see test_agent_conditional_odds_floor.py).
     Hand-computed: needed_prob = 0.55 - 0.05 = 0.5, candidate = 1 / 0.5 =
     2.0, and 2.0 > 1.6 -- a genuine forward target."""
-    market = {
-        **_VALID_MARKET, "market": "total_goals", "selection": "over_2.5",
+    candidate = {
+        **_VALID_CANDIDATE, "market": "total_goals", "selection": "over_2.5",
         "recommendation_type": "conditional", "current_odds": 1.6, "ml_probability": 0.55,
     }
-    data = {**_VALID, "overall": "conditional", "markets": [market]}
+    data = {**_VALID, "overall": "conditional", "candidates": [candidate],
+            "recommendation_pick": {"market": "total_goals", "selection": "over_2.5"}}
 
     rec = extract_recommendation(_wrap_json(data))
 
-    assert rec["markets"][0]["recommendation_type"] == "conditional"
-    assert rec["markets"][0]["target_odds"] == pytest.approx(2.0)
-    assert rec["markets"][0]["target_odds"] > rec["markets"][0]["current_odds"]
+    assert rec["candidates"][0]["recommendation_type"] == "conditional"
+    assert rec["candidates"][0]["target_odds"] == pytest.approx(2.0)
+    assert rec["candidates"][0]["target_odds"] > rec["candidates"][0]["current_odds"]
 
 
 def test_ceiling_downgraded_market_gets_no_target_odds():
@@ -65,13 +71,13 @@ def test_ceiling_downgraded_market_gets_no_target_odds():
     above) is *below* current_odds here -- 'wait for it to rise' would be
     backwards, so target_odds must be None, not a nonsensical lower number.
     A54: see test_floor_downgraded_market_gets_a_target_odds_above_current_odds's comment."""
-    market = {**_VALID_MARKET, "market": "total_goals", "selection": "over_2.5", "current_odds": 15.0, "ml_probability": 0.55}
-    data = {**_VALID, "markets": [market]}
+    candidate = {**_VALID_CANDIDATE, "market": "total_goals", "selection": "over_2.5", "current_odds": 15.0, "ml_probability": 0.55}
+    data = {**_VALID, "candidates": [candidate], "recommendation_pick": {"market": "total_goals", "selection": "over_2.5"}}
 
     rec = extract_recommendation(_wrap_json(data))
 
-    assert rec["markets"][0]["recommendation_type"] == "conditional"
-    assert rec["markets"][0]["target_odds"] is None
+    assert rec["candidates"][0]["recommendation_type"] == "conditional"
+    assert rec["candidates"][0]["target_odds"] is None
 
 
 def test_llm_originated_conditional_market_gets_a_correctly_computed_target_odds():
@@ -82,82 +88,84 @@ def test_llm_originated_conditional_market_gets_a_correctly_computed_target_odds
     overridden to an eligible pair (btts/yes) -- an LLM-originated
     'conditional' on result_3way would be downgraded to no_bet by that pass,
     tested separately in test_agent_conditional_market_eligibility.py."""
-    market = {
-        **_VALID_MARKET,
+    candidate = {
+        **_VALID_CANDIDATE,
         "market": "btts",
         "selection": "yes",
         "recommendation_type": "conditional",
         "current_odds": 1.5,
         "ml_probability": 0.5,
     }
-    data = {**_VALID, "overall": "conditional", "markets": [market]}
+    data = {**_VALID, "overall": "conditional", "candidates": [candidate],
+            "recommendation_pick": {"market": "btts", "selection": "yes"}}
 
     rec = extract_recommendation(_wrap_json(data))
 
-    assert rec["markets"][0]["target_odds"] == pytest.approx(1 / 0.45)
+    assert rec["candidates"][0]["target_odds"] == pytest.approx(1 / 0.45)
 
 
 def test_direct_bet_market_left_untouched():
     """A market that stays direct_bet (within bounds) never gets a real
     target_odds -- there's nothing to wait for."""
-    market = {**_VALID_MARKET, "current_odds": 2.1, "ml_probability": 0.55}
-    data = {**_VALID, "markets": [market]}
+    candidate = {**_VALID_CANDIDATE, "current_odds": 2.1, "ml_probability": 0.55}
+    data = {**_VALID, "candidates": [candidate]}
 
     rec = extract_recommendation(_wrap_json(data))
 
-    assert rec["markets"][0]["recommendation_type"] == "direct_bet"
-    assert rec["markets"][0]["target_odds"] is None
+    assert rec["candidates"][0]["recommendation_type"] == "direct_bet"
+    assert rec["candidates"][0]["target_odds"] is None
 
 
 def test_no_bet_market_left_untouched():
-    market = {**_VALID_MARKET, "recommendation_type": "no_bet", "current_odds": None}
-    data = {**_VALID, "overall": "no_bet", "markets": [market]}
+    candidate = {**_VALID_CANDIDATE, "recommendation_type": "no_bet", "current_odds": None}
+    data = {**_VALID, "overall": "no_bet", "candidates": [candidate]}
 
     rec = extract_recommendation(_wrap_json(data))
 
-    assert rec["markets"][0]["target_odds"] is None
+    assert rec["candidates"][0]["target_odds"] is None
 
 
 def test_conditional_market_with_null_current_odds_gets_no_target_odds():
     """No price to solve a forward target against."""
-    market = {**_VALID_MARKET, "recommendation_type": "conditional", "current_odds": None}
-    data = {**_VALID, "overall": "conditional", "markets": [market]}
+    candidate = {**_VALID_CANDIDATE, "recommendation_type": "conditional", "current_odds": None}
+    data = {**_VALID, "overall": "conditional", "candidates": [candidate]}
 
     rec = extract_recommendation(_wrap_json(data))
 
-    assert rec["markets"][0]["target_odds"] is None
+    assert rec["candidates"][0]["target_odds"] is None
 
 
 def test_conditional_market_with_ml_probability_already_below_min_value_edge_gets_no_target_odds():
     """needed_prob <= 0 -- no price fixes an ml_probability that's already
     below the edge floor on its own."""
-    market = {
-        **_VALID_MARKET,
+    candidate = {
+        **_VALID_CANDIDATE,
         "recommendation_type": "conditional",
         "current_odds": 1.5,
         "ml_probability": 0.03,
     }
-    data = {**_VALID, "overall": "conditional", "markets": [market]}
+    data = {**_VALID, "overall": "conditional", "candidates": [candidate]}
 
     rec = extract_recommendation(_wrap_json(data), min_value_edge=0.05)
 
-    assert rec["markets"][0]["target_odds"] is None
+    assert rec["candidates"][0]["target_odds"] is None
 
 
 def test_custom_min_value_edge_is_respected_not_hardcoded():
     # A54: market/selection overridden to an eligible pair, same reasoning
     # as test_llm_originated_conditional_market_gets_a_correctly_computed_target_odds.
-    market = {
-        **_VALID_MARKET,
+    candidate = {
+        **_VALID_CANDIDATE,
         "market": "btts",
         "selection": "yes",
         "recommendation_type": "conditional",
         "current_odds": 1.5,
         "ml_probability": 0.5,
     }
-    data = {**_VALID, "overall": "conditional", "markets": [market]}
+    data = {**_VALID, "overall": "conditional", "candidates": [candidate],
+            "recommendation_pick": {"market": "btts", "selection": "yes"}}
 
     rec = extract_recommendation(_wrap_json(data), min_value_edge=0.1)
 
     # needed_prob = 0.5 - 0.1 = 0.4, candidate = 1 / 0.4 = 2.5
-    assert rec["markets"][0]["target_odds"] == pytest.approx(2.5)
+    assert rec["candidates"][0]["target_odds"] == pytest.approx(2.5)

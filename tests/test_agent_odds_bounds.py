@@ -10,7 +10,7 @@ import pytest
 
 from src.agent.schema import extract_recommendation
 
-_VALID_MARKET = {
+_VALID_CANDIDATE = {
     "market": "result_3way",
     "selection": "home",
     "recommendation_type": "direct_bet",
@@ -19,12 +19,17 @@ _VALID_MARKET = {
     "ml_probability": 0.55,
     "implied_probability": 0.48,
     "value_edge": 0.07,
+    "composite_score": 0.6,
+    "reason": "Clears the odds bounds at a realistic price.",
 }
+
+_VALID_PICK = {"market": "result_3way", "selection": "home"}
 
 _VALID = {
     "match": {"home": "Arsenal", "away": "Chelsea", "date": "2026-06-15", "league": "E0"},
     "overall": "direct_bet",
-    "markets": [_VALID_MARKET],
+    "candidates": [_VALID_CANDIDATE],
+    "recommendation_pick": _VALID_PICK,
     "explanation": "Value found on the home win.",
     "confidence": "medium",
     "limitations": [],
@@ -50,12 +55,12 @@ def test_direct_bet_below_floor_downgraded_to_conditional_then_further_to_no_bet
     # updated to the actual final state now that A66 exists. A29's own
     # transition is still exercised (and still visible in `limitations`,
     # asserted below) even though it's no longer the last word.
-    market = {**_VALID_MARKET, "market": "total_goals", "selection": "over_2.5", "current_odds": 1.05}
-    data = {**_VALID, "markets": [market]}
+    candidate = {**_VALID_CANDIDATE, "market": "total_goals", "selection": "over_2.5", "current_odds": 1.05}
+    data = {**_VALID, "candidates": [candidate], "recommendation_pick": {"market": "total_goals", "selection": "over_2.5"}}
 
     rec = extract_recommendation(_wrap_json(data))
 
-    assert rec["markets"][0]["recommendation_type"] == "no_bet"
+    assert rec["candidates"][0]["recommendation_type"] == "no_bet"
     assert any("1.05" in note and "conditional" in note for note in rec["limitations"])
     assert any("1.05" in note and "no_bet" in note for note in rec["limitations"])
     # A65: 'overall' (still "direct_bet" in _VALID's base dict) must be
@@ -66,55 +71,55 @@ def test_direct_bet_below_floor_downgraded_to_conditional_then_further_to_no_bet
 
 def test_direct_bet_above_ceiling_downgraded_to_conditional():
     # A54: see test_direct_bet_below_floor_downgraded_to_conditional's comment.
-    market = {**_VALID_MARKET, "market": "total_goals", "selection": "over_2.5", "current_odds": 15.0}
-    data = {**_VALID, "markets": [market]}
+    candidate = {**_VALID_CANDIDATE, "market": "total_goals", "selection": "over_2.5", "current_odds": 15.0}
+    data = {**_VALID, "candidates": [candidate], "recommendation_pick": {"market": "total_goals", "selection": "over_2.5"}}
 
     rec = extract_recommendation(_wrap_json(data))
 
-    assert rec["markets"][0]["recommendation_type"] == "conditional"
+    assert rec["candidates"][0]["recommendation_type"] == "conditional"
     assert any("15.0" in note and "conditional" in note for note in rec["limitations"])
     assert rec["overall"] == "conditional"  # A65
 
 
 def test_direct_bet_at_exact_floor_is_accepted():
-    market = {**_VALID_MARKET, "current_odds": 1.2}
-    data = {**_VALID, "markets": [market]}
+    candidate = {**_VALID_CANDIDATE, "current_odds": 1.2}
+    data = {**_VALID, "candidates": [candidate]}
 
     rec = extract_recommendation(_wrap_json(data))
 
-    assert rec["markets"][0]["recommendation_type"] == "direct_bet"
+    assert rec["candidates"][0]["recommendation_type"] == "direct_bet"
     assert rec["limitations"] == []
 
 
 def test_direct_bet_at_exact_ceiling_is_accepted():
-    market = {**_VALID_MARKET, "current_odds": 11.0}
-    data = {**_VALID, "markets": [market]}
+    candidate = {**_VALID_CANDIDATE, "current_odds": 11.0}
+    data = {**_VALID, "candidates": [candidate]}
 
     rec = extract_recommendation(_wrap_json(data))
 
-    assert rec["markets"][0]["recommendation_type"] == "direct_bet"
+    assert rec["candidates"][0]["recommendation_type"] == "direct_bet"
     assert rec["limitations"] == []
 
 
 def test_old_2_0_only_floor_behavior_is_gone():
     """Odds of 1.5 -- below the OLD 2.0 floor but within the new [1.2, 11.0]
     band -- must now be accepted as direct_bet, not downgraded."""
-    market = {**_VALID_MARKET, "current_odds": 1.5}
-    data = {**_VALID, "markets": [market]}
+    candidate = {**_VALID_CANDIDATE, "current_odds": 1.5}
+    data = {**_VALID, "candidates": [candidate]}
 
     rec = extract_recommendation(_wrap_json(data))
 
-    assert rec["markets"][0]["recommendation_type"] == "direct_bet"
+    assert rec["candidates"][0]["recommendation_type"] == "direct_bet"
 
 
 def test_custom_thresholds_are_respected_not_hardcoded():
     # A54: see test_direct_bet_below_floor_downgraded_to_conditional's comment.
-    market = {**_VALID_MARKET, "market": "total_goals", "selection": "over_2.5", "current_odds": 3.0}
-    data = {**_VALID, "markets": [market]}
+    candidate = {**_VALID_CANDIDATE, "market": "total_goals", "selection": "over_2.5", "current_odds": 3.0}
+    data = {**_VALID, "candidates": [candidate], "recommendation_pick": {"market": "total_goals", "selection": "over_2.5"}}
 
     rec = extract_recommendation(_wrap_json(data), min_odds_threshold=3.5, max_odds_threshold=11.0)
 
-    assert rec["markets"][0]["recommendation_type"] == "conditional"
+    assert rec["candidates"][0]["recommendation_type"] == "conditional"
 
 
 def test_conditional_market_outside_bounds_is_not_touched():
@@ -122,22 +127,22 @@ def test_conditional_market_outside_bounds_is_not_touched():
     odds are none of this rule's business. A54: market/selection overridden
     to an eligible pair so A54's own restriction pass doesn't also fire here
     -- that's tested separately in test_agent_conditional_market_eligibility.py."""
-    market = {**_VALID_MARKET, "market": "btts", "selection": "yes", "recommendation_type": "conditional", "current_odds": 50.0}
-    data = {**_VALID, "overall": "conditional", "markets": [market]}
+    candidate = {**_VALID_CANDIDATE, "market": "btts", "selection": "yes", "recommendation_type": "conditional", "current_odds": 50.0}
+    data = {**_VALID, "overall": "conditional", "candidates": [candidate], "recommendation_pick": {"market": "btts", "selection": "yes"}}
 
     rec = extract_recommendation(_wrap_json(data))
 
-    assert rec["markets"][0]["recommendation_type"] == "conditional"
+    assert rec["candidates"][0]["recommendation_type"] == "conditional"
     assert rec["limitations"] == []
 
 
 def test_direct_bet_with_null_odds_still_downgrades_to_no_bet_not_conditional():
     """BUG-013's null-odds rule (A28) takes precedence over the bounds rule --
     a market can't be bounds-checked if it has no odds to check."""
-    market = {**_VALID_MARKET, "current_odds": None}
-    data = {**_VALID, "markets": [market]}
+    candidate = {**_VALID_CANDIDATE, "current_odds": None}
+    data = {**_VALID, "candidates": [candidate]}
 
     rec = extract_recommendation(_wrap_json(data))
 
-    assert rec["markets"][0]["recommendation_type"] == "no_bet"
+    assert rec["candidates"][0]["recommendation_type"] == "no_bet"
     assert rec["overall"] == "no_bet"  # A65

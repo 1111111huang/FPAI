@@ -13,7 +13,7 @@ import json
 
 from src.agent.schema import extract_recommendation
 
-_VALID_MARKET = {
+_VALID_CANDIDATE = {
     "market": "total_goals",
     "selection": "over_2.5",
     "recommendation_type": "conditional",
@@ -22,12 +22,17 @@ _VALID_MARKET = {
     "ml_probability": 0.55,
     "implied_probability": 0.48,
     "value_edge": 0.07,
+    "composite_score": 0.6,
+    "reason": "Priced below the conditional ceiling, waiting for a better price.",
 }
+
+_VALID_PICK = {"market": "total_goals", "selection": "over_2.5"}
 
 _VALID = {
     "match": {"home": "Arsenal", "away": "Chelsea", "date": "2026-06-15", "league": "E0"},
     "overall": "conditional",
-    "markets": [_VALID_MARKET],
+    "candidates": [_VALID_CANDIDATE],
+    "recommendation_pick": _VALID_PICK,
     "explanation": "Value found if the price improves.",
     "confidence": "medium",
     "limitations": [],
@@ -40,55 +45,55 @@ def _wrap_json(data: dict) -> str:
 
 
 def test_conditional_above_ceiling_downgraded_to_no_bet():
-    market = {**_VALID_MARKET, "current_odds": 4.5}
-    data = {**_VALID, "markets": [market]}
+    candidate = {**_VALID_CANDIDATE, "current_odds": 4.5}
+    data = {**_VALID, "candidates": [candidate]}
 
     rec = extract_recommendation(_wrap_json(data), max_conditional_odds_threshold=4.0)
 
-    assert rec["markets"][0]["recommendation_type"] == "no_bet"
-    assert rec["markets"][0]["target_odds"] is None
+    assert rec["candidates"][0]["recommendation_type"] == "no_bet"
+    assert rec["candidates"][0]["target_odds"] is None
     assert any("4.5" in note and "no_bet" in note for note in rec["limitations"])
 
 
 def test_conditional_at_exact_ceiling_is_accepted():
-    market = {**_VALID_MARKET, "current_odds": 4.0}
-    data = {**_VALID, "markets": [market]}
+    candidate = {**_VALID_CANDIDATE, "current_odds": 4.0}
+    data = {**_VALID, "candidates": [candidate]}
 
     rec = extract_recommendation(_wrap_json(data), max_conditional_odds_threshold=4.0)
 
-    assert rec["markets"][0]["recommendation_type"] == "conditional"
+    assert rec["candidates"][0]["recommendation_type"] == "conditional"
     assert rec["limitations"] == []
 
 
 def test_conditional_below_ceiling_is_untouched():
-    market = {**_VALID_MARKET, "current_odds": 3.0}
-    data = {**_VALID, "markets": [market]}
+    candidate = {**_VALID_CANDIDATE, "current_odds": 3.0}
+    data = {**_VALID, "candidates": [candidate]}
 
     rec = extract_recommendation(_wrap_json(data), max_conditional_odds_threshold=4.0)
 
-    assert rec["markets"][0]["recommendation_type"] == "conditional"
+    assert rec["candidates"][0]["recommendation_type"] == "conditional"
     assert rec["limitations"] == []
 
 
 def test_conditional_with_null_current_odds_is_not_touched():
-    market = {**_VALID_MARKET, "current_odds": None}
-    data = {**_VALID, "markets": [market]}
+    candidate = {**_VALID_CANDIDATE, "current_odds": None}
+    data = {**_VALID, "candidates": [candidate]}
 
     rec = extract_recommendation(_wrap_json(data), max_conditional_odds_threshold=4.0)
 
-    assert rec["markets"][0]["recommendation_type"] == "conditional"
+    assert rec["candidates"][0]["recommendation_type"] == "conditional"
     assert rec["limitations"] == []
 
 
 def test_direct_bet_and_no_bet_markets_are_never_touched_by_this_pass():
-    direct = {**_VALID_MARKET, "recommendation_type": "direct_bet", "current_odds": 2.1}
-    no_bet = {**_VALID_MARKET, "recommendation_type": "no_bet", "current_odds": 9.0}
-    data = {**_VALID, "overall": "direct_bet", "markets": [direct, no_bet]}
+    direct = {**_VALID_CANDIDATE, "recommendation_type": "direct_bet", "current_odds": 2.1}
+    no_bet = {**_VALID_CANDIDATE, "recommendation_type": "no_bet", "current_odds": 9.0}
+    data = {**_VALID, "overall": "direct_bet", "candidates": [direct, no_bet]}
 
     rec = extract_recommendation(_wrap_json(data), max_conditional_odds_threshold=4.0)
 
-    assert rec["markets"][0]["recommendation_type"] == "direct_bet"
-    assert rec["markets"][1]["recommendation_type"] == "no_bet"
+    assert rec["candidates"][0]["recommendation_type"] == "direct_bet"
+    assert rec["candidates"][1]["recommendation_type"] == "no_bet"
     assert rec["limitations"] == []
 
 
@@ -96,19 +101,19 @@ def test_default_ceiling_is_unbounded_so_no_config_change_is_backward_compatible
     """Every config that doesn't explicitly set max_conditional_odds_threshold
     (every posture/backtest config today) must keep today's real behavior:
     no ceiling at all."""
-    market = {**_VALID_MARKET, "current_odds": 999.0}
-    data = {**_VALID, "markets": [market]}
+    candidate = {**_VALID_CANDIDATE, "current_odds": 999.0}
+    data = {**_VALID, "candidates": [candidate]}
 
     rec = extract_recommendation(_wrap_json(data))  # no override -- uses the default
 
-    assert rec["markets"][0]["recommendation_type"] == "conditional"
+    assert rec["candidates"][0]["recommendation_type"] == "conditional"
     assert rec["limitations"] == []
 
 
 def test_custom_threshold_is_respected_not_hardcoded():
-    market = {**_VALID_MARKET, "current_odds": 3.5}
-    data = {**_VALID, "markets": [market]}
+    candidate = {**_VALID_CANDIDATE, "current_odds": 3.5}
+    data = {**_VALID, "candidates": [candidate]}
 
     rec = extract_recommendation(_wrap_json(data), max_conditional_odds_threshold=3.0)
 
-    assert rec["markets"][0]["recommendation_type"] == "no_bet"
+    assert rec["candidates"][0]["recommendation_type"] == "no_bet"

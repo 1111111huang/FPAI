@@ -195,15 +195,15 @@ def _downgrade_direct_bet_below_value_edge_floor(data: dict, min_value_edge: flo
     now, that's the entire premise of "wait for a better price to clear
     it later" (A52's target_odds computation)."""
     limitations = list(data.get("limitations") or [])
-    for market in data.get("candidates", []):
-        if market["recommendation_type"] != "direct_bet":
+    for candidate in data.get("candidates", []):
+        if candidate["recommendation_type"] != "direct_bet":
             continue
-        if market["value_edge"] >= min_value_edge:
+        if candidate["value_edge"] >= min_value_edge:
             continue
-        market["recommendation_type"] = "no_bet"
+        candidate["recommendation_type"] = "no_bet"
         limitations.append(
-            f"Downgraded {market['market']!r}/{market['selection']!r} from direct_bet to no_bet: "
-            f"value_edge {market['value_edge']} is below the {min_value_edge} floor -- not a coherent "
+            f"Downgraded {candidate['market']!r}/{candidate['selection']!r} from direct_bet to no_bet: "
+            f"value_edge {candidate['value_edge']} is below the {min_value_edge} floor -- not a coherent "
             "direct bet without a real edge."
         )
     data["limitations"] = limitations
@@ -240,17 +240,17 @@ def _downgrade_direct_bet_below_draw_value_edge_floor(data: dict, min_value_edge
     if min_value_edge_result_3way_draw is None:
         return data
     limitations = list(data.get("limitations") or [])
-    for market in data.get("candidates", []):
-        if market["recommendation_type"] != "direct_bet":
+    for candidate in data.get("candidates", []):
+        if candidate["recommendation_type"] != "direct_bet":
             continue
-        if market["market"] != "result_3way" or market["selection"] != "draw":
+        if candidate["market"] != "result_3way" or candidate["selection"] != "draw":
             continue
-        if market["value_edge"] >= min_value_edge_result_3way_draw:
+        if candidate["value_edge"] >= min_value_edge_result_3way_draw:
             continue
-        market["recommendation_type"] = "no_bet"
+        candidate["recommendation_type"] = "no_bet"
         limitations.append(
             f"Downgraded 'result_3way'/'draw' from direct_bet to no_bet: value_edge "
-            f"{market['value_edge']} is below the draw-specific {min_value_edge_result_3way_draw} "
+            f"{candidate['value_edge']} is below the draw-specific {min_value_edge_result_3way_draw} "
             "floor -- result_3way draw picks have an independently measured reliability problem "
             "(see documents/agent_techspec.md's draw-framing fallacy lesson)."
         )
@@ -263,11 +263,11 @@ def _downgrade_direct_bet_with_null_odds(data: dict) -> dict:
     current_odds -- downgrade to 'no_bet' (the only other value valid for this
     market-level field) instead of passing the incoherent combination through."""
     limitations = list(data.get("limitations") or [])
-    for market in data.get("candidates", []):
-        if market["recommendation_type"] == "direct_bet" and market["current_odds"] is None:
-            market["recommendation_type"] = "no_bet"
+    for candidate in data.get("candidates", []):
+        if candidate["recommendation_type"] == "direct_bet" and candidate["current_odds"] is None:
+            candidate["recommendation_type"] = "no_bet"
             limitations.append(
-                f"Downgraded {market['market']!r} from direct_bet to no_bet: current_odds was null."
+                f"Downgraded {candidate['market']!r} from direct_bet to no_bet: current_odds was null."
             )
     data["limitations"] = limitations
     return data
@@ -284,16 +284,16 @@ def _downgrade_direct_bet_outside_odds_bounds(
     non-bet. A null current_odds is out of scope here -- BUG-013's rule
     (above) already downgraded that case to 'no_bet' before this runs."""
     limitations = list(data.get("limitations") or [])
-    for market in data.get("candidates", []):
-        if market["recommendation_type"] != "direct_bet":
+    for candidate in data.get("candidates", []):
+        if candidate["recommendation_type"] != "direct_bet":
             continue
-        odds = market["current_odds"]
+        odds = candidate["current_odds"]
         if odds is None:
             continue
         if odds < min_odds_threshold or odds > max_odds_threshold:
-            market["recommendation_type"] = "conditional"
+            candidate["recommendation_type"] = "conditional"
             limitations.append(
-                f"Downgraded {market['market']!r} from direct_bet to conditional: "
+                f"Downgraded {candidate['market']!r} from direct_bet to conditional: "
                 f"current_odds {odds} outside [{min_odds_threshold}, {max_odds_threshold}]."
             )
     data["limitations"] = limitations
@@ -324,14 +324,14 @@ def _restrict_conditional_to_eligible_markets(data: dict) -> dict:
     A52's target_odds computation, so an ineligible market never gets one
     (it's no longer 'conditional' by the time that pass runs)."""
     limitations = list(data.get("limitations") or [])
-    for market in data.get("candidates", []):
-        if market["recommendation_type"] != "conditional":
+    for candidate in data.get("candidates", []):
+        if candidate["recommendation_type"] != "conditional":
             continue
-        if (market["market"], market["selection"]) in _CONDITIONAL_ELIGIBLE_MARKETS:
+        if (candidate["market"], candidate["selection"]) in _CONDITIONAL_ELIGIBLE_MARKETS:
             continue
-        market["recommendation_type"] = "no_bet"
+        candidate["recommendation_type"] = "no_bet"
         limitations.append(
-            f"Downgraded {market['market']!r}/{market['selection']!r} from conditional to no_bet: "
+            f"Downgraded {candidate['market']!r}/{candidate['selection']!r} from conditional to no_bet: "
             "'conditional' only applies to over/yes-type markets (total_goals over, corners over, "
             "btts yes), where waiting for a better price is a directional strategy, not a coin flip."
         )
@@ -356,15 +356,15 @@ def _downgrade_conditional_below_floor(data: dict, min_conditional_odds_threshol
     downgraded market never gets one (it's no longer 'conditional' by the
     time that pass runs)."""
     limitations = list(data.get("limitations") or [])
-    for market in data.get("candidates", []):
-        if market["recommendation_type"] != "conditional":
+    for candidate in data.get("candidates", []):
+        if candidate["recommendation_type"] != "conditional":
             continue
-        odds = market["current_odds"]
+        odds = candidate["current_odds"]
         if odds is None or odds >= min_conditional_odds_threshold:
             continue
-        market["recommendation_type"] = "no_bet"
+        candidate["recommendation_type"] = "no_bet"
         limitations.append(
-            f"Downgraded {market['market']!r}/{market['selection']!r} from conditional to no_bet: "
+            f"Downgraded {candidate['market']!r}/{candidate['selection']!r} from conditional to no_bet: "
             f"current_odds {odds} is below the {min_conditional_odds_threshold} floor -- too short "
             "a price for 'wait for it to improve' to be a realistic strategy."
         )
@@ -385,15 +385,15 @@ def _downgrade_conditional_above_ceiling(data: dict, max_conditional_odds_thresh
     that doesn't explicitly set max_conditional_odds_threshold keeps
     today's real, pre-existing no-ceiling behavior unchanged."""
     limitations = list(data.get("limitations") or [])
-    for market in data.get("candidates", []):
-        if market["recommendation_type"] != "conditional":
+    for candidate in data.get("candidates", []):
+        if candidate["recommendation_type"] != "conditional":
             continue
-        odds = market["current_odds"]
+        odds = candidate["current_odds"]
         if odds is None or odds <= max_conditional_odds_threshold:
             continue
-        market["recommendation_type"] = "no_bet"
+        candidate["recommendation_type"] = "no_bet"
         limitations.append(
-            f"Downgraded {market['market']!r}/{market['selection']!r} from conditional to no_bet: "
+            f"Downgraded {candidate['market']!r}/{candidate['selection']!r} from conditional to no_bet: "
             f"current_odds {odds} is above the {max_conditional_odds_threshold} ceiling."
         )
     data["limitations"] = limitations
@@ -419,16 +419,16 @@ def _compute_target_odds(data: dict, min_value_edge: float) -> dict:
     downgrade case: current_odds already too high, so 'wait for it to rise'
     would be backwards). Both degrade to None, same as needed_prob <= 0
     (no price fixes an ml_probability that's already below the edge floor)."""
-    for market in data.get("candidates", []):
-        if market["recommendation_type"] != "conditional" or market["current_odds"] is None:
-            market["target_odds"] = None
+    for candidate in data.get("candidates", []):
+        if candidate["recommendation_type"] != "conditional" or candidate["current_odds"] is None:
+            candidate["target_odds"] = None
             continue
-        needed_prob = market["ml_probability"] - min_value_edge
+        needed_prob = candidate["ml_probability"] - min_value_edge
         if needed_prob <= 0:
-            market["target_odds"] = None
+            candidate["target_odds"] = None
             continue
-        candidate = 1 / needed_prob
-        market["target_odds"] = candidate if candidate > market["current_odds"] else None
+        target_price = 1 / needed_prob
+        candidate["target_odds"] = target_price if target_price > candidate["current_odds"] else None
     return data
 
 
