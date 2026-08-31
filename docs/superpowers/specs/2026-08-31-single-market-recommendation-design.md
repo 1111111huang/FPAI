@@ -94,6 +94,12 @@ TDD, matching this codebase's existing convention:
 - Live serving wiring, settlement, frontend rendering, and cache-compatibility for rows already written under the old schema — sub-project #2.
 - `agent-backtest`/`agent-train`, `BacktestRecord`, `evaluation.py`, `staking.py`, and the historical lessons adapter moving onto this shape — sub-project #3.
 
+**Concrete blocker list for sub-project #2, found by this phase's final review — merging/deploying this branch alone is NOT safe without it.** These still read `rec.get("markets")`/`raw.get("markets")` from what `run_agent()` now actually returns as a `candidates`-shaped dict — every one of them will silently see zero markets/no pick for any recommendation generated after this branch ships, not raise an error:
+- `app/backend/recommendation_outcomes.py:277` (settlement's own market-picking, via `pick_recommended_market`)
+- `app/backend/bets.py:73`
+- `app/backend/recommendations.py:398`, `:403`
+- `src/agent/backtest.py:206` (sub-project #3's own territory, listed here too since it's the same failure mode)
+
 ## Implementation notes (added 2026-08-31, post-build)
 
 - **`RecommendationPick` → `RecommendationPickModel`.** A code-quality review during Task 1 found the Pydantic model (paired with the `MarketCandidate`/`MarketCandidateModel` TypedDict/BaseModel convention already established in this file) should carry the `Model` suffix like every other pair — the TypedDict is `RecommendationPick`, the Pydantic model is `RecommendationPickModel`. Every reference above naming just `RecommendationPick` for the Pydantic model reflects the original design intent; the actual class name differs by this suffix.
