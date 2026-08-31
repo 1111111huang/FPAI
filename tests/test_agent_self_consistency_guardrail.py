@@ -58,3 +58,20 @@ def test_a_no_bet_rejected_candidates_own_higher_score_does_not_count():
     data = {**_BASE, "candidates": [_HOME, disqualified], "recommendation_pick": {"market": "result_3way", "selection": "home"}}
     rec = extract_recommendation(_wrap_json(data))
     assert rec["recommendation_pick"] == {"market": "result_3way", "selection": "home"}
+
+
+def test_an_exact_tied_composite_score_is_not_a_contradiction():
+    """Code-quality review gap (2026-08-31, Task 5): the design spec and the
+    implementation both use strict greater-than -- only a candidate that
+    self-reports a *higher* score than the pick counts as contradicting it,
+    per docs/superpowers/specs/2026-08-31-single-market-recommendation-design.md's
+    own "if some other candidate self-reports a higher composite_score"
+    wording. An exact tie is not a contradiction (there's no basis to say
+    the LLM's own numbers favor the *other* candidate over the pick when
+    they're equal) -- this pins that boundary down explicitly, since the
+    original 3-test suite never exercised it."""
+    tied = {**_BTTS, "composite_score": _HOME["composite_score"]}
+    data = {**_BASE, "candidates": [_HOME, tied], "recommendation_pick": {"market": "result_3way", "selection": "home"}}
+    rec = extract_recommendation(_wrap_json(data))
+    assert rec["recommendation_pick"] == {"market": "result_3way", "selection": "home"}
+    assert rec["overall"] == "direct_bet"
