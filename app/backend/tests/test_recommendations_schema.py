@@ -11,9 +11,9 @@ import sys
 
 sys.path.append(str(Path(__file__).resolve().parents[3]))
 
-from app.backend.recommendations import validate_and_degrade
+from app.backend.recommendations import RecommendationPickOut, validate_and_degrade
 
-_VALID_MARKET = {
+_VALID_CANDIDATE = {
     "market": "result_3way",
     "selection": "home",
     "recommendation_type": "direct_bet",
@@ -22,12 +22,15 @@ _VALID_MARKET = {
     "ml_probability": 0.55,
     "implied_probability": 0.48,
     "value_edge": 0.07,
+    "composite_score": 0.6,
+    "reason": "Clears the edge floor at a realistic price.",
 }
 
 _VALID_RAW = {
     "match": {"home": "Arsenal", "away": "Everton", "date": "2026-08-22", "league": "E0"},
     "overall": "direct_bet",
-    "markets": [_VALID_MARKET],
+    "candidates": [_VALID_CANDIDATE],
+    "recommendation_pick": {"market": "result_3way", "selection": "home"},
     "explanation": "Value found on the home win.",
     "confidence": "medium",
     "limitations": [],
@@ -41,20 +44,20 @@ _VALID_RAW = {
 def test_valid_recommendation_passes_through_unchanged():
     result = validate_and_degrade(_VALID_RAW, "Arsenal", "Everton")
     assert result.overall == "direct_bet"
-    assert len(result.markets) == 1
-    assert result.markets[0].value_edge == 0.07
+    assert len(result.candidates) == 1
+    assert result.candidates[0].value_edge == 0.07
     assert result.invalid_market_count == 0
 
 
 def test_malformed_market_is_omitted_not_crashed():
-    bad_market = {**_VALID_MARKET, "value_edge": "high"}
-    good_market = {**_VALID_MARKET, "market": "btts", "selection": "yes"}
-    raw = {**_VALID_RAW, "markets": [good_market, bad_market]}
+    bad_market = {**_VALID_CANDIDATE, "value_edge": "high"}
+    good_market = {**_VALID_CANDIDATE, "market": "btts", "selection": "yes"}
+    raw = {**_VALID_RAW, "candidates": [good_market, bad_market]}
 
     result = validate_and_degrade(raw, "Arsenal", "Everton")
 
-    assert len(result.markets) == 1
-    assert result.markets[0].market == "btts"
+    assert len(result.candidates) == 1
+    assert result.candidates[0].market == "btts"
     assert result.invalid_market_count == 1
     assert any("1 market" in note for note in result.limitations)
 
@@ -65,34 +68,34 @@ def test_non_canonical_market_name_is_dropped_like_any_other_malformed_market():
     a recommendation that reaches this layer without having gone through
     extract_recommendation's own (now equivalent) check -- e.g. an
     already-cached row from before that check shipped."""
-    bad_market = {**_VALID_MARKET, "market": "1X2"}
-    good_market = {**_VALID_MARKET, "market": "btts", "selection": "yes"}
-    raw = {**_VALID_RAW, "markets": [good_market, bad_market]}
+    bad_market = {**_VALID_CANDIDATE, "market": "1X2"}
+    good_market = {**_VALID_CANDIDATE, "market": "btts", "selection": "yes"}
+    raw = {**_VALID_RAW, "candidates": [good_market, bad_market]}
 
     result = validate_and_degrade(raw, "Arsenal", "Everton")
 
-    assert len(result.markets) == 1
-    assert result.markets[0].market == "btts"
+    assert len(result.candidates) == 1
+    assert result.candidates[0].market == "btts"
     assert result.invalid_market_count == 1
 
 
 def test_all_markets_malformed_returns_empty_markets_not_an_exception():
-    bad_market = {**_VALID_MARKET, "confidence_typo": "oops", "value_edge": "nonsense"}
-    raw = {**_VALID_RAW, "markets": [bad_market]}
+    bad_market = {**_VALID_CANDIDATE, "confidence_typo": "oops", "value_edge": "nonsense"}
+    raw = {**_VALID_RAW, "candidates": [bad_market]}
 
     result = validate_and_degrade(raw, "Arsenal", "Everton")
 
-    assert result.markets == []
+    assert result.candidates == []
     assert result.invalid_market_count == 1
-    assert result.overall == "direct_bet"  # top-level fields untouched
+    assert result.overall == "no_bet"  # top-level fields default-capped, no resolvable pick
 
 
 def test_missing_top_level_fields_default_safely_instead_of_raising():
     """Belt-and-suspenders: even a badly malformed top-level payload (e.g.
     from a pre-A28 cached recommendation) must not crash the app layer."""
-    result = validate_and_degrade({"markets": []}, "Arsenal", "Everton")
+    result = validate_and_degrade({"candidates": []}, "Arsenal", "Everton")
     assert result.overall == "insufficient_data"
-    assert result.markets == []
+    assert result.candidates == []
 
 
 def test_cold_start_risk_and_unknown_team_pass_through():
@@ -128,7 +131,7 @@ def test_agent_match_mismatch_is_degraded_to_insufficient_data():
     result = validate_and_degrade(raw, "Brentford", "Wolverhampton")
 
     assert result.overall == "insufficient_data"
-    assert result.markets == []
+    assert result.candidates == []
     assert result.invalid_market_count == 1
     assert any("Manchester City v Liverpool" in note for note in result.limitations)
     assert any("Brentford v Wolverhampton" in note for note in result.limitations)
@@ -143,7 +146,7 @@ def test_home_away_swap_alone_is_not_a_mismatch():
     result = validate_and_degrade(raw, "Arsenal", "Everton")
 
     assert result.overall == "direct_bet"
-    assert len(result.markets) == 1
+    assert len(result.candidates) == 1
 
 
 def test_omitting_home_away_skips_the_mismatch_check_but_still_degrades_malformed_markets():
@@ -152,15 +155,20 @@ def test_omitting_home_away_skips_the_mismatch_check_but_still_degrades_malforme
     validate_and_degrade(raw) with neither -- the match-mismatch check must
     be skipped (not crash on missing args), while the per-market validation
     that endpoint actually needs still runs."""
-    bad_market = {**_VALID_MARKET, "market": "1X2"}
-    good_market = {**_VALID_MARKET, "market": "btts", "selection": "yes"}
-    raw = {**_VALID_RAW, "match": {"home": "Manchester City", "away": "Liverpool"}, "markets": [good_market, bad_market]}
+    bad_market = {**_VALID_CANDIDATE, "market": "1X2"}
+    good_market = {**_VALID_CANDIDATE, "market": "btts", "selection": "yes"}
+    raw = {
+        **_VALID_RAW,
+        "match": {"home": "Manchester City", "away": "Liverpool"},
+        "candidates": [good_market, bad_market],
+        "recommendation_pick": {"market": "btts", "selection": "yes"},
+    }
 
     result = validate_and_degrade(raw)
 
     assert result.overall == "direct_bet"  # not degraded to insufficient_data -- no mismatch check ran
-    assert len(result.markets) == 1
-    assert result.markets[0].market == "btts"
+    assert len(result.candidates) == 1
+    assert result.candidates[0].market == "btts"
     assert result.invalid_market_count == 1
 
 
@@ -168,40 +176,40 @@ def test_missing_match_field_is_not_treated_as_a_mismatch():
     """Some raw payloads omit `match` entirely (e.g. pre-existing malformed
     top-level payloads) -- that's a separate, already-handled degradation
     path, not this mismatch check's concern."""
-    result = validate_and_degrade({"markets": [_VALID_MARKET]}, "Arsenal", "Everton")
+    result = validate_and_degrade({"candidates": [_VALID_CANDIDATE]}, "Arsenal", "Everton")
     assert result.overall == "insufficient_data"  # from the existing "no overall" default
-    assert len(result.markets) == 1  # markets themselves are untouched by the mismatch check
+    assert len(result.candidates) == 1  # candidates themselves are untouched by the mismatch check
 
 
 def test_target_odds_passes_through_unchanged_w83():
     """W83: the agent-side A52 target_odds field reaches the API response
     on a conditional market exactly as computed, no re-derivation here."""
-    market = {**_VALID_MARKET, "recommendation_type": "conditional", "target_odds": 2.35}
-    raw = {**_VALID_RAW, "overall": "conditional", "markets": [market]}
+    market = {**_VALID_CANDIDATE, "recommendation_type": "conditional", "target_odds": 2.35}
+    raw = {**_VALID_RAW, "overall": "conditional", "candidates": [market]}
 
     result = validate_and_degrade(raw, "Arsenal", "Everton")
 
-    assert result.markets[0].target_odds == 2.35
+    assert result.candidates[0].target_odds == 2.35
 
 
 def test_missing_target_odds_defaults_to_none_for_pre_a52_cached_data_w83():
     """A recommendation cached before A52 shipped won't have this key at
     all -- must default, not raise, same convention as feature_completeness."""
     result = validate_and_degrade(_VALID_RAW, "Arsenal", "Everton")
-    assert result.markets[0].target_odds is None
+    assert result.candidates[0].target_odds is None
 
 
 def test_missing_min_odds_defaults_instead_of_dropping_the_market_bug032():
     """BUG-032: real DeepSeek output regularly omits min_odds on some
     markets -- must default to 0.0 (matching src/agent/schema.py's own
     default), not drop the market as malformed."""
-    market = {k: v for k, v in _VALID_MARKET.items() if k != "min_odds"}
-    raw = {**_VALID_RAW, "markets": [market]}
+    market = {k: v for k, v in _VALID_CANDIDATE.items() if k != "min_odds"}
+    raw = {**_VALID_RAW, "candidates": [market]}
 
     result = validate_and_degrade(raw, "Arsenal", "Everton")
 
-    assert len(result.markets) == 1
-    assert result.markets[0].min_odds == 0.0
+    assert len(result.candidates) == 1
+    assert result.candidates[0].min_odds == 0.0
     assert result.invalid_market_count == 0
 
 
@@ -214,3 +222,65 @@ def test_unit_bet_multiplier_passes_through_unchanged():
 def test_missing_unit_bet_multiplier_defaults_to_none_for_pre_a82_cached_data():
     result = validate_and_degrade(_VALID_RAW, "Arsenal", "Everton")
     assert result.unit_bet_multiplier is None
+
+
+def test_candidates_and_recommendation_pick_pass_through():
+    raw = {**_VALID_RAW}
+    result = validate_and_degrade(raw)
+    assert len(result.candidates) == 1
+    assert result.candidates[0].composite_score == 0.6
+    assert result.recommendation_pick == RecommendationPickOut(market="result_3way", selection="home")
+
+
+def test_dangling_pick_is_dropped_and_overall_capped_to_no_bet():
+    """recommendation_pick names a market/selection absent from candidates
+    -- the app layer doesn't re-run the agent's own guardrails, so it must
+    apply the same downgrade-only cap A90 established: no resolvable pick,
+    overall can't stay at a stronger claim than the evidence supports."""
+    raw = {**_VALID_RAW, "recommendation_pick": {"market": "btts", "selection": "yes"}}
+    result = validate_and_degrade(raw)
+    assert result.recommendation_pick is None
+    assert result.overall == "no_bet"
+
+
+def test_pick_pointing_at_a_candidate_that_failed_validation_is_also_dropped():
+    """The picked candidate itself is malformed (fails MarketCandidateOut
+    validation, gets omitted from `candidates`) -- the pick must not survive
+    just because resolve_recommendation_pick() found it in the *raw* list;
+    it has to also appear in the *validated* one."""
+    bad_candidate = {**_VALID_CANDIDATE, "value_edge": "not-a-number"}
+    raw = {**_VALID_RAW, "candidates": [bad_candidate]}
+    result = validate_and_degrade(raw)
+    assert result.candidates == []
+    assert result.recommendation_pick is None
+    assert result.overall == "no_bet"
+
+
+def test_old_shape_row_with_no_candidates_key_degrades_gracefully():
+    """A row cached before this migration -- no candidates/recommendation_pick
+    key at all, just the old (now-ignored) markets key and a real overall.
+    No special detection needed: raw.get("candidates") is naturally [],
+    raw.get("recommendation_pick") is naturally None -- the same cap applies."""
+    old_shape_raw = {
+        "match": {"home": "Arsenal", "away": "Chelsea", "date": "2026-06-15", "league": "E0"},
+        "overall": "direct_bet",
+        "markets": [{"market": "result_3way", "selection": "home", "recommendation_type": "direct_bet",
+                      "current_odds": 2.1, "min_odds": 1.8, "ml_probability": 0.55,
+                      "implied_probability": 0.48, "value_edge": 0.07}],
+        "explanation": "Value found.", "confidence": "medium", "limitations": [],
+        "prediction_basis": "team_history_and_market",
+    }
+    result = validate_and_degrade(old_shape_raw)
+    assert result.candidates == []
+    assert result.recommendation_pick is None
+    assert result.overall == "no_bet"
+
+
+def test_no_bet_and_insufficient_data_are_never_touched_by_the_cap():
+    """The cap only ever applies when overall claims something stronger --
+    an honest no_bet/insufficient_data with no pick is already consistent,
+    not something to 'downgrade' further."""
+    for value in ("no_bet", "insufficient_data"):
+        raw = {**_VALID_RAW, "overall": value, "candidates": [], "recommendation_pick": None}
+        result = validate_and_degrade(raw)
+        assert result.overall == value

@@ -21,6 +21,7 @@ from app.backend.recommendation_cache import RecommendationCache
 from app.backend.sandbox_clock import is_sandbox_mode, sandbox_scoped_path
 from src.agent import tools as agent_tools
 from src.agent.graph import run_agent as _real_run_agent
+from src.agent.market_resolution import resolve_recommendation_pick
 from src.agent.schema import normalize_explanation, reported_teams, teams_match
 from src.agent.snapshot_store import league_base_dir, SnapshotMissingError
 from src.ingestion.common.team_mapping import TeamNameMapper
@@ -294,7 +295,7 @@ class RecommendationRequest(BaseModel):
         return _composite_match_key(self.home_team, self.away_team, self.date)
 
 
-class MarketRecommendationOut(BaseModel):
+class MarketCandidateOut(BaseModel):
     # Constrained to the same vocabulary config/prompts/agent_v1.txt already
     # specifies to the LLM (result_3way/btts/total_goals/home_corners/
     # away_corners, home/draw/away/yes/no/over_2.5/under_2.5) -- previously
@@ -307,7 +308,7 @@ class MarketRecommendationOut(BaseModel):
     recommendation_type: str
     current_odds: float | None
     # BUG-032: defaulted for the same reason as src/agent/schema.py's
-    # MarketRecommendationModel -- a cached/replayed row missing this key
+    # MarketCandidateModel -- a cached/replayed row missing this key
     # (e.g. any generation predating this fix) must still validate here,
     # not just at the agent layer.
     min_odds: float = 0.0
@@ -320,12 +321,23 @@ class MarketRecommendationOut(BaseModel):
     # pre-A52 cached row (no such key at all) still validates, same
     # W15-established convention as feature_completeness below.
     target_odds: float | None = None
+    # A88/W193: the agent's own self-reported edge/hit-probability balance --
+    # defaulted so a pre-this-change cached row (no such key at all) still
+    # validates, same convention as target_odds above.
+    composite_score: float = 0.0
+    reason: str = ""
+
+
+class RecommendationPickOut(BaseModel):
+    market: Literal["result_3way", "btts", "total_goals", "home_corners", "away_corners"]
+    selection: Literal["home", "draw", "away", "yes", "no", "over_2.5", "under_2.5"]
 
 
 class MatchRecommendationOut(BaseModel):
     match: dict
     overall: str
-    markets: list[MarketRecommendationOut]
+    candidates: list[MarketCandidateOut]
+    recommendation_pick: RecommendationPickOut | None = None
     # One bullet per aspect, mirroring src/agent/schema.py's MatchRecommendationModel.
     explanation: list[str]
     confidence: str
@@ -350,7 +362,7 @@ def validate_and_degrade(
     raw: dict, home_team: str | None = None, away_team: str | None = None
 ) -> MatchRecommendationOut:
     """Validate a raw MatchRecommendation dict (from run_agent, a cache, or
-    anywhere else), dropping any market that fails validation rather than
+    anywhere else), dropping any candidate that fails validation rather than
     raising for the whole request. Top-level fields default safely too, so
     even a badly malformed payload can't crash the endpoint.
 
@@ -366,7 +378,7 @@ def validate_and_degrade(
     extract_recommendation's own home_team/away_team params, src/agent/schema.py):
     `GET /api/recommendations/{match_id}` (main.py) only has match_id/date, not
     a ground-truth fixture to compare against, so it calls this with neither --
-    the match-mismatch check is skipped, but the per-market validation below
+    the match-mismatch check is skipped, but the per-candidate validation below
     still runs, which is what that endpoint actually needs (BUG-028: it used
     to call MatchRecommendationOut.model_validate() directly instead of this
     function at all, so any pre-existing cached row with a market/selection
@@ -374,7 +386,23 @@ def validate_and_degrade(
     local-model hallucinations this file's other bugs document routinely wrote
     non-canonical values -- raised an uncaught ValidationError, a 500 for a
     plain cache read, not the graceful degrade every other caller already got.)
-    """
+
+    W193 (2026-09-01 design): `markets`/`pick_recommended_market()`'s
+    max(value_edge) reduction replaced by `candidates`/`recommendation_pick`
+    -- resolved via the same resolve_recommendation_pick() the agent side
+    uses (src/agent/market_resolution.py), against the *raw* candidate dicts
+    first (so a dangling pointer -- the LLM named something never listed --
+    is caught the same way as any other malformed pick), then cross-checked
+    against the *validated* candidate list (so a pick whose own candidate
+    failed structural validation doesn't survive just because it was found
+    in the raw list). Either failure mode collapses to the same outcome: no
+    resolvable pick, `overall` capped at "no_bet" if it claimed anything
+    stronger -- the app-layer mirror of A90's own downgrade-only rule, since
+    this layer doesn't re-run the agent's guardrails itself. An old-shape
+    cached row (no `candidates`/`recommendation_pick` key at all) needs no
+    separate detection: raw.get("candidates") is naturally [],
+    raw.get("recommendation_pick") is naturally None, and the same cap
+    applies."""
     if home_team and away_team:
         reported = reported_teams(raw.get("match") or {})
     else:
@@ -387,7 +415,8 @@ def validate_and_degrade(
         return MatchRecommendationOut(
             match={"home_team": home_team, "away_team": away_team},
             overall="insufficient_data",
-            markets=[],
+            candidates=[],
+            recommendation_pick=None,
             explanation=["The agent's analysis referenced a different match than requested and was discarded."],
             confidence="low",
             limitations=[
@@ -395,14 +424,14 @@ def validate_and_degrade(
                 f"{home_team} v {away_team} -- discarded as a mismatch."
             ],
             prediction_basis="unknown",
-            invalid_market_count=len(raw.get("markets") or []),
+            invalid_market_count=len(raw.get("candidates") or []),
         )
 
-    valid_markets: list[MarketRecommendationOut] = []
+    valid_candidates: list[MarketCandidateOut] = []
     invalid_count = 0
-    for market in raw.get("markets") or []:
+    for candidate in raw.get("candidates") or []:
         try:
-            valid_markets.append(MarketRecommendationOut.model_validate(market))
+            valid_candidates.append(MarketCandidateOut.model_validate(candidate))
         except ValidationError:
             invalid_count += 1
 
@@ -410,10 +439,25 @@ def validate_and_degrade(
     if invalid_count:
         limitations.append(f"{invalid_count} market(s) omitted: malformed data from the agent.")
 
+    overall = raw.get("overall") or "insufficient_data"
+    picked_raw = resolve_recommendation_pick(raw.get("candidates") or [], raw.get("recommendation_pick"))
+    resolved_pick: RecommendationPickOut | None = None
+    if picked_raw is not None:
+        still_valid = any(
+            c.market == picked_raw.get("market") and c.selection == picked_raw.get("selection")
+            for c in valid_candidates
+        )
+        if still_valid:
+            resolved_pick = RecommendationPickOut(market=picked_raw["market"], selection=picked_raw["selection"])
+    if resolved_pick is None and overall not in ("no_bet", "insufficient_data"):
+        limitations.append("No resolvable recommendation_pick -- overall capped at no_bet.")
+        overall = "no_bet"
+
     return MatchRecommendationOut(
         match=raw.get("match") or {},
-        overall=raw.get("overall") or "insufficient_data",
-        markets=valid_markets,
+        overall=overall,
+        candidates=valid_candidates,
+        recommendation_pick=resolved_pick,
         explanation=normalize_explanation(raw.get("explanation")),
         confidence=raw.get("confidence") or "low",
         limitations=limitations,
