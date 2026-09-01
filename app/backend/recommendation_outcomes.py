@@ -4,8 +4,10 @@ bet_tracker.py (which only records what the user chose to log), this
 resolves every actionable recommendation the agent produced against real
 results, for the user's own diagnostics (GET /api/recommendations/stats,
 recommendation_stats.py). One row per (match_id, date): the agent's actual
-pick (A81's pick_recommended_market) from that match's latest cached
-recommendation, resolved won/lost via src.agent.market_resolution.
+pick (A88's resolve_recommendation_pick, W194 -- resolved against the
+recommendation's own candidates/recommendation_pick, not A81's now-retired
+max(value_edge) reduction) from that match's latest cached recommendation,
+resolved won/lost via src.agent.market_resolution.
 
 Own db file (data/recommendation_outcomes.db), not recommendation_cache.db --
 matches this codebase's established one-concern-one-db-file convention
