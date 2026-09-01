@@ -737,8 +737,10 @@ Finally, in the same step: both `MatchUI.test.tsx` and `MatchUI.hitMiss.test.tsx
 
 - [ ] **Step 3: Run tests to verify they pass**
 
-Run: `npx jest MatchUI.test.tsx MatchUI.hitMiss.test.tsx -v`
+Run (from `app/frontend/`): `npx vitest run components/__tests__/MatchUI.test.tsx components/__tests__/MatchUI.hitMiss.test.tsx`
 Expected: PASS, every test in both files -- this is the one and only test run for this task, per the note at the top explaining why.
+
+**Test runner correction:** this project uses Vitest, not Jest (`package.json`'s `scripts.test` is `vitest run`) -- every command in this plan runs from `app/frontend/`, e.g. `cd app/frontend && npx vitest run <path>`. Vitest's CLI is Jest-compatible for `-t <pattern>` filtering and the `describe`/`test`/`expect` API the test code above already uses, so nothing about the test *code* in this plan needs to change, only the commands. If `app/frontend/node_modules` doesn't exist in this worktree (git worktrees don't copy it), symlink it from the main checkout rather than a full `npm install` -- confirm `package-lock.json` is byte-identical first (`diff app/frontend/package-lock.json /Users/tianqihuang/Documents/GitHub/FPAI/app/frontend/package-lock.json`), then `ln -s /Users/tianqihuang/Documents/GitHub/FPAI/app/frontend/node_modules app/frontend/node_modules`.
 
 - [ ] **Step 4: Commit**
 
@@ -789,7 +791,7 @@ test("rankTopEdges reads the resolved recommendation, not a value-maximizing red
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `npx jest dashboardMetrics.test.ts -t "reads the resolved recommendation"`
+Run (from `app/frontend/`): `npx vitest run lib/dashboardMetrics.test.ts -t "reads the resolved recommendation"`
 Expected: FAIL — `pricedEdge`/`bestMarket` still reduces by max `valueEdge`, so `top.edge` would be `0.15`, not `0.07`.
 
 - [ ] **Step 3: Implement, then rework the file's own fixtures**
@@ -808,7 +810,7 @@ Rework `dashboardMetrics.test.ts`'s own existing `Match` fixtures the same way T
 
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run: `npx jest dashboardMetrics.test.ts -v`
+Run (from `app/frontend/`): `npx vitest run lib/dashboardMetrics.test.ts`
 Expected: PASS, every test in the file.
 
 - [ ] **Step 5: Commit**
@@ -881,7 +883,7 @@ Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>"
 Run: `python -m pytest tests/ app/backend/tests/ -q 2>&1 | tail -30`
 Expected: clean except the session's own already-documented pre-existing `app/backend/tests/test_fixtures_endpoint.py` failures (5, confirmed unrelated across every story this session). If anything else is red, stop and fix it before continuing.
 
-Run: `npx jest 2>&1 | tail -40` (or whatever this project's real frontend test command is — check `package.json`'s `scripts.test` first if unsure)
+Run (from `app/frontend/`): `npx vitest run 2>&1 | tail -40`
 Expected: clean.
 
 - [ ] **Step 2: Update Phase 47's stories in `documents/app_user_stories.md`**
