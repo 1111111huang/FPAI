@@ -471,10 +471,9 @@ export function marketCorrect(market: string, selection: string, actual: ActualO
  * backend already resolved which candidate is the pick -- there is
  * nothing left to rank client-side. */
 export function resolveRecommendation(match: Match): MarketRec | undefined {
-  if (!match.recommendationPick) return undefined;
-  return match.candidates.find(
-    (c) => c.market === match.recommendationPick!.market && c.selection === match.recommendationPick!.selection
-  );
+  const pick = match.recommendationPick;
+  if (!pick) return undefined;
+  return match.candidates.find((c) => c.market === pick.market && c.selection === pick.selection);
 }
 
 /** Mockup point 3: backs Daily Edges' "N with positive edge" summary line.
