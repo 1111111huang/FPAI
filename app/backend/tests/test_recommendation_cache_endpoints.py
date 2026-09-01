@@ -19,14 +19,16 @@ from app.backend.main import app
 from app.backend.recommendation_cache import RecommendationCache
 from src.agent.agent_config import AgentConfig
 
-_VALID_MARKET = {
+_VALID_CANDIDATE = {
     "market": "result_3way", "selection": "home", "recommendation_type": "direct_bet",
     "current_odds": 2.1, "min_odds": 1.8, "ml_probability": 0.55,
     "implied_probability": 0.48, "value_edge": 0.07,
+    "composite_score": 0.6, "reason": "Clears the edge floor at a realistic price.",
 }
 _VALID_RECOMMENDATION = {
     "match": {"home": "Arsenal", "away": "Everton", "date": "2026-08-22", "league": "E0"},
-    "overall": "direct_bet", "markets": [_VALID_MARKET],
+    "overall": "direct_bet", "candidates": [_VALID_CANDIDATE],
+    "recommendation_pick": {"market": "result_3way", "selection": "home"},
     "explanation": "Value found.", "confidence": "medium", "limitations": [],
     "prediction_basis": "team_history_and_market",
 }
@@ -128,18 +130,18 @@ def test_get_degrades_a_legacy_cached_row_instead_of_500ing(tmp_path: Path):
     hallucination with selection="Arsenal" instead of home/draw/away) that
     was crashing this exact endpoint before the fix below."""
     cache = _override_cache(tmp_path)
-    legacy_market = {**_VALID_MARKET, "market": "1X2", "selection": "Arsenal"}
+    legacy_market = {**_VALID_CANDIDATE, "market": "1X2", "selection": "Arsenal"}
     cache.record_generation(
         match_id="m1", date="2026-08-22",
         agent_config_hash=compute_agent_config_hash(AgentConfig.default()),
-        odds={}, recommendation={**_VALID_RECOMMENDATION, "markets": [legacy_market]},
+        odds={}, recommendation={**_VALID_RECOMMENDATION, "candidates": [legacy_market], "recommendation_pick": None},
         triggered_by="scheduled",
     )
     try:
         with TestClient(app) as client:
             response = client.get("/api/recommendations/m1", params={"date": "2026-08-22"})
         assert response.status_code == 200
-        assert response.json()["markets"] == []
+        assert response.json()["candidates"] == []
         assert response.json()["invalid_market_count"] == 1
     finally:
         app.dependency_overrides.clear()

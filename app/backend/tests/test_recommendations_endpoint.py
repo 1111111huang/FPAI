@@ -16,7 +16,7 @@ from app.backend import recommendations
 from app.backend.main import app
 from app.backend.odds_api_client import NormalizedOdds
 
-_VALID_MARKET = {
+_VALID_CANDIDATE = {
     "market": "result_3way",
     "selection": "home",
     "recommendation_type": "direct_bet",
@@ -25,12 +25,15 @@ _VALID_MARKET = {
     "ml_probability": 0.55,
     "implied_probability": 0.48,
     "value_edge": 0.07,
+    "composite_score": 0.6,
+    "reason": "Clears the edge floor at a realistic price.",
 }
 
 _VALID_RECOMMENDATION = {
     "match": {"home": "Arsenal", "away": "Everton", "date": "2026-08-22", "league": "E0"},
     "overall": "direct_bet",
-    "markets": [_VALID_MARKET],
+    "candidates": [_VALID_CANDIDATE],
+    "recommendation_pick": {"market": "result_3way", "selection": "home"},
     "explanation": "Value found on the home win.",
     "confidence": "medium",
     "limitations": [],
@@ -49,7 +52,7 @@ def test_valid_request_returns_schema_valid_recommendation():
     assert response.status_code == 200
     body = response.json()
     assert body["overall"] == "direct_bet"
-    assert len(body["markets"]) == 1
+    assert len(body["candidates"]) == 1
     assert body["invalid_market_count"] == 0
     mock_run.assert_called_once()
     match_info = mock_run.call_args.args[0]
@@ -57,8 +60,8 @@ def test_valid_request_returns_schema_valid_recommendation():
 
 
 def test_malformed_market_degrades_gracefully_not_a_500():
-    bad_market = {**_VALID_MARKET, "value_edge": "high"}
-    raw = {**_VALID_RECOMMENDATION, "markets": [bad_market]}
+    bad_market = {**_VALID_CANDIDATE, "value_edge": "high"}
+    raw = {**_VALID_RECOMMENDATION, "candidates": [bad_market], "recommendation_pick": None}
 
     with patch("app.backend.recommendations.run_agent", return_value=raw):
         with TestClient(app) as client:
@@ -69,7 +72,7 @@ def test_malformed_market_degrades_gracefully_not_a_500():
 
     assert response.status_code == 200
     body = response.json()
-    assert body["markets"] == []
+    assert body["candidates"] == []
     assert body["invalid_market_count"] == 1
 
 
