@@ -96,10 +96,30 @@ def resolve_recommendation_pick(
     value rather than distinguished, since the caller's reaction is
     identical either way (src/agent/schema.py's
     _resolve_recommendation_pick adds a distinguishing limitations note for
-    the second case, but treats both as no-pick)."""
-    if pick is None:
+    the second case, but treats both as no-pick).
+
+    W193 code-quality followup (2026-09-01): reads via `.get()`, not `[]`,
+    and skips a non-dict candidate rather than raising -- this function's
+    original two callers (src/agent/schema.py's own downgrade pipeline)
+    only ever pass Pydantic-validated data, where a missing key or a wrong
+    type genuinely can't happen. `app/backend/recommendations.py`'s
+    `validate_and_degrade()` (W193) is a different kind of caller: it calls
+    this against the *raw*, not-yet-validated dict straight from an LLM
+    response or a cache row, specifically so a dangling/malformed pick is
+    caught the same way as any other malformed candidate -- but that only
+    works if this function itself can't crash on the very malformed input
+    it's being asked to evaluate. Confirmed live: a raw candidate missing
+    `"market"`, or `pick` missing `"selection"`, or either not being a dict
+    at all, all previously raised KeyError/TypeError here, unguarded, up
+    through `GET /api/recommendations/{match_id}` -- exactly the crash
+    class BUG-028 exists to prevent."""
+    if not isinstance(pick, dict):
         return None
+    pick_market = pick.get("market")
+    pick_selection = pick.get("selection")
     for candidate in candidates:
-        if candidate["market"] == pick["market"] and candidate["selection"] == pick["selection"]:
+        if not isinstance(candidate, dict):
+            continue
+        if candidate.get("market") == pick_market and candidate.get("selection") == pick_selection:
             return candidate
     return None

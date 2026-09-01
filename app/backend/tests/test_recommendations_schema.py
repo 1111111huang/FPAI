@@ -284,3 +284,22 @@ def test_no_bet_and_insufficient_data_are_never_touched_by_the_cap():
         raw = {**_VALID_RAW, "overall": value, "candidates": [], "recommendation_pick": None}
         result = validate_and_degrade(raw)
         assert result.overall == value
+
+
+def test_malformed_recommendation_pick_degrades_gracefully_not_a_500():
+    """Code-quality review (2026-09-01): resolve_recommendation_pick() is
+    called here against RAW, not-yet-validated data -- a recommendation_pick
+    missing "selection", or one that isn't a dict at all, previously raised
+    an unguarded KeyError/TypeError straight through GET
+    /api/recommendations/{match_id}, exactly the crash class BUG-028 exists
+    to prevent. Both must now degrade the same as any other unresolvable
+    pick: no pick, overall capped."""
+    raw = {**_VALID_RAW, "recommendation_pick": {"market": "result_3way"}}  # missing "selection"
+    result = validate_and_degrade(raw)
+    assert result.recommendation_pick is None
+    assert result.overall == "no_bet"
+
+    raw = {**_VALID_RAW, "recommendation_pick": "not-a-dict"}
+    result = validate_and_degrade(raw)
+    assert result.recommendation_pick is None
+    assert result.overall == "no_bet"

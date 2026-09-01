@@ -127,3 +127,29 @@ def test_resolve_recommendation_pick_returns_none_when_pick_not_in_candidates():
     candidates = [{"market": "result_3way", "selection": "home", "value_edge": 0.02}]
     pick = {"market": "btts", "selection": "yes"}
     assert resolve_recommendation_pick(candidates, pick) is None
+
+
+def test_resolve_recommendation_pick_tolerates_malformed_raw_data_instead_of_crashing():
+    """W193 code-quality followup: this function is now called against
+    RAW, not-yet-validated data too (app/backend/recommendations.py's
+    validate_and_degrade(), against an LLM response or a cache row before
+    any Pydantic check has run) -- unlike its original two callers, which
+    only ever pass already-validated dicts. A missing key, a wrong type, or
+    a non-dict entry must all degrade to 'no pick found', never raise."""
+    # pick missing "selection" entirely
+    assert resolve_recommendation_pick(
+        [{"market": "result_3way", "selection": "home"}], {"market": "result_3way"}
+    ) is None
+    # a candidate missing "market" entirely -- skipped, not a crash
+    assert resolve_recommendation_pick(
+        [{"selection": "home"}], {"market": "result_3way", "selection": "home"}
+    ) is None
+    # pick is not a dict at all
+    assert resolve_recommendation_pick(
+        [{"market": "result_3way", "selection": "home"}], "not-a-dict"
+    ) is None
+    # a candidate is not a dict at all -- skipped, the real one after it still matches
+    real_candidate = {"market": "btts", "selection": "no"}
+    assert resolve_recommendation_pick(
+        ["not-a-dict", real_candidate], {"market": "btts", "selection": "no"}
+    ) == real_candidate
