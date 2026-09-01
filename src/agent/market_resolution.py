@@ -59,23 +59,6 @@ def build_actual_outcome(home_goals: int, away_goals: int) -> dict[str, Any]:
     }
 
 
-def pick_recommended_market(markets: list[dict[str, Any]]) -> dict[str, Any] | None:
-    """Which single market a recommendation actually picked -- ports
-    MatchUI.tsx's bestMarket() into Python (A81) so the app's outcome
-    resolver (app/backend/recommendation_outcomes.py, W167) can determine
-    server-side the same market a completed card's Hit/Not-Hit badge
-    already reflects client-side. Prefers a non-'no_bet' market; falls back
-    to ranking among all markets (including no_bet) only when nothing is
-    actionable at all. Ties broken by value_edge, highest first -- Python's
-    max() returns the first maximal element on ties, matching a stable
-    descending sort's own tie-break order."""
-    if not markets:
-        return None
-    actionable = [m for m in markets if m.get("recommendation_type") != "no_bet"]
-    pool = actionable if actionable else markets
-    return max(pool, key=lambda m: m.get("value_edge") or 0.0)
-
-
 def resolve_recommendation_pick(
     candidates: list[dict[str, Any]], pick: dict[str, Any] | None
 ) -> dict[str, Any] | None:
@@ -83,11 +66,10 @@ def resolve_recommendation_pick(
     lookup -- `pick` is the LLM's own stated choice (RecommendationPickModel,
     src/agent/schema.py: market+selection only, no duplicated numeric
     fields), and this finds the matching full entry in `candidates`. Unlike
-    pick_recommended_market() above (a max(value_edge) reduction, kept
-    unchanged -- still used by app/backend/recommendation_outcomes.py's
-    settlement path until that migrates in a follow-up phase), this is a
-    plain equality lookup: there is nothing to rank, `pick` already names
-    the one candidate that matters.
+    the old markets-array max(value_edge) reduction this schema replaced
+    (A81's pick_recommended_market(), deleted W197 once every caller had
+    migrated), this is a plain equality lookup: there is nothing to rank,
+    `pick` already names the one candidate that matters.
 
     Returns None both when `pick` is None (no recommendation offered) and
     when `pick` names a market/selection absent from `candidates` (the LLM
