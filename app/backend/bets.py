@@ -69,6 +69,12 @@ def resolve_from_recommendation(request: BetFromRecommendationRequest) -> dict:
     away_team = match.get("away") or match.get("away_team")
     date = match.get("date")
 
+    # W195: the pointer is built from the REQUEST's own market/selection, not
+    # request.recommendation.get("recommendation_pick") -- deliberate, not an
+    # oversight. A user can log a bet on any candidate the recommendation
+    # actually listed, not only the one the agent picked as its own
+    # headline recommendation_pick; this preserves that permissive behavior
+    # rather than silently narrowing what's loggable.
     picked = resolve_recommendation_pick(
         request.recommendation.get("candidates") or [],
         {"market": request.market, "selection": request.selection},
