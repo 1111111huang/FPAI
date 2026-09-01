@@ -186,6 +186,16 @@ class RecommendationCache:
             ).fetchall()
         return [self._row_to_entry(row) for row in rows]
 
+    def most_recent_generated_at(self) -> str | None:
+        """Latest `generated_at` across every row, any match/config -- used
+        by main.py's boot-time pregenerate cooldown to tell "the cache is
+        already fresh from a recent EOD/T-30/pregenerate pass" from "this
+        container has been cold for a while", without caring which job
+        produced the freshness."""
+        with self._connect() as conn:
+            row = conn.execute("SELECT MAX(generated_at) FROM recommendation_generations").fetchone()
+        return row[0] if row and row[0] else None
+
     @staticmethod
     def _row_to_entry(row: tuple) -> CacheEntry:
         return CacheEntry(

@@ -259,7 +259,31 @@ _PREGENERATE_DEFAULT_DAYS_AHEAD = 3
 # a larger explicit override for a deliberate wider backfill (e.g. ahead of
 # a busy weekend) -- only the automatic boot-time default shrank.
 _PREGENERATE_DEFAULT_CONCURRENCY = 2
+# Direct user report (2026-08-30): every redeploy re-fires boot pregenerate
+# (W103, by design -- see the lifespan comment below), and during an active
+# bugfix session that can mean several redeploys an hour. already_fresh()
+# (eod_batch.py) already skips the real-money LLM call when odds haven't
+# moved, but it still costs a football-data.org get_fixtures() call plus one
+# Odds-API get_odds() call per league *before* that check even runs -- real
+# credits spent just to confirm nothing changed, on top of BUG-058's
+# football-data.org rate-limit finding from the same session. A cooldown
+# skips the whole pass (network calls included) when the cache shows a
+# generation from any recent EOD/T-30/pregenerate pass -- the redeploy
+# itself never invalidates freshness, so there's nothing to catch up on yet.
+# The admin endpoint (POST /api/admin/pregenerate-recommendations) is
+# deliberately NOT gated by this -- an explicit trigger means "do it now".
+_PREGENERATE_COOLDOWN_MINUTES = 20
 _background_tasks: set[asyncio.Task] = set()
+
+
+def _pregenerate_recently_ran(cache: RecommendationCache, minutes: int = _PREGENERATE_COOLDOWN_MINUTES) -> bool:
+    latest = cache.most_recent_generated_at()
+    if latest is None:
+        return False
+    last = datetime.fromisoformat(latest)
+    if last.tzinfo is None:
+        last = last.replace(tzinfo=timezone.utc)
+    return (datetime.now(timezone.utc) - last) < timedelta(minutes=minutes)
 
 
 def _fire_and_forget(coro) -> None:
@@ -422,7 +446,15 @@ async def lifespan(app: FastAPI):
         # would fire on every test file's `with TestClient(app)` too, the
         # exact class of problem that made the scheduler registration above
         # opt-in in the first place (W08/W09's own comment, unchanged).
-        _fire_and_forget(_pregenerate_recommendations(scheduler=scheduler))
+        if _pregenerate_recently_ran(recommendations.get_cache()):
+            LOGGER.info(
+                "Skipping boot-time pregenerate -- a generation already ran within the last "
+                "%d minutes (likely a recent redeploy, or an EOD/T-30 job already keeping the "
+                "cache fresh). Use POST /api/admin/pregenerate-recommendations to force a run.",
+                _PREGENERATE_COOLDOWN_MINUTES,
+            )
+        else:
+            _fire_and_forget(_pregenerate_recommendations(scheduler=scheduler))
     else:
         LOGGER.info("Scheduler disabled -- set ENABLE_SCHEDULER=1 to enable the EOD/T-30 pipeline.")
 

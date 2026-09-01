@@ -45,6 +45,41 @@ def test_default_days_ahead_is_3_not_5():
     assert main._PREGENERATE_DEFAULT_DAYS_AHEAD == 3
 
 
+def test_pregenerate_recently_ran_false_when_cache_empty(tmp_path):
+    from app.backend.recommendation_cache import RecommendationCache
+
+    cache = RecommendationCache(db_path=tmp_path / "cache.db")
+    assert main._pregenerate_recently_ran(cache) is False
+
+
+def test_pregenerate_recently_ran_true_within_cooldown(tmp_path):
+    from datetime import datetime, timedelta, timezone
+
+    from app.backend.recommendation_cache import RecommendationCache
+
+    cache = RecommendationCache(db_path=tmp_path / "cache.db")
+    recent = (datetime.now(timezone.utc) - timedelta(minutes=5)).isoformat()
+    cache.record_generation(
+        match_id="m1", date="2026-08-22", agent_config_hash="cfg-hash",
+        odds={}, recommendation={}, triggered_by="scheduled", generated_at=recent,
+    )
+    assert main._pregenerate_recently_ran(cache) is True
+
+
+def test_pregenerate_recently_ran_false_once_cooldown_elapsed(tmp_path):
+    from datetime import datetime, timedelta, timezone
+
+    from app.backend.recommendation_cache import RecommendationCache
+
+    cache = RecommendationCache(db_path=tmp_path / "cache.db")
+    stale = (datetime.now(timezone.utc) - timedelta(minutes=25)).isoformat()
+    cache.record_generation(
+        match_id="m1", date="2026-08-22", agent_config_hash="cfg-hash",
+        odds={}, recommendation={}, triggered_by="scheduled", generated_at=stale,
+    )
+    assert main._pregenerate_recently_ran(cache) is False
+
+
 def test_groups_fixtures_by_league_and_runs_one_batch_per_league(monkeypatch):
     monkeypatch.delenv("APP_ACCESS_TOKEN", raising=False)
     fixtures = [_fixture("m1", "E0"), _fixture("m2", "E0"), _fixture("m3", "SWE")]

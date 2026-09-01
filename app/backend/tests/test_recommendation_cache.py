@@ -33,6 +33,24 @@ def test_get_latest_returns_none_when_nothing_cached(tmp_path: Path) -> None:
     assert cache.get_latest("m1", "2026-08-22", "cfg-hash") is None
 
 
+def test_most_recent_generated_at_returns_none_when_empty(tmp_path: Path) -> None:
+    cache = RecommendationCache(db_path=tmp_path / "cache.db")
+    assert cache.most_recent_generated_at() is None
+
+
+def test_most_recent_generated_at_returns_the_latest_across_every_row(tmp_path: Path) -> None:
+    cache = RecommendationCache(db_path=tmp_path / "cache.db")
+    cache.record_generation(
+        match_id="m1", date="2026-08-22", agent_config_hash="cfg-hash",
+        odds={}, recommendation={}, triggered_by="scheduled", generated_at="2026-08-22T10:00:00+00:00",
+    )
+    cache.record_generation(
+        match_id="m2", date="2026-08-22", agent_config_hash="cfg-hash",
+        odds={}, recommendation={}, triggered_by="scheduled", generated_at="2026-08-22T12:00:00+00:00",
+    )
+    assert cache.most_recent_generated_at() == "2026-08-22T12:00:00+00:00"
+
+
 def test_record_and_retrieve_a_generation(tmp_path: Path) -> None:
     cache = RecommendationCache(db_path=tmp_path / "cache.db")
     odds = {"home": 1.5, "draw": 4.0, "away": 6.0}
