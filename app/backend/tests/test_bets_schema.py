@@ -19,10 +19,11 @@ from app.backend.bets import BetFromRecommendationRequest, BetManualRequest, res
 _RECOMMENDATION = {
     "match": {"home": "Arsenal", "away": "Everton", "date": "2026-08-22", "league": "E0"},
     "overall": "direct_bet",
-    "markets": [
+    "candidates": [
         {"market": "result_3way", "selection": "home", "recommendation_type": "direct_bet", "current_odds": 2.1},
         {"market": "btts", "selection": "yes", "recommendation_type": "conditional", "current_odds": 1.9},
     ],
+    "recommendation_pick": {"market": "result_3way", "selection": "home"},
     "explanation": "test",
     "confidence": "medium",
     "limitations": [],
@@ -62,7 +63,7 @@ def test_resolve_from_recommendation_raises_when_market_selection_not_in_snapsho
 
 
 def test_resolve_from_recommendation_raises_when_odds_are_null():
-    rec = {**_RECOMMENDATION, "markets": [{"market": "btts", "selection": "yes", "current_odds": None}]}
+    rec = {**_RECOMMENDATION, "candidates": [{"market": "btts", "selection": "yes", "current_odds": None}]}
     request = BetFromRecommendationRequest(
         match_id="m1", recommendation=rec, market="btts", selection="yes", stake=10.0,
     )
@@ -84,3 +85,21 @@ def test_manual_request_accepts_a_resolved_fixture():
         market="btts", selection="yes", odds=1.9, stake=5.0,
     )
     assert request.match_id == "m1"
+
+
+def test_resolve_from_recommendation_reads_candidates_shape():
+    rec = {
+        "match": {"home": "Arsenal", "away": "Everton", "date": "2026-08-22", "league": "E0"},
+        "overall": "direct_bet",
+        "candidates": [
+            {"market": "result_3way", "selection": "home", "recommendation_type": "direct_bet", "current_odds": 2.1},
+            {"market": "btts", "selection": "yes", "recommendation_type": "conditional", "current_odds": 1.9},
+        ],
+        "recommendation_pick": {"market": "result_3way", "selection": "home"},
+        "explanation": "test", "confidence": "medium", "limitations": [], "prediction_basis": "team_history_and_market",
+    }
+    request = BetFromRecommendationRequest(match_id="m1", recommendation=rec, market="btts", selection="yes", stake=10.0)
+
+    resolved = resolve_from_recommendation(request)
+
+    assert resolved["odds"] == 1.9

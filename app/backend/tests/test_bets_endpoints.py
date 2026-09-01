@@ -16,9 +16,10 @@ from app.backend.main import app
 _RECOMMENDATION = {
     "match": {"home": "Arsenal", "away": "Everton", "date": "2026-08-22", "league": "E0"},
     "overall": "direct_bet",
-    "markets": [
+    "candidates": [
         {"market": "result_3way", "selection": "home", "recommendation_type": "direct_bet", "current_odds": 2.1},
     ],
+    "recommendation_pick": {"market": "result_3way", "selection": "home"},
     "explanation": "test", "confidence": "medium", "limitations": [], "prediction_basis": "team_history_and_market",
 }
 

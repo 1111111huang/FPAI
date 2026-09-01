@@ -17,6 +17,7 @@ from pydantic import BaseModel, Field
 
 from app.backend.bet_tracker import Bet, BetTracker
 from app.backend.sandbox_clock import is_sandbox_mode, sandbox_scoped_path
+from src.agent.market_resolution import resolve_recommendation_pick
 
 
 class BetOut(BaseModel):
@@ -68,18 +69,15 @@ def resolve_from_recommendation(request: BetFromRecommendationRequest) -> dict:
     away_team = match.get("away") or match.get("away_team")
     date = match.get("date")
 
-    matching_market = next(
-        (
-            m for m in request.recommendation.get("markets") or []
-            if m.get("market") == request.market and m.get("selection") == request.selection
-        ),
-        None,
+    picked = resolve_recommendation_pick(
+        request.recommendation.get("candidates") or [],
+        {"market": request.market, "selection": request.selection},
     )
-    if matching_market is None:
+    if picked is None:
         raise ValueError(
             f"Market {request.market!r}/selection {request.selection!r} not found in the given recommendation."
         )
-    odds = matching_market.get("current_odds")
+    odds = picked.get("current_odds")
     if odds is None:
         raise ValueError(f"Market {request.market!r}/selection {request.selection!r} has no current_odds to bet against.")
 
