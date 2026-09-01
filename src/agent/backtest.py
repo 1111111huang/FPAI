@@ -201,6 +201,15 @@ def process_match_row(
         agent_tools.configure_snapshot_store("live")
 
     actual = load_outcome(row)
+    # A92: market_results reflects only the one candidate the agent actually
+    # picked, not every candidate that independently passed guardrails --
+    # recommendation.get("markets", []) used to iterate all of them, but that
+    # key hasn't existed on real run_agent() output since Phase 29 (candidates
+    # + recommendation_pick replaced it), so this silently returned [] on
+    # every real backtest/train run. Resolving through the same
+    # resolve_recommendation_pick() every other caller in that redesign uses
+    # also narrows backtest to one bet per match, matching what live
+    # settlement/recommendation_stats.py already do.
     picked = resolve_recommendation_pick(
         recommendation.get("candidates") or [], recommendation.get("recommendation_pick")
     )
