@@ -1,4 +1,4 @@
-import { bestMarket, dayDiff, type Match, type Overall } from "@/components/MatchUI";
+import { resolveRecommendation, dayDiff, type Match, type Overall } from "@/components/MatchUI";
 
 // Direct user request: "completed" as a 5th, mutually-exclusive category --
 // not part of the Overall union (that's a recommendation type, this is a
@@ -26,20 +26,20 @@ export function countByOverall(matches: Match[]): OverallCounts {
 
 export type TopEdge = { match: Match; edge: number };
 
-/** The best market's value_edge, but only when it's a real, priced,
- * actionable edge -- a match with no markets at all, whose best market has
+/** The resolved recommendation's value_edge, but only when it's a real,
+ * priced, actionable edge -- a match with no resolvable pick, whose pick has
  * no live odds (current_odds null -- an unpriceable edge, not a real one),
- * or whose only markets are no_bet (nothing actually clears the value
- * threshold), has no priced edge to report. That last case matters here
- * specifically: bestMarket() already prefers an actionable market when one
- * exists, but for an all-no_bet match it still returns the least-bad no_bet
- * market so MatchCard has *something* to show -- "Top Edges" must not treat
- * that fallback value as a real ranked edge, or a "No Bet" match could
- * outrank a genuine direct_bet/conditional opportunity. Shared by
+ * or whose pick is no_bet (nothing actually clears the value threshold), has
+ * no priced edge to report. That last case matters here specifically: the
+ * backend already resolves an actionable candidate as the pick when one
+ * exists, but for an all-no_bet match it still resolves to the least-bad
+ * no_bet candidate so MatchCard has *something* to show -- "Top Edges" must
+ * not treat that fallback value as a real ranked edge, or a "No Bet" match
+ * could outrank a genuine direct_bet/conditional opportunity. Shared by
  * rankTopEdges and sortMatches so both treat "no real edge" identically
  * instead of drifting apart. */
 function pricedEdge(m: Match): number | null {
-  const shown = bestMarket(m);
+  const shown = resolveRecommendation(m);
   if (!shown || shown.currentOdds === null || shown.recommendationType === "no_bet") return null;
   return shown.valueEdge;
 }
@@ -161,20 +161,20 @@ export function sortMatches(matches: Match[], sort: MatchSort): Match[] {
   // comparator fell back to array order (kickoff-ish) instead of the edge
   // % each card actually displays -- e.g. +5.3%, +5.5%, +4.5% shown in that
   // literal, unsorted order. Two-tier sort: pricedEdge (real, actionable
-  // edges only, matching bestMarket()'s own no_bet-never-outranks-a-real-
-  // bet preference) is the primary key, so a No Bet card can still never
-  // rank above a genuine direct_bet/conditional one regardless of its
+  // edges only, matching the resolved pick's own no_bet-never-outranks-a-
+  // real-bet preference) is the primary key, so a No Bet card can still
+  // never rank above a genuine direct_bet/conditional one regardless of its
   // number -- but *within* either tier, break ties by each card's own
-  // displayed edge (bestMarket's value_edge, whatever market that is) so
-  // the visible order always matches the numbers on screen.
+  // displayed edge (the resolved pick's value_edge, whatever market that
+  // is) so the visible order always matches the numbers on screen.
   return [...matches].sort((a, b) => {
     const primaryA = pricedEdge(a);
     const primaryB = pricedEdge(b);
     if (primaryA !== null && primaryB === null) return -1;
     if (primaryA === null && primaryB !== null) return 1;
     if (primaryA !== null && primaryB !== null) return primaryB - primaryA;
-    const displayA = bestMarket(a)?.valueEdge ?? -Infinity;
-    const displayB = bestMarket(b)?.valueEdge ?? -Infinity;
+    const displayA = resolveRecommendation(a)?.valueEdge ?? -Infinity;
+    const displayB = resolveRecommendation(b)?.valueEdge ?? -Infinity;
     return displayB - displayA;
   });
 }

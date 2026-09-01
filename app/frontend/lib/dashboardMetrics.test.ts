@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, test } from "vitest";
 import { countByOverall, groupByDate, groupByLeague, rankTopEdges, sortMatches } from "./dashboardMetrics";
 import type { Match } from "@/components/MatchUI";
 
@@ -14,7 +14,8 @@ function match(overrides: Partial<Match> = {}): Match {
     hasRecommendation: true,
     overall: "direct_bet",
     confidence: "medium",
-    markets: [],
+    candidates: [],
+    recommendationPick: null,
     explanation: [],
     limitations: [],
     predictionBasis: "team_history_and_market",
@@ -94,9 +95,9 @@ describe("countByOverall", () => {
 describe("rankTopEdges", () => {
   it("ranks by value_edge descending, limited to N, excluding matches with no priced market", () => {
     const matches = [
-      match({ id: "low", markets: [{ market: "result_3way", selection: "home", recommendationType: "direct_bet", currentOdds: 2.0, minOdds: 1.5, mlProbability: 0.5, impliedProbability: 0.5, valueEdge: 0.02 }] }),
-      match({ id: "high", markets: [{ market: "result_3way", selection: "home", recommendationType: "direct_bet", currentOdds: 2.0, minOdds: 1.5, mlProbability: 0.5, impliedProbability: 0.5, valueEdge: 0.09 }] }),
-      match({ id: "no-odds", markets: [{ market: "result_3way", selection: "home", recommendationType: "direct_bet", currentOdds: null, minOdds: 1.5, mlProbability: 0.5, impliedProbability: 0.5, valueEdge: 0.5 }] }),
+      match({ id: "low", candidates: [{ market: "result_3way", selection: "home", recommendationType: "direct_bet", currentOdds: 2.0, minOdds: 1.5, mlProbability: 0.5, impliedProbability: 0.5, valueEdge: 0.02 }], recommendationPick: { market: "result_3way", selection: "home" } }),
+      match({ id: "high", candidates: [{ market: "result_3way", selection: "home", recommendationType: "direct_bet", currentOdds: 2.0, minOdds: 1.5, mlProbability: 0.5, impliedProbability: 0.5, valueEdge: 0.09 }], recommendationPick: { market: "result_3way", selection: "home" } }),
+      match({ id: "no-odds", candidates: [{ market: "result_3way", selection: "home", recommendationType: "direct_bet", currentOdds: null, minOdds: 1.5, mlProbability: 0.5, impliedProbability: 0.5, valueEdge: 0.5 }], recommendationPick: { market: "result_3way", selection: "home" } }),
       match({ id: "no-rec", hasRecommendation: false }),
     ];
     const ranked = rankTopEdges(matches, 5);
@@ -108,7 +109,7 @@ describe("rankTopEdges", () => {
     const matches = Array.from({ length: 10 }, (_, i) =>
       match({
         id: `m${i}`,
-        markets: [{ market: "result_3way", selection: "home", recommendationType: "direct_bet", currentOdds: 2.0, minOdds: 1.5, mlProbability: 0.5, impliedProbability: 0.5, valueEdge: i / 100 }],
+        candidates: [{ market: "result_3way", selection: "home", recommendationType: "direct_bet", currentOdds: 2.0, minOdds: 1.5, mlProbability: 0.5, impliedProbability: 0.5, valueEdge: i / 100 }], recommendationPick: { market: "result_3way", selection: "home" },
       })
     );
     expect(rankTopEdges(matches, 3)).toHaveLength(3);
@@ -124,16 +125,32 @@ describe("rankTopEdges", () => {
       match({
         id: "no-bet-high-edge",
         overall: "no_bet",
-        markets: [{ market: "result_3way", selection: "away", recommendationType: "no_bet", currentOdds: 5.0, minOdds: 0, mlProbability: 0.23, impliedProbability: 0.2, valueEdge: 0.08 }],
+        candidates: [{ market: "result_3way", selection: "away", recommendationType: "no_bet", currentOdds: 5.0, minOdds: 0, mlProbability: 0.23, impliedProbability: 0.2, valueEdge: 0.08 }], recommendationPick: { market: "result_3way", selection: "away" },
       }),
       match({
         id: "real-bet-lower-edge",
         overall: "direct_bet",
-        markets: [{ market: "result_3way", selection: "home", recommendationType: "direct_bet", currentOdds: 1.8, minOdds: 0, mlProbability: 0.6, impliedProbability: 0.56, valueEdge: 0.04 }],
+        candidates: [{ market: "result_3way", selection: "home", recommendationType: "direct_bet", currentOdds: 1.8, minOdds: 0, mlProbability: 0.6, impliedProbability: 0.56, valueEdge: 0.04 }], recommendationPick: { market: "result_3way", selection: "home" },
       }),
     ];
     const ranked = rankTopEdges(matches, 5);
     expect(ranked.map((r) => r.match.id)).toEqual(["real-bet-lower-edge"]);
+  });
+
+  test("rankTopEdges reads the resolved recommendation, not a value-maximizing reduction", () => {
+    const m = match({
+      overall: "direct_bet",
+      candidates: [
+        { market: "result_3way", selection: "home", recommendationType: "direct_bet", currentOdds: 2.1, minOdds: 1.8, mlProbability: 0.55, impliedProbability: 0.48, valueEdge: 0.07 },
+        { market: "btts", selection: "no", recommendationType: "direct_bet", currentOdds: 2.2, minOdds: 1.8, mlProbability: 0.6, impliedProbability: 0.45, valueEdge: 0.15 },
+      ],
+      recommendationPick: { market: "result_3way", selection: "home" },
+    });
+    const [top] = rankTopEdges([m], 1);
+    // The pick is result_3way/home (edge 0.07), even though btts/no has a
+    // higher raw edge (0.15) -- proves this reads the resolved pick, not
+    // bestMarket()'s old max(valueEdge) behavior.
+    expect(top.edge).toBeCloseTo(0.07);
   });
 });
 
@@ -206,17 +223,17 @@ describe("sortMatches", () => {
 
   it("sorts by edge descending, treating no-priced-market matches as lowest", () => {
     const matches = [
-      match({ id: "no-market", markets: [] }),
-      match({ id: "priced", markets: [{ market: "result_3way", selection: "home", recommendationType: "direct_bet", currentOdds: 2.0, minOdds: 1.5, mlProbability: 0.5, impliedProbability: 0.5, valueEdge: 0.05 }] }),
+      match({ id: "no-market", candidates: [] }),
+      match({ id: "priced", candidates: [{ market: "result_3way", selection: "home", recommendationType: "direct_bet", currentOdds: 2.0, minOdds: 1.5, mlProbability: 0.5, impliedProbability: 0.5, valueEdge: 0.05 }], recommendationPick: { market: "result_3way", selection: "home" } }),
     ];
     expect(sortMatches(matches, "edge").map((m) => m.id)).toEqual(["priced", "no-market"]);
   });
 
   it("sorts by edge descending, treating an unpriced best market (currentOdds null) as lowest, same as no markets at all", () => {
     const matches = [
-      match({ id: "unpriced", markets: [{ market: "result_3way", selection: "home", recommendationType: "direct_bet", currentOdds: null, minOdds: 1.5, mlProbability: 0.5, impliedProbability: 0.5, valueEdge: 0.5 }] }),
-      match({ id: "priced", markets: [{ market: "result_3way", selection: "home", recommendationType: "direct_bet", currentOdds: 2.0, minOdds: 1.5, mlProbability: 0.5, impliedProbability: 0.5, valueEdge: 0.05 }] }),
-      match({ id: "no-market", markets: [] }),
+      match({ id: "unpriced", candidates: [{ market: "result_3way", selection: "home", recommendationType: "direct_bet", currentOdds: null, minOdds: 1.5, mlProbability: 0.5, impliedProbability: 0.5, valueEdge: 0.5 }], recommendationPick: { market: "result_3way", selection: "home" } }),
+      match({ id: "priced", candidates: [{ market: "result_3way", selection: "home", recommendationType: "direct_bet", currentOdds: 2.0, minOdds: 1.5, mlProbability: 0.5, impliedProbability: 0.5, valueEdge: 0.05 }], recommendationPick: { market: "result_3way", selection: "home" } }),
+      match({ id: "no-market", candidates: [] }),
     ];
     expect(sortMatches(matches, "edge").map((m) => m.id)).toEqual(["priced", "unpriced", "no-market"]);
   });
@@ -236,17 +253,17 @@ describe("sortMatches", () => {
   // instead of the numbers actually shown on their own cards.
   it("sorts multiple no_bet-only matches by their own displayed edge, not left tied in array order", () => {
     const matches = [
-      match({ id: "5.3pct", overall: "no_bet", markets: [{ market: "result_3way", selection: "away", recommendationType: "no_bet", currentOdds: 2.2, minOdds: 0, mlProbability: 0.5, impliedProbability: 0.45, valueEdge: 0.053 }] }),
-      match({ id: "5.5pct", overall: "no_bet", markets: [{ market: "result_3way", selection: "away", recommendationType: "no_bet", currentOdds: 6.25, minOdds: 0, mlProbability: 0.2, impliedProbability: 0.16, valueEdge: 0.055 }] }),
-      match({ id: "4.5pct", overall: "no_bet", markets: [{ market: "result_3way", selection: "draw", recommendationType: "no_bet", currentOdds: 3.0, minOdds: 0, mlProbability: 0.38, impliedProbability: 0.33, valueEdge: 0.045 }] }),
+      match({ id: "5.3pct", overall: "no_bet", candidates: [{ market: "result_3way", selection: "away", recommendationType: "no_bet", currentOdds: 2.2, minOdds: 0, mlProbability: 0.5, impliedProbability: 0.45, valueEdge: 0.053 }], recommendationPick: { market: "result_3way", selection: "away" } }),
+      match({ id: "5.5pct", overall: "no_bet", candidates: [{ market: "result_3way", selection: "away", recommendationType: "no_bet", currentOdds: 6.25, minOdds: 0, mlProbability: 0.2, impliedProbability: 0.16, valueEdge: 0.055 }], recommendationPick: { market: "result_3way", selection: "away" } }),
+      match({ id: "4.5pct", overall: "no_bet", candidates: [{ market: "result_3way", selection: "draw", recommendationType: "no_bet", currentOdds: 3.0, minOdds: 0, mlProbability: 0.38, impliedProbability: 0.33, valueEdge: 0.045 }], recommendationPick: { market: "result_3way", selection: "draw" } }),
     ];
     expect(sortMatches(matches, "edge").map((m) => m.id)).toEqual(["5.5pct", "5.3pct", "4.5pct"]);
   });
 
   it("still never ranks a no_bet match above a genuine direct_bet, even with a much higher displayed edge", () => {
     const matches = [
-      match({ id: "no-bet-9pct", overall: "no_bet", markets: [{ market: "result_3way", selection: "away", recommendationType: "no_bet", currentOdds: 5.0, minOdds: 0, mlProbability: 0.23, impliedProbability: 0.2, valueEdge: 0.09 }] }),
-      match({ id: "direct-bet-2pct", overall: "direct_bet", markets: [{ market: "result_3way", selection: "home", recommendationType: "direct_bet", currentOdds: 1.8, minOdds: 0, mlProbability: 0.58, impliedProbability: 0.56, valueEdge: 0.02 }] }),
+      match({ id: "no-bet-9pct", overall: "no_bet", candidates: [{ market: "result_3way", selection: "away", recommendationType: "no_bet", currentOdds: 5.0, minOdds: 0, mlProbability: 0.23, impliedProbability: 0.2, valueEdge: 0.09 }], recommendationPick: { market: "result_3way", selection: "away" } }),
+      match({ id: "direct-bet-2pct", overall: "direct_bet", candidates: [{ market: "result_3way", selection: "home", recommendationType: "direct_bet", currentOdds: 1.8, minOdds: 0, mlProbability: 0.58, impliedProbability: 0.56, valueEdge: 0.02 }], recommendationPick: { market: "result_3way", selection: "home" } }),
     ];
     expect(sortMatches(matches, "edge").map((m) => m.id)).toEqual(["direct-bet-2pct", "no-bet-9pct"]);
   });

@@ -15,7 +15,8 @@ function match(overrides: Partial<Match> = {}): Match {
     hasRecommendation: true,
     overall: "direct_bet",
     confidence: "medium",
-    markets: [{ market: "result_3way", selection: "home", recommendationType: "direct_bet", currentOdds: 2.0, minOdds: 1.5, mlProbability: 0.5, impliedProbability: 0.5, valueEdge: 0.05 }],
+    candidates: [{ market: "result_3way", selection: "home", recommendationType: "direct_bet", currentOdds: 2.0, minOdds: 1.5, mlProbability: 0.5, impliedProbability: 0.5, valueEdge: 0.05 }],
+    recommendationPick: { market: "result_3way", selection: "home" },
     explanation: [],
     limitations: [],
     predictionBasis: "team_history_and_market",
@@ -65,8 +66,8 @@ describe("DashboardRail", () => {
 
   it("renders Top Edges ranked by value_edge descending, as links to Match Analysis", () => {
     const matches = [
-      match({ id: "low", home: "LowEdgeTeam", markets: [{ ...match().markets[0], valueEdge: 0.01 }] }),
-      match({ id: "high", home: "HighEdgeTeam", markets: [{ ...match().markets[0], valueEdge: 0.09 }] }),
+      match({ id: "low", home: "LowEdgeTeam", candidates: [{ ...match().candidates[0], valueEdge: 0.01 }] }),
+      match({ id: "high", home: "HighEdgeTeam", candidates: [{ ...match().candidates[0], valueEdge: 0.09 }] }),
     ];
     render(<DashboardRail matches={matches} />);
     const links = screen.getAllByRole("link");
