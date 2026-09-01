@@ -24,7 +24,7 @@ from app.backend.football_data_client import FootballDataClient
 from app.backend.football_data_competition_codes import FOOTBALL_DATA_CODE_BY_LEAGUE
 from app.backend.recommendation_cache import RecommendationCache
 from app.backend.sandbox_clock import is_sandbox_mode, sandbox_scoped_path
-from src.agent.market_resolution import RESOLVABLE_MARKETS, build_actual_outcome, market_correct, pick_recommended_market
+from src.agent.market_resolution import RESOLVABLE_MARKETS, build_actual_outcome, market_correct, resolve_recommendation_pick
 from src.utils.logger import get_logger
 
 LOGGER = get_logger(__name__)
@@ -274,7 +274,7 @@ def resolve_pending_recommendations(
         if rec.get("overall") not in ("direct_bet", "conditional"):
             not_actionable_count += 1
             continue
-        picked = pick_recommended_market(rec.get("markets") or [])
+        picked = resolve_recommendation_pick(rec.get("candidates") or [], rec.get("recommendation_pick"))
         if picked is None or picked.get("market") not in RESOLVABLE_MARKETS:
             unresolvable_market_count += 1
             continue

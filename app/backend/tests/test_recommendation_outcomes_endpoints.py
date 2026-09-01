@@ -47,7 +47,9 @@ def sweden_client_mock():
 _REC = {
     "match": {"home": "Arsenal", "away": "Everton", "date": "2026-08-22", "league": "E0"},
     "overall": "direct_bet",
-    "markets": [{"market": "result_3way", "selection": "home", "recommendation_type": "direct_bet", "current_odds": 2.0, "value_edge": 0.1}],
+    "candidates": [{"market": "result_3way", "selection": "home", "recommendation_type": "direct_bet",
+                     "current_odds": 2.0, "value_edge": 0.1, "composite_score": 0.6, "reason": "Test fixture."}],
+    "recommendation_pick": {"market": "result_3way", "selection": "home"},
     "confidence": "medium", "explanation": [], "limitations": [], "prediction_basis": "team_history_and_market",
 }
 

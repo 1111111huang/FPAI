@@ -44,10 +44,11 @@ def _rec(league: str = "E0") -> dict:
     return {
         "match": {"home": "Arsenal", "away": "Everton", "date": "2026-08-22", "league": league},
         "overall": "direct_bet",
-        "markets": [{
+        "candidates": [{
             "market": "result_3way", "selection": "home", "recommendation_type": "direct_bet",
-            "current_odds": 2.0, "value_edge": 0.1,
+            "current_odds": 2.0, "value_edge": 0.1, "composite_score": 0.6, "reason": "Test fixture.",
         }],
+        "recommendation_pick": {"market": "result_3way", "selection": "home"},
         "confidence": "medium", "explanation": ["good value"], "limitations": [],
         "prediction_basis": "team_history_and_market",
     }

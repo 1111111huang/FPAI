@@ -27,10 +27,12 @@ def _rec(overall: str, market: str, selection: str, recommendation_type: str, cu
     return {
         "match": {"home": "Arsenal", "away": "Everton", "date": "2026-08-22", "league": league},
         "overall": overall,
-        "markets": [{
+        "candidates": [{
             "market": market, "selection": selection, "recommendation_type": recommendation_type,
             "current_odds": current_odds, "value_edge": value_edge,
+            "composite_score": 0.6, "reason": "Test fixture.",
         }],
+        "recommendation_pick": {"market": market, "selection": selection},
         "confidence": confidence,
         "explanation": [], "limitations": [], "prediction_basis": "team_history_and_market",
     }
@@ -49,6 +51,30 @@ def test_resolves_a_won_direct_bet_pick(tmp_path: Path) -> None:
     assert resolved[0].correct is True
     assert resolved[0].market == "result_3way"
     assert store.list_all()[0].match_id == "m1"
+
+
+def test_resolves_using_the_new_candidates_and_recommendation_pick_shape(tmp_path: Path) -> None:
+    cache = RecommendationCache(db_path=tmp_path / "cache.db")
+    store = RecommendationOutcomeStore(db_path=tmp_path / "outcomes.db")
+    rec = {
+        "match": {"home": "Arsenal", "away": "Everton", "date": "2026-08-22", "league": "E0"},
+        "overall": "direct_bet",
+        "candidates": [{
+            "market": "result_3way", "selection": "home", "recommendation_type": "direct_bet",
+            "current_odds": 2.0, "value_edge": 0.1, "composite_score": 0.6, "reason": "Clears the floor.",
+        }],
+        "recommendation_pick": {"market": "result_3way", "selection": "home"},
+        "confidence": "medium", "explanation": [], "limitations": [], "prediction_basis": "team_history_and_market",
+    }
+    cache.record_generation("m1", "2026-08-22", "hash1", {}, rec, "scheduled")
+    client = MagicMock()
+    client.get_results.return_value = [_match("m1", 2, 1)]
+
+    resolved = resolve_pending_recommendations(cache, store, client)
+
+    assert len(resolved) == 1
+    assert resolved[0].correct is True
+    assert resolved[0].market == "result_3way"
 
 
 def test_resolves_a_lost_pick(tmp_path: Path) -> None:
