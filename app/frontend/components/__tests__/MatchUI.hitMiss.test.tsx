@@ -66,9 +66,10 @@ function baseMatch(overrides: Partial<Match> = {}): Match {
     id: "m1", league: "E0", tier: "competition_specific", kickoffIso: "2026-08-15T15:00:00Z",
     home: "Arsenal", away: "Everton", status: "completed", result: { home: 2, away: 0 },
     hasRecommendation: true, overall: "direct_bet", confidence: "medium",
-    markets: [
+    candidates: [
       { market: "result_3way", selection: "home", recommendationType: "direct_bet", currentOdds: 1.8, minOdds: 0, mlProbability: 0.6, impliedProbability: 0.56, valueEdge: 0.04 },
     ],
+    recommendationPick: { market: "result_3way", selection: "home" },
     explanation: [], limitations: [], predictionBasis: "team_history_and_market",
     coldStartRisk: false, featureCompleteness: 0.9, unknownTeam: false, invalidMarketCount: 0,
     ...overrides,
@@ -91,7 +92,8 @@ describe("MatchCard -- hit/miss indicator for a completed match", () => {
 
   it("shows neither badge for an unresolvable market (corners)", () => {
     const match = baseMatch({
-      markets: [{ market: "home_corners", selection: "over_2.5", recommendationType: "direct_bet", currentOdds: 1.5, minOdds: 0, mlProbability: 0.6, impliedProbability: 0.5, valueEdge: 0.1 }],
+      candidates: [{ market: "home_corners", selection: "over_2.5", recommendationType: "direct_bet", currentOdds: 1.5, minOdds: 0, mlProbability: 0.6, impliedProbability: 0.5, valueEdge: 0.1 }],
+      recommendationPick: { market: "home_corners", selection: "over_2.5" },
     });
     render(<MatchCard match={match} onUpdate={vi.fn()} />);
     expect(screen.queryByText("Hit")).not.toBeInTheDocument();
@@ -114,12 +116,13 @@ describe("MatchCard -- hit/miss indicator for a completed match", () => {
 
   it("shows neither badge when the shown market was no_bet, even if its selection happened to match the result", () => {
     // Direct user report: a no_bet card still showed a green "Hit" badge --
-    // bestMarket()'s own "least-bad no_bet" fallback pick coincidentally
-    // matching the actual result isn't the same as a recommended bet
-    // paying off, and shouldn't read as one.
+    // the resolved pick's own selection coincidentally matching the actual
+    // result isn't the same as a recommended bet paying off, and shouldn't
+    // read as one.
     const match = baseMatch({
       overall: "no_bet",
-      markets: [{ market: "result_3way", selection: "home", recommendationType: "no_bet", currentOdds: 1.8, minOdds: 0, mlProbability: 0.6, impliedProbability: 0.56, valueEdge: 0.04 }],
+      candidates: [{ market: "result_3way", selection: "home", recommendationType: "no_bet", currentOdds: 1.8, minOdds: 0, mlProbability: 0.6, impliedProbability: 0.56, valueEdge: 0.04 }],
+      recommendationPick: { market: "result_3way", selection: "home" },
     });
     render(<MatchCard match={match} onUpdate={vi.fn()} />);
     expect(screen.queryByText("Hit")).not.toBeInTheDocument();
@@ -145,7 +148,8 @@ describe("MatchCard -- money won for a completed match (direct user request, rep
   it("shows '—' for an unresolvable market (corners) -- no hit/miss to compute money won from", () => {
     const match = baseMatch({
       unitBetMultiplier: 1.5,
-      markets: [{ market: "home_corners", selection: "over_2.5", recommendationType: "direct_bet", currentOdds: 1.5, minOdds: 0, mlProbability: 0.6, impliedProbability: 0.5, valueEdge: 0.1 }],
+      candidates: [{ market: "home_corners", selection: "over_2.5", recommendationType: "direct_bet", currentOdds: 1.5, minOdds: 0, mlProbability: 0.6, impliedProbability: 0.5, valueEdge: 0.1 }],
+      recommendationPick: { market: "home_corners", selection: "over_2.5" },
     });
     render(<MatchCard match={match} onUpdate={vi.fn()} />);
     const label = screen.getByText("Money Won");
@@ -155,7 +159,8 @@ describe("MatchCard -- money won for a completed match (direct user request, rep
   it("shows '—' for a conditional pick -- it was never actually bet at current_odds, even though it can still carry a stake number", () => {
     const match = baseMatch({
       unitBetMultiplier: 1.5,
-      markets: [{ market: "result_3way", selection: "home", recommendationType: "conditional", currentOdds: 1.8, minOdds: 0, mlProbability: 0.6, impliedProbability: 0.56, valueEdge: 0.04, targetOdds: 2.0 }],
+      candidates: [{ market: "result_3way", selection: "home", recommendationType: "conditional", currentOdds: 1.8, minOdds: 0, mlProbability: 0.6, impliedProbability: 0.56, valueEdge: 0.04, targetOdds: 2.0 }],
+      recommendationPick: { market: "result_3way", selection: "home" },
     });
     render(<MatchCard match={match} onUpdate={vi.fn()} />);
     const label = screen.getByText("Money Won");

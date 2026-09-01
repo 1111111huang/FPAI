@@ -41,7 +41,8 @@ function makeRecommendation(overrides: Partial<MatchRecommendationOut> = {}): Ma
   return {
     match: { home: "Arsenal", away: "Everton", date: "2026-08-22", league: "E0" },
     overall: "direct_bet",
-    markets: [],
+    candidates: [],
+    recommendation_pick: null,
     explanation: ["test explanation"],
     confidence: "medium",
     limitations: [],

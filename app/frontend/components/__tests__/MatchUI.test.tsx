@@ -7,7 +7,7 @@
  */
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it, vi, beforeEach } from "vitest";
+import { describe, expect, it, test, vi, beforeEach } from "vitest";
 
 import {
   fixtureToMatch,
@@ -16,9 +16,11 @@ import {
   MatchAnalysisPage,
   MatchCard,
   MatchExplorerPage,
+  resolveRecommendation,
   StatusBadge,
   TeamBadge,
   type Match,
+  type MarketRec,
   type Overall,
 } from "../MatchUI";
 import type { Fixture, MatchRecommendationOut } from "@/lib/types";
@@ -69,7 +71,8 @@ function baseMatch(overrides: Partial<Match> = {}): Match {
     hasRecommendation: true,
     overall: "direct_bet",
     confidence: "medium",
-    markets: [],
+    candidates: [],
+    recommendationPick: null,
     explanation: ["test explanation"],
     limitations: [],
     predictionBasis: "team_history_and_market",
@@ -80,6 +83,42 @@ function baseMatch(overrides: Partial<Match> = {}): Match {
     ...overrides,
   };
 }
+
+const CANDIDATE_HOME: MarketRec = {
+  market: "result_3way", selection: "home", recommendationType: "direct_bet",
+  currentOdds: 2.1, minOdds: 1.8, mlProbability: 0.55, impliedProbability: 0.48, valueEdge: 0.07,
+};
+const CANDIDATE_BTTS: MarketRec = {
+  market: "btts", selection: "no", recommendationType: "direct_bet",
+  currentOdds: 2.2, minOdds: 1.8, mlProbability: 0.6, impliedProbability: 0.45, valueEdge: 0.15,
+};
+
+function _matchWith(candidates: MarketRec[], recommendationPick: { market: string; selection: string } | null): Match {
+  return {
+    id: "m1", league: "E0", tier: "competition_specific", kickoffIso: "2026-06-15T15:00:00Z",
+    home: "Arsenal", away: "Chelsea", status: "upcoming", hasRecommendation: true,
+    overall: "direct_bet", confidence: "medium", candidates, recommendationPick,
+    explanation: [], limitations: [], predictionBasis: "team_history_and_market",
+    coldStartRisk: false, featureCompleteness: null, unknownTeam: false, invalidMarketCount: 0,
+  };
+}
+
+describe("resolveRecommendation", () => {
+  test("finds the matching candidate", () => {
+    const match = _matchWith([CANDIDATE_HOME, CANDIDATE_BTTS], { market: "btts", selection: "no" });
+    expect(resolveRecommendation(match)).toEqual(CANDIDATE_BTTS);
+  });
+
+  test("returns undefined for a null pick", () => {
+    const match = _matchWith([CANDIDATE_HOME], null);
+    expect(resolveRecommendation(match)).toBeUndefined();
+  });
+
+  test("returns undefined when the pick names a candidate not in the list", () => {
+    const match = _matchWith([CANDIDATE_HOME], { market: "btts", selection: "yes" });
+    expect(resolveRecommendation(match)).toBeUndefined();
+  });
+});
 
 describe("TeamBadge", () => {
   it("renders initials for a team name", () => {
@@ -200,13 +239,14 @@ describe("MatchCard", () => {
   it("shows the wait-condition threshold (target_odds), warning-colored, for a conditional market", () => {
     const match = baseMatch({
       overall: "conditional",
-      markets: [
+      candidates: [
         {
           market: "result_3way", selection: "home", recommendationType: "conditional",
           currentOdds: 1.15, minOdds: 0, mlProbability: 0.6, impliedProbability: 0.87, valueEdge: -0.27,
           targetOdds: 1.85,
         },
       ],
+      recommendationPick: { market: "result_3way", selection: "home" },
     });
     render(<MatchCard match={match} onUpdate={vi.fn()} />);
     expect(screen.getByText("Wait ≥")).toBeInTheDocument();
@@ -229,13 +269,14 @@ describe("MatchCard", () => {
     // with no real bookmaker feed rendered a literal "now 0.00".
     const match = baseMatch({
       overall: "conditional",
-      markets: [
+      candidates: [
         {
           market: "home_corners", selection: "over_2.5", recommendationType: "conditional",
           currentOdds: 0, minOdds: 0, mlProbability: 0.6, impliedProbability: 0.87, valueEdge: -0.27,
           targetOdds: 1.13,
         },
       ],
+      recommendationPick: { market: "home_corners", selection: "over_2.5" },
     });
     render(<MatchCard match={match} onUpdate={vi.fn()} />);
     expect(screen.getByText("Wait ≥")).toBeInTheDocument();
@@ -245,13 +286,14 @@ describe("MatchCard", () => {
   it("shows the plain Odds box (no Wait ≥) for a direct_bet market -- there's nothing to wait for", () => {
     const match = baseMatch({
       overall: "direct_bet",
-      markets: [
+      candidates: [
         {
           market: "result_3way", selection: "home", recommendationType: "direct_bet",
           currentOdds: 1.8, minOdds: 0, mlProbability: 0.6, impliedProbability: 0.56, valueEdge: 0.04,
           targetOdds: null,
         },
       ],
+      recommendationPick: { market: "result_3way", selection: "home" },
     });
     render(<MatchCard match={match} onUpdate={vi.fn()} />);
     expect(screen.queryByText("Wait ≥")).not.toBeInTheDocument();
@@ -262,13 +304,14 @@ describe("MatchCard", () => {
   it("shows the plain Odds box when target_odds is null (not applicable, or no such target exists)", () => {
     const match = baseMatch({
       overall: "conditional",
-      markets: [
+      candidates: [
         {
           market: "result_3way", selection: "home", recommendationType: "conditional",
           currentOdds: 1.8, minOdds: 0, mlProbability: 0.55, impliedProbability: 0.56, valueEdge: -0.01,
           targetOdds: null,
         },
       ],
+      recommendationPick: { market: "result_3way", selection: "home" },
     });
     render(<MatchCard match={match} onUpdate={vi.fn()} />);
     expect(screen.queryByText("Wait ≥")).not.toBeInTheDocument();
@@ -278,12 +321,13 @@ describe("MatchCard", () => {
   it("shows the plain Odds box when target_odds is absent (pre-A52 cached data)", () => {
     const match = baseMatch({
       overall: "conditional",
-      markets: [
+      candidates: [
         {
           market: "result_3way", selection: "home", recommendationType: "conditional",
           currentOdds: 1.8, minOdds: 0, mlProbability: 0.55, impliedProbability: 0.56, valueEdge: -0.01,
         },
       ],
+      recommendationPick: { market: "result_3way", selection: "home" },
     });
     render(<MatchCard match={match} onUpdate={vi.fn()} />);
     expect(screen.queryByText("Wait ≥")).not.toBeInTheDocument();
@@ -294,12 +338,13 @@ describe("MatchCard", () => {
     const match = baseMatch({
       overall: "direct_bet",
       unitBetMultiplier: 2.3,
-      markets: [
+      candidates: [
         {
           market: "result_3way", selection: "home", recommendationType: "direct_bet",
           currentOdds: 2.0, minOdds: 0, mlProbability: 0.55, impliedProbability: 0.5, valueEdge: 0.1,
         },
       ],
+      recommendationPick: { market: "result_3way", selection: "home" },
     });
     render(<MatchCard match={match} onUpdate={vi.fn()} />);
     expect(screen.getByText("Stake")).toBeInTheDocument();
@@ -310,12 +355,13 @@ describe("MatchCard", () => {
     const match = baseMatch({
       overall: "no_bet",
       unitBetMultiplier: null,
-      markets: [
+      candidates: [
         {
           market: "result_3way", selection: "home", recommendationType: "no_bet",
           currentOdds: 2.0, minOdds: 0, mlProbability: 0.5, impliedProbability: 0.5, valueEdge: -0.01,
         },
       ],
+      recommendationPick: { market: "result_3way", selection: "home" },
     });
     render(<MatchCard match={match} onUpdate={vi.fn()} />);
     expect(screen.queryByText("Stake")).not.toBeInTheDocument();
@@ -327,12 +373,13 @@ describe("MatchCard", () => {
       overall: "direct_bet",
       unitBetMultiplier: 2.3,
       result: { home: 2, away: 1 },
-      markets: [
+      candidates: [
         {
           market: "result_3way", selection: "home", recommendationType: "direct_bet",
           currentOdds: 2.0, minOdds: 0, mlProbability: 0.55, impliedProbability: 0.5, valueEdge: 0.1,
         },
       ],
+      recommendationPick: { market: "result_3way", selection: "home" },
     });
     render(<MatchCard match={match} onUpdate={vi.fn()} />);
     expect(screen.getByText("Stake")).toBeInTheDocument();
@@ -351,13 +398,14 @@ describe("MatchCard -- W153: the top badge describes the shown market, not match
   it("shows Conditional, not the stale Direct Bet overall, when the single shown market is conditional", () => {
     const match = baseMatch({
       overall: "direct_bet", // stale -- as if cached before A65 shipped
-      markets: [
+      candidates: [
         {
           market: "home_corners", selection: "over_2.5", recommendationType: "conditional",
           currentOdds: 1.13, minOdds: 0, mlProbability: 0.92, impliedProbability: 0.885, valueEdge: 0.035,
           targetOdds: 1.2,
         },
       ],
+      recommendationPick: { market: "home_corners", selection: "over_2.5" },
     });
     render(<MatchCard match={match} onUpdate={vi.fn()} />);
     expect(screen.getByText("Conditional")).toBeInTheDocument();
@@ -365,14 +413,14 @@ describe("MatchCard -- W153: the top badge describes the shown market, not match
   });
 
   it("shows the higher-edge conditional market's badge, not a lower-edge direct_bet market's, when overall reports the latter", () => {
-    // The general multi-market case A65's backend cap alone doesn't fully
-    // cover: overall="direct_bet" is legitimately true of *a* market
-    // (result_3way), but bestMarket() picks the higher-edge one
-    // (home_corners, conditional) to actually display -- the badge must
-    // follow what's shown, not the match-wide aggregate.
+    // The general multi-candidate case A65's backend cap alone doesn't fully
+    // cover: overall="direct_bet" is legitimately true of *a* candidate
+    // (result_3way), but recommendationPick names the home_corners
+    // (conditional) candidate as the actual pick to display -- the badge
+    // must follow what's shown, not the match-wide aggregate.
     const match = baseMatch({
       overall: "direct_bet",
-      markets: [
+      candidates: [
         {
           market: "result_3way", selection: "home", recommendationType: "direct_bet",
           currentOdds: 2.1, minOdds: 1.8, mlProbability: 0.55, impliedProbability: 0.48, valueEdge: 0.03,
@@ -384,6 +432,7 @@ describe("MatchCard -- W153: the top badge describes the shown market, not match
           targetOdds: 1.2,
         },
       ],
+      recommendationPick: { market: "home_corners", selection: "over_2.5" },
     });
     render(<MatchCard match={match} onUpdate={vi.fn()} />);
     expect(screen.getByText("Conditional")).toBeInTheDocument();
@@ -454,12 +503,13 @@ describe("MatchCard -- live match display", () => {
     const match = baseMatch({
       status: "live",
       result: { home: 1, away: 0 },
-      markets: [
+      candidates: [
         {
           market: "btts", selection: "no", recommendationType: "direct_bet",
           currentOdds: 1.66, minOdds: 0, mlProbability: 0.6, impliedProbability: 0.56, valueEdge: 0.074,
         },
       ],
+      recommendationPick: { market: "btts", selection: "no" },
     });
     render(<MatchCard match={match} onUpdate={vi.fn()} />);
     expect(screen.getByText("Odds")).toBeInTheDocument();
@@ -473,9 +523,10 @@ describe("MatchCard -- Market/Pick/Odds/Edge grid redesign (2026-08-13, direct m
     const match = baseMatch({
       home: "Arsenal", away: "Everton",
       overall: "direct_bet",
-      markets: [
+      candidates: [
         { market: "result_3way", selection: "home", recommendationType: "direct_bet", currentOdds: 1.8, minOdds: 0, mlProbability: 0.6, impliedProbability: 0.56, valueEdge: 0.04 },
       ],
+      recommendationPick: { market: "result_3way", selection: "home" },
     });
     render(<MatchCard match={match} onUpdate={vi.fn()} />);
     // W121 follow-up: market names are humanized ("3-Way Result" / "Full
@@ -497,18 +548,20 @@ describe("MatchCard -- Market/Pick/Odds/Edge grid redesign (2026-08-13, direct m
     // (src/agent/schema.py) -- "over_under_2.5" (this test's original
     // market string) was never a real one.
     const overUnder = baseMatch({
-      markets: [
+      candidates: [
         { market: "total_goals", selection: "over_2.5", recommendationType: "direct_bet", currentOdds: 1.85, minOdds: 0, mlProbability: 0.55, impliedProbability: 0.54, valueEdge: 0.01 },
       ],
+      recommendationPick: { market: "total_goals", selection: "over_2.5" },
     });
     render(<MatchCard match={overUnder} onUpdate={vi.fn()} />);
     expect(screen.getByText("Over 2.5")).toBeInTheDocument();
     expect(screen.getByText("Over")).toBeInTheDocument();
 
     const draw = baseMatch({
-      markets: [
+      candidates: [
         { market: "result_3way", selection: "draw", recommendationType: "direct_bet", currentOdds: 3.2, minOdds: 0, mlProbability: 0.35, impliedProbability: 0.31, valueEdge: 0.04 },
       ],
+      recommendationPick: { market: "result_3way", selection: "draw" },
     });
     render(<MatchCard match={draw} onUpdate={vi.fn()} />);
     expect(screen.getByText("Draw")).toBeInTheDocument();
@@ -516,7 +569,7 @@ describe("MatchCard -- Market/Pick/Odds/Edge grid redesign (2026-08-13, direct m
   });
 
   it("shows dashes for Market/Pick/Odds/Edge when there's no recommendation yet", () => {
-    const match = baseMatch({ hasRecommendation: false, markets: [] });
+    const match = baseMatch({ hasRecommendation: false, candidates: [] });
     render(<MatchCard match={match} onUpdate={vi.fn()} />);
     expect(screen.getAllByText("—").length).toBeGreaterThanOrEqual(3); // Market, Pick, Odds, Edge
   });
@@ -537,9 +590,10 @@ describe("MatchCard -- Market/Pick/Odds/Edge grid redesign (2026-08-13, direct m
   it("does not show the Positive Edge tag for a no_bet market with a numerically positive edge", () => {
     const match = baseMatch({
       overall: "no_bet",
-      markets: [
+      candidates: [
         { market: "result_3way", selection: "away", recommendationType: "no_bet", currentOdds: 5.0, minOdds: 0, mlProbability: 0.23, impliedProbability: 0.2, valueEdge: 0.032 },
       ],
+      recommendationPick: { market: "result_3way", selection: "away" },
     });
     render(<MatchCard match={match} onUpdate={vi.fn()} />);
     expect(screen.queryByText("Positive Edge")).not.toBeInTheDocument();
@@ -561,16 +615,20 @@ describe("MatchCard -- Market/Pick/Odds/Edge grid redesign (2026-08-13, direct m
 // Direct user report (2026-08-08): a "No Bet" card showed a prominent
 // positive "+3.2% EDGE" -- a real, positive-but-below-threshold edge on a
 // no_bet market (a legitimate state, e.g. A54's ineligible-market downgrade,
-// or simply below min_value_edge) was picked as bestMarket() purely because
-// it had the numerically highest value_edge, with no regard for whether
+// or simply below min_value_edge) must never be the one shown just because
+// it has the numerically highest value_edge, with no regard for whether
 // that market was actually being recommended. A green-colored positive edge
 // on a "No Bet" card reads as a good bet that isn't actually being offered.
+// W193: the backend now resolves the actual pick server-side (recommendation_
+// pick) -- resolveRecommendation() is a direct lookup, not a ranking, so
+// these fixtures now set recommendationPick explicitly to the direct_bet
+// candidate rather than relying on client-side edge-sorting.
 // ---------------------------------------------------------------------------
-describe("MatchCard -- bestMarket prefers an actionable market over a higher-edge no_bet one", () => {
+describe("MatchCard -- resolveRecommendation prefers the resolved pick over a higher-edge no_bet candidate", () => {
   it("shows the direct_bet market's odds/edge, not a no_bet market with a numerically higher edge", () => {
     const match = baseMatch({
       overall: "direct_bet",
-      markets: [
+      candidates: [
         // Higher edge, but not actionable -- must not be the one shown.
         {
           market: "result_3way", selection: "away", recommendationType: "no_bet",
@@ -584,6 +642,7 @@ describe("MatchCard -- bestMarket prefers an actionable market over a higher-edg
           targetOdds: null,
         },
       ],
+      recommendationPick: { market: "result_3way", selection: "home" },
     });
     render(<MatchCard match={match} onUpdate={vi.fn()} />);
     expect(screen.getByText("1.80")).toBeInTheDocument();
@@ -595,13 +654,14 @@ describe("MatchCard -- bestMarket prefers an actionable market over a higher-edg
   it("does not color a no_bet market's positive edge as 'good' when nothing is actionable", () => {
     const match = baseMatch({
       overall: "no_bet",
-      markets: [
+      candidates: [
         {
           market: "result_3way", selection: "away", recommendationType: "no_bet",
           currentOdds: 5.0, minOdds: 0, mlProbability: 0.23, impliedProbability: 0.2, valueEdge: 0.032,
           targetOdds: null,
         },
       ],
+      recommendationPick: { market: "result_3way", selection: "away" },
     });
     render(<MatchCard match={match} onUpdate={vi.fn()} />);
     const edge = screen.getByText("+3.2%");
@@ -620,7 +680,8 @@ function makeRecommendation(overrides: Partial<MatchRecommendationOut> = {}): Ma
   return {
     match: { home: "Arsenal", away: "Everton", date: "2026-08-22", league: "E0" },
     overall: "direct_bet",
-    markets: [],
+    candidates: [],
+    recommendation_pick: null,
     explanation: ["test explanation"],
     confidence: "medium",
     limitations: [],
@@ -840,12 +901,13 @@ describe("MatchAnalysisPage -- cache-first load (W47)", () => {
       makeRecommendation({
         overall: "direct_bet",
         confidence: "high",
-        markets: [
+        candidates: [
           {
             market: "result_3way", selection: "home", recommendation_type: "direct_bet",
             current_odds: 1.8, min_odds: 0, ml_probability: 0.6, implied_probability: 0.56, value_edge: 0.04,
           },
         ],
+        recommendation_pick: { market: "result_3way", selection: "home" },
       })
     );
 
@@ -871,13 +933,14 @@ describe("MatchAnalysisPage -- cache-first load (W47)", () => {
     vi.mocked(getCachedRecommendation).mockResolvedValue(
       makeRecommendation({
         overall: "conditional",
-        markets: [
+        candidates: [
           {
             market: "result_3way", selection: "home", recommendation_type: "conditional",
             current_odds: 1.15, min_odds: 0, ml_probability: 0.6, implied_probability: 0.87, value_edge: -0.27,
             target_odds: 1.85,
           },
         ],
+        recommendation_pick: { market: "result_3way", selection: "home" },
       })
     );
 
@@ -892,13 +955,14 @@ describe("MatchAnalysisPage -- cache-first load (W47)", () => {
     vi.mocked(getCachedRecommendation).mockResolvedValue(
       makeRecommendation({
         overall: "conditional",
-        markets: [
+        candidates: [
           {
             market: "result_3way", selection: "home", recommendation_type: "conditional",
             current_odds: 1.8, min_odds: 0, ml_probability: 0.55, implied_probability: 0.56, value_edge: -0.01,
             target_odds: null,
           },
         ],
+        recommendation_pick: { market: "result_3way", selection: "home" },
       })
     );
 
@@ -915,13 +979,14 @@ describe("MatchAnalysisPage -- cache-first load (W47)", () => {
     vi.mocked(getCachedRecommendation).mockResolvedValue(
       makeRecommendation({
         overall: "direct_bet",
-        markets: [
+        candidates: [
           {
             market: "result_3way", selection: "home", recommendation_type: "direct_bet",
             current_odds: 2.1, min_odds: 0, ml_probability: 0.6, implied_probability: 0.48, value_edge: 0.12,
             target_odds: null,
           },
         ],
+        recommendation_pick: { market: "result_3way", selection: "home" },
       })
     );
 
@@ -938,12 +1003,13 @@ describe("MatchAnalysisPage -- cache-first load (W47)", () => {
     vi.mocked(getCachedRecommendation).mockResolvedValue(
       makeRecommendation({
         overall: "direct_bet",
-        markets: [
+        candidates: [
           {
             market: "result_3way", selection: "home", recommendation_type: "direct_bet",
             current_odds: 2.1, min_odds: 0, ml_probability: 0.6, implied_probability: 0.48, value_edge: 0.12,
           },
         ],
+        recommendation_pick: { market: "result_3way", selection: "home" },
       })
     );
 
@@ -961,9 +1027,10 @@ describe("LogBetButton (bet-logging locked-except-stake behavior)", () => {
   const recommendation: MatchRecommendationOut = {
     match: { home: "Arsenal", away: "Everton", date: "2026-08-22", league: "E0" },
     overall: "direct_bet",
-    markets: [
+    candidates: [
       { market: "result_3way", selection: "home", recommendation_type: "direct_bet", current_odds: 2.1, min_odds: 1.5, ml_probability: 0.5, implied_probability: 0.47, value_edge: 0.03 },
     ],
+    recommendation_pick: { market: "result_3way", selection: "home" },
     explanation: ["test"],
     confidence: "medium",
     limitations: [],

@@ -60,7 +60,7 @@ describe("MatchCard's relative-day label respects the sandbox clock", () => {
       id: "m1", league: "E0", tier: "competition_specific", kickoffIso,
       home: "Arsenal", away: "Everton", status: "upcoming",
       hasRecommendation: true, overall: "no_bet", confidence: "medium",
-      markets: [], explanation: [], limitations: [],
+      candidates: [], recommendationPick: null, explanation: [], limitations: [],
       predictionBasis: "team_history_and_market", coldStartRisk: false,
       featureCompleteness: 0.9, unknownTeam: false, invalidMarketCount: 0,
     };
@@ -111,12 +111,13 @@ describe("MatchCard's relative-day label respects the sandbox clock", () => {
     // market happened to show which day they were on.
     const match = {
       ...matchWithKickoff("2026-03-02T12:00:00Z"),
-      markets: [
+      candidates: [
         {
           market: "result_3way", selection: "home", recommendationType: "direct_bet" as const,
           currentOdds: 1.8, minOdds: 1.5, mlProbability: 0.55, impliedProbability: 0.5, valueEdge: 0.05,
         },
       ],
+      recommendationPick: { market: "result_3way", selection: "home" },
     };
 
     render(
@@ -270,7 +271,8 @@ describe("sandbox mode does not leak real results for fixtures still-future rela
     const rec: MatchRecommendationOut = {
       match: { home: "Arsenal", away: "Everton", date: "2026-03-14", league: "E0" },
       overall: "direct_bet",
-      markets: [],
+      candidates: [],
+      recommendation_pick: null,
       explanation: ["generated for a still-future (in sandbox) fixture"],
       confidence: "medium",
       limitations: [],
@@ -311,7 +313,7 @@ describe("MatchExplorerPage -- actionable-only filter (W108)", () => {
       { match_id: "2", utc_date: "2026-08-23T15:00:00Z", status: "SCHEDULED", home_team: "Chelsea", away_team: "Brighton", home_goals: null, away_goals: null },
     ]);
     const rec: MatchRecommendationOut = {
-      match: {}, overall: "direct_bet", markets: [], explanation: [], confidence: "high",
+      match: {}, overall: "direct_bet", candidates: [], recommendation_pick: null, explanation: [], confidence: "high",
       limitations: [], prediction_basis: "team_history_and_market", invalid_market_count: 0,
       cold_start_risk: false, feature_completeness: 0.9, unknown_team: false,
     };

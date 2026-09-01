@@ -17,9 +17,10 @@ function baseMatch(overrides: Partial<Match> = {}): Match {
     id: "m1", league: "SP1", tier: "competition_specific", kickoffIso: "2026-08-15T15:00:00Z",
     home: "Alaves", away: "Getafe", status: "completed", result: { home: 3, away: 0 },
     hasRecommendation: true, overall: "direct_bet", confidence: "medium",
-    markets: [
+    candidates: [
       { market: "result_3way", selection: "draw", recommendationType: "direct_bet", currentOdds: 3.0, minOdds: 0, mlProbability: 0.4, impliedProbability: 0.33, valueEdge: 0.055 },
     ],
+    recommendationPick: { market: "result_3way", selection: "draw" },
     explanation: [], limitations: [], predictionBasis: "team_history_and_market",
     coldStartRisk: false, featureCompleteness: 0.9, unknownTeam: false, invalidMarketCount: 0,
     ...overrides,
@@ -67,7 +68,8 @@ describe("MatchCard -- completed match, pick column", () => {
 
   it("does not strike through the pick for an unresolvable market (corners)", () => {
     const match = baseMatch({
-      markets: [{ market: "home_corners", selection: "over_2.5", recommendationType: "direct_bet", currentOdds: 1.5, minOdds: 0, mlProbability: 0.6, impliedProbability: 0.5, valueEdge: 0.1 }],
+      candidates: [{ market: "home_corners", selection: "over_2.5", recommendationType: "direct_bet", currentOdds: 1.5, minOdds: 0, mlProbability: 0.6, impliedProbability: 0.5, valueEdge: 0.1 }],
+      recommendationPick: { market: "home_corners", selection: "over_2.5" },
     });
     render(<MatchCard match={match} onUpdate={vi.fn()} />);
     expect(screen.getByText("Over")).not.toHaveClass("line-through");
@@ -113,7 +115,8 @@ describe("MatchCard -- completed match, edge column", () => {
 
   it("shows 'Pre-match edge' even when the original edge was negative -- it's descriptive, not a recommendation to act", () => {
     const match = baseMatch({
-      markets: [{ market: "result_3way", selection: "draw", recommendationType: "no_bet", currentOdds: 3.0, minOdds: 0, mlProbability: 0.2, impliedProbability: 0.33, valueEdge: -0.05 }],
+      candidates: [{ market: "result_3way", selection: "draw", recommendationType: "no_bet", currentOdds: 3.0, minOdds: 0, mlProbability: 0.2, impliedProbability: 0.33, valueEdge: -0.05 }],
+      recommendationPick: { market: "result_3way", selection: "draw" },
     });
     render(<MatchCard match={match} onUpdate={vi.fn()} />);
     expect(screen.getByText("Pre-match edge")).toBeInTheDocument();

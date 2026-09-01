@@ -18,7 +18,7 @@ export type Fixture = {
   competition?: string;
 };
 
-export type MarketRecommendationOut = {
+export type MarketCandidateOut = {
   market: string;
   selection: string;
   recommendation_type: "direct_bet" | "conditional" | "no_bet";
@@ -33,12 +33,23 @@ export type MarketRecommendationOut = {
   // (not conditional, no current_odds, or no such target exists) or absent
   // entirely on a pre-A52 cached row, so optional rather than required.
   target_odds?: number | null;
+  // A88/W193: the agent's own self-reported edge/hit-probability balance,
+  // and the one-line reason this candidate won or lost -- both optional so
+  // a pre-this-change cached row (no such keys at all) still type-checks.
+  composite_score?: number;
+  reason?: string;
+};
+
+export type RecommendationPickOut = {
+  market: string;
+  selection: string;
 };
 
 export type MatchRecommendationOut = {
   match: Record<string, unknown>;
   overall: "direct_bet" | "conditional" | "no_bet" | "insufficient_data";
-  markets: MarketRecommendationOut[];
+  candidates: MarketCandidateOut[];
+  recommendation_pick: RecommendationPickOut | null;
   // One bullet per aspect (value edge, team news, form, market caveats, ...)
   // instead of one narrative paragraph -- direct user request.
   explanation: string[];

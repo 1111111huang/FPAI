@@ -191,7 +191,7 @@ describe("Dashboard always shows the next 10 matches (date-grouped, not today-on
       fixture("not-yet-generated-match", "2026-09-01T18:00:00Z"),
     ]);
     const rec: MatchRecommendationOut = {
-      match: {}, overall: "direct_bet", markets: [], explanation: [], confidence: "high",
+      match: {}, overall: "direct_bet", candidates: [], recommendation_pick: null, explanation: [], confidence: "high",
       limitations: [], prediction_basis: "team_history_and_market", invalid_market_count: 0,
       cold_start_risk: false, feature_completeness: 0.9, unknown_team: false,
     };

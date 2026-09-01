@@ -66,14 +66,10 @@ export type MarketRec = {
   mlProbability: number;
   impliedProbability: number;
   valueEdge: number;
-  // W84/A52: code-computed price this market would need to reach to clear
-  // min_value_edge -- null/undefined when not applicable or on a pre-A52
-  // cached row. Optional (not required) so every existing hand-built
-  // MarketRec literal across the test suite, none of which set this field,
-  // keeps type-checking without modification -- same convention as
-  // Fixture.competition (lib/types.ts).
   targetOdds?: number | null;
 };
+
+export type RecommendationPick = { market: string; selection: string };
 
 export type Match = {
   id: string;
@@ -88,7 +84,8 @@ export type Match = {
   hasRecommendation: boolean;
   overall: Overall;
   confidence: Confidence;
-  markets: MarketRec[];
+  candidates: MarketRec[];
+  recommendationPick: RecommendationPick | null;
   // One bullet per aspect, mirroring lib/types.ts's MatchRecommendationOut.
   explanation: string[];
   limitations: string[];
@@ -163,7 +160,8 @@ export function fixtureToMatch(fixture: Fixture, asOf?: Date, sandboxMode = fals
     hasRecommendation: false,
     overall: "insufficient_data",
     confidence: "low",
-    markets: [],
+    candidates: [],
+    recommendationPick: null,
     explanation: [],
     limitations: [],
     predictionBasis: "",
@@ -188,16 +186,17 @@ function applyRecommendation(match: Match, rec: MatchRecommendationOut): Match {
     unknownTeam: rec.unknown_team,
     unitBetMultiplier: rec.unit_bet_multiplier ?? null,
     invalidMarketCount: rec.invalid_market_count,
-    markets: rec.markets.map((m) => ({
-      market: m.market,
-      selection: m.selection,
-      recommendationType: m.recommendation_type,
-      currentOdds: m.current_odds,
-      minOdds: m.min_odds,
-      mlProbability: m.ml_probability,
-      impliedProbability: m.implied_probability,
-      valueEdge: m.value_edge,
-      targetOdds: m.target_odds ?? null,
+    recommendationPick: rec.recommendation_pick,
+    candidates: rec.candidates.map((c) => ({
+      market: c.market,
+      selection: c.selection,
+      recommendationType: c.recommendation_type,
+      currentOdds: c.current_odds,
+      minOdds: c.min_odds,
+      mlProbability: c.ml_probability,
+      impliedProbability: c.implied_probability,
+      valueEdge: c.value_edge,
+      targetOdds: c.target_odds ?? null,
     })),
   };
 }
@@ -464,19 +463,18 @@ export function marketCorrect(market: string, selection: string, actual: ActualO
   return selection === actual.totalGoalsSide; // market === "total_goals"
 }
 
-export function bestMarket(match: Match): MarketRec | undefined {
-  // Prefer an actually-recommended market (direct_bet/conditional) over a
-  // no_bet one, even if a no_bet market happens to have a numerically
-  // higher value_edge (a real case: a market can have positive edge and
-  // still be no_bet if it's below min_value_edge, or an ineligible-for-
-  // conditional market A54 downgraded) -- direct user report: a "No Bet"
-  // card was showing a prominent positive "+3.2% EDGE" from exactly this
-  // situation, reading as a good-looking bet that wasn't actually being
-  // recommended. Falls back to ranking among all markets (including
-  // no_bet) only when nothing is actionable at all.
-  const actionable = match.markets.filter((m) => m.recommendationType !== "no_bet");
-  const pool = actionable.length > 0 ? actionable : match.markets;
-  return [...pool].sort((a, b) => b.valueEdge - a.valueEdge)[0];
+/** W193 (2026-09-01 design): TS port of resolve_recommendation_pick()
+ * (src/agent/market_resolution.py) -- same three-case contract: the
+ * matching candidate, or undefined when recommendationPick is null OR
+ * names a market/selection absent from candidates (a dangling pointer).
+ * Replaces bestMarket()'s own max(valueEdge) reduction now that the
+ * backend already resolved which candidate is the pick -- there is
+ * nothing left to rank client-side. */
+export function resolveRecommendation(match: Match): MarketRec | undefined {
+  if (!match.recommendationPick) return undefined;
+  return match.candidates.find(
+    (c) => c.market === match.recommendationPick!.market && c.selection === match.recommendationPick!.selection
+  );
 }
 
 /** Mockup point 3: backs Daily Edges' "N with positive edge" summary line.
@@ -485,19 +483,8 @@ export function bestMarket(match: Match): MarketRec | undefined {
  * kept as one shared function rather than a third inline copy of that
  * condition. */
 export function hasPositiveEdge(match: Match): boolean {
-  const m = bestMarket(match);
+  const m = resolveRecommendation(match);
   return !!m && m.currentOdds != null && m.recommendationType !== "no_bet" && m.valueEdge >= 0;
-}
-
-/** W117: every row sharing bestMarket()'s own `market` name -- e.g. all
- * three of a result_3way's home/draw/away rows -- so MatchCard can show a
- * full "market + odds per direction" board instead of only the single
- * highest-edge selection. Deliberately shows every direction's raw price
- * (transparency), never a per-direction edge -- edge stays reserved for the
- * one actually-recommended selection (Selection + Edge row) so a plain,
- * unactioned price never reads as a second recommendation. */
-export function marketDirections(match: Match, marketName: string): MarketRec[] {
-  return match.markets.filter((m) => m.market === marketName);
 }
 
 const TEAM_COLORS: Record<string, { primary: string; secondary?: string }> = {
@@ -825,12 +812,12 @@ export function MatchCard({
   const [error, setError] = useState<string | null>(null);
   const isCompleted = match.status === "completed";
   const isLive = match.status === "live";
-  const shown = bestMarket(match);
+  const shown = resolveRecommendation(match);
   // null covers "not completed yet", "no recommendation", "no bet was
   // actually recommended", and "market unresolvable" (e.g. corners)
   // identically -- HitBadge only renders for a real true/false. Direct user
   // report: a `no_bet` card still showed a green "Hit" badge (the app's own
-  // "least-bad no_bet" fallback market, bestMarket(), happening to land on
+  // "least-bad no_bet" fallback market, resolveRecommendation(), happening to land on
   // the correct outcome) -- misleading, since Hit/Not Hit should describe
   // whether an actual recommended pick paid off, not whether an unactioned
   // market's own selection happened to match the result.
@@ -945,7 +932,7 @@ export function MatchCard({
                   describe *that* market, not a separate match-wide
                   aggregate that can legitimately differ from it (see
                   summarySentence's comment for the concrete scenario).
-                  Falls back to match.overall only when bestMarket()
+                  Falls back to match.overall only when resolveRecommendation()
                   found nothing to show at all. */}
               {!isCompleted && <StatusBadge status={shown?.recommendationType ?? match.overall} />}
             </>
@@ -1867,7 +1854,7 @@ export function marketLabel(market: string): { label: string; subtitle: string |
 }
 
 /** W111: one plain-English sentence, composed entirely from fields already
- * on the recommendation (overall/confidence/bestMarket) -- no new backend
+ * on the recommendation (overall/confidence/resolveRecommendation) -- no new backend
  * field, no LLM call. Sits ahead of the jargon-dense Model Probabilities
  * table so a reader with zero betting vocabulary has something to read
  * before the numbers.
@@ -1876,13 +1863,13 @@ export function marketLabel(market: string): { label: string; subtitle: string |
  * match.overall -- match.overall describes the match as a whole (used for
  * the dashboard's aggregate "N with positive edge" count, where it's the
  * right concept: "is ANYTHING on this match actionable"), but this
- * sentence is specifically about the one market bestMarket() picked to
+ * sentence is specifically about the one market resolveRecommendation() picked to
  * display, and those two can genuinely differ (a higher-edge conditional
  * market can outrank a lower-edge direct_bet one for "shown", even though
  * match.overall reports the strongest type across every market). Falls
  * back to match.overall only when there's no shown market at all. */
 function summarySentence(match: Match): string {
-  const shown = bestMarket(match);
+  const shown = resolveRecommendation(match);
   switch (shown?.recommendationType ?? match.overall) {
     case "direct_bet":
       return shown
@@ -1949,7 +1936,8 @@ export function MatchAnalysisPage({
             hasRecommendation: false,
             overall: "insufficient_data",
             confidence: "low",
-            markets: [],
+            candidates: [],
+            recommendationPick: null,
             explanation: [],
             limitations: [],
             predictionBasis: "",
@@ -1991,7 +1979,7 @@ export function MatchAnalysisPage({
   // highlights this exact market, and must describe it, not a separate
   // match-wide aggregate that can legitimately differ (see
   // summarySentence's comment for the concrete scenario).
-  const shown = match ? bestMarket(match) : undefined;
+  const shown = match ? resolveRecommendation(match) : undefined;
 
   return (
     <AppShell active="matches">
@@ -2061,12 +2049,12 @@ export function MatchAnalysisPage({
               <span title={EDGE_EXPLAIN} className="text-right">Edge</span>
               <span className="justify-self-end">Status</span>
             </div>
-            {match.markets.length === 0 ? (
+            {match.candidates.length === 0 ? (
               <p className="mt-2 rounded-lg border border-border bg-surface p-3.5 text-sm text-ink-secondary">
                 No markets in this recommendation.
               </p>
             ) : (
-              match.markets.map((m, i) => (
+              match.candidates.map((m, i) => (
                 <ProbabilityRow
                   key={`${m.market}-${i}`}
                   m={m}
