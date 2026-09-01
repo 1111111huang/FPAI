@@ -44,7 +44,7 @@ function pricedEdge(m: Match): number | null {
   return shown.valueEdge;
 }
 
-/** Ranks by the best-priced market's value_edge, descending. A match with
+/** Ranks by the resolved pick's value_edge, descending. A match with
  * no recommendation, or with no priced edge (see pricedEdge), is excluded
  * rather than ranked with a fabricated value. */
 export function rankTopEdges(matches: Match[], limit: number): TopEdge[] {

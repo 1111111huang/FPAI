@@ -1,4 +1,4 @@
-import { describe, expect, it, test } from "vitest";
+import { describe, expect, it } from "vitest";
 import { countByOverall, groupByDate, groupByLeague, rankTopEdges, sortMatches } from "./dashboardMetrics";
 import type { Match } from "@/components/MatchUI";
 
@@ -137,7 +137,7 @@ describe("rankTopEdges", () => {
     expect(ranked.map((r) => r.match.id)).toEqual(["real-bet-lower-edge"]);
   });
 
-  test("rankTopEdges reads the resolved recommendation, not a value-maximizing reduction", () => {
+  it("reads the resolved recommendation, not a value-maximizing reduction", () => {
     const m = match({
       overall: "direct_bet",
       candidates: [
