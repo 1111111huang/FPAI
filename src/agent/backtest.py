@@ -15,7 +15,7 @@ from typing import Any, Literal
 import pandas as pd
 
 from src.agent.agent_config import AgentConfig
-from src.agent.market_resolution import build_actual_outcome, market_correct as _market_correct
+from src.agent.market_resolution import build_actual_outcome, market_correct as _market_correct, resolve_recommendation_pick
 from src.utils.db_manager import DuckDBManager
 
 _VALID_SPLITS = ("all", "train", "test")
@@ -201,10 +201,10 @@ def process_match_row(
         agent_tools.configure_snapshot_store("live")
 
     actual = load_outcome(row)
-    market_results = [
-        {**m, "correct": _market_correct(m, actual)}
-        for m in recommendation.get("markets", [])
-    ]
+    picked = resolve_recommendation_pick(
+        recommendation.get("candidates") or [], recommendation.get("recommendation_pick")
+    )
+    market_results = [{**picked, "correct": _market_correct(picked, actual)}] if picked else []
     return BacktestRecord(
         match_id=match_id,
         home_team=row["home_team"],

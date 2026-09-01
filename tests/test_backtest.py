@@ -102,11 +102,12 @@ def test_load_outcome_away_win():
 def test_process_match_row_scores_markets_correctly():
     recommendation = {
         "match": {}, "overall": "direct_bet",
-        "markets": [
-            {"market": "result_3way", "selection": "home", "recommendation_type": "direct_bet", "current_odds": 1.9, "min_odds": 1.9, "ml_probability": 0.6, "implied_probability": 0.52, "value_edge": 0.08},
-            {"market": "btts", "selection": "yes", "recommendation_type": "no_bet", "current_odds": 1.8, "min_odds": 2.0, "ml_probability": 0.5, "implied_probability": 0.55, "value_edge": -0.05},
-            {"market": "home_corners", "selection": "over_4.5", "recommendation_type": "direct_bet", "current_odds": 1.9, "min_odds": 1.9, "ml_probability": 0.5, "implied_probability": 0.52, "value_edge": -0.02},
+        "candidates": [
+            {"market": "result_3way", "selection": "home", "recommendation_type": "direct_bet", "current_odds": 1.9, "min_odds": 1.9, "ml_probability": 0.6, "implied_probability": 0.52, "value_edge": 0.08, "composite_score": 0.7, "reason": "x"},
+            {"market": "btts", "selection": "yes", "recommendation_type": "no_bet", "current_odds": 1.8, "min_odds": 2.0, "ml_probability": 0.5, "implied_probability": 0.55, "value_edge": -0.05, "composite_score": 0.1, "reason": "y"},
+            {"market": "home_corners", "selection": "over_4.5", "recommendation_type": "no_bet", "current_odds": 1.9, "min_odds": 1.9, "ml_probability": 0.5, "implied_probability": 0.52, "value_edge": -0.02, "composite_score": 0.1, "reason": "z"},
         ],
+        "recommendation_pick": {"market": "result_3way", "selection": "home"},
         "explanation": "x", "confidence": "high", "limitations": [], "prediction_basis": "team_history_and_market",
     }
     with patch("src.agent.graph.run_agent", return_value=recommendation) as mock_run, \
@@ -115,15 +116,40 @@ def test_process_match_row_scores_markets_correctly():
 
     assert isinstance(record, BacktestRecord)
     assert record.actual["result"] == "home"
-    by_market = {m["market"]: m for m in record.market_results}
-    assert by_market["result_3way"]["correct"] is True
-    assert by_market["btts"]["correct"] is True  # actual btts is "yes" (2-1, both scored); selection was "yes"
-    assert by_market["home_corners"]["correct"] is None  # unresolvable, documented limitation
+    assert len(record.market_results) == 1
+    assert record.market_results[0]["market"] == "result_3way"
+    assert record.market_results[0]["correct"] is True
 
     # configure_snapshot_store called with replay then live (record_calls captures the mode transitions)
     modes_used = [call.args[0] for call in mock_configure.call_args_list]
     assert modes_used == ["replay", "live"]
     mock_run.assert_called_once()
+
+
+def test_process_match_row_scores_only_the_recommendation_pick_not_every_candidate():
+    """A92: market_results must reflect only the one candidate the agent
+    actually picked, not every candidate that independently passed
+    guardrails -- matches what live settlement/recommendation_stats.py
+    already do (see the design spec's LIVE_SOURCE_NOTE discussion)."""
+    recommendation = {
+        "match": {}, "overall": "direct_bet",
+        "candidates": [
+            {"market": "result_3way", "selection": "home", "recommendation_type": "direct_bet", "current_odds": 1.9, "min_odds": 1.9, "ml_probability": 0.6, "implied_probability": 0.52, "value_edge": 0.08, "composite_score": 0.6, "reason": "x"},
+            {"market": "btts", "selection": "yes", "recommendation_type": "direct_bet", "current_odds": 2.1, "min_odds": 1.8, "ml_probability": 0.55, "implied_probability": 0.48, "value_edge": 0.14, "composite_score": 0.9, "reason": "y"},
+        ],
+        "recommendation_pick": {"market": "result_3way", "selection": "home"},
+        "explanation": "x", "confidence": "high", "limitations": [], "prediction_basis": "team_history_and_market",
+    }
+    with patch("src.agent.graph.run_agent", return_value=recommendation), \
+         patch("src.agent.tools.configure_snapshot_store"):
+        record = process_match_row(_row(fthg=2, ftag=1), _make_config())
+
+    # btts/yes has the higher value_edge (0.14 vs 0.08) and is individually
+    # direct_bet-eligible, but it was NOT the recommendation_pick -- it must
+    # not appear in market_results at all.
+    assert [m["market"] for m in record.market_results] == ["result_3way"]
+    assert record.market_results[0]["selection"] == "home"
+    assert record.market_results[0]["correct"] is True
 
 
 def test_process_match_row_uses_league_scoped_base_dir():
@@ -132,7 +158,7 @@ def test_process_match_row_uses_league_scoped_base_dir():
     from src.agent.snapshot_store import league_base_dir
 
     recommendation = {
-        "match": {}, "overall": "no_bet", "markets": [],
+        "match": {}, "overall": "no_bet", "candidates": [], "recommendation_pick": None,
         "explanation": "x", "confidence": "high", "limitations": [], "prediction_basis": "team_history_and_market",
     }
     with patch("src.agent.graph.run_agent", return_value=recommendation), \
@@ -145,7 +171,7 @@ def test_process_match_row_uses_league_scoped_base_dir():
 
 def test_process_match_row_threads_allow_lessons_in_replay_to_configure_snapshot_store():
     recommendation = {
-        "match": {}, "overall": "no_bet", "markets": [],
+        "match": {}, "overall": "no_bet", "candidates": [], "recommendation_pick": None,
         "explanation": "x", "confidence": "high", "limitations": [], "prediction_basis": "team_history_and_market",
     }
     with patch("src.agent.graph.run_agent", return_value=recommendation), \
@@ -162,7 +188,7 @@ def test_process_match_row_passes_leakage_guard_instructions_to_run_agent():
     instruction -- confirmed live that such leakage exists and, before this
     fix, replay had zero defense against it."""
     recommendation = {
-        "match": {}, "overall": "no_bet", "markets": [],
+        "match": {}, "overall": "no_bet", "candidates": [], "recommendation_pick": None,
         "explanation": "x", "confidence": "high", "limitations": [], "prediction_basis": "team_history_and_market",
     }
     with patch("src.agent.graph.run_agent", return_value=recommendation) as mock_run, \
@@ -175,7 +201,7 @@ def test_process_match_row_passes_leakage_guard_instructions_to_run_agent():
 def test_process_match_row_passes_leakage_guard_instructions_with_capture_state():
     full_state = {
         "recommendation": {
-            "match": {}, "overall": "no_bet", "markets": [],
+            "match": {}, "overall": "no_bet", "candidates": [], "recommendation_pick": None,
             "explanation": "x", "confidence": "high", "limitations": [], "prediction_basis": "team_history_and_market",
         },
         "competition_resolution": {"competition": "E0", "tier": "competition_specific"},
@@ -199,7 +225,7 @@ def test_process_match_row_propagates_snapshot_missing_error():
 def test_process_match_row_captures_full_state_when_requested():
     full_state = {
         "recommendation": {
-            "match": {}, "overall": "no_bet", "markets": [],
+            "match": {}, "overall": "no_bet", "candidates": [], "recommendation_pick": None,
             "explanation": "x", "confidence": "high", "limitations": [], "prediction_basis": "team_history_and_market",
         },
         "competition_resolution": {"competition": "E0", "tier": "competition_specific"},
@@ -218,7 +244,7 @@ def test_process_match_row_captures_full_state_when_requested():
 
 def test_process_match_row_full_state_none_by_default():
     recommendation = {
-        "match": {}, "overall": "no_bet", "markets": [],
+        "match": {}, "overall": "no_bet", "candidates": [], "recommendation_pick": None,
         "explanation": "x", "confidence": "high", "limitations": [], "prediction_basis": "team_history_and_market",
     }
     with patch("src.agent.graph.run_agent", return_value=recommendation) as mock_run, \
