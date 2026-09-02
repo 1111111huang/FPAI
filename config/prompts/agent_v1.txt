@@ -64,6 +64,8 @@ Produce this JSON block. Always include all fields. Use empty arrays if no data.
 
 List one candidates entry for every market with a real current price you evaluated, including ones you're rejecting — not just the one you pick. Set recommendation_pick to null (and overall to "no_bet") if nothing clears every rule above.
 
+**Field names are exact — do not rename or substitute them.** The market array below MUST be named `candidates`. Do NOT name it `markets` — that was an older field name from a previous version of this schema and no longer exists; an output using it will fail to parse and the entire recommendation will be discarded. `recommendation_pick` is REQUIRED as a key in every response, even when its value is `null` (nothing cleared the bar) — omitting the key itself, not just leaving it null, also fails to parse.
+
 ```json
 {
   "match": {
