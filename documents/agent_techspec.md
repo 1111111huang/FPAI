@@ -10,11 +10,12 @@ Authoritative implementation reference for the agent described in `agent_prd.md`
 src/agent/
   __init__.py
   agent_config.py     # AgentConfig dataclass + YAML loader
-  schema.py            # MatchRecommendation/MarketRecommendation TypedDicts + JSON extraction
+  schema.py            # MatchRecommendation/MarketCandidate/RecommendationPick TypedDicts (A88) + JSON extraction
   tools.py             # web_search, forecast_league, forecast_international, resolve_competition — all routed through SnapshotStore
   pipeline.py          # resolve_competition_node, research_node, forecast_node, lessons_node — deterministic pre-LLM graph nodes (A31–A33, A41)
   graph.py             # AgentState, build_graph(), run_agent()
-  schema.py            # MatchRecommendation/MarketRecommendation TypedDicts + MatchRecommendationModel/MarketRecommendationModel (Pydantic) + JSON extraction
+  schema.py            # MatchRecommendation/MarketCandidate/RecommendationPick TypedDicts (A88) + MatchRecommendationModel/MarketCandidateModel/RecommendationPickModel (Pydantic) + JSON extraction
+  market_resolution.py # market_correct(), build_actual_outcome(), resolve_recommendation_pick() (A88) — shared by schema.py, backtest.py, and app/backend/
   snapshot_store.py    # SnapshotStore, SnapshotMissingError — record/replay interceptor (A09), allow_lessons_in_replay flag (A41)
   backtest.py          # BacktestRecord, load_outcome(), process_match_row(), match_in_test_split(), BacktestHarness (A12, A40)
   lessons.py           # create_lessons_tables(), insert_lesson_candidate(), generate_lesson_text()/generate_batch_lesson_text(), generate_batch_reflection(), generate_rule_from_lesson(), find_conflicting_rule(), approve_lesson()/reject_lesson(), load_approved_lessons() (A33, A39, A43–A45)
@@ -259,6 +260,46 @@ Even with `llama3.1:8b`, the model occasionally produces a `markets` array with 
 
 ## 8. Output Schema Parsing (`src/agent/schema.py`)
 
+**Current shape (A88, 2026-08-31 — see Section 33 for the full redesign this section now reflects):**
+
+```python
+class MarketCandidate(TypedDict):
+    market: str
+    selection: str
+    recommendation_type: Literal["direct_bet", "conditional", "no_bet"]
+    current_odds: float
+    min_odds: float
+    ml_probability: float
+    implied_probability: float
+    value_edge: float
+    composite_score: float   # A88: LLM's own edge-vs-hit-probability balance judgment
+    reason: str               # A88: one-line rationale for this candidate's score
+
+class RecommendationPick(TypedDict):
+    market: str
+    selection: str
+
+class MatchRecommendation(TypedDict):
+    match: dict
+    overall: Literal["direct_bet", "conditional", "no_bet", "insufficient_data"]
+    candidates: list[MarketCandidate]           # A88: replaces `markets` — every
+                                                  # market the agent evaluated, rejected
+                                                  # ones included, not just the winner
+    recommendation_pick: RecommendationPick | None  # A88: the LLM's own single choice,
+                                                       # a pointer only (no duplicated
+                                                       # numeric fields) -- resolved
+                                                       # against `candidates` via
+                                                       # `resolve_recommendation_pick()`
+                                                       # (Section 33), never re-derived
+                                                       # by a max(value_edge) reduction
+    explanation: str
+    confidence: Literal["low", "medium", "high"]
+    limitations: list[str]
+    prediction_basis: str
+```
+
+**Historical shape (pre-A88, everything below this point in this section describes the schema as it stood through A67/A69/A84/A87 — kept for the historical record; every reference to `markets`/`MarketRecommendation` below is what the pipeline used to produce, not what it produces today):**
+
 ```python
 class MarketRecommendation(TypedDict):
     market: str
@@ -301,7 +342,7 @@ def extract_recommendation(
 
 `json_repair` is a hard dependency (`requirements.txt`), not optional — without it, the multi-array bracket-nesting failure (Section 7, #6 follow-on) causes silent `insufficient_data` fallbacks even when the model's numbers were correct.
 
-**Residual gap, honestly noted:** the Pydantic validation in step 6 covers every *field on `MatchRecommendation`/`MarketRecommendation` itself*, but does not validate `match` (typed as a plain `dict`, no nested schema) or the contents of `limitations` (typed as `list[str]`, but a non-string element inside the list would still fail — this is enforced by Pydantic, not a gap) or cross-field semantic invariants beyond the two rules in steps 7–8 (e.g. nothing checks that `implied_probability` is actually `1 / current_odds`, or that `value_edge` is actually `ml_probability - implied_probability`). Those remain the LLM's responsibility, unchecked at extraction time.
+**Residual gap, honestly noted:** the Pydantic validation in step 6 covers every *field on `MatchRecommendation`/`MarketCandidate` itself* (post-A88; pre-A88 this was `MarketRecommendation`, same coverage), but does not validate `match` (typed as a plain `dict`, no nested schema) or the contents of `limitations` (typed as `list[str]`, but a non-string element inside the list would still fail — this is enforced by Pydantic, not a gap) or cross-field semantic invariants beyond the two rules in steps 7–8 (e.g. nothing checks that `implied_probability` is actually `1 / current_odds`, or that `value_edge` is actually `ml_probability - implied_probability`). Those remain the LLM's responsibility, unchecked at extraction time.
 
 ### 8a. Schema-Constrained Structured Output for Ollama (`src/agent/graph.py`, A37, 2026-07-26)
 
@@ -411,7 +452,7 @@ Derives, from a finished match's `fthg`/`ftag` (full-time goals): `result` (`"ho
 def _market_correct(market_rec: dict[str, Any], actual: dict[str, Any]) -> bool | None
 ```
 
-Resolves whether one market entry in a `MatchRecommendation.markets` list matches the actual outcome:
+Resolves whether one market entry (post-A92: the single resolved `recommendation_pick`, pre-A92: any entry in the old `MatchRecommendation.markets` list — see Section 33) matches the actual outcome:
 
 | Market | Resolvable? | Logic |
 |---|---|---|
@@ -420,7 +461,7 @@ Resolves whether one market entry in a `MatchRecommendation.markets` list matche
 | `total_goals` | Yes | `selection == actual["total_goals_side"]` |
 | `home_corners` / `away_corners` | **No — returns `None`** | `MatchRecommendation` has no numeric line field for corners (only `current_odds`/`min_odds`), so there is no way to know what threshold the agent's `selection` (e.g. `"over_4.5"`) actually refers to without that line value. |
 
-**This `None`-vs-`False` distinction is the single most important contract in the backtest stack.** `None` means "unknown, cannot be scored" — not "wrong." Every downstream consumer (`staking.py`, `evaluation.py`) treats a market with `correct is None` as **skip entirely** (no bet recorded, no win/loss counted), never as a settled loss. This is a deliberate, permanent limitation, not a bug to be fixed by adding more `elif` branches — fixing it would require extending `MarketRecommendation` with a numeric line field and is out of scope for A12–A16.
+**This `None`-vs-`False` distinction is the single most important contract in the backtest stack.** `None` means "unknown, cannot be scored" — not "wrong." Every downstream consumer (`staking.py`, `evaluation.py`) treats a market with `correct is None` as **skip entirely** (no bet recorded, no win/loss counted), never as a settled loss. This is a deliberate, permanent limitation, not a bug to be fixed by adding more `elif` branches — fixing it would require extending `MarketCandidate` (post-A88; `MarketRecommendation` pre-A88) with a numeric line field and is out of scope for A12–A16.
 
 ### 11.2 process_match_row — the Single Shared Replay Path
 
@@ -430,7 +471,9 @@ def process_match_row(row: pd.Series, config: AgentConfig) -> BacktestRecord
 
 This is the **one and only** implementation of "replay one historical match through the agent and score it." It is called directly by `BacktestHarness.run()` (synchronous, used by `agent-backtest` without concurrency and by `agent-compare`) and via `asyncio.to_thread` by `_run_backtest_concurrent()` (`main.py`, A14, Section 13) — by design, there is no second copy of this logic, so the sync and concurrent paths can never drift apart.
 
-Sequence: `configure_snapshot_store("replay", match_id=row["match_id"])` → `run_agent(match_info=..., config=config)` → (always, via `finally`) `configure_snapshot_store("live")` → `load_outcome(row)` → tag every entry in `recommendation["markets"]` with `correct: _market_correct(m, actual)` → return a `BacktestRecord`.
+Sequence: `configure_snapshot_store("replay", match_id=row["match_id"])` → `run_agent(match_info=..., config=config)` → (always, via `finally`) `configure_snapshot_store("live")` → `load_outcome(row)` → resolve the recommendation's own `recommendation_pick` against `candidates` via `resolve_recommendation_pick()` and tag it with `correct: _market_correct(picked, actual)` → return a `BacktestRecord`.
+
+**Post-A92 (2026-09-01), `market_results` is a 0-or-1-entry list — one bet per match**, built from the single resolved `recommendation_pick`, not from every candidate that independently passed guardrails. This matches what live settlement (`app/backend/recommendation_outcomes.py`) and `recommendation_stats.py`/`live_lessons.py` already do — see Section 33. Before this fix, and specifically between A88's merge and A92's fix, `recommendation.get("markets", [])` had silently returned `[]` on every real run (that key stopped existing on real `run_agent()` output the moment A88 shipped), a live production bug caught and closed the same day it was found.
 
 ```python
 @dataclass
@@ -442,7 +485,8 @@ class BacktestRecord:
     league: str
     recommendation: dict[str, Any]      # the raw MatchRecommendation dict
     actual: dict[str, Any]              # load_outcome() result
-    market_results: list[dict[str, Any]]  # each market dict + "correct": bool | None
+    market_results: list[dict[str, Any]]  # post-A92: 0 or 1 entries (the resolved
+                                            # recommendation_pick) + "correct": bool | None
 ```
 
 If `run_agent()` raises `SnapshotMissingError` (the match was never recorded, or the agent issued a tool call with inputs that don't match anything recorded — e.g. a different `web_search` query string than what was captured), the exception propagates out of `process_match_row` uncaught. Callers decide what to do with it (Section 13: the concurrent CLI path catches and skips; `BacktestHarness.run()` and `compare_configs()` do not, and will abort on the first missing snapshot).
@@ -683,7 +727,7 @@ Reflects `documents/agent_user_stories.md` as of this writing.
 - **Snapshot replay key misses on LLM-regenerated tool arguments** (Section 18.6) — `agent-backtest` runs over the identical snapshot corpus can evaluate a different subset of matches each time, since the LLM regenerates its own tool-call arguments (not just its final answer) and a SHA-256 key match requires byte-identical inputs. Not a crash (A14's fault tolerance skips cleanly), but means bet counts and even which matches get scored can shift run to run — average over multiple runs before trusting any single comparison.
 - ~~Result leakage can survive both leakage defenses~~ (Section 18.7) — observed on at least one match in the 24-match pilot despite the `before:<date>` web_search filter and the system-prompt instruction to discard final-score-bearing results. The model reported it honestly (`"Match result is known."` in `limitations`) rather than silently using it, but the defense was a mitigation, not a guarantee. **Substantially closed 2026-07-28/29 (A46–A47, Section 24).** A46 found the leak was structural, not a one-off (`process_match_row`'s shared replay path never applied the record-mode leakage instructions at all) and added a prompt-level guard; A47 went further with a code-enforced filter that drops individual leaked search results before they ever reach the LLM, and used it to re-scan and re-record the E0 corpus's confirmed-leaky matches. **Residual gap, honestly noted:** the filter is a title-pattern heuristic (`ponytail`-flagged in code), not a precise classifier — it will have residual false positives/negatives — and 21 of the corpus's re-recording attempts failed on a Tavily free-tier quota cap, leaving those 21 matches genuinely incomplete rather than re-verified clean.
 - ~~`extract_recommendation` does not validate `recommendation_type`, `confidence`, or numeric field types beyond presence...~~ **Resolved 2026-07-11 (A28).** `extract_recommendation` now runs every candidate through internal Pydantic v2 models after the key-presence/`overall` checks, validating every market field's type and both `recommendation_type`/`confidence` enums — a model emitting `value_edge: "high"` now fails extraction with a field-path-qualified `RecommendationParseError` instead of silently passing through to a downstream `TypeError` (Section 8, Section 19.2). **Residual gap, honestly noted:** this validation does not cover `match` (still a plain untyped `dict`) or cross-field semantic invariants — nothing checks that `implied_probability` is actually `1 / current_odds`, or that `value_edge` is actually `ml_probability - implied_probability`; a model could still pass a self-inconsistent-but-well-typed set of numbers.
-- **Corners markets (`home_corners`/`away_corners`) cannot be scored in backtests.** `_market_correct` (Section 11.1) always returns `None` for them, so they are never staked and never contribute to ROI/hit-rate — `min_odds_threshold`/`max_odds_threshold` enforcement only happens at recommendation time (code-enforced in `extract_recommendation` as of A29, Section 8, not just the LLM via the prompt), never validated against an actual outcome. Resolving this would require extending `MarketRecommendation` with a numeric line field and is out of scope for A09–A16.
+- **Corners markets (`home_corners`/`away_corners`) cannot be scored in backtests.** `_market_correct` (Section 11.1) always returns `None` for them, so they are never staked and never contribute to ROI/hit-rate — `min_odds_threshold`/`max_odds_threshold` enforcement only happens at recommendation time (code-enforced in `extract_recommendation` as of A29, Section 8, not just the LLM via the prompt), never validated against an actual outcome. Resolving this would require extending `MarketCandidate` (post-A88; `MarketRecommendation` pre-A88) with a numeric line field and is out of scope for A09–A16.
 - **`agent-compare` is slower and less fault-tolerant than `agent-backtest`** for equivalent match counts — it runs each config strictly sequentially via `BacktestHarness.run()` rather than reusing `agent-backtest`'s concurrent, per-match-fault-tolerant path (Section 14). A single missing snapshot aborts the whole comparison. Accepted scope boundary for A16, not a defect, but worth revisiting if comparison runs grow large.
 - `save_report`/`save_comparison` filenames are timestamped to the second; two runs (of the same config, for `save_report`; of any size, for `save_comparison`) completing within the same UTC second will silently overwrite each other's report file. Low risk given this tool's manual, human-paced usage pattern.
 - `agent-backtest --concurrency` is also capped by Python's default `ThreadPoolExecutor` size (`min(32, os.cpu_count() + 4)`) — values above that have no further effect on actual parallelism.
@@ -1092,6 +1136,8 @@ Direct user report, live on the deployed Dashboard: a card's top-right badge rea
 
 Full story-level detail lives in `documents/agent_user_stories.md` A65 and `documents/app_user_stories.md` W152/W153 (the paired frontend changes — showing `current_odds` alongside the wait threshold, and deriving the badge from the shown market itself, same investigation).
 
+**Superseded (2026-08-31/09-01, A88–A92, Section 33):** `_reconcile_overall_with_markets()` and `bestMarket()` (W153, mentioned just below) are both gone. The redesign in Section 33 doesn't just fix the same *symptom* this section describes (a badge disagreeing with what's shown) — it removes the underlying *cause*: there's no longer a max-value_edge reduction to reconcile `overall` against in the first place, because the LLM now commits to a single `recommendation_pick` directly. `_resolve_recommendation_pick()` replaces `_reconcile_overall_with_markets()`'s one-directional cap with a full sync to the one resolved candidate's real state (Section 33 covers why this can go both directions, unlike every guardrail before it).
+
 ### 27.4 Conditional-market odds floor — `_downgrade_conditional_below_floor()` (`src/agent/schema.py`, A66)
 
 Same investigation, direct follow-up: the current_odds displayed alongside that "WAIT ≥ 1.13" badge was `0.0` — not a real price at all. Root cause: `home_corners`/`away_corners` have no real bookmaker feed anywhere in this pipeline (`match_odds()`/`odds_lookup()`, Section 5.4 of `app_techspec.md`, only ever populate `result_3way` odds) — the LLM has nothing to ground a corners market's `current_odds` on, and the system prompt's own JSON template uses `0.0` as its generic numeric placeholder (every field, not just this one), which the model plausibly copied verbatim rather than reporting "I don't know."
@@ -1188,3 +1234,46 @@ Full story-level detail lives in `documents/agent_user_stories.md` A84.
 **Same "safety rails" invariant reversal as A84 (above), for a second field:** `tests/test_agent_config.py::test_all_three_posture_configs_keep_every_other_field_identical_to_default` had `max_tool_calls` equality already surviving A84's own carve-out (only the odds thresholds were exempted then) — A87 dropped it too, with two new tests locking in the diverging shape (`test_production_config_has_2026_08_30_tool_call_cut`, `test_posture_configs_keep_the_original_pre_cut_tool_call_budget`).
 
 Full story-level detail lives in `documents/agent_user_stories.md` PHASE 28 (A86/A87).
+
+## 33. Single-Market Recommendation Redesign (A88–A92, 2026-08-31/09-01)
+
+Direct user request: *"I want the agent to look at all markets together, with the news, odds to make one bet recommendation, preferably balance the edge and the hit probability."* Every prior section of this document describes an architecture where each of the 5 markets (`result_3way`, `btts`, `total_goals`, `home_corners`, `away_corners`) is scored independently, and a separate reduction (`pick_recommended_market()`, `max(value_edge)` among actionable markets) decides after the fact which one gets shown. This redesign removes that reduction entirely — the LLM itself weighs every market it evaluated against every other one, in the same single `run_agent()` call (a second synthesis call was considered and rejected on cost grounds, given A87's tool-call-budget pressure the day before), and commits to exactly one `recommendation_pick`.
+
+Full design: `docs/superpowers/specs/2026-08-31-single-market-recommendation-design.md` (A88–A91) and `docs/superpowers/specs/2026-09-01-backtest-train-recommendation-pick-design.md` (A92). Three sequential sub-projects, each independently spec'd, planned, and merged: **A88–A91** (the decision mechanism itself — schema, prompt, guardrails, `src/agent/` only), **W193–W197** (live serving — `app/backend/`, the frontend, `documents/app_user_stories.md` Phase 47), **A92** (the backtest/train harness). The app was taken deliberately offline (`ENABLE_SCHEDULER=0`, no public Railway domain) for the duration of the first two, resumed after.
+
+### 33.1 Schema: `candidates` + `recommendation_pick` (A88)
+
+Section 8 above now shows the current shape directly. The key structural change: `MarketRecommendation`/`markets` (one array, no way to distinguish "the pick" from "an also-ran" except by a downstream reduction) becomes `MarketCandidate`/`candidates` (every market the agent evaluated, rejected ones included, each now also carrying a self-reported `composite_score`/`reason`) plus a separate `recommendation_pick: {market, selection} | None` — a bare pointer, not a duplicate of the candidate's own numeric fields. "Which one is the pick" stops being a reduction computed after the LLM's response arrives and becomes a fact the LLM states directly.
+
+New shared resolver, `resolve_recommendation_pick(candidates, pick)` (`src/agent/market_resolution.py`) — a plain equality lookup (find the `candidates` entry whose `market`/`selection` match `pick`'s), replacing `pick_recommended_market()`'s `max(value_edge)` reduction. Every real caller across all three sub-projects — `schema.py`'s own guardrail pipeline, `app/backend/recommendations.py`/`recommendation_outcomes.py`/`bets.py`, `MatchUI.tsx`'s `resolveRecommendation()` (TS port, same three-case contract), and `backtest.py` (A92) — routes through this one function. `pick_recommended_market()` and its TS counterpart `bestMarket()`/`marketDirections()` are deleted (W197, A92) now that nothing calls them.
+
+**Hardened against untrusted data mid-redesign:** `resolve_recommendation_pick()` originally used direct dict indexing, safe for its original agent-side callers (always Pydantic-validated) but crash-prone once app-side callers started passing it raw, untrusted cached/LLM JSON. Found via code review, not live — fixed at the source (`.get()`/`isinstance` guards) rather than in each of the (eventually four) call sites that would have needed the same fix independently.
+
+### 33.2 Guardrails: downgrade-only, plus one deliberate exception (A90–A91)
+
+All six pre-existing per-market downgrade passes (Sections 19, 27.3–27.5, 31 above — value-edge floor, draw floor, null-odds, odds bounds, conditional floor/ceiling) were adapted mechanically from looping `data["markets"]` to looping `data["candidates"]`; same thresholds, same rules, same downgrade-only philosophy (`direct_bet` → `conditional` → `no_bet`, never the reverse, never a substitution).
+
+Two things are genuinely new, not mechanical renames:
+
+- **`_downgrade_recommendation_below_top_composite_score()` (A91)** — a self-consistency guardrail with no pre-A88 equivalent, because there was nothing to be self-consistent *about* before: compares the resolved pick's own `composite_score` against every other still-eligible candidate's. If a rejected candidate self-reports a *higher* score than the one actually picked, the pick downgrades straight to `no_bet` — catching "said X, but its own numbers favor Y," the same class of self-contradiction A38/BUG-027 already found this model prone to for match/market identity.
+- **`_resolve_recommendation_pick()` (A90, replaces `_reconcile_overall_with_markets()`, Section 27.3)** — syncs `overall` to the resolved pick's real state. Unlike every guardrail listed above (and unlike its own predecessor, which only ever *capped* `overall`), this sync is bidirectional: it can also *raise* `overall` above the LLM's own stale self-report when the resolved pick outranks it. Deliberate, not an oversight — once every other guardrail has run, there's exactly one validated candidate left to trust, so there's no longer a scenario (unlike the old array-scan) where a legitimately-higher self-reported `overall` could be second-guessing real information the resolver doesn't have.
+
+### 33.3 Prompt changes (A89)
+
+All four prompt files (`agent_v1.txt` + conservative/balanced/aggressive posture variants) gained: a `composite_score` balance instruction (a smaller edge with materially higher hit probability should generally beat a larger, noisier one — not a restatement of `value_edge`), a `recommendation_pick` eligibility instruction, and the updated JSON schema block (`candidates`+`recommendation_pick` replacing `markets`). Two real inaccuracies found by code-quality review before shipping: a claim that an ineligible pick "will be downgraded to no_bet automatically" (false — some downgrade to `conditional` instead, per the actual per-rule behavior above), and A91's self-consistency rule being enforced but never disclosed to the model at all. Both corrected.
+
+### 33.4 Live serving (W193–W197, `documents/app_user_stories.md` Phase 47)
+
+App-side schema mirror (`app/backend/recommendations.py`'s `MatchRecommendationOut`), settlement (`recommendation_outcomes.py`), bet-logging (`bets.py`), and the frontend (`MatchUI.tsx`, `dashboardMetrics.ts`, `lib/types.ts`) all migrated onto the same `candidates`/`recommendation_pick` shape, all resolving through the same `resolve_recommendation_pick()`/`resolveRecommendation()`. Old cached rows need no migration script or read-time adapter — `raw.get("candidates") or []`/`raw.get("recommendation_pick")` are naturally empty/null for a pre-redesign row, and a new downgrade-only cap forces `overall` to `"no_bet"` when no pick resolves, so a stale row can't show a badge with nothing behind it. `bets.py`'s `resolve_from_recommendation()` deliberately builds its lookup pointer from the *request's* own `market`/`selection` fields, not `recommendation.get("recommendation_pick")` — preserving the pre-existing permissive behavior that a user can log a bet on any candidate the recommendation listed, not only the agent's own headline pick.
+
+### 33.5 Backtest/train harness (A92, 2026-09-01)
+
+Investigated expecting a wide migration (`evaluation.py`, `staking.py`, `lessons.py` were all originally flagged as deferred, unbuilt scope alongside A88–A91) and found it was actually one function: `staking.py`/`lessons.py` were already shape-agnostic (they duck-type over `BacktestRecord.market_results`, never assuming its length or origin), and `evaluation.py` never touched the `markets`/`candidates` shape at all. The one real gap was `process_match_row()` (Section 11.2) still reading the dead `recommendation.get("markets", [])` key — **a live, silent production bug**, not just stale code: that key stopped existing on real `run_agent()` output the moment A88 merged, so every real `agent-backtest`/`agent-train` run between A88 and A92 had recorded zero staked bets and zero-market lesson stats, undetected because `tests/test_backtest.py` mocks `run_agent` directly with old-shape fixtures rather than exercising the real schema.
+
+Fixed by resolving `recommendation_pick` via `resolve_recommendation_pick()` (Section 33.1) and building a 0-or-1-entry `market_results` list from it — see Section 11.2's updated text above. This is a genuine design choice, not just a bug fix: it narrows backtest to **one bet per match**, matching what live settlement and `app/backend/recommendation_stats.py`/`live_lessons.py` already did (the latter's own `LIVE_SOURCE_NOTE` code comment had already flagged the backtest-vs-live asymmetry this closes). Historical backtest ROI/hit-rate numbers computed before this fix — and any computed under the old `markets`-array multi-bet-per-match model, i.e. everything in Sections 18–32 above — are not directly comparable to numbers computed after it.
+
+### 33.6 Cleanup of ~1,150 stale lesson candidates (2026-09-01, operational, not a story)
+
+Separately from the schema migration itself: `agent_lessons` held 1,151 rows, all generated 2026-07-28 through 2026-08-21 (entirely pre-dating this redesign, so none were affected by the A92 bug window above). 1,150 were still `status="pending"` a month later — `load_approved_lessons()` (Section 20) only ever reads `status="approved"` rows, so a pending row has never influenced a single live prompt regardless of age. Deleted the 1,150 pending rows as a housekeeping pass (backed up first: `data/fpai_core.db.pre-lessons-cleanup-backup-20260901`); kept the one `approved` row, whose `rule_text` ("NEVER recommend a bet on any market for which the ML forecast model did not produce a direct probability for that specific market") is schema-agnostic and remains fully valid under the new architecture.
+
+Full story-level detail lives in `documents/agent_user_stories.md` Phase 29 (A88–A91) and Phase 30 (A92), and `documents/app_user_stories.md` Phase 47 (W193–W197).

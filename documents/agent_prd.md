@@ -57,8 +57,14 @@ The overall match-level recommendation is also one of:
 ### 3.3 Odds Threshold
 The user's odds bounds are **1.2–11.0 (decimal) / -500 to +1000 (American)** (widened 2026-07-11 from an original 2.0-only floor, per A29). The agent will never recommend a direct bet outside this band regardless of value edge — code-enforced at extraction time (`extract_recommendation`), not just a prompt instruction.
 
-### 3.4 Per-Market vs Per-Match Output
-The agent evaluates all configured markets and produces a recommendation per market. The match-level `overall` field reflects the strongest opportunity found. This allows the user to see, for example, a `conditional` recommendation on `btts` alongside a `no_bet` on `result_3way` for the same match.
+### 3.4 Per-Market Evaluation, One Per-Match Recommendation (revised 2026-08-31/09-01, A88–A92)
+**Superseded design principle, kept below for the historical record — see the current statement first.**
+
+The agent still evaluates every configured market internally (`candidates: list[MarketCandidate]`, each carrying its own `recommendation_type`/`value_edge`/`composite_score`), but no longer produces an independent recommendation per market for the user to reconcile themselves. The agent weighs all evaluated markets against each other — balancing statistical edge against hit probability via a self-reported `composite_score` — and commits to exactly one `recommendation_pick`, in the same LLM call. The match-level `overall` field is a direct read of that one resolved pick's own state, not a reduction computed after the fact over an array (`agent_techspec.md` §33).
+
+Direct user request that drove this change: *"I want the agent to look at all markets together, with the news, odds to make one bet recommendation, preferably balance the edge and the hit probability."* This was an explicit product decision to move away from the original 2026-06 design below, not an incremental extension of it — the earlier design's own example (a `conditional` `btts` recommendation shown *alongside* a `no_bet` `result_3way` for the same match) is precisely the "which one do I actually act on" ambiguity this redesign closes. `candidates` still lists every market the agent evaluated, rejected ones included, for transparency — but only one is ever the recommendation.
+
+**Original design principle (2026-06, superseded above):** ~~The agent evaluates all configured markets and produces a recommendation per market. The match-level `overall` field reflects the strongest opportunity found. This allows the user to see, for example, a `conditional` recommendation on `btts` alongside a `no_bet` on `result_3way` for the same match.~~
 
 ### 3.5 Explanation
 Every recommendation includes a natural language explanation of the agent's reasoning. No separate tool is needed — the LLM generates this as part of its final reasoning turn.
@@ -69,6 +75,38 @@ Weekend fixture card: "give me recommendations for this weekend's Premier League
 ---
 
 ## 4. Output Schema
+
+**Current (A88, 2026-08-31 — see §3.4 above and `agent_techspec.md` §33):**
+
+```python
+class MarketCandidate(TypedDict):
+    market: str                # "btts" | "result_3way" | "total_goals" | "home_corners" | "away_corners"
+    selection: str             # e.g. "yes", "home", "over_2.5"
+    recommendation_type: str   # "direct_bet" | "conditional" | "no_bet"
+    current_odds: float
+    min_odds: float            # value threshold for this market
+    ml_probability: float
+    implied_probability: float
+    value_edge: float          # ml_probability - implied_probability
+    composite_score: float     # LLM's own edge-vs-hit-probability balance judgment
+    reason: str                 # one-line rationale for this candidate's score
+
+class RecommendationPick(TypedDict):
+    market: str
+    selection: str
+
+class MatchRecommendation(TypedDict):
+    match: dict                # home, away, date, league
+    overall: str               # "direct_bet" | "conditional" | "no_bet" | "insufficient_data"
+    candidates: list[MarketCandidate]              # every market evaluated, not just the pick
+    recommendation_pick: RecommendationPick | None  # the agent's one chosen market+selection
+    explanation: str           # natural language explanation from final LLM turn
+    confidence: str            # "low" | "medium" | "high"
+    limitations: list[str]     # specific gaps: missing odds, cold-start, unknown team, etc.
+    prediction_basis: str      # forwarded from ML tool: "team_history_and_market" | "market_odds_only" | "partial"
+```
+
+**Original (2026-06, superseded — `markets` replaced by `candidates`+`recommendation_pick` above):**
 
 ```python
 class MarketRecommendation(TypedDict):
