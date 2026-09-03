@@ -1277,3 +1277,58 @@ Fixed by resolving `recommendation_pick` via `resolve_recommendation_pick()` (Se
 Separately from the schema migration itself: `agent_lessons` held 1,151 rows, all generated 2026-07-28 through 2026-08-21 (entirely pre-dating this redesign, so none were affected by the A92 bug window above). 1,150 were still `status="pending"` a month later — `load_approved_lessons()` (Section 20) only ever reads `status="approved"` rows, so a pending row has never influenced a single live prompt regardless of age. Deleted the 1,150 pending rows as a housekeeping pass (backed up first: `data/fpai_core.db.pre-lessons-cleanup-backup-20260901`); kept the one `approved` row, whose `rule_text` ("NEVER recommend a bet on any market for which the ML forecast model did not produce a direct probability for that specific market") is schema-agnostic and remains fully valid under the new architecture.
 
 Full story-level detail lives in `documents/agent_user_stories.md` Phase 29 (A88–A91) and Phase 30 (A92), and `documents/app_user_stories.md` Phase 47 (W193–W197).
+
+## 34. First Real Post-Redesign Validation: BUG-060, A57's Remediation, and a Full SP1 Train/Test Run (2026-09-01/02)
+
+Direct user request, immediately after A92 closed out the redesign: *"train the agent with a 30 match sample train set and evaluate ROI on the test set."* This was the first time any real LLM call had been made against the new `candidates`/`recommendation_pick` schema (Section 33) since it merged — the app has been offline the whole redesign, so nothing had actually exercised it live. What started as a small sanity check surfaced two real, independent production issues before any ROI number could be trusted, then produced the first genuine train/test result under the new architecture once both were resolved.
+
+### 34.1 What got found and fixed along the way
+
+Full detail lives in each finding's own record — this section only summarizes and cross-references:
+
+- **BUG-060** (`documents/bugs.md`): the initial 5-match SP1 sample came back `insufficient_data_rate: 1.0` — every match failed to parse. Root cause: DeepSeek (`deepseek-v4-pro`, production default) reproducibly emitted the pre-redesign `markets` key instead of `candidates`, and never emitted `recommendation_pick`, despite an already-correct, unambiguous prompt (A89). Fixed with an explicit negative instruction in all 4 prompt files. This reduced the failure rate from 100% to a residual **~10%** on the full 299-match train run (29/299) — accepted as a known LLM-reliability limit, not chased to zero, since it degrades safely (`insufficient_data`, excluded from betting) and a code-side compatibility shim would have reintroduced the mechanical reduction A88 was built to eliminate.
+- **A57** (`documents/agent_user_stories.md` Phase 29): re-scanning E0's corpus for leaked post-match content (routine due diligence before trusting any backtest number) found the corpus was *not* actually clean despite A47's 2026-07-29 remediation claiming so — 36/380 matches still leaking. Root cause confirmed as a genuine coverage gap in A47's original batch (not a filter defect: the leaked content all predated A47's fix, nothing postdated it). Remediated identically to A47's own precedent (delete + re-record + re-scan): now 0/5441 snippets flagged. SP1, I1, D1, F1 were independently confirmed already clean (all recorded after the filter shipped); SWE (12/24 matches, 50% leak rate, never remediated at all) was found in the same pass and explicitly deferred by direct user instruction, not silently dropped.
+
+### 34.2 SP1 full train/test backtest — the first trustworthy post-redesign number
+
+Once both issues were resolved, ran the actual requested methodology at full scale rather than a 30-match sample (SP1's corpus was already confirmed clean, so this was the first league where a real number was worth computing) — `agent-train --split train` (no `--sample`, full 298-ish partition) followed by `agent-backtest --split test` (full held-out partition), both `--stake-mode flat`, both against `config/agent_config.yaml`'s production default (DeepSeek):
+
+| | Matches evaluated | Bets placed | Bets won | Hit rate | ROI | `insufficient_data` |
+|---|---|---|---|---|---|---|
+| **Train** | 299 | 158 | 67 | 42.4% | **−4.8%** | 9.7% (BUG-060 residual) |
+| **Test** | 81 | 37 | 16 | 43.2% | **−3.2%** | 7.4% |
+
+Train and test **agree in direction** (both modestly negative ROI, both ~42-43% hit rate) — a materially more coherent result than A46's earlier E0 train/test contradiction, which turned out to be leakage-driven. That agreement is itself evidence this number reflects the pipeline's real current behavior on a clean corpus, not an artifact. **Explicitly not claimed as proof of a durable edge, positive or negative** — 37 test bets is still a thin sample by this project's own standing convention (Section 26.3/A47's own "not treated as evidence of a real edge" precedent), and this is one draw of a non-deterministic process (temperature > 0), not a repeated-run distribution. Neither number reflects any lesson-informed adjustment — `--use-lessons` was deliberately not used, by direct user choice, to keep this reading as the cold baseline.
+
+### 34.3 What the 308 generated lesson candidates (all `pending`) actually show
+
+Every train-split match writes one lesson candidate (`--batch-size` defaulted to 1); a deterministic thematic pass across all 308 pending SP1 rows (300 from the full train run, 8 from the earlier smaller sanity samples) — not an official `generate_batch_lesson_text()` run (that requires `--batch-size > 1`), but the same underlying data, aggregated ad hoc — surfaced patterns real enough to note here even though none of these candidates have been reviewed or approved:
+
+- **Extreme market concentration.** Of 160 direct bets, 146 (91%) were `total_goals`; only 14 (9%) were `result_3way`. Whatever the model finds compelling about match outcomes almost never clears its own value-edge bar.
+- **A strong one-sided lean within `total_goals`.** Of those 146, 137 (94%) were `under_2.5`; only 9 (6%) were `over_2.5`.
+- **The dominant bet type underperforms.** `under_2.5` hit rate: **41.6%** (137 bets) — below a coin flip. `result_3way` (the rarely-picked market): **57.1%** (14 bets, thin but the only market beating 50%).
+- **Confidence is not currently a usable filter.** 154 of 160 direct-bet lessons report `confidence=medium`; `high`/`low` combined appear only 6 times total across the whole batch.
+- **Limitation themes**: 77% of all 308 matches cite conflicting/stale injury-availability info; 73% cite missing BTTS/corners odds (a known, permanent structural gap, unrelated to this run — no data source has ever carried these, live or historical, per Section 28); 38% cite general forecast entropy/uncertainty; 11% are the BUG-060 residual.
+
+### 34.4 The raw `total_goals` model's own accuracy — separated from the agent's staking behavior
+
+The `under_2.5` underperformance above is filtered by the agent's own value-edge threshold — a biased subset by construction. To check whether the underlying signal itself is weak (rather than the agent's judgment), computed the SP1 `total_goals` model's raw side-pick accuracy across **every** evaluated match with usable candidates (270, not just the 146 actually bet on): favor whichever side (`over_2.5`/`under_2.5`) the model's own `ml_probability` ranks higher, compare to the real result.
+
+**Raw accuracy: 140/270 = 51.9%** — essentially a coin flip. Calibration is worse than flat — it's inverted: matches where the model stated ~70% probability hit only **47.4%** of the time, *less* often than the ~50%-probability bucket (51.4%) or the ~60% bucket (52.3%). A well-calibrated model's accuracy should climb with stated confidence; this one doesn't.
+
+Cross-checked against `total_goals_sp1_xgboostregressor_v1_20260807.joblib` (the actual deployed model, per `config/model_selection.yaml`'s `SP1.total_goals` entry — see `FRAI_TECHSPEC.md` §25.3 for the selection mechanism): its own logged held-out test metrics are **MAE 1.23, RMSE 1.53 goals**, against a decision threshold sitting at 2.5 — an average error of over a full goal means a large fraction of real matches land within the model's own uncertainty band around that exact line. Every SP1 target model shares the same `training_cutoff: 2023-06-04` (over two full seasons stale relative to the 2025/26 matches being evaluated here) — full table, all 8 SP1 targets:
+
+| Target | Type | Test error | 
+|---|---|---|
+| `home_goals` | regression | MAE 0.88 (RMSE 1.12) |
+| `away_goals` | regression | MAE 0.77 (RMSE 0.97) |
+| `total_goals` | regression | MAE 1.23 (RMSE 1.53) |
+| `home_corners` | regression | MAE 2.33 (RMSE 3.04) |
+| `away_corners` | regression | MAE 1.88 (RMSE 2.34) |
+| `total_corners` | regression | MAE 2.68 (RMSE 3.41) |
+| `btts` | classification | 52.3% accuracy (log loss 0.696) |
+| `result_3way` | classification | 52.6% accuracy (log loss 0.976) |
+
+**This reframes the `under_2.5` finding**: the agent's *actual placed bets* (41.6% hit rate) performed *worse* than the model's raw, unfiltered side-pick accuracy (51.9%). That's the signature of a market that's already reasonably efficient on this line — when a noisy model disagrees with it enough to register as "value," the market is more often right than the model, not the other way around. `result_3way`'s markedly better real-money hit rate (57.1%, thin sample) lines up with its own model having the better accuracy-over-baseline story (52.6% vs. a ~33% 3-way chance floor, versus `btts`'s 52.3% against a 50% binary floor). The agent's judgment isn't the weak link here — the `total_goals` forecast it's reasoning from is.
+
+**Not yet acted on, flagged for whoever picks this up**: no lesson candidate from this run has been reviewed or approved; no ML-model retraining was scoped or attempted; SWE's leakage gap (34.1 above) remains open by explicit deferral.
