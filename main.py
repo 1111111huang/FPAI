@@ -17,7 +17,7 @@ load_dotenv()
 from src.agent.snapshot_store import DEFAULT_BASE_DIR, league_base_dir
 from src.features.feature_factory import FeatureFactory
 from src.ingestion import CSVLoader, FootballDataScraper
-from src.logic.target_registry import get_target_definition, list_target_definitions
+from src.logic.target_registry import INACTIVE_DEFAULT_TARGETS, get_target_definition, list_target_definitions
 from src.logic.competition_registry import (
     get_competition_definition,
     is_target_available,
@@ -74,6 +74,9 @@ MODEL_REGISTRY = {
     "rf_regressor": RandomForestRegressorModel,
     "goal_stacker": None,  # handled via ModelFactory
     "stacker": None,
+    "result_stacker": None,  # US#181, handled via ModelFactory
+    "two_stage_result": None,
+    "skellam_result": None,  # US#183, handled via ModelFactory
     "mlp": None,
     "mlp_regressor": None,
 }
@@ -810,19 +813,22 @@ def run_train_target(
         valid_models = ", ".join(sorted(MODEL_REGISTRY.keys()))
         raise ValueError(f"Unsupported model '{selected_model}'. Available options: {valid_models}")
     LOGGER.info("Training forecast target | target=%s | task_type=%s | model=%s | context=%s", definition.name, definition.task_type, selected_model, context)
-    model_cls = MODEL_REGISTRY.get(selected_model)
-    if model_cls is None:
-        model = ModelFactory.get_model(selected_model)
-    else:
-        xgb_params = _xgb_params_for_target(target_name, selected_model)
-        model = model_cls(**xgb_params)
-
     # US#110: --context IS the competition_id to train for (e.g. "E0", "SWE",
     # "international"), resolved through the registry rather than a hardcoded
     # binary. "league" is kept as a deprecated alias for "E0" -- the one
     # competition_specific competition it used to unambiguously mean -- so it
-    # keeps working rather than silently doing the wrong thing.
+    # keeps working rather than silently doing the wrong thing. Computed
+    # before model construction: SkellamResultModel (US#183) needs the real
+    # competition_id at construction time (it loads that competition's own
+    # promoted home_goals/away_goals), not just at ModelManager time.
     competition_id = "E0" if context == "league" else context
+    model_cls = MODEL_REGISTRY.get(selected_model)
+    if model_cls is None:
+        factory_params = {"competition_id": competition_id} if selected_model == "skellam_result" else None
+        model = ModelFactory.get_model(selected_model, factory_params)
+    else:
+        xgb_params = _xgb_params_for_target(target_name, selected_model)
+        model = model_cls(**xgb_params)
     competition_def = get_competition_definition(competition_id)
     if not is_target_available(competition_def, definition.name):
         # US#129: fail fast and explicitly rather than let prepare_training_data's
@@ -868,7 +874,8 @@ def run_train_forecast_suite(targets: list[str] | None = None, context: str = "E
     it, with an explicit, readable reason logged per skipped target.
     """
     requested_targets = targets or [
-        definition.name for definition in list_target_definitions() if definition.name != "home_win"
+        definition.name for definition in list_target_definitions()
+        if definition.name not in INACTIVE_DEFAULT_TARGETS
     ]
 
     # --context "league" is a deprecated alias for "E0" -- resolve the same

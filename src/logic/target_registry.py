@@ -45,6 +45,13 @@ TARGET_REGISTRY: dict[str, TargetDefinition] = {
         primary_metric="log_loss",
         secondary_metrics=("accuracy",),
     ),
+    "result_margin": TargetDefinition(
+        name="result_margin",
+        task_type="regression",
+        label_columns=("fthg", "ftag"),
+        primary_metric="mae",
+        secondary_metrics=("rmse",),
+    ),
     "btts": TargetDefinition(
         name="btts",
         task_type="binary_classification",
@@ -96,6 +103,19 @@ TARGET_REGISTRY: dict[str, TargetDefinition] = {
         secondary_metrics=("rmse",),
     ),
 }
+
+
+# Registered but excluded from the default active target set (CLI --target
+# choices, train-forecast-suite's default sweep, select-best-models' default
+# scan, ForecastService's default forecast_upcoming target list): "home_win"
+# is a legacy pre-result_3way target kept only for backward compatibility;
+# "result_margin" (US#182) is an exploratory regression reformulation of
+# result_3way, not yet proven to beat it -- registered so it's trainable via
+# train-target/optuna-sweep like any other target, but deliberately not
+# swept into production training/selection/serving until/unless promoted.
+# Still fully usable via --target result_margin (or any explicit target
+# list) everywhere; only the "no --target given" default paths skip it.
+INACTIVE_DEFAULT_TARGETS: frozenset[str] = frozenset({"home_win", "result_margin"})
 
 
 def normalize_target_name(target_name: str | None) -> str:

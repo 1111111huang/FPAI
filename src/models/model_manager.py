@@ -23,6 +23,8 @@ from src.logic.target_resolver import TargetResolver
 from src.logic.target_registry import TargetDefinition, get_target_definition
 from src.models.base_model import FPAIBaseModel, XGBoostModel, XGBoostRegressorModel
 from src.models.goal_stacker import GoalStackerModel
+from src.models.skellam_result_model import SkellamResultModel
+from src.models.two_stage_result_model import TwoStageResultModel
 from src.utils.config_loader import AppSettings, load_settings
 from src.utils.db_manager import DuckDBManager
 from src.utils.logger import get_logger
@@ -469,8 +471,12 @@ class ModelManager:
         df["target"] = TargetResolver.get_label(df, self.target_config)
         # XGBoost handles NaN features natively; only require a non-null target.
         # Non-XGBoost models require all feature columns to be present.
+        # TwoStageResultModel (US#181) is built entirely from XGBClassifier
+        # sub-models, so it tolerates NaN the same way -- unlike
+        # GoalStackerModel, which mixes in sklearn's PoissonRegressor/Ridge
+        # and genuinely needs the strict dropna.
         required_non_null = ["target"]
-        if not isinstance(self.model, (XGBoostModel, XGBoostRegressorModel)):
+        if not isinstance(self.model, (XGBoostModel, XGBoostRegressorModel, TwoStageResultModel, SkellamResultModel)):
             required_non_null.extend(feature_columns)
         df = df.dropna(subset=required_non_null).reset_index(drop=True)
 
@@ -516,7 +522,7 @@ class ModelManager:
         X_val = X_val.replace({pd.NA: np.nan})
         X_test = X_test.replace({pd.NA: np.nan})
 
-        if not isinstance(self.model, (XGBoostModel, XGBoostRegressorModel)):
+        if not isinstance(self.model, (XGBoostModel, XGBoostRegressorModel, TwoStageResultModel, SkellamResultModel)):
             if X_train.isna().any().any() or X_val.isna().any().any() or X_test.isna().any().any():
                 raise ValueError(
                     "Missing values detected in features. "
@@ -618,7 +624,7 @@ class ModelManager:
         selected_features = self._load_selected_features()
         self._log_selected_features(selected_features)
         X_train, X_val, X_test, y_train, y_val, y_test, test_meta = self.prepare_training_data()
-        eval_set = [(X_val, y_val)] if isinstance(self.model, (XGBoostModel, XGBoostRegressorModel, GoalStackerModel)) else None
+        eval_set = [(X_val, y_val)] if isinstance(self.model, (XGBoostModel, XGBoostRegressorModel, GoalStackerModel, TwoStageResultModel)) else None
         sample_weight = _compute_sample_weight(y_train, self.target_definition.task_type, alpha=self.sample_weight_alpha)
         self.model.train(X_train, y_train, eval_set=eval_set, sample_weight=sample_weight)
         self._log_feature_importance(list(X_train.columns), self.model)
@@ -657,7 +663,7 @@ class ModelManager:
                 mlflow.set_tag("primary_metric", self.target_definition.primary_metric)
                 mlflow.set_tag("secondary_metrics", ",".join(self.target_definition.secondary_metrics))
                 mlflow.log_param("target_type", self.target_definition.name)
-                eval_set = [(X_val, y_val)] if isinstance(self.model, (XGBoostModel, XGBoostRegressorModel, GoalStackerModel)) else None
+                eval_set = [(X_val, y_val)] if isinstance(self.model, (XGBoostModel, XGBoostRegressorModel, GoalStackerModel, TwoStageResultModel)) else None
                 sample_weight = _compute_sample_weight(y_train, self.target_definition.task_type, alpha=self.sample_weight_alpha)
                 self.model.train(X_train, y_train, eval_set=eval_set, sample_weight=sample_weight)
                 self._log_feature_importance(list(X_train.columns), self.model)

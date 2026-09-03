@@ -11,7 +11,7 @@ import mlflow
 import yaml
 
 from src.logic.competition_registry import DEFAULT_REGISTRY_PATH, list_context_keys
-from src.logic.target_registry import list_target_definitions, get_target_definition
+from src.logic.target_registry import INACTIVE_DEFAULT_TARGETS, list_target_definitions, get_target_definition
 from src.utils.logger import get_logger
 
 LOGGER = get_logger(__name__)
@@ -318,7 +318,7 @@ class ModelSelector:
         targets = (
             [target]
             if target
-            else [d.name for d in list_target_definitions() if d.name != "home_win"]
+            else [d.name for d in list_target_definitions() if d.name not in INACTIVE_DEFAULT_TARGETS]
         )
         # US#110: "league" is a deprecated alias for "E0", resolved here so a
         # `--context league` caller lands in the right bucket instead of

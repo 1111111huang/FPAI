@@ -20,7 +20,12 @@ from src.forecast.uncertainty import (
     residual_prediction_interval,
 )
 from src.logic.competition_registry import get_competition_definition
-from src.logic.target_registry import TargetDefinition, get_target_definition, list_target_definitions
+from src.logic.target_registry import (
+    INACTIVE_DEFAULT_TARGETS,
+    TargetDefinition,
+    get_target_definition,
+    list_target_definitions,
+)
 from src.utils.config_loader import AppSettings, load_settings
 from src.utils.db_manager import DuckDBManager
 
@@ -62,7 +67,8 @@ class ForecastService:
         self.db_manager = DuckDBManager(config_path=str(self.config_path))
         self.model_dir = Path(self.config.paths.model_dir)
         self.targets = [get_target_definition(target).name for target in targets] if targets else [
-            definition.name for definition in list_target_definitions() if definition.name != "home_win"
+            definition.name for definition in list_target_definitions()
+            if definition.name not in INACTIVE_DEFAULT_TARGETS
         ]
         self.feature_names = self._load_selected_features()
 
@@ -139,6 +145,29 @@ class ForecastService:
             return _load_xgboost_native(XGBClassifier(), model_path)
         if model_type == "XGBoostRegressorModel":
             return _load_xgboost_native(XGBRegressor(), model_path)
+        # Composite models (US#181/US#183): .save() dumps a config/state
+        # dict, not the underlying estimator directly (unlike LRModel/
+        # RandomForestModel, whose raw joblib.load() below already returns
+        # something with .predict_proba()) -- a bare joblib.load() here
+        # would silently hand back that dict instead of a usable model,
+        # crashing on the first .predict_proba() call. Found live promoting
+        # SkellamResultModel: "'dict' object has no attribute 'predict_proba'".
+        # Substring match, not equality: model_selection.yaml's model_type
+        # values aren't consistently one convention across promotion eras
+        # (confirmed live -- some entries carry the CLI registry key, e.g.
+        # "xgb_regressor"; run_pipeline()'s own model_prefix tag instead
+        # writes self.model.__class__.__name__.lower().replace("model", "")
+        # e.g. "skellamresult"/"twostageresult", no underscore). XGBoost
+        # artifacts tolerate either because of the byte-sniffing fallback
+        # below; these composite ones have no such fallback, so match
+        # loosely here rather than depend on getting one exact spelling.
+        model_type_lower = model_type.lower()
+        if "skellam" in model_type_lower:
+            from src.models.skellam_result_model import SkellamResultModel
+            return SkellamResultModel.load(str(model_path))
+        if "twostage" in model_type_lower or "two_stage" in model_type_lower:
+            from src.models.two_stage_result_model import TwoStageResultModel
+            return TwoStageResultModel.load(str(model_path))
         # Sniff file format: XGBoost native UBJSON starts with b'{'
         with open(model_path, "rb") as _f:
             _magic = _f.read(1)

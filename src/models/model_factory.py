@@ -14,6 +14,8 @@ from src.models.base_model import (
 )
 from src.models.goal_stacker import GoalStackerModel
 from src.models.mlp_model import MLPModel, MLPRegressorModel
+from src.models.skellam_result_model import SkellamResultModel
+from src.models.two_stage_result_model import TwoStageResultModel
 
 
 class ModelFactory:
@@ -31,6 +33,9 @@ class ModelFactory:
         "xgboost_regressor": XGBoostRegressorModel,
         "goal_stacker": GoalStackerModel,
         "stacker": GoalStackerModel,
+        "result_stacker": TwoStageResultModel,
+        "two_stage_result": TwoStageResultModel,
+        "skellam_result": SkellamResultModel,
         "mlp": MLPModel,
         "mlp_regressor": MLPRegressorModel,
     }

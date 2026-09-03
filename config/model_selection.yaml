@@ -1436,12 +1436,12 @@ contexts:
       selected_at: '2026-09-03T17:00:00Z'
     result_3way:
       metric_name: test_log_loss
-      metric_value: 1.01389
-      mlflow_run_id: 2beb8592b82d4d3a823e3ba44e0870ab
-      model_path: models/result_3way_xgboost_v1_20260820.joblib
-      model_type: xgboost
-      previous_model_path: models/result_3way_xgboost_v1_20260814.joblib
-      selected_at: '2026-08-20T16:14:32Z'
+      metric_value: 1.004261
+      mlflow_run_id: 0b9318ac0ace4a219aebb40d023707af
+      model_path: models/result_3way_skellamresult_v1_20260903.joblib
+      model_type: skellam_result
+      previous_model_path: models/result_3way_xgboost_v1_20260820.joblib
+      selected_at: '2026-09-03T18:45:00Z'
     total_corners:
       metric_name: test_mae
       metric_value: 2.630237

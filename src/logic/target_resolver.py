@@ -44,6 +44,8 @@ class TargetResolver:
             return pd.to_numeric(df["ftag"], errors="coerce")
         if definition.name == "total_goals":
             return pd.to_numeric(df["fthg"], errors="coerce") + pd.to_numeric(df["ftag"], errors="coerce")
+        if definition.name == "result_margin":
+            return pd.to_numeric(df["fthg"], errors="coerce") - pd.to_numeric(df["ftag"], errors="coerce")
         if definition.name == "home_corners":
             return pd.to_numeric(df["hc"], errors="coerce")
         if definition.name == "away_corners":
