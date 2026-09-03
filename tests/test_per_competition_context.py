@@ -118,6 +118,8 @@ def _write_raw_matches(config_path: Path) -> None:
                 hy FLOAT, ay FLOAT, hr FLOAT, ar FLOAT,
                 odds_h FLOAT, odds_d FLOAT, odds_a FLOAT,
                 avgh FLOAT, avgd FLOAT, avga FLOAT,
+                maxch FLOAT, maxcd FLOAT, maxca FLOAT,
+                avgch FLOAT, avgcd FLOAT, avgca FLOAT,
                 xg_h FLOAT, xg_a FLOAT, xga_h FLOAT, xga_a FLOAT,
                 over25_odds FLOAT, under25_odds FLOAT,
                 ah_line FLOAT, ah_home_odds FLOAT, ah_away_odds FLOAT
@@ -257,6 +259,8 @@ def test_forecast_upcoming_real_sweden_registration(tmp_path: Path) -> None:
                 hy FLOAT, ay FLOAT, hr FLOAT, ar FLOAT,
                 odds_h FLOAT, odds_d FLOAT, odds_a FLOAT,
                 avgh FLOAT, avgd FLOAT, avga FLOAT,
+                maxch FLOAT, maxcd FLOAT, maxca FLOAT,
+                avgch FLOAT, avgcd FLOAT, avgca FLOAT,
                 xg_h FLOAT, xg_a FLOAT, xga_h FLOAT, xga_a FLOAT,
                 over25_odds FLOAT, under25_odds FLOAT,
                 ah_line FLOAT, ah_home_odds FLOAT, ah_away_odds FLOAT
@@ -316,6 +320,8 @@ def test_forecast_upcoming_real_sp1_registration(tmp_path: Path) -> None:
                 hy FLOAT, ay FLOAT, hr FLOAT, ar FLOAT,
                 odds_h FLOAT, odds_d FLOAT, odds_a FLOAT,
                 avgh FLOAT, avgd FLOAT, avga FLOAT,
+                maxch FLOAT, maxcd FLOAT, maxca FLOAT,
+                avgch FLOAT, avgcd FLOAT, avgca FLOAT,
                 xg_h FLOAT, xg_a FLOAT, xga_h FLOAT, xga_a FLOAT,
                 over25_odds FLOAT, under25_odds FLOAT,
                 ah_line FLOAT, ah_home_odds FLOAT, ah_away_odds FLOAT
@@ -379,6 +385,8 @@ def test_forecast_upcoming_real_new_league_registration(
                 hy FLOAT, ay FLOAT, hr FLOAT, ar FLOAT,
                 odds_h FLOAT, odds_d FLOAT, odds_a FLOAT,
                 avgh FLOAT, avgd FLOAT, avga FLOAT,
+                maxch FLOAT, maxcd FLOAT, maxca FLOAT,
+                avgch FLOAT, avgcd FLOAT, avgca FLOAT,
                 xg_h FLOAT, xg_a FLOAT, xga_h FLOAT, xga_a FLOAT,
                 over25_odds FLOAT, under25_odds FLOAT,
                 ah_line FLOAT, ah_home_odds FLOAT, ah_away_odds FLOAT

@@ -94,6 +94,79 @@ def test_process_v1_csv_tolerates_missing_over25_columns(tmp_path: Path) -> None
     assert row[2] is None  # ah_line absent → NULL
 
 
+def test_process_v1_csv_ingests_closing_and_max_odds(tmp_path: Path) -> None:
+    """US#176: AvgCH/AvgCD/AvgCA (closing average) and MaxCH/MaxCD/MaxCA
+    (closing best-price) sit unused in every downloaded CSV -- confirm
+    they're captured into raw_matches so line-movement/disagreement
+    features have something to read."""
+    csv_path = tmp_path / "sample.csv"
+    csv_path.write_text(
+        "\n".join(
+            [
+                "Date,HomeTeam,AwayTeam,FTHG,FTAG,B365H,B365D,B365A,AvgH,AvgD,AvgA,"
+                "MaxCH,MaxCD,MaxCA,AvgCH,AvgCD,AvgCA",
+                "15/08/2025,Liverpool,Bournemouth,4,2,1.3,6.0,8.5,1.28,5.8,8.2,1.35,6.20,9.10,1.30,5.95,8.70",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    db_path = tmp_path / "test_fpai.db"
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        yaml.safe_dump({"paths": {"database_path": str(db_path)}}),
+        encoding="utf-8",
+    )
+
+    loader = CSVLoader(config_path=str(config_path))
+    loader.process_v1_csv(file_path=str(csv_path), league_code="E0")
+
+    with duckdb.connect(str(db_path)) as conn:
+        row = conn.execute(
+            "SELECT maxch, maxcd, maxca, avgch, avgcd, avgca FROM raw_matches"
+        ).fetchone()
+
+    assert row is not None
+    assert row[0] == pytest.approx(1.35)
+    assert row[1] == pytest.approx(6.20)
+    assert row[2] == pytest.approx(9.10)
+    assert row[3] == pytest.approx(1.30)
+    assert row[4] == pytest.approx(5.95)
+    assert row[5] == pytest.approx(8.70)
+
+
+def test_process_v1_csv_tolerates_missing_closing_odds_columns(tmp_path: Path) -> None:
+    """Sweden and older seasons ship no MaxCH/AvgCH columns at all -- must
+    not crash, just leave the new columns NULL."""
+    csv_path = tmp_path / "legacy.csv"
+    csv_path.write_text(
+        "\n".join(
+            [
+                "Date,HomeTeam,AwayTeam,FTHG,FTAG,B365H,B365D,B365A",
+                "15/08/2019,Arsenal,Chelsea,2,1,2.10,3.40,3.50",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    db_path = tmp_path / "test_legacy_closing.db"
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        yaml.safe_dump({"paths": {"database_path": str(db_path)}}),
+        encoding="utf-8",
+    )
+
+    loader = CSVLoader(config_path=str(config_path))
+    loader.process_v1_csv(file_path=str(csv_path), league_code="E0")
+
+    with duckdb.connect(str(db_path)) as conn:
+        row = conn.execute(
+            "SELECT maxch, maxcd, maxca, avgch, avgcd, avgca FROM raw_matches"
+        ).fetchone()
+
+    assert row == (None, None, None, None, None, None)
+
+
 def test_csv_loader_forwards_retry_window_to_its_internal_db_manager(tmp_path: Path) -> None:
     """US#159: CSVLoader builds its own DuckDBManager internally rather
     than reusing a passed-in one, so a caller wanting a longer lock-retry

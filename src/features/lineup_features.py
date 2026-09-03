@@ -474,3 +474,121 @@ def compute_defensive_anchor(
         .merge(home_anchor, on="match_id", how="left")
         .merge(away_anchor, on="match_id", how="left")
     )
+
+
+# ---------------------------------------------------------------------------
+# Key-attacker absence (US#175)
+# ---------------------------------------------------------------------------
+
+def compute_key_starter_absence(
+    match_lineups_df: pd.DataFrame,
+    player_stats_df: pd.DataFrame,
+    raw_df: pd.DataFrame,
+    pool_days: int = SQUAD_POOL_DAYS,
+) -> pd.DataFrame:
+    """LINEUP_HOME_KEY_ATTACKER_MISSING / LINEUP_AWAY_KEY_ATTACKER_MISSING.
+
+    XOC/FRDS/DEF_ANCHOR already join to each match's *actual* confirmed
+    lineup (a rotated-out player already lowers those magnitudes) -- this
+    adds the explicit, non-redundant signal those don't: for each team,
+    identify the single player with the highest rolling (xG+xA)/90 among
+    all of that team's appearances in the trailing `pool_days` window
+    (independent of *this* match's lineup -- the team's own recently-
+    established best attacking threat), then flag whether that specific
+    player_id actually started this match. 1 = missing, 0 = started,
+    NaN = no confirmed lineup for this match/team yet (leakage-safe
+    fallback for a future fixture before official lineups drop) or no
+    rolling history to identify a key player from at all.
+    """
+    if match_lineups_df.empty or player_stats_df.empty or raw_df.empty:
+        return pd.DataFrame(columns=["match_id"])
+
+    match_info = raw_df[["match_id", "date", "home_team", "away_team"]].copy()
+    match_info["date"] = pd.to_datetime(match_info["date"])
+
+    stats = player_stats_df.copy()
+    stats["player_id"] = pd.to_numeric(stats["player_id"], errors="coerce")
+    for col in ["xg", "xa", "minutes_played"]:
+        stats[col] = pd.to_numeric(stats[col], errors="coerce").fillna(0.0)
+    stats = stats[stats["minutes_played"] > 0].copy()
+    if stats.empty:
+        return pd.DataFrame(columns=["match_id"])
+    stats["xgxa_p90"] = (stats["xg"] + stats["xa"]) / stats["minutes_played"] * 90.0
+    stats["team_std"] = stats["team_name"].map(standardize_team_name)
+    stats = stats.merge(match_info[["match_id", "date"]], on="match_id", how="inner")
+    stats = stats.sort_values(["player_id", "date", "match_id"]).reset_index(drop=True)
+    stats["_roll_xgxa_p90"] = stats.groupby("player_id")["xgxa_p90"].transform(
+        lambda s: s.shift(1).rolling(5, min_periods=1).mean()
+    )
+    team_history = stats.dropna(subset=["_roll_xgxa_p90"])[
+        ["team_std", "date", "player_id", "_roll_xgxa_p90"]
+    ]
+
+    # --- Resolve fotmob_match_id -> raw match_id via player co-occurrence
+    # voting (mirrors compute_defensive_anchor's bridge; every position, not
+    # just DEF/MID -- we only need to know whether this specific player_id
+    # started at all, in any role). ---
+    lineups = match_lineups_df.copy()
+    lineups["player_id"] = pd.to_numeric(lineups["player_id"], errors="coerce")
+    lineups["team_std"] = lineups["team_name"].map(standardize_team_name)
+
+    starter_cols = lineups[["fotmob_match_id", "player_id", "team_std"]].drop_duplicates()
+    player_match_map = stats[["player_id", "match_id", "date"]].drop_duplicates()
+    bridge = starter_cols.merge(player_match_map, on="player_id", how="inner")
+    if bridge.empty:
+        return pd.DataFrame(columns=["match_id"])
+
+    cooccur = (
+        bridge.groupby(["fotmob_match_id", "match_id"])
+        .agg(player_count=("player_id", "count"), max_date=("date", "max"))
+        .reset_index()
+    )
+    cooccur = cooccur.sort_values(
+        ["fotmob_match_id", "player_count", "max_date"], ascending=[True, False, False]
+    )
+    fotmob_to_raw = cooccur.drop_duplicates(subset=["fotmob_match_id"], keep="first")[
+        ["fotmob_match_id", "match_id"]
+    ]
+
+    lineups_resolved = lineups.merge(fotmob_to_raw, on="fotmob_match_id", how="inner")
+    started_lookup: dict[tuple[str, str], set] = (
+        lineups_resolved.groupby(["match_id", "team_std"])["player_id"].apply(set).to_dict()
+    )
+
+    def _identify_key_player(team_std: str, match_date) -> object:
+        window = team_history[
+            (team_history["team_std"] == team_std)
+            & (team_history["date"] < match_date)
+            & (team_history["date"] >= match_date - pd.Timedelta(days=pool_days))
+        ]
+        if window.empty:
+            return None
+        return window.loc[window["_roll_xgxa_p90"].idxmax(), "player_id"]
+
+    # ponytail: per-match Python loop (O(matches x team_history rows) via the
+    # boolean-mask filter in _identify_key_player) -- fine at this dataset's
+    # current size; vectorize with a per-player merge_asof if
+    # compute_rolling_stats' overall runtime becomes a bottleneck.
+    rows = []
+    for _, m in match_info.iterrows():
+        match_id, date, home_team, away_team = m["match_id"], m["date"], m["home_team"], m["away_team"]
+        home_key = _identify_key_player(home_team, date)
+        away_key = _identify_key_player(away_team, date)
+        home_starters = started_lookup.get((match_id, home_team))
+        away_starters = started_lookup.get((match_id, away_team))
+        home_missing = (
+            float(home_key not in home_starters)
+            if home_starters is not None and home_key is not None
+            else float("nan")
+        )
+        away_missing = (
+            float(away_key not in away_starters)
+            if away_starters is not None and away_key is not None
+            else float("nan")
+        )
+        rows.append({
+            "match_id": match_id,
+            "LINEUP_HOME_KEY_ATTACKER_MISSING": home_missing,
+            "LINEUP_AWAY_KEY_ATTACKER_MISSING": away_missing,
+        })
+    return pd.DataFrame(rows)

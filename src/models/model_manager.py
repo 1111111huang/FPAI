@@ -203,6 +203,9 @@ class ModelManager:
                 all_features = [f for f in all_features if not f.startswith("XOC_")]
                 all_features = [f for f in all_features if not f.startswith("FRDS_")]
                 all_features = [f for f in all_features if not f.startswith("DEF_ANCHOR_")]
+                # US#175: same lineup/raw_player_match_stats dependency as the
+                # four prefixes above.
+                all_features = [f for f in all_features if not f.startswith("LINEUP_")]
 
             def _passes_group_gate(feature: str) -> bool:
                 tag = resolve_feature_group_tag(feature)

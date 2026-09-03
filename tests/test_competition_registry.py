@@ -268,7 +268,7 @@ def test_sweden_resolved_feature_count_is_74() -> None:
     # US#127's own end-to-end test already proves this against a synthetic
     # fixture; this re-proves it against the real, now-registered entry.
     features = _selected_features_for("SWE")
-    assert len(features) == 74
+    assert len(features) == 86  # US#174 (+6 DC_, ungated) = 80 + 6 + US#178 (+6 DC_CORNER_) = 86 + 6 -- US#179 (-6) = 92 - 6
 
 
 def test_sweden_feature_set_is_superset_of_general_purpose_features() -> None:
@@ -288,7 +288,7 @@ def test_sweden_feature_set_is_superset_of_general_purpose_features() -> None:
 def test_e0_still_resolves_full_167_features_after_sweden_registration() -> None:
     # Regression: registering a second competition_specific competition must
     # not change E0's own resolved feature set.
-    assert len(_selected_features_for("E0")) == 167
+    assert len(_selected_features_for("E0")) == 181  # US#174 (+6 DC_) = 175 + 6 + US#178 (+6 DC_CORNER_) = 181 + 6 -- US#179 (-6 MKT_LINE_MOVE/DISAGREEMENT, train/serve skew) = 187 - 6
 
 
 def test_sweden_available_targets_exclude_corners() -> None:
@@ -342,7 +342,7 @@ def test_la_liga_resolved_feature_count_matches_e0_minus_squad() -> None:
     # "SQUAD" absent from enabled_feature_groups gates 5 prefixes, not just
     # SQUAD_ itself (ModelManager._load_selected_features, US#97/Phase 14c/15a):
     # SQUAD_, LUCK_, XOC_, FRDS_, DEF_ANCHOR_.
-    squad_gated_prefixes = ("SQUAD_", "LUCK_", "XOC_", "FRDS_", "DEF_ANCHOR_")
+    squad_gated_prefixes = ("SQUAD_", "LUCK_", "XOC_", "FRDS_", "DEF_ANCHOR_", "LINEUP_")
     e0_features = set(_selected_features_for("E0"))
     la_liga_features = set(_selected_features_for("SP1"))
     squad_only = {f for f in e0_features if f not in la_liga_features}
@@ -358,8 +358,8 @@ def test_la_liga_feature_set_is_superset_of_general_purpose_features() -> None:
 def test_e0_and_sweden_still_resolve_unchanged_after_la_liga_registration() -> None:
     # Regression: registering a third competition_specific competition must
     # not change E0's or Sweden's own resolved feature sets.
-    assert len(_selected_features_for("E0")) == 167
-    assert len(_selected_features_for("SWE")) == 74
+    assert len(_selected_features_for("E0")) == 181  # US#174 (+6 DC_) = 175 + 6 + US#178 (+6 DC_CORNER_) = 181 + 6 -- US#179 (-6 MKT_LINE_MOVE/DISAGREEMENT, train/serve skew) = 187 - 6
+    assert len(_selected_features_for("SWE")) == 86  # US#174 (+6 DC_) = 80 + 6 + US#178 (+6 DC_CORNER_) = 86 + 6 -- US#179 (-6) = 92 - 6
 
 
 def test_la_liga_available_targets_unrestricted() -> None:
@@ -412,7 +412,7 @@ def test_new_leagues_enabled_feature_groups_match_sp1s_shape(code: str) -> None:
 
 @pytest.mark.parametrize("code", _NEW_LEAGUES)
 def test_new_leagues_resolved_feature_count_matches_e0_minus_squad(code: str) -> None:
-    squad_gated_prefixes = ("SQUAD_", "LUCK_", "XOC_", "FRDS_", "DEF_ANCHOR_")
+    squad_gated_prefixes = ("SQUAD_", "LUCK_", "XOC_", "FRDS_", "DEF_ANCHOR_", "LINEUP_")
     e0_features = set(_selected_features_for("E0"))
     league_features = set(_selected_features_for(code))
     squad_only = {f for f in e0_features if f not in league_features}
@@ -438,6 +438,6 @@ def test_e0_sweden_and_la_liga_still_resolve_unchanged_after_new_league_registra
     # Regression: registering three more competition_specific competitions
     # must not change any previously-registered competition's own resolved
     # feature set.
-    assert len(_selected_features_for("E0")) == 167
-    assert len(_selected_features_for("SWE")) == 74
+    assert len(_selected_features_for("E0")) == 181  # US#174 (+6 DC_) = 175 + 6 + US#178 (+6 DC_CORNER_) = 181 + 6 -- US#179 (-6 MKT_LINE_MOVE/DISAGREEMENT, train/serve skew) = 187 - 6
+    assert len(_selected_features_for("SWE")) == 86  # US#174 (+6 DC_) = 80 + 6 + US#178 (+6 DC_CORNER_) = 86 + 6 -- US#179 (-6) = 92 - 6
     assert len(_selected_features_for("SP1")) == len(_selected_features_for("I1"))

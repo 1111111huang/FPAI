@@ -64,7 +64,8 @@ class FeatureFactory:
                 SELECT match_id, league, date, home_team, away_team,
                        fthg, ftag, hs, "as", hst, ast, hc, ac, hy, ay, hr, ar,
                        odds_h, odds_d, odds_a,
-                       avgh, avgd, avga, xg_h, xg_a, xga_h, xga_a,
+                       avgh, avgd, avga, maxch, maxcd, maxca, avgch, avgcd, avgca,
+                       xg_h, xg_a, xga_h, xga_a,
                        over25_odds, under25_odds, ah_line, ah_home_odds, ah_away_odds
                 FROM raw_matches
                 ORDER BY date, match_id
@@ -302,6 +303,11 @@ class FeatureFactory:
         odds_feats = self._compute_odds_features(raw_df)
         features = features.merge(odds_feats, on="match_id", how="left")
 
+        # US#174: Dixon-Coles walk-forward stacking features
+        dc_feats = self._compute_dixon_coles_features(raw_df)
+        if not dc_feats.empty:
+            features = features.merge(dc_feats, on="match_id", how="left")
+
         opp_adj = self._compute_opp_adjusted_rolling(raw_df)
         features = features.merge(opp_adj, on="match_id", how="left")
 
@@ -341,6 +347,11 @@ class FeatureFactory:
         def_anchor = self._compute_defensive_anchor_features(raw_df)
         if not def_anchor.empty:
             features = features.merge(def_anchor, on="match_id", how="left")
+
+        # US#175: key-attacker-absence flags (skipped when lineup tables absent)
+        key_starter_absence = self._compute_key_starter_absence_features(raw_df)
+        if not key_starter_absence.empty:
+            features = features.merge(key_starter_absence, on="match_id", how="left")
 
         # US#59/US#134: cold-start imputation — fill NaN rolling values with
         # column means, computed per competition so cross-league data never
@@ -562,6 +573,108 @@ class FeatureFactory:
         return result
 
     @staticmethod
+    def _compute_dixon_coles_features(raw_df: pd.DataFrame, min_train_matches: int = 40) -> pd.DataFrame:
+        """US#174/US#177/US#178: walk-forward Dixon-Coles stacking features.
+
+        `DixonColesModel` is otherwise only fit once on the entire history
+        for the standalone comparison baseline -- doing that here would leak
+        every match's own future results into its own attack/defence
+        ratings. Instead, refits once per (league, calendar month) on
+        strictly prior matches only, then applies the resulting model to
+        every fixture in that month. Matches in a league's first
+        `min_train_matches` (default 40 -- enough rows for the MLE to be
+        meaningfully identified, not just converge) get NaN, same as any
+        other cold-start feature in this file.
+
+        US#177: each month's fit is warm-started from the previous month's
+        converged parameters (per league) instead of a cold zero vector --
+        team strengths drift gradually, so this both converges faster and
+        more reliably (fewer "did not fully converge" fits).
+
+        US#178: a second, independent sub-model reuses the exact same
+        generic Poisson machinery on `hc`/`ac` (corners are count data just
+        like goals) to produce `DC_CORNER_*` features. Gated on its own
+        per-month corner-data floor -- a league with hc/ac entirely absent
+        (e.g. Sweden) or genuinely sparse for a stretch gets NaN for the
+        corner columns only, independent of whether the goals sub-model has
+        enough data.
+        """
+        import numpy as np
+        from src.models.dixon_coles import DixonColesModel
+
+        required = {"match_id", "league", "date", "home_team", "away_team", "fthg", "ftag"}
+        if raw_df.empty or not required.issubset(raw_df.columns):
+            return pd.DataFrame(columns=["match_id"])
+
+        has_corners = {"hc", "ac"}.issubset(raw_df.columns)
+        cols = list(required) + (["hc", "ac"] if has_corners else [])
+        df = raw_df[cols].copy()
+        df["date"] = pd.to_datetime(df["date"], errors="coerce")
+        df = df.dropna(subset=["date"])
+        if df.empty:
+            return pd.DataFrame(columns=["match_id"])
+        df["_month"] = df["date"].values.astype("datetime64[M]")
+
+        nan_goals = {"DC_LAMBDA_HOME": np.nan, "DC_LAMBDA_AWAY": np.nan, "DC_ATTACK_HOME": np.nan,
+                     "DC_DEFENSE_HOME": np.nan, "DC_ATTACK_AWAY": np.nan, "DC_DEFENSE_AWAY": np.nan}
+        nan_corner = {"DC_CORNER_LAMBDA_HOME": np.nan, "DC_CORNER_LAMBDA_AWAY": np.nan,
+                      "DC_CORNER_ATTACK_HOME": np.nan, "DC_CORNER_DEFENSE_HOME": np.nan,
+                      "DC_CORNER_ATTACK_AWAY": np.nan, "DC_CORNER_DEFENSE_AWAY": np.nan}
+
+        rows = []
+        for _league, league_df in df.groupby("league"):
+            league_df = league_df.sort_values(["date", "match_id"])
+            goals_warm_state: dict | None = None
+            corner_warm_state: dict | None = None
+            for month in sorted(league_df["_month"].unique()):
+                train = league_df[league_df["date"] < month]
+                test = league_df[league_df["_month"] == month]
+                if len(train) < min_train_matches:
+                    for match_id in test["match_id"]:
+                        rows.append({"match_id": match_id, **nan_goals, **nan_corner})
+                    continue
+
+                goals_model = DixonColesModel().fit(
+                    train[["home_team", "away_team", "fthg", "ftag"]], warm_start=goals_warm_state,
+                )
+                goals_warm_state = goals_model.get_state()
+
+                corner_model = None
+                if has_corners:
+                    train_corners = train.dropna(subset=["hc", "ac"])
+                    if len(train_corners) >= min_train_matches:
+                        corner_train = train_corners[["home_team", "away_team", "hc", "ac"]].rename(
+                            columns={"hc": "fthg", "ac": "ftag"}
+                        )
+                        corner_model = DixonColesModel().fit(corner_train, warm_start=corner_warm_state)
+                        corner_warm_state = corner_model.get_state()
+
+                for _, m in test.iterrows():
+                    pred = goals_model.predict_match(m["home_team"], m["away_team"])
+                    atk_h, dfc_h = goals_model.team_strengths(m["home_team"])
+                    atk_a, dfc_a = goals_model.team_strengths(m["away_team"])
+                    row = {
+                        "match_id": m["match_id"],
+                        "DC_LAMBDA_HOME": pred["home_goals"], "DC_LAMBDA_AWAY": pred["away_goals"],
+                        "DC_ATTACK_HOME": atk_h, "DC_DEFENSE_HOME": dfc_h,
+                        "DC_ATTACK_AWAY": atk_a, "DC_DEFENSE_AWAY": dfc_a,
+                    }
+                    if corner_model is not None:
+                        c_pred = corner_model.predict_match(m["home_team"], m["away_team"])
+                        c_atk_h, c_dfc_h = corner_model.team_strengths(m["home_team"])
+                        c_atk_a, c_dfc_a = corner_model.team_strengths(m["away_team"])
+                        row.update({
+                            "DC_CORNER_LAMBDA_HOME": c_pred["home_goals"],
+                            "DC_CORNER_LAMBDA_AWAY": c_pred["away_goals"],
+                            "DC_CORNER_ATTACK_HOME": c_atk_h, "DC_CORNER_DEFENSE_HOME": c_dfc_h,
+                            "DC_CORNER_ATTACK_AWAY": c_atk_a, "DC_CORNER_DEFENSE_AWAY": c_dfc_a,
+                        })
+                    else:
+                        row.update(nan_corner)
+                    rows.append(row)
+        return pd.DataFrame(rows) if rows else pd.DataFrame(columns=["match_id"])
+
+    @staticmethod
     def _compute_odds_features(raw_df: pd.DataFrame) -> pd.DataFrame:
         """Compute raw odds, overround, over/under 2.5, AH, and Poisson-decomposed features.
 
@@ -573,12 +686,18 @@ class FeatureFactory:
         from scipy.optimize import brentq
 
         src_cols = ["match_id", "avgh", "avgd", "avga"]
-        for col in ["over25_odds", "under25_odds", "ah_line", "ah_home_odds", "ah_away_odds"]:
+        for col in [
+            "over25_odds", "under25_odds", "ah_line", "ah_home_odds", "ah_away_odds",
+            "maxch", "maxcd", "maxca", "avgch", "avgcd", "avgca",
+        ]:
             if col in raw_df.columns:
                 src_cols.append(col)
 
         df = raw_df[src_cols].copy()
-        for col in ["avgh", "avgd", "avga", "over25_odds", "under25_odds", "ah_home_odds", "ah_away_odds"]:
+        for col in [
+            "avgh", "avgd", "avga", "over25_odds", "under25_odds", "ah_home_odds", "ah_away_odds",
+            "maxch", "maxcd", "maxca", "avgch", "avgcd", "avgca",
+        ]:
             if col in df.columns:
                 df[col] = pd.to_numeric(df[col], errors="coerce")
 
@@ -657,11 +776,40 @@ class FeatureFactory:
             lambda_total - ah_abs,
         )
 
+        # US#176: line movement (closing margin-removed implied prob minus
+        # opening) and cross-bookmaker disagreement (raw implied prob at the
+        # average closing price minus at the best/max closing price -- a
+        # proxy for std-dev-across-books that needs only the Max/Avg columns
+        # football-data.co.uk already ships, not one column per bookmaker).
+        # NaN whenever avgch/maxch weren't ingested for this row (older
+        # seasons, a gated-off league, or a match still awaiting kickoff).
+        if {"avgch", "avgcd", "avgca"}.issubset(df.columns):
+            opening_probs = remove_margin(df["avgh"], df["avgd"], df["avga"])
+            closing_probs = remove_margin(df["avgch"], df["avgcd"], df["avgca"])
+            df["MKT_LINE_MOVE_HOME"] = closing_probs["MKT_Home_Prob_Real"].to_numpy() - opening_probs["MKT_Home_Prob_Real"].to_numpy()
+            df["MKT_LINE_MOVE_DRAW"] = closing_probs["MKT_Draw_Prob_Real"].to_numpy() - opening_probs["MKT_Draw_Prob_Real"].to_numpy()
+            df["MKT_LINE_MOVE_AWAY"] = closing_probs["MKT_Away_Prob_Real"].to_numpy() - opening_probs["MKT_Away_Prob_Real"].to_numpy()
+        else:
+            df["MKT_LINE_MOVE_HOME"] = np.nan
+            df["MKT_LINE_MOVE_DRAW"] = np.nan
+            df["MKT_LINE_MOVE_AWAY"] = np.nan
+
+        if {"maxch", "maxcd", "maxca", "avgch", "avgcd", "avgca"}.issubset(df.columns):
+            df["MKT_BOOK_DISAGREEMENT_HOME"] = (1.0 / df["avgch"]) - (1.0 / df["maxch"])
+            df["MKT_BOOK_DISAGREEMENT_DRAW"] = (1.0 / df["avgcd"]) - (1.0 / df["maxcd"])
+            df["MKT_BOOK_DISAGREEMENT_AWAY"] = (1.0 / df["avgca"]) - (1.0 / df["maxca"])
+        else:
+            df["MKT_BOOK_DISAGREEMENT_HOME"] = np.nan
+            df["MKT_BOOK_DISAGREEMENT_DRAW"] = np.nan
+            df["MKT_BOOK_DISAGREEMENT_AWAY"] = np.nan
+
         return df[["match_id", "MKT_OVERROUND",
                    "MKT_IMPLIED_OVER25",
                    "MKT_AH_LINE", "MKT_AH_HOME_ODDS", "MKT_AH_AWAY_ODDS",
                    "MKT_LAMBDA_TOTAL", "MKT_LAMBDA_HOME", "MKT_LAMBDA_AWAY",
-                   "MKT_POISSON_BTTS_PROB", "MKT_LAMBDA_AH_DIFF"]]
+                   "MKT_POISSON_BTTS_PROB", "MKT_LAMBDA_AH_DIFF",
+                   "MKT_LINE_MOVE_HOME", "MKT_LINE_MOVE_DRAW", "MKT_LINE_MOVE_AWAY",
+                   "MKT_BOOK_DISAGREEMENT_HOME", "MKT_BOOK_DISAGREEMENT_DRAW", "MKT_BOOK_DISAGREEMENT_AWAY"]]
 
     @staticmethod
     def _compute_temporal_features(raw_df: pd.DataFrame) -> pd.DataFrame:
@@ -816,6 +964,12 @@ class FeatureFactory:
             "avgh",
             "avgd",
             "avga",
+            "maxch",
+            "maxcd",
+            "maxca",
+            "avgch",
+            "avgcd",
+            "avgca",
             "xg_h",
             "xg_a",
             "xga_h",
@@ -907,7 +1061,8 @@ class FeatureFactory:
                 SELECT match_id, league, date, home_team, away_team,
                        fthg, ftag, hs, "as", hst, ast, hc, ac, hy, ay, hr, ar,
                        odds_h, odds_d, odds_a,
-                       avgh, avgd, avga, xg_h, xg_a, xga_h, xga_a,
+                       avgh, avgd, avga, maxch, maxcd, maxca, avgch, avgcd, avgca,
+                       xg_h, xg_a, xga_h, xga_a,
                        over25_odds, under25_odds, ah_line, ah_home_odds, ah_away_odds
                 FROM raw_matches
                 WHERE home_team = ? OR away_team = ? OR home_team = ? OR away_team = ?
@@ -931,6 +1086,7 @@ class FeatureFactory:
                 "match_id", "league", "date", "home_team", "away_team", "fthg", "ftag",
                 "hs", "as", "hst", "ast", "hc", "ac", "hy", "ay", "hr", "ar",
                 "odds_h", "odds_d", "odds_a", "avgh", "avgd", "avga",
+                "maxch", "maxcd", "maxca", "avgch", "avgcd", "avgca",
                 "xg_h", "xg_a", "xga_h", "xga_a",
                 "over25_odds", "under25_odds", "ah_line", "ah_home_odds", "ah_away_odds",
             ])
@@ -953,6 +1109,13 @@ class FeatureFactory:
             "hr": np.nan, "ar": np.nan,
             "odds_h": odds_h, "odds_d": odds_d, "odds_a": odds_a,
             "avgh": avgh_val, "avgd": avgd_val, "avga": avga_val,
+            # US#176: closing-line odds genuinely don't exist yet for a match
+            # being forecast pre-kickoff -- always NaN here, same as
+            # fthg/hs/etc above. MKT_LINE_MOVE_*/MKT_BOOK_DISAGREEMENT_* come
+            # back NaN for this row by design, not a bug (existing MKT_
+            # cold-start-imputation skip already tolerates this).
+            "maxch": np.nan, "maxcd": np.nan, "maxca": np.nan,
+            "avgch": np.nan, "avgcd": np.nan, "avgca": np.nan,
             "xg_h": np.nan, "xg_a": np.nan, "xga_h": np.nan, "xga_a": np.nan,
             "over25_odds": over25_odds, "under25_odds": np.nan,
             "ah_line": ah_line, "ah_home_odds": ah_home_odds, "ah_away_odds": ah_away_odds,
@@ -972,6 +1135,7 @@ class FeatureFactory:
         _numeric_synthetic_cols = [
             "fthg", "ftag", "hs", "as", "hst", "ast", "hc", "ac", "hy", "ay", "hr", "ar",
             "odds_h", "odds_d", "odds_a", "avgh", "avgd", "avga",
+            "maxch", "maxcd", "maxca", "avgch", "avgcd", "avgca",
             "xg_h", "xg_a", "xga_h", "xga_a",
             "over25_odds", "under25_odds", "ah_line", "ah_home_odds", "ah_away_odds",
         ]
@@ -1142,6 +1306,25 @@ class FeatureFactory:
         def_anchor = self._compute_defensive_anchor_features(combined)
         if not def_anchor.empty:
             features = features.merge(def_anchor, on="match_id", how="left")
+        # US#175: key-attacker-absence flags -- correctly NaN here for the
+        # synthetic upcoming-match row (no confirmed lineup yet pre-kickoff),
+        # same fallback the story called for.
+        key_starter_absence = self._compute_key_starter_absence_features(combined)
+        if not key_starter_absence.empty:
+            features = features.merge(key_starter_absence, on="match_id", how="left")
+
+        # US#175/US#174: Dixon-Coles stacking needs the WHOLE league's
+        # history to fit meaningfully (MLE team strengths are only
+        # identified from a full round-robin), not just these two teams'
+        # own rows -- `combined` above is deliberately filtered to
+        # home_norm/away_norm only, so a separate, unfiltered query is
+        # required here rather than reusing it.
+        dc_feats = self._compute_dixon_coles_features_for_spot_match(
+            league=league, home_team=home_norm, away_team=away_norm,
+            match_date=match_date, synthetic_id=SYNTHETIC_ID,
+        )
+        if not dc_feats.empty:
+            features = features.merge(dc_feats, on="match_id", how="left")
 
         # US#134: group by league (see _apply_cold_start_imputation docstring).
         # combined's "league" column covers each historical row's own
@@ -1395,6 +1578,64 @@ class FeatureFactory:
             return pd.DataFrame(columns=["match_id"])
         from src.features.lineup_features import compute_xoc
         return compute_xoc(lineups_df, player_df, raw_df)
+
+    def _compute_dixon_coles_features_for_spot_match(
+        self, league: str, home_team: str, away_team: str, match_date: str, synthetic_id: str,
+    ) -> pd.DataFrame:
+        """US#174: live-serving counterpart to `_compute_dixon_coles_features`.
+
+        `build_for_match`'s own `combined` frame is deliberately filtered to
+        the two requested teams' own rows (see its query), which is the
+        wrong input for Dixon-Coles -- MLE team strengths need the whole
+        league's round robin to be identified at all. Fetches that league's
+        full history fresh, appends a single synthetic future row for the
+        requested fixture, and reuses `_compute_dixon_coles_features`
+        unchanged (its own per-month grouping already treats the synthetic
+        row's month as strictly-future relative to every real row, so this
+        is leakage-safe by construction, not by a second implementation).
+        """
+        import numpy as np
+
+        with self.db_manager.connection(read_only=True) as conn:
+            league_df = conn.execute(
+                "SELECT match_id, league, date, home_team, away_team, fthg, ftag, hc, ac"
+                " FROM raw_matches WHERE league = ?",
+                [league],
+            ).fetchdf()
+        if league_df.empty:
+            return pd.DataFrame(columns=["match_id"])
+        league_df["home_team"] = league_df["home_team"].astype(str).map(standardize_team_name)
+        league_df["away_team"] = league_df["away_team"].astype(str).map(standardize_team_name)
+
+        synthetic_row = pd.DataFrame([{
+            "match_id": synthetic_id, "league": league, "date": pd.Timestamp(match_date),
+            "home_team": home_team, "away_team": away_team,
+            "fthg": np.nan, "ftag": np.nan, "hc": np.nan, "ac": np.nan,
+        }])
+        combined_league_df = pd.concat([league_df, synthetic_row], ignore_index=True)
+        result = self._compute_dixon_coles_features(combined_league_df)
+        return result[result["match_id"] == synthetic_id]
+
+    def _compute_key_starter_absence_features(self, raw_df: pd.DataFrame) -> pd.DataFrame:
+        """US#175: query match_lineups + raw_player_match_stats and compute
+        the key-attacker-absence flags.
+
+        Returns empty DataFrame (with only match_id column) when either table is absent.
+        """
+        try:
+            with self.db_manager.connection(read_only=True) as conn:
+                lineups_df = conn.execute(
+                    "SELECT fotmob_match_id, player_id, team_name, side, position_group"
+                    " FROM match_lineups"
+                ).fetchdf()
+                player_df = conn.execute(
+                    "SELECT match_id, player_id, team_name, minutes_played, xg, xa"
+                    " FROM raw_player_match_stats"
+                ).fetchdf()
+        except duckdb.CatalogException:
+            return pd.DataFrame(columns=["match_id"])
+        from src.features.lineup_features import compute_key_starter_absence
+        return compute_key_starter_absence(lineups_df, player_df, raw_df)
 
     def _compute_frds_features(self, raw_df: pd.DataFrame) -> pd.DataFrame:
         """Query match_lineups + raw_player_match_stats and compute FRDS features.

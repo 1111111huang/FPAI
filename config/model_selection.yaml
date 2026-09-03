@@ -1257,12 +1257,12 @@ contexts:
       selected_at: '2026-07-06T05:15:38Z'
     away_goals:
       metric_name: test_mae
-      metric_value: 0.827586
-      mlflow_run_id: 968f8fff23124e8ca0c56258df5e6fb9
-      model_path: models/away_goals_xgboostregressor_v1_20260627.joblib
+      metric_value: 0.819794
+      mlflow_run_id: 5f7c2cec58ac4f00899fa9f5bec82bc8
+      model_path: models/away_goals_xgboostregressor_v1_20260903.joblib
       model_type: xgb_regressor
       previous_model_path: models/away_goals_xgboostregressor_v1_20260627.joblib
-      selected_at: '2026-07-06T05:34:13Z'
+      selected_at: '2026-09-03T17:00:00Z'
     btts:
       feature_subset:
       - OFF_HOME_FTHG_R3
@@ -1428,12 +1428,12 @@ contexts:
       selected_at: '2026-07-06T06:47:34Z'
     home_goals:
       metric_name: test_mae
-      metric_value: 0.946158
-      mlflow_run_id: 117dd2897de44bcc89a3568a6a39dbe7
-      model_path: models/home_goals_xgboostregressor_v1_20260627.joblib
+      metric_value: 0.938135
+      mlflow_run_id: d0ace2fb8e9e43f2bbcc4e54380e2184
+      model_path: models/home_goals_xgboostregressor_v1_20260903.joblib
       model_type: xgb_regressor
-      previous_model_path: models/home_goals_xgboostregressor_v1_20260701.joblib
-      selected_at: '2026-07-06T07:07:16Z'
+      previous_model_path: models/home_goals_xgboostregressor_v1_20260627.joblib
+      selected_at: '2026-09-03T17:00:00Z'
     result_3way:
       metric_name: test_log_loss
       metric_value: 1.01389
@@ -1444,20 +1444,20 @@ contexts:
       selected_at: '2026-08-20T16:14:32Z'
     total_corners:
       metric_name: test_mae
-      metric_value: 2.651686
-      mlflow_run_id: a3d5ede352a646c1b7f120183f365af8
-      model_path: models/total_corners_xgboostregressor_v1_20260627.joblib
+      metric_value: 2.630237
+      mlflow_run_id: 9925688b7400440a80cf6bbb6188ed71
+      model_path: models/total_corners_xgboostregressor_v1_20260903.joblib
       model_type: xgb_regressor
       previous_model_path: models/total_corners_xgboostregressor_v1_20260627.joblib
-      selected_at: '2026-07-06T07:30:14Z'
+      selected_at: '2026-09-03T17:00:00Z'
     total_goals:
       metric_name: test_mae
-      metric_value: 1.231935
-      mlflow_run_id: c2000f84fb5f437fb93dd0ea85b66086
-      model_path: models/total_goals_xgboostregressor_v1_20260627.joblib
+      metric_value: 1.226240
+      mlflow_run_id: caf2913a57214f34912ddc7c91f67210
+      model_path: models/total_goals_xgboostregressor_v1_20260903.joblib
       model_type: xgb_regressor
-      previous_model_path: models/total_goals_randomforestregressor_v1_20260705.joblib
-      selected_at: '2026-07-06T08:04:44Z'
+      previous_model_path: models/total_goals_xgboostregressor_v1_20260627.joblib
+      selected_at: '2026-09-03T17:00:00Z'
   F1:
     away_corners:
       feature_subset:

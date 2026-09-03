@@ -86,6 +86,75 @@ class TestDixonColesFit:
         with pytest.raises(RuntimeError):
             DixonColesModel().predict_match("Arsenal", "Chelsea")
 
+    def test_team_strengths_matches_internal_dicts(self, fitted_model):
+        """US#174: the public accessor a stacking feature needs, instead of
+        reaching into _attack/_defence directly from another module."""
+        atk, dfc = fitted_model.team_strengths("Arsenal")
+        assert atk == pytest.approx(fitted_model._attack["Arsenal"])
+        assert dfc == pytest.approx(fitted_model._defence["Arsenal"])
+
+    def test_team_strengths_unseen_team_falls_back_to_mean(self, fitted_model):
+        atk, dfc = fitted_model.team_strengths("Unseen FC")
+        assert atk == pytest.approx(fitted_model._mean_attack)
+        assert dfc == pytest.approx(fitted_model._mean_defence)
+
+    def test_team_strengths_before_fit_raises(self):
+        with pytest.raises(RuntimeError):
+            DixonColesModel().team_strengths("Arsenal")
+
+    def test_get_state_matches_fitted_params(self, fitted_model):
+        """US#177: get_state() is the warm-start snapshot a walk-forward
+        caller carries from one month's fit into the next."""
+        state = fitted_model.get_state()
+        assert state["mu"] == pytest.approx(fitted_model._mu)
+        assert state["home_adv"] == pytest.approx(fitted_model._home_adv)
+        assert state["rho"] == pytest.approx(fitted_model._rho)
+        assert state["attack"] == fitted_model._attack
+        assert state["defence"] == fitted_model._defence
+
+    def test_get_state_before_fit_raises(self):
+        with pytest.raises(RuntimeError):
+            DixonColesModel().get_state()
+
+    def test_fit_with_warm_start_produces_finite_params(self):
+        """A second fit seeded from the first's state must still converge to
+        sane, finite parameters -- not just accept the argument."""
+        df1 = _make_matches(150, seed=10)
+        m1 = DixonColesModel().fit(df1)
+        state = m1.get_state()
+
+        df2 = _make_matches(150, seed=11)
+        m2 = DixonColesModel().fit(df2, warm_start=state)
+
+        for team in m2.teams_:
+            atk, dfc = m2.team_strengths(team)
+            assert np.isfinite(atk)
+            assert np.isfinite(dfc)
+        assert np.isfinite(m2._mu)
+        assert np.isfinite(m2._home_adv)
+        assert -1.0 < m2._rho < 1.0
+
+    def test_fit_with_warm_start_handles_a_team_unseen_in_warm_start(self):
+        """A newly-promoted team absent from warm_start's attack/defence
+        dicts must not crash -- falls back to warm_start's own mean."""
+        df1 = _make_matches(150, seed=10)
+        m1 = DixonColesModel().fit(df1)
+        state = m1.get_state()
+
+        teams2 = ["Arsenal", "Chelsea", "Liverpool", "ManCity", "Spurs", "Everton", "NewlyPromoted FC"]
+        rng = np.random.default_rng(20)
+        rows = []
+        for _ in range(150):
+            h, a = rng.choice(teams2, size=2, replace=False)
+            rows.append({"home_team": h, "away_team": a,
+                         "fthg": int(rng.poisson(1.5)), "ftag": int(rng.poisson(1.1))})
+        df2 = pd.DataFrame(rows)
+
+        m2 = DixonColesModel().fit(df2, warm_start=state)
+        atk, dfc = m2.team_strengths("NewlyPromoted FC")
+        assert np.isfinite(atk)
+        assert np.isfinite(dfc)
+
 
 # ---------------------------------------------------------------------------
 # predict_match

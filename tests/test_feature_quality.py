@@ -5,9 +5,9 @@ NaN rate ceilings (assert < threshold):
   OFF_ / DEF_ / DIS_                    < 30 %  (rolling cold-start 3-4%; xG features add ~25%
                                                   NaN when understat data is absent — expected)
   CTX_                                  < 5  %  (context features; typically 1 %)
-  MKT_                                  < 5  %  ← CURRENTLY FAILING at ~30.6 %; intentional
-                                                  flag to surface missing odds data for
-                                                  older seasons.
+  MKT_                                  < 10 %  (raised from 5% for US#176's closing-line
+                                                  features, real ~9.5% NaN for E0 -- see
+                                                  _NAN_THRESHOLDS below)
   STRENGTH_ / INTERACTION_ / EFFICIENCY_ < 15 %
   OPP_ADJ_                              < 8  %  (combined venue timeline; typically 2 %)
 
@@ -154,9 +154,16 @@ _NAN_THRESHOLDS = [
     ("DEF_",          0.30),
     ("DIS_",          0.10),
     ("CTX_",          0.05),
-    # MKT_ INTENTIONALLY FAILING: currently at ~30.6 % because odds data is
-    # absent for older seasons.  Threshold set to < 5 % to force investigation.
-    ("MKT_",          0.05),
+    # MKT_: ceiling raised 5%->10% for US#176's MKT_LINE_MOVE_*/
+    # MKT_BOOK_DISAGREEMENT_* (closing-line odds) -- real, permanent ~9.5%
+    # NaN rate for E0 today because football-data.co.uk only started
+    # publishing MaxCH/AvgCH columns partway through history (same
+    # pre-2020-style gap MKT_AH_LINE/MKT_LAMBDA_* already tolerate, see
+    # src/logic/feature_groups.py's docstring). The stale "~30.6%,
+    # intentionally failing" comment this replaced no longer matched
+    # reality (measured 0.01% pre-US#176) -- verified against the real
+    # feature_store, not assumed.
+    ("MKT_",          0.10),
     ("STRENGTH_",     0.15),
     ("INTERACTION_",  0.15),
     ("EFFICIENCY_",   0.15),

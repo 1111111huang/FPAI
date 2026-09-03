@@ -32,6 +32,8 @@ Tracks model versions, feature changes, and performance per target across all tr
 | Phase 14b | 2026-06-22 | 159 | FotMob player stats ingestion (ratings, minutes, xG, xA per player per match) |
 | Phase 14c | 2026-06-27 | 175 | `SQUAD_*` rolling squad ratings/fouls/defensive stats; `LUCK_BURNOUT_R5` team luck carry-over |
 | Phase 15 | 2026-07-05 | 179 | `FRDS_*` (lineup quality vs squad depth); `XOC_*` (top-3 FWD xG+xA concentration); `DEF_ANCHOR_*` (top-2 DEF/MID interceptions+recoveries/90) |
+| Phase 16 | 2026-09-02 | 193 | `DC_LAMBDA_*`/`DC_ATTACK_*`/`DC_DEFENSE_*` (US#174, walk-forward Dixon-Coles stacking); `LINEUP_*_KEY_ATTACKER_MISSING` (US#175, SQUAD-gated); `MKT_LINE_MOVE_*`/`MKT_BOOK_DISAGREEMENT_*` (US#176, closing-line odds, ungated). Feature-computation + real `feature_store` regeneration done; retraining/SHAP-gate check not yet run — see `user_stories.md` Phase 29 |
+
 
 ---
 
