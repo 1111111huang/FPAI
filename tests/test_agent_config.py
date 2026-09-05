@@ -19,6 +19,25 @@ def test_default_config_loads():
     assert len(cfg.markets) > 0
 
 
+def test_default_config_no_longer_sets_a_draw_value_edge_floor():
+    """A94, direct user decision (2026-09-05): min_value_edge_result_3way_draw
+    (2026-08-29) was a patch for the old single-softmax result_3way
+    classifier's training-time class-balance sample weighting inflating
+    its own P(draw) -- a mechanism that doesn't exist in the architectures
+    now promoted across every context (E0: SkellamResultModel, US#183;
+    SP1/I1/D1/F1: retrained this session, US#191). Removed from
+    config/agent_config.yaml globally rather than re-tuned or scoped
+    per-context -- the mechanism itself (AgentConfig's field,
+    _downgrade_direct_bet_below_draw_value_edge_floor,
+    _load_system_prompt's clause templating) stays in the codebase, opt-in
+    and fully tested (test_agent_draw_value_edge_floor.py,
+    test_agent_prompt_thresholds.py), in case a future backtest finds a
+    specific context still needs it -- only the live default stopped
+    setting a value."""
+    cfg = AgentConfig.default()
+    assert cfg.min_value_edge_result_3way_draw is None
+
+
 def test_default_config_has_a29_widened_odds_bounds():
     """A29 widened bounds to [1.2, 11.0]; direct user request (2026-08-28)
     tightened the live production default specifically to [1.71, 4.0]
