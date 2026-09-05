@@ -17,7 +17,7 @@ load_dotenv()
 from src.agent.snapshot_store import DEFAULT_BASE_DIR, league_base_dir
 from src.features.feature_factory import FeatureFactory
 from src.ingestion import CSVLoader, FootballDataScraper
-from src.logic.target_registry import get_target_definition, list_target_definitions
+from src.logic.target_registry import INACTIVE_DEFAULT_TARGETS, get_target_definition, list_target_definitions
 from src.logic.competition_registry import (
     get_competition_definition,
     is_target_available,
@@ -35,6 +35,7 @@ from src.models import (
 )
 from src.utils import DuckDBManager, configure_logger, get_logger
 from src.utils.config_loader import AppSettings, settings
+from src.utils.mlflow_config import configure_mlflow_tracking
 
 # W102: mlflow, run_diagnostics, MLflowStoreCleanup/save_cleanup_report,
 # ForecastService, PermutationImportanceAnalyzer, LearningCurveAnalyzer/
@@ -74,6 +75,11 @@ MODEL_REGISTRY = {
     "rf_regressor": RandomForestRegressorModel,
     "goal_stacker": None,  # handled via ModelFactory
     "stacker": None,
+    "result_stacker": None,  # US#181, handled via ModelFactory
+    "two_stage_result": None,
+    "skellam_result": None,  # US#183, handled via ModelFactory
+    "ensemble_result": None,  # US#188, handled via ModelFactory
+    "quantile_interval": None,  # US#184, handled via ModelFactory
     "mlp": None,
     "mlp_regressor": None,
 }
@@ -810,19 +816,28 @@ def run_train_target(
         valid_models = ", ".join(sorted(MODEL_REGISTRY.keys()))
         raise ValueError(f"Unsupported model '{selected_model}'. Available options: {valid_models}")
     LOGGER.info("Training forecast target | target=%s | task_type=%s | model=%s | context=%s", definition.name, definition.task_type, selected_model, context)
-    model_cls = MODEL_REGISTRY.get(selected_model)
-    if model_cls is None:
-        model = ModelFactory.get_model(selected_model)
-    else:
-        xgb_params = _xgb_params_for_target(target_name, selected_model)
-        model = model_cls(**xgb_params)
-
     # US#110: --context IS the competition_id to train for (e.g. "E0", "SWE",
     # "international"), resolved through the registry rather than a hardcoded
     # binary. "league" is kept as a deprecated alias for "E0" -- the one
     # competition_specific competition it used to unambiguously mean -- so it
-    # keeps working rather than silently doing the wrong thing.
+    # keeps working rather than silently doing the wrong thing. Computed
+    # before model construction: SkellamResultModel (US#183) needs the real
+    # competition_id at construction time (it loads that competition's own
+    # promoted home_goals/away_goals), not just at ModelManager time --
+    # EnsembleResultModel (US#188) needs the same, since it builds a
+    # SkellamResultModel as one of its own members.
     competition_id = "E0" if context == "league" else context
+    model_cls = MODEL_REGISTRY.get(selected_model)
+    if model_cls is None:
+        factory_params = (
+            {"competition_id": competition_id}
+            if selected_model in ("skellam_result", "ensemble_result")
+            else None
+        )
+        model = ModelFactory.get_model(selected_model, factory_params)
+    else:
+        xgb_params = _xgb_params_for_target(target_name, selected_model)
+        model = model_cls(**xgb_params)
     competition_def = get_competition_definition(competition_id)
     if not is_target_available(competition_def, definition.name):
         # US#129: fail fast and explicitly rather than let prepare_training_data's
@@ -868,7 +883,8 @@ def run_train_forecast_suite(targets: list[str] | None = None, context: str = "E
     it, with an explicit, readable reason logged per skipped target.
     """
     requested_targets = targets or [
-        definition.name for definition in list_target_definitions() if definition.name != "home_win"
+        definition.name for definition in list_target_definitions()
+        if definition.name not in INACTIVE_DEFAULT_TARGETS
     ]
 
     # --context "league" is a deprecated alias for "E0" -- resolve the same
@@ -1181,7 +1197,48 @@ def run_mlflow_cleanup(
     print("\nCleanup report saved to documents/mlflow_cleanup_report.txt")
 
 
-def _current_computable_features() -> set[str] | None:
+def _resolve_probe_row(conn, context: str | None) -> tuple | None:
+    """Most recent real match (real odds) to probe live feature-computability
+    against for BUG-012 layer 3c -- scoped to `context`'s own league when
+    resolvable, so a globally more-recent match from an unrelated
+    competition can never stand in for a different competition's own
+    live-computability check.
+
+    Found live (US#190 follow-up): the unscoped version of this query
+    picked Sweden's most recent match (2026-07-20, later than any "big
+    five" league's) as the probe for EVERY context's promotion check,
+    including SP1/I1/D1/F1 -- Sweden structurally has no FotMob player
+    data at all, so every SQUAD-gated feature was wrongly reported
+    "not computable" for leagues where it demonstrably is (independently
+    confirmed the same session via a direct build_for_match() call).
+
+    Falls back to the pre-existing unscoped global-most-recent-match
+    behavior when `context` is None (the bare "all contexts" CLI
+    invocation -- still shares one probe across every context, a known,
+    narrower remaining gap, not silently claimed fixed here) or resolves
+    to no single league (e.g. "international", which pools across
+    competitions by design, or an unrecognized context string).
+    """
+    league_code = None
+    if context is not None:
+        try:
+            from src.logic.competition_registry import get_competition_definition
+            league_code = get_competition_definition(context).league_code
+        except ValueError:
+            league_code = None
+    if league_code is not None:
+        return conn.execute(
+            "SELECT home_team, away_team, date, league FROM raw_matches "
+            "WHERE odds_h IS NOT NULL AND league = ? ORDER BY date DESC LIMIT 1",
+            [league_code],
+        ).fetchone()
+    return conn.execute(
+        "SELECT home_team, away_team, date, league FROM raw_matches "
+        "WHERE odds_h IS NOT NULL ORDER BY date DESC LIMIT 1"
+    ).fetchone()
+
+
+def _current_computable_features(context: str | None = None) -> set[str] | None:
     """Sample FeatureFactory.build_for_match() on one real fixture to get the
     set of feature columns the live inference path can currently produce
     (BUG-012 layer 3c). Returns None (disabling the promotion-time coverage
@@ -1193,10 +1250,7 @@ def _current_computable_features() -> set[str] | None:
 
         db_manager = DuckDBManager()
         with db_manager.connection(read_only=True) as conn:
-            row = conn.execute(
-                "SELECT home_team, away_team, date, league FROM raw_matches "
-                "WHERE odds_h IS NOT NULL ORDER BY date DESC LIMIT 1"
-            ).fetchone()
+            row = _resolve_probe_row(conn, context)
         if row is None:
             return None
         home_team, away_team, date, league = row
@@ -1219,7 +1273,7 @@ def run_select_best_models(
 ) -> None:
     """Select best-performing model per target from MLflow (US#78)."""
     from src.utils.model_selection import ModelSelector
-    selector = ModelSelector(computable_features=_current_computable_features())
+    selector = ModelSelector(computable_features=_current_computable_features(context))
     selector.run(target=target, context=context, dry_run=dry_run, min_improvement=min_improvement)
 
 
@@ -1830,6 +1884,12 @@ def run_status(db_manager: DuckDBManager) -> None:
 
 def main() -> None:
     configure_logger()
+    # US#185: must run before any mlflow.* call anywhere in the process --
+    # switches every subcommand from the deprecated, 14GB/109k-file
+    # filesystem tracking backend to a DB-backed one. See
+    # src/utils/mlflow_config.py's own docstring for why this doesn't need
+    # to migrate the old store's history.
+    configure_mlflow_tracking()
     parser = _build_parser()
     args = parser.parse_args()
     app_settings = settings

@@ -142,6 +142,37 @@ training_setup:
   - MKT_LAMBDA_AWAY
   - MKT_POISSON_BTTS_PROB
   - MKT_LAMBDA_AH_DIFF
+  # US#176/US#179: MKT_LINE_MOVE_*/MKT_BOOK_DISAGREEMENT_* (closing-line
+  # movement + cross-bookmaker disagreement) are STILL COMPUTED into
+  # feature_store (see _compute_odds_features) but deliberately excluded
+  # from selected_features/live-serving training -- they need the true
+  # closing line, which by definition doesn't exist at live-forecast time
+  # (build_for_match's synthetic row always has avgch/avgcd/avgca=NaN).
+  # Verified live (2026-09-03): the chronological test split has ZERO rows
+  # where this is missing (closing-odds coverage began before the test
+  # window), so the promotion-gate MAE/log_loss measured on it never
+  # actually exercised the always-missing-at-serving-time condition --
+  # a real train/serve skew a normal cold-start gap doesn't have. Left
+  # ingested/computed for backtest/agent-reasoning use (already-finished
+  # matches genuinely have a closing line), just not fed to these 8 models.
+  # US#174: Dixon-Coles walk-forward stacking features. Ungated -- needs
+  # only home_team/away_team/fthg/ftag/date, present for every competition
+  # (including Sweden), unlike the FotMob-dependent SQUAD-gated group below.
+  - DC_LAMBDA_HOME
+  - DC_LAMBDA_AWAY
+  - DC_ATTACK_HOME
+  - DC_DEFENSE_HOME
+  - DC_ATTACK_AWAY
+  - DC_DEFENSE_AWAY
+  # US#178: corner sub-model, same walk-forward Dixon-Coles machinery
+  # reused on hc/ac. Ungated code-wise (naturally NaN for Sweden, which
+  # has no hc/ac at all -- same pattern as MKT_LINE_MOVE_* for closing odds).
+  - DC_CORNER_LAMBDA_HOME
+  - DC_CORNER_LAMBDA_AWAY
+  - DC_CORNER_ATTACK_HOME
+  - DC_CORNER_DEFENSE_HOME
+  - DC_CORNER_ATTACK_AWAY
+  - DC_CORNER_DEFENSE_AWAY
   # US#68: form variance (rolling std R5) and streak indicators
   # US#77 Tier 3: OFF/DEF *_EMA3 removed (r≈0.97 with EMA5 equivalents)
   - CTX_HOME_GOALS_STD_R5
@@ -177,6 +208,11 @@ training_setup:
   - FRDS_AWAY
   - DEF_ANCHOR_HOME
   - DEF_ANCHOR_AWAY
+  # US#175: key-attacker-absence flags. Same lineup/raw_player_match_stats
+  # dependency as XOC/FRDS/DEF_ANCHOR above -- gated identically in
+  # ModelManager._load_selected_features (SQUAD-gated prefix list).
+  - LINEUP_HOME_KEY_ATTACKER_MISSING
+  - LINEUP_AWAY_KEY_ATTACKER_MISSING
 
 # US#72: Per-target feature subsets (US#66) removed — Phase 8 experiment showed 6/8 targets
 # regressed under hard top-N cutoffs. All targets now train on the full selected_features list

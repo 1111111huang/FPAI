@@ -136,7 +136,7 @@ def test_e0_enabled_feature_groups_resolves_to_full_schema_feature_set() -> None
         if (tag := resolve_feature_group_tag(f)) is None or tag in definition.enabled_feature_groups
     ]
     assert kept == full_features
-    assert len(kept) == 167
+    assert len(kept) == 181  # US#176 (+6 MKT_LINE_MOVE/MKT_BOOK_DISAGREEMENT) + US#175 (+2 LINEUP_) + US#174 (+6 DC_) = 167 + 14 + US#178 (+6 DC_CORNER_) = 181 + 6 -- US#179 (-6 MKT_LINE_MOVE/DISAGREEMENT, train/serve skew) = 187 - 6
 
 
 def test_e0_via_model_manager_resolves_to_full_schema_feature_set() -> None:
@@ -151,7 +151,7 @@ def test_e0_via_model_manager_resolves_to_full_schema_feature_set() -> None:
     features = manager._load_selected_features()
     full_features = _full_schema_features()
     assert features == full_features
-    assert len(features) == 167
+    assert len(features) == 181  # US#176 (+6) + US#175 (+2) + US#174 (+6) + US#178 (+6) = 167 + 20 -- US#179 (-6 MKT_LINE_MOVE/DISAGREEMENT, train/serve skew) = 187 - 6
 
 
 # --- New capability: a goals-only competition (Sweden stand-in) -----------

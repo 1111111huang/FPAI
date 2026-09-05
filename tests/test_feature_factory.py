@@ -516,6 +516,71 @@ def test_poisson_decomposed_market_features(tmp_path: Path) -> None:
         assert pd.isna(m2[col]), f"{col} should be NaN when over25_odds is missing"
 
 
+def test_market_microstructure_line_move_and_disagreement(tmp_path: Path) -> None:
+    """US#176: MKT_LINE_MOVE_* (closing implied prob − opening implied prob)
+    and MKT_BOOK_DISAGREEMENT_* (raw implied prob at avg price − at best/max
+    price, closing snapshot) derived from the newly-ingested maxch/avgch
+    columns. A row with no closing data at all (older ingestion / a
+    gated-off league) must come back NaN, not crash."""
+    db_path = tmp_path / "test_fpai.db"
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        yaml.safe_dump({"paths": {"database_path": str(db_path)}}),
+        encoding="utf-8",
+    )
+
+    with duckdb.connect(str(db_path)) as conn:
+        _create_raw_matches_table(conn)
+        _insert_raw_matches(
+            conn,
+            [
+                ("mm1", "E0", 1, "2025-08-15 20:00:00", "Team A", "Team B", 2, 1,
+                 1.8, 3.4, 4.2, 1.8, 3.4, 4.2),
+                ("mm2", "E0", 1, "2025-08-22 20:00:00", "Team A", "Team C", 1, 0,
+                 1.8, 3.4, 4.2, 1.8, 3.4, 4.2),
+            ],
+        )
+        conn.execute("ALTER TABLE raw_matches ADD COLUMN maxch FLOAT")
+        conn.execute("ALTER TABLE raw_matches ADD COLUMN maxcd FLOAT")
+        conn.execute("ALTER TABLE raw_matches ADD COLUMN maxca FLOAT")
+        conn.execute("ALTER TABLE raw_matches ADD COLUMN avgch FLOAT")
+        conn.execute("ALTER TABLE raw_matches ADD COLUMN avgcd FLOAT")
+        conn.execute("ALTER TABLE raw_matches ADD COLUMN avgca FLOAT")
+        # mm1: real closing data, odds drifted shorter on home (market moved
+        # towards home winning) between open (avgh=1.8) and close (avgch=1.6).
+        conn.execute(
+            "UPDATE raw_matches SET maxch=1.70, maxcd=3.80, maxca=4.60, "
+            "avgch=1.60, avgcd=3.60, avgca=4.40 WHERE match_id='mm1'"
+        )
+        # mm2: no closing data at all (simulates a pre-backfill/legacy row).
+
+    feature_factory = FeatureFactory(config_path=str(config_path))
+    features = feature_factory.compute_rolling_stats(window=5)
+
+    for col in [
+        "MKT_LINE_MOVE_HOME", "MKT_LINE_MOVE_DRAW", "MKT_LINE_MOVE_AWAY",
+        "MKT_BOOK_DISAGREEMENT_HOME", "MKT_BOOK_DISAGREEMENT_DRAW", "MKT_BOOK_DISAGREEMENT_AWAY",
+    ]:
+        assert col in features.columns
+
+    m1 = features.loc[features["match_id"] == "mm1"].iloc[0]
+    opening_home = (1 / 1.8) / ((1 / 1.8) + (1 / 3.4) + (1 / 4.2))
+    closing_home = (1 / 1.60) / ((1 / 1.60) + (1 / 3.60) + (1 / 4.40))
+    assert m1["MKT_LINE_MOVE_HOME"] == pytest.approx(closing_home - opening_home, abs=1e-4)
+    # Odds shortened on home close vs open → line moved positive towards home.
+    assert m1["MKT_LINE_MOVE_HOME"] > 0
+    expected_disagreement_home = (1 / 1.60) - (1 / 1.70)
+    assert m1["MKT_BOOK_DISAGREEMENT_HOME"] == pytest.approx(expected_disagreement_home, abs=1e-4)
+    assert m1["MKT_BOOK_DISAGREEMENT_HOME"] >= 0
+
+    m2 = features.loc[features["match_id"] == "mm2"].iloc[0]
+    for col in [
+        "MKT_LINE_MOVE_HOME", "MKT_LINE_MOVE_DRAW", "MKT_LINE_MOVE_AWAY",
+        "MKT_BOOK_DISAGREEMENT_HOME", "MKT_BOOK_DISAGREEMENT_DRAW", "MKT_BOOK_DISAGREEMENT_AWAY",
+    ]:
+        assert pd.isna(m2[col]), f"{col} should be NaN when no closing odds are recorded"
+
+
 def test_opp_adjusted_features_combine_home_and_away_venues(tmp_path: Path) -> None:
     """OPP_ADJ rolling must aggregate a team's stats across both home and away matches."""
     db_path = tmp_path / "test_fpai.db"
@@ -572,6 +637,8 @@ def test_build_for_match_includes_squad_and_luck_columns(tmp_path: Path) -> None
                 hy FLOAT, ay FLOAT, hr FLOAT, ar FLOAT,
                 odds_h FLOAT, odds_d FLOAT, odds_a FLOAT,
                 avgh FLOAT, avgd FLOAT, avga FLOAT,
+                maxch FLOAT, maxcd FLOAT, maxca FLOAT,
+                avgch FLOAT, avgcd FLOAT, avgca FLOAT,
                 xg_h FLOAT, xg_a FLOAT, xga_h FLOAT, xga_a FLOAT,
                 over25_odds FLOAT, under25_odds FLOAT,
                 ah_line FLOAT, ah_home_odds FLOAT, ah_away_odds FLOAT
@@ -650,3 +717,66 @@ def test_feature_factory_default_retry_window_is_unchanged_when_not_given(tmp_pa
 
     assert factory.db_manager.default_max_retries == 5
     assert factory.db_manager.default_retry_delay_seconds == 1.0
+
+
+def test_build_for_match_includes_dixon_coles_columns(tmp_path: Path) -> None:
+    """US#174: build_for_match's live-serving path fits Dixon-Coles on the
+    WHOLE league's history (not just these two teams' own rows, which is
+    all `combined` itself contains) -- with 40+ real prior league matches,
+    the synthetic spot-forecast row must get real, finite DC_* values."""
+    import numpy as np
+
+    db_path = tmp_path / "test_fpai.db"
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        yaml.safe_dump({"paths": {"database_path": str(db_path)}}),
+        encoding="utf-8",
+    )
+
+    rng = np.random.default_rng(3)
+    teams = ["Arsenal", "Chelsea", "Liverpool", "Everton", "Spurs", "ManCity"]
+    rows = []
+    for i in range(45):
+        h, a = rng.choice(teams, size=2, replace=False)
+        rows.append((
+            f"m{i}", "E0", 1, f"2025-0{1 + i // 30}-{1 + i % 28:02d} 20:00:00",
+            h, a, int(rng.poisson(1.4)), int(rng.poisson(1.1)),
+            1.8, 3.6, 4.2, 1.8, 3.6, 4.2,
+        ))
+
+    with duckdb.connect(str(db_path)) as conn:
+        conn.execute(
+            """
+            CREATE TABLE raw_matches (
+                match_id TEXT PRIMARY KEY, league TEXT, tier INTEGER, date TIMESTAMP,
+                home_team TEXT, away_team TEXT, fthg INTEGER, ftag INTEGER,
+                hs FLOAT, "as" FLOAT, hst FLOAT, ast FLOAT, hc FLOAT, ac FLOAT,
+                hy FLOAT, ay FLOAT, hr FLOAT, ar FLOAT,
+                odds_h FLOAT, odds_d FLOAT, odds_a FLOAT,
+                avgh FLOAT, avgd FLOAT, avga FLOAT,
+                maxch FLOAT, maxcd FLOAT, maxca FLOAT,
+                avgch FLOAT, avgcd FLOAT, avgca FLOAT,
+                xg_h FLOAT, xg_a FLOAT, xga_h FLOAT, xga_a FLOAT,
+                over25_odds FLOAT, under25_odds FLOAT,
+                ah_line FLOAT, ah_home_odds FLOAT, ah_away_odds FLOAT
+            )
+            """
+        )
+        conn.executemany(
+            "INSERT INTO raw_matches "
+            "(match_id, league, tier, date, home_team, away_team, fthg, ftag, "
+            " odds_h, odds_d, odds_a, avgh, avgd, avga) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            rows,
+        )
+
+    feature_factory = FeatureFactory(config_path=str(config_path))
+    row = feature_factory.build_for_match(
+        home_team="Arsenal", away_team="Chelsea", match_date="2025-04-01",
+        league="E0", odds_h=1.8, odds_d=3.6, odds_a=4.2,
+    )
+
+    for col in ["DC_LAMBDA_HOME", "DC_LAMBDA_AWAY", "DC_ATTACK_HOME",
+                "DC_DEFENSE_HOME", "DC_ATTACK_AWAY", "DC_DEFENSE_AWAY"]:
+        assert col in row.columns
+        assert np.isfinite(row[col].iloc[0]), f"{col} should be finite with 45 prior league matches"

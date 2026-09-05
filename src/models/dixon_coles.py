@@ -70,13 +70,22 @@ class DixonColesModel:
     # Fitting
     # ------------------------------------------------------------------
 
-    def fit(self, matches_df: pd.DataFrame) -> "DixonColesModel":
+    def fit(self, matches_df: pd.DataFrame, warm_start: dict[str, Any] | None = None) -> "DixonColesModel":
         """Fit parameters on historical match data.
 
         Parameters
         ----------
         matches_df : DataFrame with columns [home_team, away_team, fthg, ftag].
                      Optionally [hc, ac] for corner baseline means.
+        warm_start : US#177 -- an optional `get_state()` snapshot from a
+                     prior fit (e.g. the previous month's, in a walk-forward
+                     loop) used to seed the optimizer instead of the zero
+                     vector. Team strengths carry over gradually month to
+                     month, so starting near the last solution converges
+                     faster and more reliably than a cold start every time.
+                     A team present in this fit but absent from
+                     warm_start's attack/defence dicts (newly promoted)
+                     falls back to warm_start's own fitted means.
         """
         df = matches_df.dropna(subset=["home_team", "away_team", "fthg", "ftag"]).copy()
         df["fthg"] = df["fthg"].astype(int)
@@ -126,14 +135,30 @@ class DixonColesModel:
 
         p0 = np.zeros(n_params)
         p0[0] = float(np.log(df["fthg"].mean() + 1e-6))
+        if warm_start is not None:
+            p0[0] = float(warm_start["mu"])
+            ws_attack = warm_start["attack"]
+            ws_defence = warm_start["defence"]
+            ws_mean_attack = float(warm_start["mean_attack"])
+            ws_mean_defence = float(warm_start["mean_defence"])
+            # attack_0 stays fixed at 0 (identifiability constraint, same as
+            # a cold-start fit) regardless of what warm_start knows about
+            # all_teams[0] -- only atk_1..N-1 are free parameters.
+            for i, team in enumerate(all_teams):
+                if i > 0:
+                    p0[i] = ws_attack.get(team, ws_mean_attack)
+                p0[N + i] = ws_defence.get(team, ws_mean_defence)
+            p0[2 * N] = float(warm_start["home_adv"])
+            p0[2 * N + 1] = float(np.clip(warm_start["rho"], -0.98, 0.98))
 
         bounds = [(None, None)] * n_params
         bounds[-1] = (-0.99, 0.99)  # rho
 
-        LOGGER.info("Fitting Dixon-Coles: %d teams, %d matches", N, len(df))
+        LOGGER.info("Fitting Dixon-Coles: %d teams, %d matches%s", N, len(df),
+                    " (warm-started)" if warm_start is not None else "")
         result = minimize(
             neg_ll, p0, method="L-BFGS-B", bounds=bounds,
-            options={"maxiter": 3000, "ftol": 1e-10},
+            options={"maxiter": 8000, "maxfun": 20000, "ftol": 1e-10},
         )
         if not result.success:
             LOGGER.warning("Dixon-Coles MLE did not fully converge: %s", result.message)
@@ -187,6 +212,28 @@ class DixonColesModel:
         if s > 0:
             joint /= s
         return joint
+
+    def get_state(self) -> dict[str, Any]:
+        """US#177: snapshot of fitted parameters, for warm-starting a
+        subsequent fit() call (e.g. the next month, in a walk-forward loop)."""
+        if not self._fitted:
+            raise RuntimeError("Model must be fitted before extracting state.")
+        return {
+            "mu": self._mu, "home_adv": self._home_adv, "rho": self._rho,
+            "attack": dict(self._attack), "defence": dict(self._defence),
+            "mean_attack": self._mean_attack, "mean_defence": self._mean_defence,
+        }
+
+    def team_strengths(self, team: str) -> tuple[float, float]:
+        """US#174: public (attack, defence) accessor for stacking features,
+        instead of a caller reaching into _attack/_defence directly.
+        Falls back to the fitted mean for a team unseen during fit()."""
+        if not self._fitted:
+            raise RuntimeError("Model must be fitted before predicting.")
+        return (
+            self._attack.get(team, self._mean_attack),
+            self._defence.get(team, self._mean_defence),
+        )
 
     def predict_match(self, home_team: str, away_team: str) -> dict[str, Any]:
         """Return predictions for all FPAI targets for one fixture."""

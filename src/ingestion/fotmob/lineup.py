@@ -233,6 +233,38 @@ def upsert_match_lineups(
 # Backfill helper
 # ---------------------------------------------------------------------------
 
+def discover_match_ids_multi_league(
+    league_ids: dict[str, int], date_from, date_to, delay: float = 1.0
+) -> dict[str, list[int]]:
+    """Discover FotMob match IDs for several leagues across a date range,
+    sharing one day-level request across all of them (US#190's
+    fetch_matches_for_leagues) instead of one request per league per day --
+    same rationale as the player-stats multi-league backfill: match_lineups
+    doesn't need any team-name resolution at all (keyed purely by
+    fotmob_match_id/player_id), so the only per-league work left is this
+    discovery step plus one fetch_match_lineup call per match.
+
+    Returns {league_code: [fotmob_match_id, ...]}.
+    """
+    from datetime import timedelta
+
+    from src.ingestion.fotmob.fetcher import fetch_matches_for_leagues
+
+    ids: dict[str, list[int]] = {code: [] for code in league_ids}
+    day = date_from
+    while day <= date_to:
+        try:
+            matches_by_league = fetch_matches_for_leagues(day, league_ids, delay=delay)
+        except requests.RequestException as exc:
+            LOGGER.error("Failed to fetch matches for %s: %s", day, exc)
+            day += timedelta(days=1)
+            continue
+        for code, matches in matches_by_league.items():
+            ids[code].extend(m["fotmob_match_id"] for m in matches)
+        day += timedelta(days=1)
+    return ids
+
+
 def backfill_lineups_from_player_stats(db_manager: "DuckDBManager", delay: float = 1.0) -> int:
     """Backfill ``match_lineups`` using date bounds inferred from ``raw_matches``.
 

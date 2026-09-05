@@ -18,6 +18,7 @@ def test_registry_contains_forecast_targets_with_metrics() -> None:
     expected_targets = {
         "home_win",
         "result_3way",
+        "result_margin",
         "btts",
         "home_goals",
         "away_goals",

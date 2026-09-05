@@ -22,9 +22,14 @@ from sklearn.metrics import accuracy_score, log_loss, mean_absolute_error, mean_
 from src.logic.target_resolver import TargetResolver
 from src.logic.target_registry import TargetDefinition, get_target_definition
 from src.models.base_model import FPAIBaseModel, XGBoostModel, XGBoostRegressorModel
+from src.models.ensemble_result_model import EnsembleResultModel
 from src.models.goal_stacker import GoalStackerModel
+from src.models.quantile_interval_model import QuantileIntervalModel
+from src.models.skellam_result_model import SkellamResultModel
+from src.models.two_stage_result_model import TwoStageResultModel
 from src.utils.config_loader import AppSettings, load_settings
 from src.utils.db_manager import DuckDBManager
+from src.utils.mlflow_config import configure_mlflow_tracking
 from src.utils.logger import get_logger
 
 LOGGER = get_logger(__name__)
@@ -58,6 +63,31 @@ def _compute_sample_weight(y: pd.Series, task_type: str, alpha: float = 1.0) -> 
     if alpha != 1.0:
         weights = weights ** alpha
     return weights
+
+
+def _compute_time_decay_weight(dates: pd.Series, half_life_days: float) -> np.ndarray:
+    """Recency sample weights: exponential decay relative to the most recent
+    date in the training set (day 0 == that match, weight 1.0), halving every
+    half_life_days.
+
+    Per direct user prioritization ("Do 8, 1, 3, 5, 6"), item #6: every model
+    in this project has always weighted an 8-10-year-old match the same as a
+    recent one -- this is the first mechanism giving recency any weight at
+    all. Independent of and combined multiplicatively with
+    _compute_sample_weight's class-balance weight (see train()/run_pipeline())
+    rather than folded into one function, since they're orthogonal concerns:
+    a match's class-balance weight depends only on its label, its recency
+    weight only on its date.
+
+    Relative to the training set's own most recent match (not real wall-clock
+    "today") -- this project trains on archived historical data (some
+    contexts, e.g. E0's raw_matches, haven't been refreshed past the end of
+    a season), so "today" would apply an arbitrary, source-dependent extra
+    discount having nothing to do with actual recency within the data."""
+    dates = pd.to_datetime(dates)
+    reference = dates.max()
+    days_ago = (reference - dates).dt.total_seconds().to_numpy() / 86400.0
+    return np.asarray(0.5 ** (days_ago / half_life_days))
 
 
 def _classes_for_calibration(model: FPAIBaseModel) -> np.ndarray | None:
@@ -109,6 +139,7 @@ class ModelManager:
         context: str = "E0",
         competition_id: str = "E0",
         sample_weight_alpha: float = 1.0,
+        time_decay_half_life_days: float | None = None,
     ) -> None:
         """Initialize manager with a model instance and YAML config path."""
         self.model = model
@@ -141,6 +172,15 @@ class ModelManager:
         # _compute_sample_weight's own docstring. 1.0 (default) preserves
         # every existing caller's exact current behavior.
         self.sample_weight_alpha: float = sample_weight_alpha
+        # US#189: None (default) preserves every existing caller's exact
+        # current behavior -- no recency weighting at all unless a caller
+        # opts in with a real half-life. Populated by prepare_training_data()
+        # (same side-effect-attribute pattern as self.training_cutoff below).
+        self.time_decay_half_life_days: float | None = time_decay_half_life_days
+        self.train_dates: pd.Series | None = None
+        # US#185: defense-in-depth for direct-Python usage that bypasses
+        # main.py's own call -- cheap/idempotent, see mlflow_config.py.
+        configure_mlflow_tracking(config_path)
         mlflow.set_experiment("FPAI_Evolution")
 
     def _load_selected_features(self) -> list[str]:
@@ -203,6 +243,9 @@ class ModelManager:
                 all_features = [f for f in all_features if not f.startswith("XOC_")]
                 all_features = [f for f in all_features if not f.startswith("FRDS_")]
                 all_features = [f for f in all_features if not f.startswith("DEF_ANCHOR_")]
+                # US#175: same lineup/raw_player_match_stats dependency as the
+                # four prefixes above.
+                all_features = [f for f in all_features if not f.startswith("LINEUP_")]
 
             def _passes_group_gate(feature: str) -> bool:
                 tag = resolve_feature_group_tag(feature)
@@ -466,8 +509,12 @@ class ModelManager:
         df["target"] = TargetResolver.get_label(df, self.target_config)
         # XGBoost handles NaN features natively; only require a non-null target.
         # Non-XGBoost models require all feature columns to be present.
+        # TwoStageResultModel (US#181) is built entirely from XGBClassifier
+        # sub-models, so it tolerates NaN the same way -- unlike
+        # GoalStackerModel, which mixes in sklearn's PoissonRegressor/Ridge
+        # and genuinely needs the strict dropna.
         required_non_null = ["target"]
-        if not isinstance(self.model, (XGBoostModel, XGBoostRegressorModel)):
+        if not isinstance(self.model, (XGBoostModel, XGBoostRegressorModel, TwoStageResultModel, SkellamResultModel, QuantileIntervalModel, EnsembleResultModel)):
             required_non_null.extend(feature_columns)
         df = df.dropna(subset=required_non_null).reset_index(drop=True)
 
@@ -496,6 +543,10 @@ class ModelManager:
         val_end = max(train_end + 1, int(total * (train_ratio + val_ratio)))
         val_end = min(val_end, total - 1)
         self.training_cutoff = pd.to_datetime(df.iloc[train_end - 1]["date"]).isoformat()
+        # US#189: train rows' own dates, aligned by position to X_train/y_train
+        # (same df slice) -- consumed by _compute_time_decay_weight in
+        # train()/run_pipeline() when time_decay_half_life_days is set.
+        self.train_dates = pd.to_datetime(df.iloc[:train_end]["date"]).reset_index(drop=True)
 
         X_train = X.iloc[:train_end].copy()
         X_val = X.iloc[train_end:val_end].copy()
@@ -513,7 +564,7 @@ class ModelManager:
         X_val = X_val.replace({pd.NA: np.nan})
         X_test = X_test.replace({pd.NA: np.nan})
 
-        if not isinstance(self.model, (XGBoostModel, XGBoostRegressorModel)):
+        if not isinstance(self.model, (XGBoostModel, XGBoostRegressorModel, TwoStageResultModel, SkellamResultModel, QuantileIntervalModel, EnsembleResultModel)):
             if X_train.isna().any().any() or X_val.isna().any().any() or X_test.isna().any().any():
                 raise ValueError(
                     "Missing values detected in features. "
@@ -610,13 +661,23 @@ class ModelManager:
         
         return test_metrics, prediction_output
 
+    def _combine_time_decay(self, sample_weight: np.ndarray | None) -> np.ndarray | None:
+        """US#189: multiply in the recency weight, if configured. A no-op
+        (returns sample_weight unchanged) when time_decay_half_life_days is
+        None (the default) or train_dates hasn't been populated yet."""
+        if self.time_decay_half_life_days is None or self.train_dates is None:
+            return sample_weight
+        decay_weight = _compute_time_decay_weight(self.train_dates, self.time_decay_half_life_days)
+        return decay_weight if sample_weight is None else np.asarray(sample_weight) * decay_weight
+
     def train(self) -> tuple[pd.Series, pd.DataFrame, pd.Series]:
         """Train on the chronological train split, tune on val, and return test predictions."""
         selected_features = self._load_selected_features()
         self._log_selected_features(selected_features)
         X_train, X_val, X_test, y_train, y_val, y_test, test_meta = self.prepare_training_data()
-        eval_set = [(X_val, y_val)] if isinstance(self.model, (XGBoostModel, XGBoostRegressorModel, GoalStackerModel)) else None
+        eval_set = [(X_val, y_val)] if isinstance(self.model, (XGBoostModel, XGBoostRegressorModel, GoalStackerModel, TwoStageResultModel, QuantileIntervalModel, EnsembleResultModel)) else None
         sample_weight = _compute_sample_weight(y_train, self.target_definition.task_type, alpha=self.sample_weight_alpha)
+        sample_weight = self._combine_time_decay(sample_weight)
         self.model.train(X_train, y_train, eval_set=eval_set, sample_weight=sample_weight)
         self._log_feature_importance(list(X_train.columns), self.model)
         if isinstance(self.model, (XGBoostModel, XGBoostRegressorModel)):
@@ -654,8 +715,9 @@ class ModelManager:
                 mlflow.set_tag("primary_metric", self.target_definition.primary_metric)
                 mlflow.set_tag("secondary_metrics", ",".join(self.target_definition.secondary_metrics))
                 mlflow.log_param("target_type", self.target_definition.name)
-                eval_set = [(X_val, y_val)] if isinstance(self.model, (XGBoostModel, XGBoostRegressorModel, GoalStackerModel)) else None
+                eval_set = [(X_val, y_val)] if isinstance(self.model, (XGBoostModel, XGBoostRegressorModel, GoalStackerModel, TwoStageResultModel, QuantileIntervalModel, EnsembleResultModel)) else None
                 sample_weight = _compute_sample_weight(y_train, self.target_definition.task_type, alpha=self.sample_weight_alpha)
+                sample_weight = self._combine_time_decay(sample_weight)
                 self.model.train(X_train, y_train, eval_set=eval_set, sample_weight=sample_weight)
                 self._log_feature_importance(list(X_train.columns), self.model)
                 if isinstance(self.model, (XGBoostModel, XGBoostRegressorModel)):

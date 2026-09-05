@@ -29,6 +29,7 @@ def match_results() -> pd.DataFrame:
     [
         ("home_win", [1, 0, 0, 1]),
         ("result_3way", ["home", "draw", "away", "home"]),
+        ("result_margin", [1, 0, -2, 3]),
         ("btts", [1, 1, 0, 0]),
         ("home_goals", [2, 1, 0, 3]),
         ("away_goals", [1, 1, 2, 0]),

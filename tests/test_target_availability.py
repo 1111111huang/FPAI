@@ -43,7 +43,7 @@ from src.logic.competition_registry import (
     get_competition_definition,
     is_target_available,
 )
-from src.logic.target_registry import list_target_definitions
+from src.logic.target_registry import INACTIVE_DEFAULT_TARGETS, list_target_definitions
 from src.models.base_model import XGBoostRegressorModel
 from src.models.model_manager import ModelManager
 
@@ -265,14 +265,15 @@ def test_train_forecast_suite_default_context_e0_trains_full_target_set_unaffect
 ) -> None:
     """E0 has no available_targets restriction -- this story must not change
     its behavior: it still trains the full default suite (every target
-    except legacy home_win)."""
+    except legacy home_win and the exploratory result_margin, US#182)."""
     trained: list[str] = []
     monkeypatch.setattr(main, "run_train_target", lambda target_name, context="E0": trained.append(target_name))
 
     main.run_train_forecast_suite()  # context defaults to "E0"
 
     expected = sorted(
-        definition.name for definition in list_target_definitions() if definition.name != "home_win"
+        definition.name for definition in list_target_definitions()
+        if definition.name not in INACTIVE_DEFAULT_TARGETS
     )
     assert sorted(trained) == expected
     assert len(trained) == 8

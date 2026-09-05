@@ -268,7 +268,7 @@ def test_sweden_resolved_feature_count_is_74() -> None:
     # US#127's own end-to-end test already proves this against a synthetic
     # fixture; this re-proves it against the real, now-registered entry.
     features = _selected_features_for("SWE")
-    assert len(features) == 74
+    assert len(features) == 86  # US#174 (+6 DC_, ungated) = 80 + 6 + US#178 (+6 DC_CORNER_) = 86 + 6 -- US#179 (-6) = 92 - 6
 
 
 def test_sweden_feature_set_is_superset_of_general_purpose_features() -> None:
@@ -288,7 +288,7 @@ def test_sweden_feature_set_is_superset_of_general_purpose_features() -> None:
 def test_e0_still_resolves_full_167_features_after_sweden_registration() -> None:
     # Regression: registering a second competition_specific competition must
     # not change E0's own resolved feature set.
-    assert len(_selected_features_for("E0")) == 167
+    assert len(_selected_features_for("E0")) == 181  # US#174 (+6 DC_) = 175 + 6 + US#178 (+6 DC_CORNER_) = 181 + 6 -- US#179 (-6 MKT_LINE_MOVE/DISAGREEMENT, train/serve skew) = 187 - 6
 
 
 def test_sweden_available_targets_exclude_corners() -> None:
@@ -312,15 +312,16 @@ def test_e0_available_targets_unrestricted() -> None:
 # US#147: La Liga (SP1)'s real registration, verified against the real
 # config/competitions.yaml. Unlike Sweden, US#143's live column-parity check
 # found SP1's source has the exact same rich column set as E0, so SP1's
-# enabled_feature_groups mirrors E0's list minus SQUAD (FotMob backfill not
-# yet run) and available_targets is left unset (full parity, all 8 targets).
+# enabled_feature_groups mirrors E0's list exactly (SQUAD included, US#190 --
+# FotMob player-level backfill complete) and available_targets is left unset
+# (full parity, all 8 targets).
 # ---------------------------------------------------------------------------
 
 def test_la_liga_is_registered_competition_specific() -> None:
     definition = get_competition_definition("SP1")
     assert definition.tier == "competition_specific"
     assert definition.league_code == "SP1"
-    assert definition.player_data_sources == ()
+    assert definition.player_data_sources == ("fotmob",)
 
 
 def test_la_liga_enabled_feature_groups_match_us143_findings() -> None:
@@ -332,22 +333,19 @@ def test_la_liga_enabled_feature_groups_match_us143_findings() -> None:
         "STRENGTH_GOALS", "STRENGTH_SHOTS",
         "INTERACTION_GOALS", "INTERACTION_SHOTS",
         "DIS", "CTX", "CTX_CORNERS", "H2H_CORNERS", "MKT", "EFFICIENCY",
+        "SQUAD",
     }
-    # SQUAD is the only E0 group SP1 doesn't have -- FotMob player-level
-    # backfill for La Liga hasn't been run yet (US#147's own completion notes).
-    assert "SQUAD" not in definition.enabled_feature_groups
+    # US#190: SQUAD now included -- FotMob player-level backfill for La Liga
+    # is complete (3,799/3,800 matches, 100.0%).
+    assert "SQUAD" in definition.enabled_feature_groups
 
 
-def test_la_liga_resolved_feature_count_matches_e0_minus_squad() -> None:
-    # "SQUAD" absent from enabled_feature_groups gates 5 prefixes, not just
-    # SQUAD_ itself (ModelManager._load_selected_features, US#97/Phase 14c/15a):
-    # SQUAD_, LUCK_, XOC_, FRDS_, DEF_ANCHOR_.
-    squad_gated_prefixes = ("SQUAD_", "LUCK_", "XOC_", "FRDS_", "DEF_ANCHOR_")
+def test_la_liga_resolved_feature_count_matches_e0() -> None:
+    # US#190: SQUAD is enabled now, so SP1's resolved feature set matches
+    # E0's exactly -- no longer "E0 minus the SQUAD-gated prefixes".
     e0_features = set(_selected_features_for("E0"))
     la_liga_features = set(_selected_features_for("SP1"))
-    squad_only = {f for f in e0_features if f not in la_liga_features}
-    assert all(f.startswith(squad_gated_prefixes) for f in squad_only), squad_only
-    assert la_liga_features < e0_features
+    assert la_liga_features == e0_features
 
 
 def test_la_liga_feature_set_is_superset_of_general_purpose_features() -> None:
@@ -358,8 +356,8 @@ def test_la_liga_feature_set_is_superset_of_general_purpose_features() -> None:
 def test_e0_and_sweden_still_resolve_unchanged_after_la_liga_registration() -> None:
     # Regression: registering a third competition_specific competition must
     # not change E0's or Sweden's own resolved feature sets.
-    assert len(_selected_features_for("E0")) == 167
-    assert len(_selected_features_for("SWE")) == 74
+    assert len(_selected_features_for("E0")) == 181  # US#174 (+6 DC_) = 175 + 6 + US#178 (+6 DC_CORNER_) = 181 + 6 -- US#179 (-6 MKT_LINE_MOVE/DISAGREEMENT, train/serve skew) = 187 - 6
+    assert len(_selected_features_for("SWE")) == 86  # US#174 (+6 DC_) = 80 + 6 + US#178 (+6 DC_CORNER_) = 86 + 6 -- US#179 (-6) = 92 - 6
 
 
 def test_la_liga_available_targets_unrestricted() -> None:
@@ -376,13 +374,15 @@ def test_la_liga_available_targets_unrestricted() -> None:
 # verified against the real config/competitions.yaml. US#161's live
 # column-parity check found all three sources have the exact same rich
 # column set as E0/SP1, so each league's enabled_feature_groups mirrors
-# SP1's list exactly (minus SQUAD -- FotMob player backfill not yet run for
-# any of them) and available_targets is left unset (full parity, all 8
-# targets). One block, parametrized across all three, since the shape is
-# identical for each -- SP1's own registration used a bare (non-parametrized)
-# block because it was the first and only competition_specific league beyond
-# E0/SWE at the time; three more added at once is the natural point to stop
-# repeating the same test body per league.
+# SP1's list exactly. US#190 (2026-09-04): FotMob player-level backfill is
+# complete for all three (I1 3,796/3,797 = 100.0%, D1 3,060/3,060 = 100.0%,
+# F1 3,473/3,475 = 99.9%), so SQUAD is now included here too, and
+# available_targets is left unset (full parity, all 8 targets). One block,
+# parametrized across all three, since the shape is identical for each --
+# SP1's own registration used a bare (non-parametrized) block because it was
+# the first and only competition_specific league beyond E0/SWE at the time;
+# three more added at once is the natural point to stop repeating the same
+# test body per league.
 # ---------------------------------------------------------------------------
 
 _NEW_LEAGUES = ["I1", "D1", "F1"]
@@ -393,7 +393,7 @@ def test_new_leagues_are_registered_competition_specific(code: str) -> None:
     definition = get_competition_definition(code)
     assert definition.tier == "competition_specific"
     assert definition.league_code == code
-    assert definition.player_data_sources == ()
+    assert definition.player_data_sources == ("fotmob",)
 
 
 @pytest.mark.parametrize("code", _NEW_LEAGUES)
@@ -406,18 +406,19 @@ def test_new_leagues_enabled_feature_groups_match_sp1s_shape(code: str) -> None:
         "STRENGTH_GOALS", "STRENGTH_SHOTS",
         "INTERACTION_GOALS", "INTERACTION_SHOTS",
         "DIS", "CTX", "CTX_CORNERS", "H2H_CORNERS", "MKT", "EFFICIENCY",
+        "SQUAD",
     }
-    assert "SQUAD" not in definition.enabled_feature_groups
+    assert "SQUAD" in definition.enabled_feature_groups
 
 
 @pytest.mark.parametrize("code", _NEW_LEAGUES)
-def test_new_leagues_resolved_feature_count_matches_e0_minus_squad(code: str) -> None:
-    squad_gated_prefixes = ("SQUAD_", "LUCK_", "XOC_", "FRDS_", "DEF_ANCHOR_")
+def test_new_leagues_resolved_feature_count_matches_e0(code: str) -> None:
+    # US#190: SQUAD is enabled for all three now, so each resolves to
+    # exactly E0's feature set -- no longer "E0 minus the SQUAD-gated
+    # prefixes".
     e0_features = set(_selected_features_for("E0"))
     league_features = set(_selected_features_for(code))
-    squad_only = {f for f in e0_features if f not in league_features}
-    assert all(f.startswith(squad_gated_prefixes) for f in squad_only), squad_only
-    assert league_features < e0_features
+    assert league_features == e0_features
 
 
 @pytest.mark.parametrize("code", _NEW_LEAGUES)
@@ -438,6 +439,6 @@ def test_e0_sweden_and_la_liga_still_resolve_unchanged_after_new_league_registra
     # Regression: registering three more competition_specific competitions
     # must not change any previously-registered competition's own resolved
     # feature set.
-    assert len(_selected_features_for("E0")) == 167
-    assert len(_selected_features_for("SWE")) == 74
+    assert len(_selected_features_for("E0")) == 181  # US#174 (+6 DC_) = 175 + 6 + US#178 (+6 DC_CORNER_) = 181 + 6 -- US#179 (-6 MKT_LINE_MOVE/DISAGREEMENT, train/serve skew) = 187 - 6
+    assert len(_selected_features_for("SWE")) == 86  # US#174 (+6 DC_) = 80 + 6 + US#178 (+6 DC_CORNER_) = 86 + 6 -- US#179 (-6) = 92 - 6
     assert len(_selected_features_for("SP1")) == len(_selected_features_for("I1"))
