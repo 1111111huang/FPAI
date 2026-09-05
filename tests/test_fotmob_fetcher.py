@@ -16,7 +16,9 @@ from src.ingestion.fotmob.fetcher import (
     LEAGUE_IDS,
     fetch_finished_match_ids,
     fetch_match_player_stats,
+    fetch_matches_for_leagues,
     fetch_player_match_stats,
+    fetch_player_match_stats_multi_league,
 )
 
 
@@ -214,6 +216,89 @@ def test_league_ids_maps_sp1_to_the_real_fotmob_league_id():
     """US#146: La Liga's real FotMob league id is 87 (live-verified 2026-08-06
     against /api/data/matches, entry name 'LaLiga', ccode 'ESP')."""
     assert LEAGUE_IDS["SP1"] == 87
+
+
+# ---------------------------------------------------------------------------
+# fetch_matches_for_leagues / fetch_player_match_stats_multi_league (US#190)
+# ---------------------------------------------------------------------------
+
+def test_fetch_matches_for_leagues_makes_one_request_for_all_leagues():
+    """The whole point (US#190): backfilling N leagues for the same date
+    must make ONE HTTP request, not N -- /api/data/matches already returns
+    every league's fixtures for that date in a single payload."""
+    payload = {
+        "leagues": [
+            {"id": 47, "matches": [_match_entry(match_id=1)]},
+            {"id": 87, "matches": [_match_entry(match_id=2)]},
+            {"id": 55, "matches": [_match_entry(match_id=3)]},
+        ]
+    }
+    with patch("src.ingestion.fotmob.fetcher.requests.get", return_value=_mock_resp(payload)) as mock_get, \
+         patch("src.ingestion.fotmob.fetcher.time.sleep"):
+        result = fetch_matches_for_leagues(
+            date(2024, 5, 19), league_ids={"E0": 47, "SP1": 87, "I1": 55}, delay=0,
+        )
+
+    assert mock_get.call_count == 1
+    assert [m["fotmob_match_id"] for m in result["E0"]] == [1]
+    assert [m["fotmob_match_id"] for m in result["SP1"]] == [2]
+    assert [m["fotmob_match_id"] for m in result["I1"]] == [3]
+
+
+def test_fetch_matches_for_leagues_gives_empty_list_for_a_league_absent_that_day():
+    payload = {"leagues": [{"id": 47, "matches": [_match_entry(match_id=1)]}]}
+    with patch("src.ingestion.fotmob.fetcher.requests.get", return_value=_mock_resp(payload)), \
+         patch("src.ingestion.fotmob.fetcher.time.sleep"):
+        result = fetch_matches_for_leagues(date(2024, 5, 19), league_ids={"E0": 47, "D1": 54}, delay=0)
+
+    assert result["D1"] == []
+
+
+def test_fetch_matches_for_leagues_treats_a_null_payload_as_no_matches_for_any_league():
+    with patch("src.ingestion.fotmob.fetcher.requests.get", return_value=_mock_resp(None)), \
+         patch("src.ingestion.fotmob.fetcher.time.sleep"):
+        result = fetch_matches_for_leagues(date(2011, 8, 1), league_ids={"E0": 47, "SP1": 87}, delay=0)
+
+    assert result == {"E0": [], "SP1": []}
+
+
+def test_fetch_matches_for_leagues_excludes_unfinished_matches():
+    payload = {"leagues": [{"id": 47, "matches": [_match_entry(finished=False)]}]}
+    with patch("src.ingestion.fotmob.fetcher.requests.get", return_value=_mock_resp(payload)), \
+         patch("src.ingestion.fotmob.fetcher.time.sleep"):
+        result = fetch_matches_for_leagues(date(2024, 5, 19), league_ids={"E0": 47}, delay=0)
+
+    assert result["E0"] == []
+
+
+def test_fetch_player_match_stats_multi_league_shares_day_requests_across_leagues():
+    matches_payload = {
+        "leagues": [
+            {"id": 47, "matches": [_match_entry(match_id=1, home="Arsenal", away="Everton")]},
+            {"id": 87, "matches": [_match_entry(match_id=2, home="Barcelona", away="Sevilla")]},
+        ]
+    }
+    details_payload = _match_details_payload(_player_entry())
+    day_request_count = {"n": 0}
+
+    def fake_get(url, **kwargs):
+        if "matchDetails" in url:
+            return _mock_resp(details_payload)
+        day_request_count["n"] += 1
+        return _mock_resp(matches_payload)
+
+    with patch("src.ingestion.fotmob.fetcher.requests.get", side_effect=fake_get), \
+         patch("src.ingestion.fotmob.fetcher.time.sleep"):
+        result = fetch_player_match_stats_multi_league(
+            leagues={"E0": 47, "SP1": 87}, date_from=date(2024, 5, 19), date_to=date(2024, 5, 19), delay=0,
+        )
+
+    # One day in range -> exactly one /matches request, shared by both leagues.
+    assert day_request_count["n"] == 1
+    assert len(result["E0"]) == 1
+    assert result["E0"].iloc[0]["home_team"] == "Arsenal"
+    assert len(result["SP1"]) == 1
+    assert result["SP1"].iloc[0]["home_team"] == "Barcelona"
 
 
 def test_league_ids_maps_the_three_new_leagues_to_their_real_fotmob_ids():

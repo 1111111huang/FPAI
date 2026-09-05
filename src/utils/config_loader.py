@@ -48,6 +48,13 @@ class AppSettings(BaseModel):
     paths: PathsConfig = Field(default_factory=PathsConfig)
     settings: RuntimeConfig = Field(default_factory=RuntimeConfig)
     scraper: ScraperConfig = Field(default_factory=ScraperConfig)
+    # US#185: MLflow's implicit default (no tracking URI set at all) is the
+    # filesystem backend, which MLflow itself deprecated (Feb 2026) and
+    # which grew to 14GB/109k files in this project -- a full
+    # select-best-models scan took ~2 hours because of it. DB-backed sqlite
+    # is the default going forward; override here if a real Postgres/MySQL
+    # server is ever preferred instead.
+    mlflow_tracking_uri: str = "sqlite:///mlflow.db"
 
 
 @lru_cache(maxsize=32)

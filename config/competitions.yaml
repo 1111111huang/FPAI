@@ -104,13 +104,14 @@ competitions:
     # ingested SP1 rows (10 seasons, 2015/16-2025/26, 3,800 matches) confirm
     # 100% non-null shots/corners/discipline/over-under/Asian-handicap columns
     # and 100% non-null B365-based odds -- full column parity with E0, unlike
-    # Sweden's goals-only source. enabled_feature_groups therefore mirrors E0's
-    # list exactly, MINUS SQUAD: FotMob's La Liga league id (87) is confirmed
-    # live (US#146), but the actual `fetch-fotmob --league SP1` player-level
-    # backfill (a slow, per-match job) has not been run yet -- flagged as a
-    # fast-follow, not a data-availability gap like Sweden's. available_targets
-    # is left unset (all 8 targets trainable), matching E0's convention, since
-    # every raw column every target's labels depend on is fully populated.
+    # Sweden's goals-only source. US#190 (2026-09-04): the FotMob per-match
+    # player-level backfill (2016/17-2025/26, shared-day-request fetcher,
+    # see src/ingestion/fotmob/fetcher.py's fetch_player_match_stats_multi_league)
+    # is now complete -- 3,799/3,800 matches (100.0%), matching E0's own
+    # 99.8% coverage. enabled_feature_groups now mirrors E0's list exactly,
+    # SQUAD included. available_targets is left unset (all 8 targets
+    # trainable), matching E0's convention, since every raw column every
+    # target's labels depend on is fully populated.
     enabled_feature_groups:
       - OFF_GOALS
       - OFF_SHOTS
@@ -131,7 +132,9 @@ competitions:
       - H2H_CORNERS
       - MKT
       - EFFICIENCY
-    player_data_sources: []
+      - SQUAD
+    player_data_sources:
+      - fotmob
   I1:
     competition_id: I1
     tier: competition_specific
@@ -144,10 +147,12 @@ competitions:
     # matches) confirm 100% non-null shots/corners/discipline/over-under/
     # Asian-handicap columns and 100% non-null B365-based odds -- full column
     # parity with E0/SP1. Real Understat xG backfill (US#165) reached 99.8%
-    # coverage. enabled_feature_groups mirrors SP1's list exactly, MINUS
-    # SQUAD: FotMob's Serie A league id (55) is confirmed live (US#165), but
-    # the actual per-match player-level backfill has not been run yet --
-    # flagged as a fast-follow, same posture as SP1's own SQUAD gap.
+    # coverage. US#190 (2026-09-04): FotMob per-match player-level backfill
+    # complete -- 3,796/3,797 matches (100.0%). Found and fixed a real gap
+    # during this backfill: "Hellas Verona"/"SSC Napoli"/"ChievoVerona" were
+    # missing from config/team_mapping.json, silently dropping every match
+    # involving those clubs (was only 86.2% before the fix). enabled_feature_
+    # groups now mirrors E0/SP1's list exactly, SQUAD included.
     # available_targets is left unset (all 8 targets trainable).
     enabled_feature_groups:
       - OFF_GOALS
@@ -169,7 +174,9 @@ competitions:
       - H2H_CORNERS
       - MKT
       - EFFICIENCY
-    player_data_sources: []
+      - SQUAD
+    player_data_sources:
+      - fotmob
   D1:
     competition_id: D1
     tier: competition_specific
@@ -184,10 +191,15 @@ competitions:
     # backfill (US#165) reached 100.0% coverage (the FotMob league id, 54,
     # needed extra care to disambiguate from the same endpoint's "2.
     # Bundesliga"/146 and Austria's own "Bundesliga"/938366 -- confirmed
-    # against the real GER top-flight entry specifically). enabled_feature_
-    # groups mirrors SP1/I1's list exactly, MINUS SQUAD (FotMob per-match
-    # player backfill not yet run, same fast-follow posture).
-    # available_targets left unset (all 8 targets trainable).
+    # against the real GER top-flight entry specifically). US#190
+    # (2026-09-04): FotMob per-match player-level backfill complete --
+    # 3,060/3,060 matches (100.0%). Found and fixed a real gap during this
+    # backfill: "Bayern München"/"Köln"/"Hertha BSC"/"VfL Bochum"/
+    # "Düsseldorf"/"SV Darmstadt" were missing from config/team_mapping.json,
+    # silently dropping every match involving those clubs every season (was
+    # only 72.4% before the fix -- the worst-affected of the 4 new leagues).
+    # enabled_feature_groups now mirrors E0/SP1/I1's list exactly, SQUAD
+    # included. available_targets left unset (all 8 targets trainable).
     enabled_feature_groups:
       - OFF_GOALS
       - OFF_SHOTS
@@ -208,7 +220,9 @@ competitions:
       - H2H_CORNERS
       - MKT
       - EFFICIENCY
-    player_data_sources: []
+      - SQUAD
+    player_data_sources:
+      - fotmob
   F1:
     competition_id: F1
     tier: competition_specific
@@ -219,10 +233,13 @@ competitions:
     # Real ingested F1 rows (10 seasons, 2016/17-2025/26, 3,475 matches)
     # confirm 100% non-null shots/corners/discipline/over-under/Asian-
     # handicap columns and 100% non-null B365-based odds. Real Understat xG
-    # backfill (US#165) reached 99.5% coverage. enabled_feature_groups
-    # mirrors SP1/I1/D1's list exactly, MINUS SQUAD (FotMob per-match player
-    # backfill not yet run, same fast-follow posture). available_targets
-    # left unset (all 8 targets trainable).
+    # backfill (US#165) reached 99.5% coverage. US#190 (2026-09-04): FotMob
+    # per-match player-level backfill complete -- 3,473/3,475 matches
+    # (99.9%). Found and fixed one real gap during this backfill: "AC
+    # Ajaccio" was missing from config/team_mapping.json (F1 was otherwise
+    # already near-complete, unlike I1/D1's much larger gaps).
+    # enabled_feature_groups now mirrors E0/SP1/I1/D1's list exactly, SQUAD
+    # included. available_targets left unset (all 8 targets trainable).
     enabled_feature_groups:
       - OFF_GOALS
       - OFF_SHOTS
@@ -243,7 +260,9 @@ competitions:
       - H2H_CORNERS
       - MKT
       - EFFICIENCY
-    player_data_sources: []
+      - SQUAD
+    player_data_sources:
+      - fotmob
   international:
     competition_id: international
     tier: general_purpose

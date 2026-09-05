@@ -29,6 +29,33 @@ from src.logic.target_registry import (
 from src.utils.config_loader import AppSettings, load_settings
 from src.utils.db_manager import DuckDBManager
 
+def _apply_calibration(raw_proba: np.ndarray, sidecar: dict[str, Any] | None) -> np.ndarray:
+    """US#186: apply a model's own saved calibration sidecar (produced by
+    ModelManager._fit_and_save_calibrator, computed for every classifier
+    but never previously read back anywhere in the serving path) to a raw
+    probability array. Mirrors that function's own fit-time transform
+    exactly, just at predict time instead of validation time.
+
+    Returns raw_proba unchanged (a no-op) when sidecar is None -- callers
+    that never had a calibrator saved (or an older artifact predating this
+    mechanism) see no behavior change at all.
+    """
+    if sidecar is None:
+        return raw_proba
+    if sidecar.get("type") == "binary":
+        calibrator = sidecar["calibrator"]
+        cal_pos = calibrator.predict(raw_proba[:, 1])
+        return np.stack([1.0 - cal_pos, cal_pos], axis=1)
+    if sidecar.get("type") == "multiclass":
+        calibrators = sidecar["calibrator"]
+        cal_proba = np.zeros_like(raw_proba)
+        for c, calibrator in enumerate(calibrators):
+            cal_proba[:, c] = calibrator.predict(raw_proba[:, c])
+        row_sums = cal_proba.sum(axis=1, keepdims=True).clip(min=1e-9)
+        return cal_proba / row_sums
+    return raw_proba
+
+
 def _load_xgboost_native(model: Any, model_path: Path) -> Any:
     """Loads a native-XGBoost-format artifact (UBJSON/JSON) by content, not
     by path. These files are saved via XGBoost's own save_model(), not
@@ -136,6 +163,7 @@ class ForecastService:
         metadata.setdefault("artifact_name", model_path.name)
         metadata.setdefault("model_type", "unknown")
         metadata.setdefault("feature_names", self.feature_names)
+        metadata.setdefault("calibrator", self._load_calibrator_sidecar(model_path))
         return model_path, metadata
 
     @staticmethod
@@ -168,6 +196,25 @@ class ForecastService:
         if "twostage" in model_type_lower or "two_stage" in model_type_lower:
             from src.models.two_stage_result_model import TwoStageResultModel
             return TwoStageResultModel.load(str(model_path))
+        if "quantileinterval" in model_type_lower or "quantile_interval" in model_type_lower:
+            from src.models.quantile_interval_model import QuantileIntervalModel
+            return QuantileIntervalModel.load(str(model_path))
+        if "ensembleresult" in model_type_lower or "ensemble_result" in model_type_lower:
+            from src.models.ensemble_result_model import EnsembleResultModel
+            return EnsembleResultModel.load(str(model_path))
+        return ForecastService._load_model_by_format(model_path)
+
+    @staticmethod
+    def _load_calibrator_sidecar(model_path: Path) -> dict[str, Any] | None:
+        """US#186: load a model's saved isotonic-calibration sidecar, if
+        ModelManager._fit_and_save_calibrator wrote one alongside it."""
+        cal_path = model_path.with_suffix(model_path.suffix + ".calibration.pkl")
+        if not cal_path.exists():
+            return None
+        return joblib.load(str(cal_path))
+
+    @staticmethod
+    def _load_model_by_format(model_path: Path) -> Any:
         # Sniff file format: XGBoost native UBJSON starts with b'{'
         with open(model_path, "rb") as _f:
             _magic = _f.read(1)
@@ -265,7 +312,13 @@ class ForecastService:
             feature_row = feature_row[target_feature_names]
 
         if definition.task_type in {"binary_classification", "multiclass_classification"}:
-            probabilities = self._coerce_probability_vector(model.predict_proba(feature_row))
+            raw_proba = np.asarray(model.predict_proba(feature_row))
+            # US#186: apply this model's own saved calibrator, if one was
+            # computed at training time -- a real, better-calibrated
+            # version of these probabilities that nothing in this path
+            # ever consumed before. No-op when metadata carries none.
+            calibrated_proba = _apply_calibration(raw_proba, metadata.get("calibrator"))
+            probabilities = self._coerce_probability_vector(calibrated_proba)
             labels = self._class_labels(definition, model, probabilities)
             probability_map = {
                 label: round(float(probability), 6)
@@ -281,14 +334,30 @@ class ForecastService:
             "expected": round(expected, 6),
             "distribution": poisson_count_distribution(expected),
         }
-        interval_config = metadata.get("prediction_interval")
-        if isinstance(interval_config, dict):
-            payload["prediction_interval"] = residual_prediction_interval(
-                expected=expected,
-                lower_residual=float(interval_config.get("lower_residual", 0.0)),
-                upper_residual=float(interval_config.get("upper_residual", 0.0)),
-                coverage=float(interval_config.get("coverage", 0.8)),
-            )
+        # US#184: prefer the model's own per-match, heteroscedastic interval
+        # (varies with this specific fixture's features) over the existing
+        # metadata-driven residual_prediction_interval, which is one FIXED
+        # width computed once from overall validation residuals -- every
+        # match got the same band regardless of how uncertain the model
+        # actually was about that particular fixture.
+        if hasattr(model, "predict_interval"):
+            lower, upper = model.predict_interval(feature_row)
+            coverage = getattr(model, "coverage", 0.8)
+            payload["prediction_interval"] = {
+                "lower": round(float(np.asarray(lower).ravel()[0]), 6),
+                "upper": round(float(np.asarray(upper).ravel()[0]), 6),
+                "coverage": float(coverage),
+                "method": "quantile_regression",
+            }
+        else:
+            interval_config = metadata.get("prediction_interval")
+            if isinstance(interval_config, dict):
+                payload["prediction_interval"] = residual_prediction_interval(
+                    expected=expected,
+                    lower_residual=float(interval_config.get("lower_residual", 0.0)),
+                    upper_residual=float(interval_config.get("upper_residual", 0.0)),
+                    coverage=float(interval_config.get("coverage", 0.8)),
+                )
         return payload
 
     def _load_context_models(self, context: str) -> dict[str, tuple[TargetDefinition, Any, dict[str, Any]]]:
@@ -332,6 +401,10 @@ class ForecastService:
                         "artifact_name": model_path.name,
                         "feature_names": entry.get("feature_subset") or artifact_feature_names or self.feature_names,
                         "feature_subset": entry.get("feature_subset"),
+                        # US#186: this model's own saved isotonic-calibration
+                        # sidecar, if one exists -- consumed by _predict_target
+                        # via _apply_calibration. None (no-op) when absent.
+                        "calibrator": self._load_calibrator_sidecar(model_path),
                     }
                     loaded[target] = (definition, self._load_model(model_path, metadata), metadata)
                 if loaded:

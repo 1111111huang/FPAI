@@ -14,6 +14,7 @@ sys.path.append(str(Path(__file__).resolve().parents[1]))
 from src.ingestion.fotmob.lineup import (
     _position_group,
     _create_lineup_table,
+    discover_match_ids_multi_league,
     fetch_match_lineup,
     upsert_match_lineups,
 )
@@ -207,6 +208,30 @@ def test_upsert_creates_table_and_inserts():
     assert (rows["fotmob_match_id"] == 4506586).all()
 
     db.close()
+
+
+def test_discover_match_ids_multi_league_shares_day_requests(monkeypatch):
+    """US#190 follow-up: lineup backfill for several leagues must share the
+    same day-level request (fetch_matches_for_leagues), not re-scan the same
+    date once per league."""
+    from datetime import date
+
+    call_count = {"n": 0}
+
+    def fake_fetch_matches_for_leagues(day, league_ids, delay=1.0):
+        call_count["n"] += 1
+        return {"SP1": [{"fotmob_match_id": 111}], "I1": [{"fotmob_match_id": 222}]}
+
+    monkeypatch.setattr(
+        "src.ingestion.fotmob.fetcher.fetch_matches_for_leagues", fake_fetch_matches_for_leagues,
+    )
+
+    result = discover_match_ids_multi_league(
+        {"SP1": 87, "I1": 55}, date(2024, 5, 19), date(2024, 5, 19), delay=0,
+    )
+
+    assert call_count["n"] == 1
+    assert result == {"SP1": [111], "I1": [222]}
 
 
 def test_upsert_idempotent_on_conflict():

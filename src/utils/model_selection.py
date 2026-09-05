@@ -13,6 +13,7 @@ import yaml
 from src.logic.competition_registry import DEFAULT_REGISTRY_PATH, list_context_keys
 from src.logic.target_registry import INACTIVE_DEFAULT_TARGETS, list_target_definitions, get_target_definition
 from src.utils.logger import get_logger
+from src.utils.mlflow_config import configure_mlflow_tracking
 
 LOGGER = get_logger(__name__)
 
@@ -109,6 +110,17 @@ class ModelSelector:
         # can register a fictional second competition_specific competition
         # without touching the real registry.
         self.registry_path = Path(registry_path)
+        # US#185 coverage gap, found live: the CLI path (main.py's
+        # select-best-models) only worked by accident, because main()'s own
+        # top-level call already sets the tracking URI process-wide before
+        # ModelSelector is ever constructed. Any direct-Python caller of
+        # run_select_best_models/ModelSelector (an ad-hoc retraining script,
+        # bypassing main()) got mlflow's implicit filesystem-backend default
+        # instead -- silently re-introducing the exact 14GB/109k-file/
+        # ~2-hour-scan problem US#185 fixed. Confirmed live: a real
+        # multi-context selection run took 75+ minutes instead of under a
+        # minute before being traced to this gap and killed.
+        configure_mlflow_tracking()
         self.client = mlflow.tracking.MlflowClient()
 
     def load_config(self) -> dict[str, Any]:

@@ -18,6 +18,7 @@ optuna.logging.set_verbosity(optuna.logging.WARNING)
 from src.logic.target_registry import get_target_definition
 from src.models import ModelFactory, ModelManager, XGBoostModel, XGBoostRegressorModel
 from src.utils.logger import get_logger
+from src.utils.mlflow_config import configure_mlflow_tracking
 
 _METRIC_KEYS = {"log_loss", "accuracy", "mae", "rmse", "precision"}
 
@@ -125,6 +126,9 @@ class SweepRunner:
 
     def run(self) -> list[dict[str, object]]:
         """Execute the configured sweep and return run metric summaries."""
+        # US#185: defense-in-depth for direct usage that bypasses main.py's
+        # own call -- cheap/idempotent, see src/utils/mlflow_config.py.
+        configure_mlflow_tracking()
         config = self._load_config()
         model_type = str(config.get("model_type", "lr")).strip().lower()
         grid = self._validate_grid(config.get("grid_search", {}))
@@ -276,6 +280,9 @@ class OptunaRunner:
 
     def run(self) -> list[dict[str, object]]:
         """Execute the Optuna sweep and return trial metric summaries."""
+        # US#185: defense-in-depth for direct usage that bypasses main.py's
+        # own call -- cheap/idempotent, see src/utils/mlflow_config.py.
+        configure_mlflow_tracking()
         config = self._load_config()
         model_type = str(config.get("model_type", "lr")).strip().lower()
         search_space: dict[str, Any] = config.get("optuna_search", config.get("grid_search", {}))

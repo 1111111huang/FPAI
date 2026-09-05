@@ -25,6 +25,7 @@ sys.path.append(str(Path(__file__).resolve().parents[1]))
 
 from src.forecast.forecast_service import ForecastService
 from src.models.base_model import XGBoostRegressorModel
+from src.models.quantile_interval_model import QuantileIntervalModel
 from src.models.skellam_result_model import SkellamResultModel
 from src.models.two_stage_result_model import TwoStageResultModel
 
@@ -103,3 +104,22 @@ def test_load_model_reconstructs_two_stage_result_model_not_a_raw_dict(tmp_path:
     assert isinstance(loaded, TwoStageResultModel)
     proba = loaded.predict_proba(X.iloc[:3])
     assert proba.shape == (3, 3)
+
+
+def test_load_model_reconstructs_quantile_interval_model_not_a_raw_dict(tmp_path: Path) -> None:
+    model = QuantileIntervalModel(coverage=0.8)
+    rng = np.random.default_rng(4)
+    X = pd.DataFrame({"a": rng.normal(size=100), "b": rng.normal(size=100)})
+    y = pd.Series(np.clip(1.5 + X["a"] * 0.3 + rng.normal(0, 1, size=100), 0, None))
+    model.train(X, y)
+    model_path = tmp_path / "total_corners_quantile_interval.joblib"
+    model.save(str(model_path))
+
+    loaded = ForecastService._load_model(model_path, {"model_type": "quantileinterval"})
+
+    assert isinstance(loaded, QuantileIntervalModel)
+    X_test = X.iloc[:3]
+    point = loaded.predict(X_test)
+    lower, upper = loaded.predict_interval(X_test)
+    assert point.shape == (3,)
+    assert (lower <= upper).all()

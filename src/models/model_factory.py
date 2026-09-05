@@ -12,8 +12,10 @@ from src.models.base_model import (
     XGBoostModel,
     XGBoostRegressorModel,
 )
+from src.models.ensemble_result_model import EnsembleResultModel
 from src.models.goal_stacker import GoalStackerModel
 from src.models.mlp_model import MLPModel, MLPRegressorModel
+from src.models.quantile_interval_model import QuantileIntervalModel
 from src.models.skellam_result_model import SkellamResultModel
 from src.models.two_stage_result_model import TwoStageResultModel
 
@@ -36,6 +38,8 @@ class ModelFactory:
         "result_stacker": TwoStageResultModel,
         "two_stage_result": TwoStageResultModel,
         "skellam_result": SkellamResultModel,
+        "ensemble_result": EnsembleResultModel,
+        "quantile_interval": QuantileIntervalModel,
         "mlp": MLPModel,
         "mlp_regressor": MLPRegressorModel,
     }
