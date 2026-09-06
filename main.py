@@ -1332,36 +1332,37 @@ def run_agent_snapshot(
     dry_run: bool,
     refresh_model: bool = False,
 ) -> None:
-    """Drive the agent in record mode over historical matches to build a snapshot corpus (A11).
+    """Drive the deterministic pipeline (resolve_competition/research/forecast,
+    no LLM) over historical matches to build a snapshot corpus (A11).
 
-    refresh_model: instead of skipping already-complete matches and fully
-    re-recording (LLM + all tools live), reprocess *every* match in range in
-    a mode that replays the existing web_search/resolve_competition
-    recordings unchanged and only re-invokes forecast_league/
-    forecast_international live -- for refreshing a snapshot corpus after
-    retraining a model, without re-spending Tavily quota/wall-clock time on
-    research evidence for matches whose real-world context hasn't changed.
-    A match with no prior recording at all will error cleanly (same
-    per-match error handling as the normal path) -- refresh only makes
-    sense on top of an already-recorded corpus."""
+    refresh_model: instead of skipping already-complete matches, reprocess
+    *every* match in range in a mode that replays the existing
+    web_search/resolve_competition recordings unchanged and only
+    re-invokes forecast_league/forecast_international live -- for
+    refreshing a snapshot corpus after retraining a model, without
+    re-spending Tavily quota/wall-clock time on research evidence for
+    matches whose real-world context hasn't changed. A match with no prior
+    recording at all will error cleanly (same per-match error handling as
+    the normal path) -- refresh only makes sense on top of an
+    already-recorded corpus.
+
+    A97: config_path is accepted for CLI backward compatibility but unused
+    -- run_deterministic_pipeline never touches the LLM, so there's no
+    system prompt/posture to select. Every snapshot file this command
+    writes (resolve_competition, forecast_league/international, web_search)
+    comes from resolve_competition_node/research_node/forecast_node alone;
+    agent_node's LLM output was never persisted by SnapshotStore in the
+    first place (confirmed: no .wrap() call anywhere wraps it), so calling
+    the full run_agent() here was a real DeepSeek/whatever-provider API
+    call per match spent on output nothing ever reads back."""
     import sys
     from datetime import datetime, timezone
     from pathlib import Path
 
-    from src.agent.agent_config import AgentConfig
-    from src.agent.backtest import LEAKAGE_GUARD_INSTRUCTIONS
-    from src.agent.graph import run_agent
+    from src.agent.graph import run_deterministic_pipeline
     from src.agent import tools as agent_tools
     from src.utils.db_manager import DuckDBManager
 
-    # A46: shares its actual instruction text with process_match_row's replay
-    # path via LEAKAGE_GUARD_INSTRUCTIONS so the two can never drift apart.
-    snapshot_addendum = (
-        "## SNAPSHOT COLLECTION MODE\n\n"
-        "You are collecting training data from a historical match. " + LEAKAGE_GUARD_INSTRUCTIONS
-    )
-
-    cfg = AgentConfig.from_yaml(config_path) if config_path else AgentConfig.default()
     db = DuckDBManager()
     query = (
         "SELECT match_id, league, date, home_team, away_team, odds_h, odds_d, odds_a "
@@ -1415,14 +1416,7 @@ def run_agent_snapshot(
         else:
             agent_tools.configure_snapshot_store("record", match_id=match_id, match_date=date_str, base_dir=match_base_dir)
         try:
-            # A42 precedent: in any mode where web_search isn't itself live,
-            # the LLM's own optional follow-up call (self-generated query
-            # text) almost never matches an existing recorded key and would
-            # abort the whole match via SnapshotMissingError. research_node's
-            # deterministic pre-fetch calls (template-fixed query text) still
-            # replay reliably without the LLM's tool access at all.
-            run_kwargs = {"tools": []} if refresh_model else {}
-            run_agent(match_info=match_info, config=cfg, extra_system_instructions=snapshot_addendum, **run_kwargs)
+            run_deterministic_pipeline(match_info)
             marker_path = match_base_dir / match_id / "_complete.json"
             marker_path.parent.mkdir(parents=True, exist_ok=True)
             marker_path.write_text(json.dumps({"completed_at": datetime.now(timezone.utc).isoformat()}))
