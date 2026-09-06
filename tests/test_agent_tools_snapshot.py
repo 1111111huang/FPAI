@@ -17,10 +17,16 @@ def reset_snapshot_store(tmp_path):
     agent_tools._snapshot_store.set_mode("live")
     agent_tools._snapshot_store.set_allow_lessons_in_replay(False)
     agent_tools._snapshot_store.set_tool_mode_overrides({})
+    # A99: match_id/match_date are otherwise sticky across tests (by design,
+    # for CLI callers that set them once per invocation) -- without resetting
+    # here too, a test that sets match_date leaks it into whichever test
+    # happens to run next.
+    agent_tools._snapshot_store.set_match(None, None)
     yield
     agent_tools._snapshot_store.set_mode("live")
     agent_tools._snapshot_store.set_allow_lessons_in_replay(False)
     agent_tools._snapshot_store.set_tool_mode_overrides({})
+    agent_tools._snapshot_store.set_match(None, None)
 
 
 def test_configure_snapshot_store_allow_lessons_in_replay_defaults_false():
@@ -224,6 +230,56 @@ class TestPostMatchResultFilter:
             result = _web_search_impl("Team A Team B recent form")
 
         assert result == "No results found."
+
+
+def test_web_search_impl_passes_structured_date_bounds_when_match_date_set(tmp_path):
+    """A99: root-caused live -- stale/wrong-fixture-date team news reaching
+    the agent (10 real training-run lessons flagged this) traced to
+    _dated_web_search's 'before:<date>' filter being unstructured text glued
+    onto the query, with no lower bound at all -- so for any two teams that
+    have met before (every rival pair, across a multi-season backtest
+    corpus), Tavily's relevance ranking could surface team news from an
+    entirely earlier meeting. The real Tavily client (tavily-python) already
+    supports structured start_date/end_date params built for exactly this;
+    nothing in this codebase used them. Deliberately does NOT touch
+    _dated_web_search's query-string construction (still the unchanged
+    'before:<date>' text) -- that string is what SnapshotStore.wrap hashes
+    to a filename, and changing it would invalidate every already-recorded
+    web_search snapshot's replay key. Only _web_search_impl's internal
+    Tavily call gains the new, additive start_date/end_date bound, read
+    from the snapshot store's own already-tracked match_date."""
+    from src.agent.tools import _web_search_impl
+
+    agent_tools.configure_snapshot_store("record", match_id="m9", match_date="2025-08-17")
+    with patch("src.agent.tools.os.environ.get", return_value="fake-key"), \
+         patch("tavily.TavilyClient") as MockClient:
+        instance = MagicMock()
+        MockClient.return_value = instance
+        instance.search.return_value = {"results": [{"title": "T", "content": "C", "url": "U"}]}
+
+        _web_search_impl("Manchester United Arsenal injury suspension team news")
+
+    call_kwargs = instance.search.call_args.kwargs
+    assert call_kwargs["end_date"] == "2025-08-17"
+    assert call_kwargs["start_date"] == "2025-07-18"  # 30 days before end_date
+
+
+def test_web_search_impl_omits_date_bounds_when_no_match_date_set():
+    """Live-mode/no-match-context calls (match_date is None) get today's
+    unbounded behavior exactly -- nothing to bound against."""
+    from src.agent.tools import _web_search_impl
+
+    with patch("src.agent.tools.os.environ.get", return_value="fake-key"), \
+         patch("tavily.TavilyClient") as MockClient:
+        instance = MagicMock()
+        MockClient.return_value = instance
+        instance.search.return_value = {"results": [{"title": "T", "content": "C", "url": "U"}]}
+
+        _web_search_impl("Arsenal Chelsea injury news")
+
+    call_kwargs = instance.search.call_args.kwargs
+    assert "start_date" not in call_kwargs
+    assert "end_date" not in call_kwargs
 
 
 def test_web_search_date_filter_applied_during_record_and_replay(tmp_path):
