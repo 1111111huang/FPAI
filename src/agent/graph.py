@@ -543,6 +543,14 @@ def run_agent(
         yes = btts_odds.get("yes")
         no = btts_odds.get("no")
         prompt += f" Bookmaker odds for both teams to score (BTTS): yes={yes}, no={no}."
+    # A100: corners_odds threaded from _build_match_info's OddsPapi lookup
+    # (backtest-only, 2026-01-01 onward, manual one-off pull -- see that
+    # function's own docstring). No live source exists for this market yet.
+    corners_odds = match_info.get("corners_odds")
+    if corners_odds:
+        over = corners_odds.get("over_9.5")
+        under = corners_odds.get("under_9.5")
+        prompt += f" Bookmaker odds for total corners (over/under 9.5): over_9.5={over}, under_9.5={under}."
 
     initial_state: AgentState = {
         "messages": [

@@ -13,17 +13,25 @@ from typing import Any
 # away_corners are excluded: MatchRecommendation has no numeric line field
 # for them (only current_odds/min_odds), so we cannot tell what threshold
 # the agent's "selection" refers to. Accepted, ongoing limitation, not a v1
-# gap -- see documents/app_user_stories.md Integration Gaps.
-RESOLVABLE_MARKETS = {"result_3way", "btts", "total_goals"}
+# gap -- see documents/app_user_stories.md Integration Gaps. total_corners
+# (A101, 2026-09-07) is different: it has a real, fixed line (9.5, matching
+# total_goals' own fixed 2.5 convention) via the OddsPapi odds pull (A100),
+# so it's resolvable the same way total_goals already is -- when the actual
+# outcome supplies corner counts at all (see build_actual_outcome).
+RESOLVABLE_MARKETS = {"result_3way", "btts", "total_goals", "total_corners"}
 
 
 def market_correct(market_rec: dict[str, Any], actual: dict[str, Any]) -> bool | None:
     """Resolve whether a market recommendation/bet matches the actual outcome.
 
-    Returns True/False for resolvable markets (result_3way, btts, total_goals).
-    Returns None -- not False -- for markets with no programmatic resolution
-    (e.g. home_corners/away_corners). Callers MUST treat None as "unknown,
-    skip" and never coerce it to a loss.
+    Returns True/False for resolvable markets (result_3way, btts, total_goals,
+    total_corners -- the last only when `actual` actually has corner counts,
+    see build_actual_outcome). Returns None -- not False -- for markets with
+    no programmatic resolution at all (e.g. home_corners/away_corners), or a
+    resolvable market whose `actual` happens to lack the needed field (e.g.
+    total_corners from live settlement, which doesn't supply corner counts
+    yet). Callers MUST treat None as "unknown, skip" and never coerce it to
+    a loss.
     """
     market = market_rec.get("market")
     if market not in RESOLVABLE_MARKETS:
@@ -33,14 +41,26 @@ def market_correct(market_rec: dict[str, Any], actual: dict[str, Any]) -> bool |
         return selection == actual["result"]
     if market == "btts":
         return selection == actual["btts"]
+    if market == "total_corners":
+        side = actual.get("total_corners_side")
+        return None if side is None else selection == side
     return selection == actual["total_goals_side"]  # market == "total_goals"
 
 
-def build_actual_outcome(home_goals: int, away_goals: int) -> dict[str, Any]:
+def build_actual_outcome(
+    home_goals: int, away_goals: int, home_corners: int | None = None, away_corners: int | None = None,
+) -> dict[str, Any]:
     """Build the resolvable-outcome dict shape from plain home/away goal
     counts -- usable from any live-result source (not just a raw_matches
     DataFrame row, which src/agent/backtest.py's load_outcome() sources this
-    same shape from)."""
+    same shape from).
+
+    home_corners/away_corners (A101): optional, keyword-only, default None --
+    every existing caller (app/backend/settlement.py's live settlement job,
+    which has no corner-count result source yet) keeps working unchanged,
+    just without total_corners/total_corners_side in the result (same
+    missing-key-not-null-placeholder convention as total_goals_odds
+    elsewhere). Fixed at the 9.5 line, matching total_goals' own fixed 2.5."""
     home_goals, away_goals = int(home_goals), int(away_goals)
     if home_goals > away_goals:
         result = "home"
@@ -49,7 +69,7 @@ def build_actual_outcome(home_goals: int, away_goals: int) -> dict[str, Any]:
     else:
         result = "draw"
     total_goals = home_goals + away_goals
-    return {
+    outcome = {
         "fthg": home_goals,
         "ftag": away_goals,
         "result": result,
@@ -57,6 +77,11 @@ def build_actual_outcome(home_goals: int, away_goals: int) -> dict[str, Any]:
         "total_goals": total_goals,
         "total_goals_side": "over_2.5" if total_goals > 2 else "under_2.5",
     }
+    if home_corners is not None and away_corners is not None:
+        total_corners = int(home_corners) + int(away_corners)
+        outcome["total_corners"] = total_corners
+        outcome["total_corners_side"] = "over_9.5" if total_corners > 9 else "under_9.5"
+    return outcome
 
 
 def resolve_recommendation_pick(

@@ -440,26 +440,46 @@ export function isActionable(match: Match): boolean {
 // call) -- keep in sync if the Python side ever changes. home_corners/
 // away_corners stay unresolvable: MarketRec has no numeric line field for
 // them, only current_odds/min_odds, so there's no threshold to check against.
-const RESOLVABLE_MARKETS = new Set(["result_3way", "btts", "total_goals"]);
+// total_corners (A101) is different: a real, fixed 9.5 line via the
+// OddsPapi backtest pull (A100) makes it genuinely resolvable the same way
+// total_goals already is -- but no live match-result source in this app
+// (Match["result"] itself) supplies corner counts yet, so in practice this
+// stays dormant on real live completed-match cards until that changes too.
+const RESOLVABLE_MARKETS = new Set(["result_3way", "btts", "total_goals", "total_corners"]);
 
-export type ActualOutcome = { result: "home" | "away" | "draw"; btts: "yes" | "no"; totalGoalsSide: "over_2.5" | "under_2.5" };
+export type ActualOutcome = {
+  result: "home" | "away" | "draw";
+  btts: "yes" | "no";
+  totalGoalsSide: "over_2.5" | "under_2.5";
+  totalCorners?: number;
+  totalCornersSide?: "over_9.5" | "under_9.5";
+};
 
-export function buildActualOutcome(home: number, away: number): ActualOutcome {
+export function buildActualOutcome(home: number, away: number, homeCorners?: number, awayCorners?: number): ActualOutcome {
   const result = home > away ? "home" : home < away ? "away" : "draw";
   const totalGoals = home + away;
-  return {
+  const outcome: ActualOutcome = {
     result,
     btts: home > 0 && away > 0 ? "yes" : "no",
     totalGoalsSide: totalGoals > 2 ? "over_2.5" : "under_2.5",
   };
+  if (homeCorners !== undefined && awayCorners !== undefined) {
+    const totalCorners = homeCorners + awayCorners;
+    outcome.totalCorners = totalCorners;
+    outcome.totalCornersSide = totalCorners > 9 ? "over_9.5" : "under_9.5";
+  }
+  return outcome;
 }
 
-/** Returns null (not false) for a market with no programmatic resolution --
- * callers MUST treat null as "unknown, skip" and never coerce it to a miss. */
+/** Returns null (not false) for a market with no programmatic resolution,
+ * or a resolvable market whose `actual` happens to lack the needed field
+ * (e.g. total_corners when no corner counts were supplied) -- callers MUST
+ * treat null as "unknown, skip" and never coerce it to a miss. */
 export function marketCorrect(market: string, selection: string, actual: ActualOutcome): boolean | null {
   if (!RESOLVABLE_MARKETS.has(market)) return null;
   if (market === "result_3way") return selection === actual.result;
   if (market === "btts") return selection === actual.btts;
+  if (market === "total_corners") return actual.totalCornersSide === undefined ? null : selection === actual.totalCornersSide;
   return selection === actual.totalGoalsSide; // market === "total_goals"
 }
 
@@ -1832,16 +1852,17 @@ function pickCaption(selection: string): string | null {
 // W121 follow-up (mockup point 3): human-readable market names, not the raw
 // backend string (`shown.market` was previously rendered verbatim -- a
 // reader would have seen "result_3way"/"total_goals" literally). Covers
-// only the five real markets the agent actually emits (src/agent/schema.py
+// the real markets the agent actually emits (src/agent/schema.py
 // MarketRecommendation.market Literal) -- an unrecognized market string
 // (future market type) falls back to a generic humanization rather than
-// silently mislabeling it as one of these five.
+// silently mislabeling it as one of these.
 const MARKET_LABEL: Record<string, { label: string; subtitle: string }> = {
   result_3way: { label: "3-Way Result", subtitle: "Full Time" },
   total_goals: { label: "Over/Under", subtitle: "Full Time" },
   btts: { label: "Both Teams to Score", subtitle: "Full Time" },
   home_corners: { label: "Home Corners", subtitle: "Full Time" },
   away_corners: { label: "Away Corners", subtitle: "Full Time" },
+  total_corners: { label: "Total Corners", subtitle: "Full Time" }, // A101
 };
 // W174: exported so AgentPerformanceDashboard.tsx can reuse the same
 // human-readable market names ("3-Way Result" instead of "result_3way")

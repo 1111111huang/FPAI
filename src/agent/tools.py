@@ -119,17 +119,7 @@ def _looks_like_post_match_result(title: str, content: str) -> bool:
     return bool(_TITLE_SCORE_PATTERN.search(title))
 
 
-# A99: lower bound for the structured Tavily date filter below -- wide
-# enough that legitimate recent injury/team-news coverage isn't excluded,
-# narrow enough to make an entirely different, earlier meeting between the
-# same two teams (the real, confirmed root cause of the "stale/wrong
-# fixture date" lesson pattern) unlikely to fall inside the window.
-_SEARCH_LOOKBACK_DAYS = 30
-
-
 def _web_search_impl(query: str) -> str:
-    from datetime import datetime, timedelta
-
     from tavily import TavilyClient
 
     # Second key (TAVILY_API_KEY_FALLBACK) is tried when the primary is
@@ -149,23 +139,30 @@ def _web_search_impl(query: str) -> str:
             "Output your final JSON recommendation now using only the forecast data already retrieved."
         )
 
-    # A99: real, structured date bounds on top of _dated_web_search's own
-    # 'before:<date>' text hint (kept unchanged there -- it's what
-    # SnapshotStore.wrap hashes to a filename, so changing that string would
-    # break replay of every already-recorded web_search snapshot). Tavily's
-    # relevance ranking has no notion of "this specific fixture" -- a query
-    # naming two teams that have met before (every rival pair, across a
-    # multi-season backtest corpus) can surface team news from an entirely
-    # earlier meeting just as easily as current coverage. Read match_date
-    # from the store directly rather than adding a new parameter here, so
-    # this wrapped function's kwargs (and therefore its snapshot hash key)
-    # stay exactly as they were.
+    # A99 (2026-09-05): added a structured end_date bound (then briefly also
+    # a start_date lookback) on top of _dated_web_search's own
+    # 'before:<date>' text hint, reasoned as a fix for stale/wrong-fixture-
+    # date team news reaching the agent.
+    #
+    # A99-follow-up (2026-09-07): direct user investigation into a real
+    # "lineup search" lesson pattern found BOTH structured date params make
+    # real research quality *worse*, not better -- confirmed live against
+    # the real Tavily API on two independent real matches, at every window
+    # size tested (start_date+end_date at 7/14/30 days; end_date alone at
+    # 0-7 day buffers past the match date): a genuinely on-topic,
+    # correctly-dated result (a predicted-lineup preview, a local paper's
+    # fixture-specific team news) reliably appeared unbounded, and
+    # reliably disappeared -- sometimes to zero results entirely -- the
+    # moment ANY structured date filter was added. Many of the actually-
+    # relevant pages appear to lack date metadata Tavily can reliably match
+    # against, so any date filter risks excluding them outright. Both
+    # params removed; what's left is the pre-existing, weaker safety net
+    # (the unchanged 'before:<date>' text hint, plus the content-based
+    # _looks_like_post_match_result filter, which catches genuine
+    # post-match leakage by content rather than by date) -- a real but
+    # smaller residual risk of an older meeting's team news surfacing,
+    # accepted in exchange for not losing good results outright.
     search_kwargs: dict = {"query": query, "max_results": 5}
-    match_date = _snapshot_store.match_date
-    if match_date:
-        end_date = datetime.strptime(match_date, "%Y-%m-%d")
-        search_kwargs["end_date"] = match_date
-        search_kwargs["start_date"] = (end_date - timedelta(days=_SEARCH_LOOKBACK_DAYS)).strftime("%Y-%m-%d")
 
     response = None
     last_exc: Exception | None = None

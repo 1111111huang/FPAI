@@ -59,13 +59,32 @@ def research_node(state: dict) -> dict:
     """A32: guarantees minimum research coverage deterministically instead of
     depending on the LLM choosing to search. Always runs availability and
     recent-form searches; only runs an odds-verification search when the
-    caller didn't already supply odds (match_info.get('odds'))."""
+    caller didn't already supply odds (match_info.get('odds')).
+
+    near_kickoff (direct user request, 2026-09-07): real starting lineups
+    are typically confirmed only ~T-60 minutes before kickoff -- every
+    context this system generates a recommendation in (backtest, EOD batch,
+    even the T-30 refresh's own scheduling instant) is at or before that
+    point, EXCEPT the T-30 refresh's actual run time, which lands after it.
+    Only app/backend/t30_refresh.py sets this flag on match_info; backtest/
+    EOD generation are unchanged (a confirmed lineup can't exist that far
+    out regardless of query wording, so there's nothing to gain and a real
+    cost -- an extra call -- to avoid). When set, tries a confirmed-lineup-
+    specific query first and only falls back to the regular query (which
+    still finds a predicted lineup, same as every other context) if nothing
+    confirmed has been published yet."""
     from src.agent.tools import _dated_web_search
 
     match_info = state["match_info"]
     home, away = match_info["home_team"], match_info["away_team"]
 
-    availability_text = _dated_web_search(f"{home} {away} injury suspension team news")
+    regular_query = f"{home} {away} injury suspension team news"
+    if match_info.get("near_kickoff"):
+        availability_text = _dated_web_search(f"{home} {away} confirmed starting lineup today")
+        if availability_text == "No results found.":
+            availability_text = _dated_web_search(regular_query)
+    else:
+        availability_text = _dated_web_search(regular_query)
     form_text = _dated_web_search(f"{home} {away} recent form last 5 matches")
 
     evidence: dict = {

@@ -232,22 +232,35 @@ class TestPostMatchResultFilter:
         assert result == "No results found."
 
 
-def test_web_search_impl_passes_structured_date_bounds_when_match_date_set(tmp_path):
-    """A99: root-caused live -- stale/wrong-fixture-date team news reaching
-    the agent (10 real training-run lessons flagged this) traced to
-    _dated_web_search's 'before:<date>' filter being unstructured text glued
-    onto the query, with no lower bound at all -- so for any two teams that
-    have met before (every rival pair, across a multi-season backtest
-    corpus), Tavily's relevance ranking could surface team news from an
-    entirely earlier meeting. The real Tavily client (tavily-python) already
-    supports structured start_date/end_date params built for exactly this;
-    nothing in this codebase used them. Deliberately does NOT touch
-    _dated_web_search's query-string construction (still the unchanged
-    'before:<date>' text) -- that string is what SnapshotStore.wrap hashes
-    to a filename, and changing it would invalidate every already-recorded
-    web_search snapshot's replay key. Only _web_search_impl's internal
-    Tavily call gains the new, additive start_date/end_date bound, read
-    from the snapshot store's own already-tracked match_date."""
+def test_web_search_impl_passes_no_structured_date_bound_even_when_match_date_set(tmp_path):
+    """A99 (2026-09-05): root-caused live that _dated_web_search's own
+    'before:<date>' filter (unstructured text glued onto the query) was a
+    soft hint Tavily might not honor -- added a structured end_date (and
+    briefly a start_date lookback) via the real Tavily client's own
+    start_date/end_date params.
+
+    A99-follow-up (2026-09-07): direct user investigation into a real
+    "lineup search" lesson pattern found BOTH structured date params make
+    real research quality *worse*, not better -- confirmed live against the
+    real Tavily API on two independent real matches, at every window size
+    tested (start_date+end_date at 7/14/30 days; end_date alone at 0-7 day
+    buffers): a genuinely on-topic, correctly-dated result (a predicted-
+    lineup preview, or a local paper's fixture-specific team news) reliably
+    appeared unbounded, and reliably disappeared -- sometimes to zero
+    results entirely -- the moment ANY structured date filter was added.
+    Many of the actually-relevant pages appear to lack date metadata Tavily
+    can reliably match against, so any date filter risks excluding them.
+    Both params removed entirely; the pre-existing, weaker safety net (the
+    unchanged 'before:<date>' text hint, plus the content-based
+    _looks_like_post_match_result filter, which catches genuine post-match
+    leakage by content rather than by date) is what's left, accepting a
+    real but smaller residual risk of an older meeting's team news
+    surfacing than the now-confirmed cost of losing good results outright.
+    Deliberately does NOT touch _dated_web_search's own query-string
+    construction (still the unchanged 'before:<date>' text) -- that string
+    is what SnapshotStore.wrap hashes into a filename, and changing it
+    would invalidate every already-recorded web_search snapshot's replay
+    key."""
     from src.agent.tools import _web_search_impl
 
     agent_tools.configure_snapshot_store("record", match_id="m9", match_date="2025-08-17")
@@ -260,11 +273,11 @@ def test_web_search_impl_passes_structured_date_bounds_when_match_date_set(tmp_p
         _web_search_impl("Manchester United Arsenal injury suspension team news")
 
     call_kwargs = instance.search.call_args.kwargs
-    assert call_kwargs["end_date"] == "2025-08-17"
-    assert call_kwargs["start_date"] == "2025-07-18"  # 30 days before end_date
+    assert "end_date" not in call_kwargs
+    assert "start_date" not in call_kwargs
 
 
-def test_web_search_impl_omits_date_bounds_when_no_match_date_set():
+def test_web_search_impl_omits_date_bound_when_no_match_date_set():
     """Live-mode/no-match-context calls (match_date is None) get today's
     unbounded behavior exactly -- nothing to bound against."""
     from src.agent.tools import _web_search_impl

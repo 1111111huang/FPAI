@@ -412,6 +412,36 @@ def test_generate_batch_reflection_includes_stats_and_examples_in_prompt():
     assert "Strong home form." in captured["prompt"]
 
 
+def test_generate_batch_reflection_prompt_asks_for_a_specific_missing_web_search_query():
+    """Direct user request (2026-09-07): the reflection should also name a
+    concrete web_search query that could have filled an information gap
+    behind a real miss -- not generic hedging ("more team news would help"),
+    which the prompt already explicitly guards against for its other points.
+    A specific, literal example query anchors the model the same way
+    "reference the specific examples above" already does."""
+    records = [
+        _FakeRecord(
+            league="E0", match_id="m1", date="2025-01-01", home_team="City", away_team="Villa",
+            recommendation={"overall": "direct_bet", "confidence": "high", "explanation": ["Confident home win pick."], "limitations": []},
+            market_results=[{"market": "result_3way", "selection": "home", "correct": False}],
+            actual={"result": "away"},
+        ),
+    ]
+    stats_text = generate_batch_lesson_text(records)
+    captured = {}
+
+    def fake_invoke(prompt: str) -> str:
+        captured["prompt"] = prompt
+        return "reflection"
+
+    generate_batch_reflection(records, stats_text, fake_invoke)
+
+    prompt = captured["prompt"]
+    assert "web_search query" in prompt
+    assert "not a generic" in prompt or "not generic" in prompt
+    assert "confirmed starting XI" in prompt or "e.g." in prompt  # a literal example query anchors the model
+
+
 def test_generate_batch_reflection_returns_none_on_llm_failure():
     records = [
         _FakeRecord(
