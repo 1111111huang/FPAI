@@ -38,10 +38,37 @@ class FootballDataScraper:
         self.raw_data_dir.mkdir(parents=True, exist_ok=True)
         self.session = requests.Session()
 
+    @staticmethod
+    def _bare_domain_fallback_url(league_page_url: str) -> str | None:
+        """football-data.co.uk's www subdomain and bare apex domain serve
+        identical content from what appear to be independent frontends --
+        confirmed live 2026-09-08 (BUG-062-followup): a real 503 from
+        www.football-data.co.uk while the bare domain served the exact same
+        page, and the exact same CSV files, with a clean 200. Returns None
+        when there's no 'www.' to strip (already-bare, or some other URL
+        shape), so callers don't retry an identical URL pointlessly."""
+        fallback = league_page_url.replace("://www.", "://", 1)
+        return fallback if fallback != league_page_url else None
+
     def fetch_csv_urls(self, league_page_url: str) -> list[str]:
         """Fetch all season CSV URLs from a league page, including historical/current."""
-        response = self.session.get(league_page_url, timeout=self.timeout_seconds)
-        response.raise_for_status()
+        try:
+            response = self.session.get(league_page_url, timeout=self.timeout_seconds)
+            response.raise_for_status()
+        except requests.RequestException:
+            fallback_url = self._bare_domain_fallback_url(league_page_url)
+            if fallback_url is None:
+                raise
+            LOGGER.warning(
+                "Primary league page %s failed -- retrying via bare-domain fallback %s",
+                league_page_url, fallback_url,
+            )
+            response = self.session.get(fallback_url, timeout=self.timeout_seconds)
+            response.raise_for_status()
+            # Resolve relative CSV links against whichever host actually
+            # worked, so the returned URLs are downloadable too -- not just
+            # the listing page itself.
+            league_page_url = fallback_url
         try:
             from bs4 import BeautifulSoup
         except ImportError as exc:
