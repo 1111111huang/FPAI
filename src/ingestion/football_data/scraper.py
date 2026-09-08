@@ -116,7 +116,15 @@ class FootballDataScraper:
         else:
             self.cleanup_old_raw_files(start_year=start_year)
 
-        all_urls = self.fetch_csv_urls(self.league_page_url)
+        try:
+            all_urls = self.fetch_csv_urls(self.league_page_url)
+        except requests.RequestException:
+            # BUG-062: a transient failure fetching the league-listing page
+            # itself (e.g. a 503) must not block ingest() -- it processes
+            # whatever CSVs already exist on disk from a prior scrape, so a
+            # fresh scrape succeeding is not a hard prerequisite for it.
+            LOGGER.exception("Failed to fetch league page %s -- skipping scrape this run", self.league_page_url)
+            return 0
         if not all_urls:
             return 0
 
