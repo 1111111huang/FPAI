@@ -49,7 +49,7 @@ def test_run_refresh_data_la_liga_scrapes_the_spain_page_not_the_default_england
     monkeypatch.setattr(main, "run_fetch_fotmob", lambda *a, **kw: None)
     monkeypatch.setattr(
         "src.ingestion.fotmob.lineup.backfill_lineups_from_player_stats",
-        lambda db_manager: 0,
+        lambda db_manager, league=None: 0,
     )
 
     from src.utils.config_loader import settings as app_settings
@@ -71,7 +71,7 @@ def test_run_refresh_data_epl_still_scrapes_its_own_default_page(monkeypatch: py
     monkeypatch.setattr(main, "run_fetch_fotmob", lambda *a, **kw: None)
     monkeypatch.setattr(
         "src.ingestion.fotmob.lineup.backfill_lineups_from_player_stats",
-        lambda db_manager: 0,
+        lambda db_manager, league=None: 0,
     )
 
     from src.utils.config_loader import settings as app_settings

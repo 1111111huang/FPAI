@@ -265,7 +265,9 @@ def discover_match_ids_multi_league(
     return ids
 
 
-def backfill_lineups_from_player_stats(db_manager: "DuckDBManager", delay: float = 1.0) -> int:
+def backfill_lineups_from_player_stats(
+    db_manager: "DuckDBManager", league: str = "E0", delay: float = 1.0
+) -> int:
     """Backfill ``match_lineups`` using date bounds inferred from ``raw_matches``.
 
     The ``raw_player_match_stats`` table stores an internal hashed ``match_id``
@@ -274,9 +276,19 @@ def backfill_lineups_from_player_stats(db_manager: "DuckDBManager", delay: float
     use ``fetch_finished_match_ids`` -- the same mechanism as the forward-going
     ``fetch-lineups`` command -- to discover FotMob match IDs.
 
-    This will re-issue HTTP requests for match-list pages but avoids storing
-    duplicate state.  For a targeted historical backfill, prefer the
-    ``fetch-lineups`` CLI with explicit ``--date-from`` / ``--date-to`` flags.
+    This will re-issue HTTP requests for match-list pages every run (no
+    per-day watermark) but avoids storing duplicate state, and (BUG-064)
+    skips any match ID already present in ``match_lineups`` -- a fully
+    historical match's starting lineup is a fixed fact once fetched once,
+    so re-fetching it on every ``refresh-data`` trigger was pure waste.
+    For a targeted historical backfill, prefer the ``fetch-lineups`` CLI
+    with explicit ``--date-from`` / ``--date-to`` flags.
+
+    BUG-064: `league` was previously hardcoded to "E0" regardless of what
+    was actually passed to ``refresh-data`` -- confirmed live 2026-09-08
+    (an E0-triggered refresh's lineup-backfill step was, correctly, always
+    scanning E0; the bug was that *any* league's trigger would have scanned
+    E0 too, never its own league).
 
     Returns
     -------
@@ -301,12 +313,13 @@ def backfill_lineups_from_player_stats(db_manager: "DuckDBManager", delay: float
     date_from: _date = bounds[0]
     date_to: _date = bounds[1]
     LOGGER.info(
-        "backfill_lineups_from_player_stats: scanning %s .. %s for FotMob match IDs",
+        "backfill_lineups_from_player_stats: scanning %s .. %s for FotMob match IDs (league=%s)",
         date_from,
         date_to,
+        league,
     )
 
-    league_id = LEAGUE_IDS["E0"]
+    league_id = LEAGUE_IDS[league]
     fotmob_ids: list[int] = []
     current = date_from
     while current <= date_to:
@@ -317,7 +330,16 @@ def backfill_lineups_from_player_stats(db_manager: "DuckDBManager", delay: float
             LOGGER.warning("backfill: failed to fetch match list for %s: %s", current, exc)
         current += timedelta(days=1)
 
+    with db_manager.connection() as conn:
+        _create_lineup_table(conn)  # idempotent (CREATE TABLE IF NOT EXISTS) -- safe on a fresh DB too
+        already_backfilled = {
+            row[0] for row in conn.execute("SELECT DISTINCT fotmob_match_id FROM match_lineups").fetchall()
+        }
+
+    deduped_ids = list(dict.fromkeys(fotmob_ids))  # dedupe, preserve discovery order
+    new_ids = [mid for mid in deduped_ids if mid not in already_backfilled]
     LOGGER.info(
-        "backfill_lineups_from_player_stats: found %d FotMob match IDs", len(fotmob_ids)
+        "backfill_lineups_from_player_stats: found %d FotMob match IDs, %d already backfilled, %d new",
+        len(deduped_ids), len(deduped_ids) - len(new_ids), len(new_ids),
     )
-    return upsert_match_lineups(fotmob_ids, db_manager, delay=delay)
+    return upsert_match_lineups(new_ids, db_manager, delay=delay)

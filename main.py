@@ -712,7 +712,7 @@ def run_refresh_data(app_settings: AppSettings, db_manager: DuckDBManager, leagu
     run_fetch_understat(app_settings, db_manager, league=league, rebuild_features=True)
     run_fetch_fotmob(app_settings, db_manager, league=league)
     from src.ingestion.fotmob.lineup import backfill_lineups_from_player_stats
-    total = backfill_lineups_from_player_stats(db_manager)
+    total = backfill_lineups_from_player_stats(db_manager, league=league)
     LOGGER.info("refresh-data: lineup backfill complete | rows_upserted=%d", total)
     LOGGER.info("refresh-data complete.")
 

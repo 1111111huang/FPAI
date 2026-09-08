@@ -101,7 +101,7 @@ def test_ingested_rows_survive_a_later_failure_in_the_understat_step(
     monkeypatch.setattr(main, "run_fetch_fotmob", lambda *a, **kw: fotmob_calls.append(1))
     monkeypatch.setattr(
         "src.ingestion.fotmob.lineup.backfill_lineups_from_player_stats",
-        lambda db_manager: fotmob_calls.append(1) or 0,
+        lambda db_manager, league=None: fotmob_calls.append(1) or 0,
     )
 
     with pytest.raises(RuntimeError, match="Understat unreachable"):
@@ -135,7 +135,7 @@ def test_a_retry_after_the_understat_failure_backfills_the_rows_it_skipped(
     monkeypatch.setattr(main, "run_scrape", lambda *a, **kw: None)
     monkeypatch.setattr(main, "run_fetch_fotmob", lambda *a, **kw: None)
     monkeypatch.setattr(
-        "src.ingestion.fotmob.lineup.backfill_lineups_from_player_stats", lambda db_manager: 0
+        "src.ingestion.fotmob.lineup.backfill_lineups_from_player_stats", lambda db_manager, league=None: 0
     )
 
     # First call: understat genuinely fails, as in the durability test above.

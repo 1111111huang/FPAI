@@ -14,6 +14,7 @@ sys.path.append(str(Path(__file__).resolve().parents[1]))
 from src.ingestion.fotmob.lineup import (
     _position_group,
     _create_lineup_table,
+    backfill_lineups_from_player_stats,
     discover_match_ids_multi_league,
     fetch_match_lineup,
     upsert_match_lineups,
@@ -253,3 +254,50 @@ def test_upsert_idempotent_on_conflict():
     assert count == 4
 
     db.close()
+
+
+# ---------------------------------------------------------------------------
+# backfill_lineups_from_player_stats: over-fetching fixes (BUG-064)
+# ---------------------------------------------------------------------------
+
+def test_backfill_skips_match_ids_already_in_match_lineups():
+    """BUG-064: a match already present in match_lineups from a prior
+    backfill run is a fully historical, immutable fact -- refetching its
+    lineup on every single refresh-data trigger is pure waste. Only
+    genuinely new match IDs should reach fetch_match_lineup."""
+    db = _InMemoryDBManager()
+    db._conn.execute("CREATE TABLE raw_matches (date DATE)")
+    db._conn.execute("INSERT INTO raw_matches VALUES ('2026-01-01'), ('2026-01-02')")
+    with db.connection() as conn:
+        _create_lineup_table(conn)
+        conn.execute(
+            "INSERT INTO match_lineups VALUES (100, 1, 'Team A', 'home', 'GK', 1, '1', 'Keeper')"
+        )
+
+    def _fake_fetch(day, league_id, delay=1.0):
+        return [{"fotmob_match_id": 100}, {"fotmob_match_id": 200}]
+
+    with patch("src.ingestion.fotmob.fetcher.fetch_finished_match_ids", side_effect=_fake_fetch), \
+         patch("src.ingestion.fotmob.lineup.fetch_match_lineup", return_value=[]) as mock_fetch_lineup:
+        backfill_lineups_from_player_stats(db, delay=0)
+
+    mock_fetch_lineup.assert_called_once_with(200, delay=0)
+
+
+def test_backfill_respects_the_requested_league_not_hardcoded_e0():
+    """BUG-064: triggering a backfill for D1 (or any league) must scan
+    D1's own FotMob league_id, not always re-scan E0 regardless of what
+    was actually requested."""
+    from src.ingestion.fotmob.fetcher import LEAGUE_IDS
+
+    db = _InMemoryDBManager()
+    db._conn.execute("CREATE TABLE raw_matches (date DATE)")
+    db._conn.execute("INSERT INTO raw_matches VALUES ('2026-01-01')")
+    with db.connection() as conn:
+        _create_lineup_table(conn)
+
+    with patch("src.ingestion.fotmob.fetcher.fetch_finished_match_ids", return_value=[]) as mock_fetch:
+        backfill_lineups_from_player_stats(db, league="D1", delay=0)
+
+    mock_fetch.assert_called_once()
+    assert mock_fetch.call_args.kwargs["league_id"] == LEAGUE_IDS["D1"]
