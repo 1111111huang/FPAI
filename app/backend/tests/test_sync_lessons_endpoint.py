@@ -90,6 +90,28 @@ def test_sync_lessons_accepts_multiple_and_reports_mixed_result(tmp_path):
     assert response.json() == {"inserted": 1, "skipped_duplicates": 1}
 
 
+def test_sync_lessons_accepts_tier_scope_with_no_competition_id(tmp_path):
+    """A101/A102 session's real approved lessons (ids 2033/2034/2040) are all
+    scope='tier' with competition_id=NULL -- load_approved_lessons() only
+    matches tier-scoped rows on `tier`, never on competition_id, and
+    insert_lesson_candidate() itself already accepts `competition_id: str |
+    None`. The payload model must allow the same."""
+    manager = _db_manager_for(tmp_path)
+    payload = _payload(competition_id=None, scope="tier")
+    with patch("app.backend.main.DuckDBManager", return_value=manager):
+        with TestClient(app) as client:
+            response = client.post("/api/admin/sync-lessons", json=[payload])
+
+    assert response.status_code == 200
+    assert response.json() == {"inserted": 1, "skipped_duplicates": 0}
+
+    with manager.connection(read_only=True) as conn:
+        rows = conn.execute(
+            "SELECT status, scope, competition_id, tier FROM agent_lessons"
+        ).fetchall()
+    assert rows == [("approved", "tier", None, "competition_specific")]
+
+
 def test_sync_lessons_rejects_invalid_scope(tmp_path):
     manager = _db_manager_for(tmp_path)
     with patch("app.backend.main.DuckDBManager", return_value=manager):

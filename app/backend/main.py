@@ -577,7 +577,7 @@ class _LessonSyncItem(BaseModel):
     database -- deliberately not the full agent_lessons row shape (id,
     created_at, etc. are meaningless across databases); these four are
     exactly what load_approved_lessons() ever reads at serving time."""
-    competition_id: str
+    competition_id: str | None
     tier: str
     scope: Literal["competition", "tier"]
     rule_text: str
