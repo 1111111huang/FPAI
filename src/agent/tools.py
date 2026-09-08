@@ -139,11 +139,36 @@ def _web_search_impl(query: str) -> str:
             "Output your final JSON recommendation now using only the forecast data already retrieved."
         )
 
+    # A99 (2026-09-05): added a structured end_date bound (then briefly also
+    # a start_date lookback) on top of _dated_web_search's own
+    # 'before:<date>' text hint, reasoned as a fix for stale/wrong-fixture-
+    # date team news reaching the agent.
+    #
+    # A99-follow-up (2026-09-07): direct user investigation into a real
+    # "lineup search" lesson pattern found BOTH structured date params make
+    # real research quality *worse*, not better -- confirmed live against
+    # the real Tavily API on two independent real matches, at every window
+    # size tested (start_date+end_date at 7/14/30 days; end_date alone at
+    # 0-7 day buffers past the match date): a genuinely on-topic,
+    # correctly-dated result (a predicted-lineup preview, a local paper's
+    # fixture-specific team news) reliably appeared unbounded, and
+    # reliably disappeared -- sometimes to zero results entirely -- the
+    # moment ANY structured date filter was added. Many of the actually-
+    # relevant pages appear to lack date metadata Tavily can reliably match
+    # against, so any date filter risks excluding them outright. Both
+    # params removed; what's left is the pre-existing, weaker safety net
+    # (the unchanged 'before:<date>' text hint, plus the content-based
+    # _looks_like_post_match_result filter, which catches genuine
+    # post-match leakage by content rather than by date) -- a real but
+    # smaller residual risk of an older meeting's team news surfacing,
+    # accepted in exchange for not losing good results outright.
+    search_kwargs: dict = {"query": query, "max_results": 5}
+
     response = None
     last_exc: Exception | None = None
     for key in api_keys:
         try:
-            response = TavilyClient(api_key=key).search(query=query, max_results=5)
+            response = TavilyClient(api_key=key).search(**search_kwargs)
             break
         except Exception as exc:
             # A53: any Tavily-side failure (quota exhausted, rate limit, network

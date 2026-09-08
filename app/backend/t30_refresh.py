@@ -105,6 +105,14 @@ def refresh_match_at_t30(
     match_info = {
         "home_team": fixture.home_team, "away_team": fixture.away_team,
         "date": date_str, "league": league, "odds": fresh_odds,
+        # Direct user request (2026-09-07): real starting lineups are
+        # typically confirmed only ~T-60 minutes before kickoff -- this is
+        # the one call in the whole system whose actual run time lands
+        # after that point (every other generation, including this job's
+        # own *scheduling* instant, is well before it), so it's the one
+        # context where research_node's confirmed-lineup-first query
+        # (src/agent/pipeline.py) can find real, non-speculative team news.
+        "near_kickoff": True,
     }
     # W164 fixed EOD generation's odds to include totals/btts, not just
     # 1X2 -- t30_refresh.py never got the equivalent call, so every T-30

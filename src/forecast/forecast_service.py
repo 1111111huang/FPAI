@@ -7,6 +7,7 @@ import json
 from pathlib import Path
 from typing import Any
 
+import duckdb
 import joblib
 import numpy as np
 import pandas as pd
@@ -113,6 +114,9 @@ class ForecastService:
         match_ids: list[str] | None = None,
         league: str | None = None,
         limit: int | None = None,
+        home_team: str | None = None,
+        away_team: str | None = None,
+        date: str | None = None,
     ) -> pd.DataFrame:
         for feature_name in self.feature_names:
             if not feature_name.replace("_", "").isalnum():
@@ -127,6 +131,18 @@ class ForecastService:
         if league:
             filters.append("UPPER(r.league) = ?")
             params.append(league.upper())
+        # A98: lets a caller that only knows (team, team, date, league) --
+        # not match_id -- look up an already-computed feature_store row for
+        # an already-played match (see forecast_upcoming's cached fast path).
+        if home_team:
+            filters.append("r.home_team = ?")
+            params.append(home_team)
+        if away_team:
+            filters.append("r.away_team = ?")
+            params.append(away_team)
+        if date:
+            filters.append("CAST(r.date AS DATE) = CAST(? AS DATE)")
+            params.append(date)
         where_clause = f"WHERE {' AND '.join(filters)}" if filters else ""
         limit_clause = f"LIMIT {int(limit)}" if limit is not None else ""
         query = f"""
@@ -144,7 +160,15 @@ class ForecastService:
             {limit_clause}
         """
         with self.db_manager.connection() as conn:
-            return conn.execute(query, params).fetchdf()
+            try:
+                return conn.execute(query, params).fetchdf()
+            except duckdb.CatalogException:
+                # A98: feature_store doesn't exist yet (e.g. a fresh DB the
+                # offline compute_rolling_stats() pipeline hasn't populated
+                # at all) -- same "no cached row" outcome as a real miss,
+                # same defensive-empty convention feature_factory.py already
+                # uses for its own optional-table lookups.
+                return pd.DataFrame(columns=["match_id", "date", "league", "home_team", "away_team"])
 
     def _latest_artifact(self, target: str) -> tuple[Path, dict[str, Any]] | None:
         candidates = sorted(
@@ -391,10 +415,12 @@ class ForecastService:
                     # can drift ahead of what any given artifact supports.
                     metadata_path = model_path.with_suffix(model_path.suffix + ".metadata.json")
                     artifact_feature_names: list[str] | None = None
+                    artifact_metrics: dict[str, Any] | None = None
                     if metadata_path.exists():
                         with metadata_path.open("r", encoding="utf-8") as meta_fh:
                             artifact_metadata = json.load(meta_fh)
                         artifact_feature_names = artifact_metadata.get("feature_names")
+                        artifact_metrics = artifact_metadata.get("metrics")
                     metadata: dict[str, Any] = {
                         "target": target,
                         "model_type": entry.get("model_type", "unknown"),
@@ -405,6 +431,16 @@ class ForecastService:
                         # sidecar, if one exists -- consumed by _predict_target
                         # via _apply_calibration. None (no-op) when absent.
                         "calibrator": self._load_calibrator_sidecar(model_path),
+                        # A95: this model's own held-out test-set metrics
+                        # (e.g. {"log_loss": ..., "accuracy": ...} or
+                        # {"mae": ..., "rmse": ...}), already computed and
+                        # saved at training time but never previously
+                        # surfaced anywhere -- flows into
+                        # diagnostics.target_versions[target]["metrics"] in
+                        # the payload the agent actually sees (FORECAST_
+                        # PAYLOAD, src/agent/pipeline.py). None when the
+                        # artifact predates this field or has no sidecar.
+                        "metrics": artifact_metrics,
                     }
                     loaded[target] = (definition, self._load_model(model_path, metadata), metadata)
                 if loaded:
@@ -485,20 +521,47 @@ class ForecastService:
         else:
             # US#84: full feature computation
             prediction_basis = "team_history_and_market"
-            factory = FeatureFactory(config_path=str(self.config_path))
-            feature_row = factory.build_for_match(
-                home_team=home_team, away_team=away_team, match_date=date,
-                league=league, odds_h=odds_h, odds_d=odds_d, odds_a=odds_a,
-                over25_odds=over25_odds, ah_line=ah_line, ah_home_odds=ah_home_odds, ah_away_odds=ah_away_odds,
-            )
+            # A98: an already-played match (the common case when backfilling
+            # a historical snapshot/backtest corpus) already has this exact
+            # feature row sitting in feature_store, computed once by the
+            # offline compute_rolling_stats() pipeline using identical logic
+            # (BUG-012 layer 1's parity comment) -- profiled at ~93s/match
+            # otherwise (194 Dixon-Coles refits + a full lineup/player-stats
+            # rescan, every single call) for a chronological backfill that
+            # never needed any of it recomputed. Try the cheap cache lookup
+            # first; a genuinely live/upcoming match can never match (it has
+            # no raw_matches row yet, so no feature_store row either), so
+            # this is a no-op for real live serving -- falls through to the
+            # unchanged live computation below exactly as before A98.
+            from src.utils.helpers import standardize_team_name
+            from src.ingestion.common.team_mapping import TeamNameMapper
+
+            mapping_path = Path(__file__).parent.parent.parent / "config" / "team_mapping.json"
+            team_mapper = TeamNameMapper(mapping_path=str(mapping_path))
+            home_norm = team_mapper.map_team(standardize_team_name(home_team))
+            away_norm = team_mapper.map_team(standardize_team_name(away_team))
+            cached_rows = self._fetch_feature_rows(home_team=home_norm, away_team=away_norm, date=date, league=league)
+
+            if not cached_rows.empty:
+                feature_row = cached_rows.iloc[[0]].reset_index(drop=True)
+                # Already an ingested, already-featured historical match --
+                # by construction not a cold-start/unknown-team case.
+                unknown_team = False
+            else:
+                factory = FeatureFactory(config_path=str(self.config_path))
+                feature_row = factory.build_for_match(
+                    home_team=home_team, away_team=away_team, match_date=date,
+                    league=league, odds_h=odds_h, odds_d=odds_d, odds_a=odds_a,
+                    over25_odds=over25_odds, ah_line=ah_line, ah_home_odds=ah_home_odds, ah_away_odds=ah_away_odds,
+                )
+                # US#108: build_for_match's own zero-history detection, distinct
+                # from the feature_completeness-based cold_start_risk below.
+                unknown_team = bool(feature_row["_unknown_team"].iloc[0])
             # US#110: effective_context is already the resolved competition_id
             # (e.g. "E0") in this branch — never None here, since a None
             # resolved_competition_id only happens together with tier ==
             # "general_purpose", which takes the "international" branch above.
             context = effective_context
-            # US#108: build_for_match's own zero-history detection, distinct from
-            # the feature_completeness-based cold_start_risk computed below.
-            unknown_team = bool(feature_row["_unknown_team"].iloc[0])
 
         loaded = self._load_context_models(context)
         if not loaded:
@@ -564,6 +627,11 @@ class ForecastService:
                         "artifact": meta.get("artifact_name"),
                         "created_at": meta.get("created_at"),
                         "model_type": meta.get("model_type"),
+                        # A95: this target's own held-out test-set metrics
+                        # (comparable only within the same target across
+                        # time -- metric names/scales differ by target,
+                        # never compare one target's number against another's).
+                        "metrics": meta.get("metrics"),
                     }
                     for target, (_, __, meta) in loaded.items()
                 },
@@ -690,6 +758,9 @@ class ForecastService:
                             "artifact": metadata.get("artifact_name"),
                             "created_at": metadata.get("created_at"),
                             "model_type": metadata.get("model_type"),
+                            # A95: see forecast_upcoming's own copy of this
+                            # field for the full rationale/caveat.
+                            "metrics": metadata.get("metrics"),
                         }
                         for target, metadata in metadata_by_target.items()
                     },

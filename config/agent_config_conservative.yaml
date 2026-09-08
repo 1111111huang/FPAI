@@ -32,6 +32,7 @@ markets:
   - total_goals
   - home_corners
   - away_corners
+  - total_corners
 
 # 2026-08-21: risk-posture variant -- conservative posture uses its own system prompt.
 # See docs/superpowers/specs/2026-08-21-agent-risk-posture-design.md

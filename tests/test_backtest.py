@@ -48,6 +48,21 @@ def test_load_outcome_home_win():
     assert outcome["total_goals_side"] == "over_2.5"
 
 
+def test_load_outcome_includes_total_corners_from_hc_ac_columns():
+    """A101: _row()'s own base fixture already carries hc=5.0/ac=4.0 (real
+    raw_matches columns) -- load_outcome must thread them through to
+    build_actual_outcome, not just goals."""
+    outcome = load_outcome(_row(hc=5.0, ac=4.0))
+    assert outcome["total_corners"] == 9
+    assert outcome["total_corners_side"] == "under_9.5"
+
+
+def test_load_outcome_omits_total_corners_when_hc_ac_are_nan():
+    outcome = load_outcome(_row(hc=float("nan"), ac=float("nan")))
+    assert "total_corners" not in outcome
+    assert "total_corners_side" not in outcome
+
+
 def test_load_outcome_draw_and_no_btts():
     outcome = load_outcome(_row(fthg=0, ftag=0))
     assert outcome["result"] == "draw"
@@ -92,6 +107,41 @@ def test_build_match_info_omits_total_goals_odds_when_nan():
     row = _row(over25_odds=1.85, under25_odds=float("nan"))
     info = _build_match_info(row)
     assert "total_goals_odds" not in info
+
+
+# ---------------------------------------------------------------------------
+# _build_match_info: A100 -- btts_odds/corners_odds threading from the
+# OddsPapi lookup (a manual, one-off historical pull; no equivalent real
+# column exists in raw_matches for either market, per A69).
+# ---------------------------------------------------------------------------
+
+def test_build_match_info_includes_btts_and_corners_odds_when_present():
+    with patch(
+        "src.agent.backtest._load_oddspapi_odds_lookup",
+        return_value={"m1": {"btts_odds": {"yes": 1.8, "no": 2.0}, "corners_9.5_odds": {"over": 1.9, "under": 1.95}}},
+    ):
+        info = _build_match_info(_row())
+    assert info["btts_odds"] == {"yes": 1.8, "no": 2.0}
+    assert info["corners_odds"] == {"over_9.5": 1.9, "under_9.5": 1.95}
+
+
+def test_build_match_info_omits_btts_and_corners_odds_when_match_id_not_in_lookup():
+    with patch("src.agent.backtest._load_oddspapi_odds_lookup", return_value={}):
+        info = _build_match_info(_row())
+    assert "btts_odds" not in info
+    assert "corners_odds" not in info
+
+
+def test_build_match_info_includes_only_whichever_market_the_lookup_actually_has():
+    # A99.5-adjacent: the real pull has ~95% btts coverage but ~99.9% corners
+    # -- a match missing one market's odds must not lose the other.
+    with patch(
+        "src.agent.backtest._load_oddspapi_odds_lookup",
+        return_value={"m1": {"corners_9.5_odds": {"over": 1.9, "under": 1.95}}},
+    ):
+        info = _build_match_info(_row())
+    assert "btts_odds" not in info
+    assert info["corners_odds"] == {"over_9.5": 1.9, "under_9.5": 1.95}
 
 
 def test_load_outcome_away_win():

@@ -8,6 +8,8 @@ Your final response must contain NOTHING except the JSON block described under "
 
 Before your turn, the system has already deterministically: resolved the match's competition tier, run the ML forecast model, and searched for injury/availability news, recent-form context, and (when odds weren't supplied) an odds-verification search. This evidence appears in a message below. A "Lessons from past evaluated matches" message may also appear below with reviewer-approved notes from prior matches in this competition or tier. Treat it as advisory context, not as fact about this specific match -- it will not always be present. You do NOT have forecast_league, forecast_international, or resolve_competition available as tools — do not attempt to call them; they no longer exist in this conversation.
 
+Each forecast target in FORECAST_PAYLOAD.diagnostics.target_versions carries its own "metrics" field -- that target's own historical performance on real held-out matches when it was trained (e.g. log_loss/accuracy for result_3way/btts, mae/rmse for goals/corners; lower is better for log_loss/mae/rmse). Use it to gauge how much to trust that specific target's prediction -- but only compare a target's own metric across matches, never one target's number against a different target's: the metric names and scales differ by task type and are not on the same footing. A missing or null "metrics" field just means that artifact predates this data, not that the model is unreliable.
+
 ## CRITICAL RULE — ACT, NEVER JUST PLAN
 
 After any tool result you MUST do ONE of these two things immediately:
@@ -36,7 +38,7 @@ NEVER write "I will now call..." or "Let me try..." without immediately making t
 - Bet has value when value_edge >= {{MIN_VALUE_EDGE}}
 - Never recommend direct_bet unless this specific market's own value_edge is actually >= {{MIN_VALUE_EDGE}} — recommendation_type='direct_bet' with a value_edge below that (including negative) is incoherent and will be downgraded to "no_bet" automatically. If the numbers don't support a direct bet, call it "no_bet", don't call it "direct_bet" anyway.
 - Never recommend direct_bet at odds below {{MIN_ODDS_THRESHOLD}} or above {{MAX_ODDS_THRESHOLD}} (decimal). Use "conditional" if value exists but odds fall outside this range. This is code-enforced at extraction time, not just a prompt instruction — an out-of-range direct_bet will be downgraded automatically.{{DRAW_VALUE_EDGE_CLAUSE}}
-- Only use "conditional" for total_goals/over_2.5, home_corners/over_2.5, away_corners/over_2.5, or btts/yes — the markets where waiting for a better price is a real, directional strategy. Never use "conditional" for result_3way, under_2.5, or btts/no — use "no_bet" instead if value exists but the price isn't right. This is code-enforced — a "conditional" call on any other market/selection will be downgraded to "no_bet" automatically.
+- Only use "conditional" for total_goals/over_2.5, home_corners/over_2.5, away_corners/over_2.5, total_corners/over_9.5, or btts/yes — the markets where waiting for a better price is a real, directional strategy. Never use "conditional" for result_3way, under_2.5, or btts/no — use "no_bet" instead if value exists but the price isn't right. This is code-enforced — a "conditional" call on any other market/selection will be downgraded to "no_bet" automatically.
 - Never use "conditional" below {{MIN_CONDITIONAL_ODDS_THRESHOLD}} (decimal): a price already this short isn't realistically going to drift up further, so "wait for it to improve" isn't a real strategy — use "no_bet" instead.{{MAX_CONDITIONAL_ODDS_CLAUSE}} This also means current_odds must always be a real, current bookmaker price you actually have evidence for — never a placeholder or guess (e.g. 0.0). If you don't have a real current price for a market, don't recommend it at all. This is code-enforced — a "conditional" call outside this range will be downgraded to "no_bet" automatically.
 - After scoring every market with a real current price, weigh them against each other before picking one: a smaller value_edge backed by a materially higher ml_probability can be the stronger pick over a larger, noisier edge — don't default to whichever number is biggest. Record this balance as each candidate's composite_score.
 - recommendation_pick must name a candidate whose recommendation_type/value_edge/odds already clear every rule above — the code enforces this, a pick that doesn't will be downgraded automatically per whichever specific rule it fails (some downgrades land on "conditional", most land on "no_bet" — see the rules above for which). A candidate you already know is ineligible can still appear in candidates for transparency, just not as the pick. If nothing clears every rule, leave recommendation_pick null and set overall to "no_bet".
@@ -77,8 +79,8 @@ List one candidates entry for every market with a real current price you evaluat
   "overall": "<direct_bet | conditional | no_bet | insufficient_data>",
   "candidates": [
     {
-      "market": "<result_3way | btts | total_goals | home_corners | away_corners>",
-      "selection": "<home | draw | away | yes | no | over_2.5 | under_2.5>",
+      "market": "<result_3way | btts | total_goals | home_corners | away_corners | total_corners>",
+      "selection": "<home | draw | away | yes | no | over_2.5 | under_2.5 | over_9.5 | under_9.5>",
       "recommendation_type": "<direct_bet | conditional | no_bet>",
       "current_odds": 0.0,
       "min_odds": 0.0,

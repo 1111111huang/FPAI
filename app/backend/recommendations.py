@@ -303,8 +303,8 @@ class MarketCandidateOut(BaseModel):
     # "1X2" for what should be result_3way, "Asian Handicap", team names used
     # as a selection) passed validation instead of being dropped like any
     # other malformed market.
-    market: Literal["result_3way", "btts", "total_goals", "home_corners", "away_corners"]
-    selection: Literal["home", "draw", "away", "yes", "no", "over_2.5", "under_2.5"]
+    market: Literal["result_3way", "btts", "total_goals", "home_corners", "away_corners", "total_corners"]
+    selection: Literal["home", "draw", "away", "yes", "no", "over_2.5", "under_2.5", "over_9.5", "under_9.5"]
     recommendation_type: str
     current_odds: float | None
     # BUG-032: defaulted for the same reason as src/agent/schema.py's
@@ -329,8 +329,8 @@ class MarketCandidateOut(BaseModel):
 
 
 class RecommendationPickOut(BaseModel):
-    market: Literal["result_3way", "btts", "total_goals", "home_corners", "away_corners"]
-    selection: Literal["home", "draw", "away", "yes", "no", "over_2.5", "under_2.5"]
+    market: Literal["result_3way", "btts", "total_goals", "home_corners", "away_corners", "total_corners"]
+    selection: Literal["home", "draw", "away", "yes", "no", "over_2.5", "under_2.5", "over_9.5", "under_9.5"]
 
 
 class MatchRecommendationOut(BaseModel):

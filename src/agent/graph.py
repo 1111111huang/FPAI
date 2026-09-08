@@ -457,6 +457,25 @@ def build_graph(config: AgentConfig, tools: list):
     return graph.compile()
 
 
+def run_deterministic_pipeline(match_info: dict) -> dict:
+    """Run just the graph's deterministic prefix -- resolve_competition ->
+    research -> forecast, in their real build_graph order -- with zero LLM
+    involvement.
+
+    A97: agent-snapshot's whole job is to persist these three nodes'
+    outputs (SnapshotStore.wrap's tool names: resolve_competition,
+    forecast_league/forecast_international, web_search). The LLM turn
+    (agent_node/output_node) is never wrapped by SnapshotStore at all, so
+    its output was never part of the snapshot corpus either way -- calling
+    the full run_agent() for a snapshot was spending a real LLM API call
+    per match for no reason.
+    """
+    state: dict = {"match_info": match_info}
+    for node in (resolve_competition_node, research_node, forecast_node):
+        state.update(node(state))
+    return state
+
+
 def run_agent(
     match_info: dict,
     config: AgentConfig | None = None,
@@ -524,6 +543,14 @@ def run_agent(
         yes = btts_odds.get("yes")
         no = btts_odds.get("no")
         prompt += f" Bookmaker odds for both teams to score (BTTS): yes={yes}, no={no}."
+    # A100: corners_odds threaded from _build_match_info's OddsPapi lookup
+    # (backtest-only, 2026-01-01 onward, manual one-off pull -- see that
+    # function's own docstring). No live source exists for this market yet.
+    corners_odds = match_info.get("corners_odds")
+    if corners_odds:
+        over = corners_odds.get("over_9.5")
+        under = corners_odds.get("under_9.5")
+        prompt += f" Bookmaker odds for total corners (over/under 9.5): over_9.5={over}, under_9.5={under}."
 
     initial_state: AgentState = {
         "messages": [

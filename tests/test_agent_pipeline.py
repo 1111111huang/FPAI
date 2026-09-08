@@ -114,6 +114,70 @@ def test_research_node_also_runs_odds_search_when_caller_supplied_no_odds():
     assert odds_verification["parsed_odds"] == {"home": 1.45, "draw": 4.50, "away": 7.00}
 
 
+def test_research_node_near_kickoff_uses_confirmed_lineup_query_first():
+    """Direct user request (2026-09-07): real starting lineups are typically
+    confirmed only ~T-60 minutes before kickoff -- the T-30 refresh
+    (app/backend/t30_refresh.py) runs after that point, so it's the one
+    context where asking specifically for the *confirmed* lineup (rather
+    than the generic query every other context uses, which can only ever
+    find a predicted lineup this close to kickoff or earlier) can find real,
+    non-speculative team news. When the confirmed-lineup query itself finds
+    something, no fallback call is made."""
+    with patch(
+        "src.agent.tools._dated_web_search",
+        side_effect=["confirmed lineup text", "form text"],
+    ) as mock_search:
+        state = _base_state(match_info={
+            "home_team": "A", "away_team": "B", "date": "2026-06-21",
+            "odds": {"home": 2.0, "draw": 3.0, "away": 3.5},
+            "near_kickoff": True,
+        })
+        result = research_node(state)
+
+    assert result["research_evidence"]["availability"] == "confirmed lineup text"
+    assert mock_search.call_count == 2
+    first_query = mock_search.call_args_list[0].args[0] if mock_search.call_args_list[0].args else mock_search.call_args_list[0].kwargs["query"]
+    assert "confirmed" in first_query.lower()
+
+
+def test_research_node_near_kickoff_falls_back_to_predicted_query_when_confirmed_empty():
+    """No confirmed lineup published yet (early T-30 refresh, or a source
+    gap) -- regresses to the same predicted-lineup-oriented query every
+    other context already uses, rather than returning nothing."""
+    with patch(
+        "src.agent.tools._dated_web_search",
+        side_effect=["No results found.", "predicted lineup text", "form text"],
+    ) as mock_search:
+        state = _base_state(match_info={
+            "home_team": "A", "away_team": "B", "date": "2026-06-21",
+            "odds": {"home": 2.0, "draw": 3.0, "away": 3.5},
+            "near_kickoff": True,
+        })
+        result = research_node(state)
+
+    assert result["research_evidence"]["availability"] == "predicted lineup text"
+    assert mock_search.call_count == 3
+    queries = [c.args[0] if c.args else c.kwargs["query"] for c in mock_search.call_args_list]
+    assert "confirmed" in queries[0].lower()
+    assert queries[1] == "A B injury suspension team news"  # unchanged existing query, reused as the fallback
+
+
+def test_research_node_without_near_kickoff_is_unchanged():
+    """Backtest/EOD generation (no near_kickoff flag, or explicitly False)
+    keep today's exact single-query behavior -- confirmed lineups can never
+    exist that far before kickoff regardless of query wording, so there's
+    nothing to gain and a real cost (an extra call) to avoid."""
+    with patch("src.agent.tools._dated_web_search", side_effect=["injury text", "form text"]) as mock_search:
+        state = _base_state(match_info={
+            "home_team": "A", "away_team": "B", "date": "2026-06-21",
+            "odds": {"home": 2.0, "draw": 3.0, "away": 3.5},
+        })
+        result = research_node(state)
+
+    assert result["research_evidence"]["availability"] == "injury text"
+    assert mock_search.call_count == 2
+
+
 from src.agent.pipeline import _format_evidence_message, forecast_node
 
 

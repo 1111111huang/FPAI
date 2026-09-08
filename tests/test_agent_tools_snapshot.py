@@ -17,10 +17,16 @@ def reset_snapshot_store(tmp_path):
     agent_tools._snapshot_store.set_mode("live")
     agent_tools._snapshot_store.set_allow_lessons_in_replay(False)
     agent_tools._snapshot_store.set_tool_mode_overrides({})
+    # A99: match_id/match_date are otherwise sticky across tests (by design,
+    # for CLI callers that set them once per invocation) -- without resetting
+    # here too, a test that sets match_date leaks it into whichever test
+    # happens to run next.
+    agent_tools._snapshot_store.set_match(None, None)
     yield
     agent_tools._snapshot_store.set_mode("live")
     agent_tools._snapshot_store.set_allow_lessons_in_replay(False)
     agent_tools._snapshot_store.set_tool_mode_overrides({})
+    agent_tools._snapshot_store.set_match(None, None)
 
 
 def test_configure_snapshot_store_allow_lessons_in_replay_defaults_false():
@@ -224,6 +230,69 @@ class TestPostMatchResultFilter:
             result = _web_search_impl("Team A Team B recent form")
 
         assert result == "No results found."
+
+
+def test_web_search_impl_passes_no_structured_date_bound_even_when_match_date_set(tmp_path):
+    """A99 (2026-09-05): root-caused live that _dated_web_search's own
+    'before:<date>' filter (unstructured text glued onto the query) was a
+    soft hint Tavily might not honor -- added a structured end_date (and
+    briefly a start_date lookback) via the real Tavily client's own
+    start_date/end_date params.
+
+    A99-follow-up (2026-09-07): direct user investigation into a real
+    "lineup search" lesson pattern found BOTH structured date params make
+    real research quality *worse*, not better -- confirmed live against the
+    real Tavily API on two independent real matches, at every window size
+    tested (start_date+end_date at 7/14/30 days; end_date alone at 0-7 day
+    buffers): a genuinely on-topic, correctly-dated result (a predicted-
+    lineup preview, or a local paper's fixture-specific team news) reliably
+    appeared unbounded, and reliably disappeared -- sometimes to zero
+    results entirely -- the moment ANY structured date filter was added.
+    Many of the actually-relevant pages appear to lack date metadata Tavily
+    can reliably match against, so any date filter risks excluding them.
+    Both params removed entirely; the pre-existing, weaker safety net (the
+    unchanged 'before:<date>' text hint, plus the content-based
+    _looks_like_post_match_result filter, which catches genuine post-match
+    leakage by content rather than by date) is what's left, accepting a
+    real but smaller residual risk of an older meeting's team news
+    surfacing than the now-confirmed cost of losing good results outright.
+    Deliberately does NOT touch _dated_web_search's own query-string
+    construction (still the unchanged 'before:<date>' text) -- that string
+    is what SnapshotStore.wrap hashes into a filename, and changing it
+    would invalidate every already-recorded web_search snapshot's replay
+    key."""
+    from src.agent.tools import _web_search_impl
+
+    agent_tools.configure_snapshot_store("record", match_id="m9", match_date="2025-08-17")
+    with patch("src.agent.tools.os.environ.get", return_value="fake-key"), \
+         patch("tavily.TavilyClient") as MockClient:
+        instance = MagicMock()
+        MockClient.return_value = instance
+        instance.search.return_value = {"results": [{"title": "T", "content": "C", "url": "U"}]}
+
+        _web_search_impl("Manchester United Arsenal injury suspension team news")
+
+    call_kwargs = instance.search.call_args.kwargs
+    assert "end_date" not in call_kwargs
+    assert "start_date" not in call_kwargs
+
+
+def test_web_search_impl_omits_date_bound_when_no_match_date_set():
+    """Live-mode/no-match-context calls (match_date is None) get today's
+    unbounded behavior exactly -- nothing to bound against."""
+    from src.agent.tools import _web_search_impl
+
+    with patch("src.agent.tools.os.environ.get", return_value="fake-key"), \
+         patch("tavily.TavilyClient") as MockClient:
+        instance = MagicMock()
+        MockClient.return_value = instance
+        instance.search.return_value = {"results": [{"title": "T", "content": "C", "url": "U"}]}
+
+        _web_search_impl("Arsenal Chelsea injury news")
+
+    call_kwargs = instance.search.call_args.kwargs
+    assert "start_date" not in call_kwargs
+    assert "end_date" not in call_kwargs
 
 
 def test_web_search_date_filter_applied_during_record_and_replay(tmp_path):

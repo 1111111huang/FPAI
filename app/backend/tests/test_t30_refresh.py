@@ -112,6 +112,26 @@ def test_league_parameter_tags_match_info_and_selects_the_matching_sport_key(tmp
     assert mock_run.call_args.kwargs["match_info"]["league"] == "SWE"
 
 
+def test_tags_match_info_near_kickoff(tmp_path: Path) -> None:
+    """Direct user request (2026-09-07): real starting lineups are typically
+    confirmed only ~T-60 minutes before kickoff -- the T-30 refresh is the
+    one context in this whole system whose actual run time lands after
+    that, so it's the one caller that should get research_node's
+    confirmed-lineup-first query behavior (src/agent/pipeline.py)."""
+    config = AgentConfig.default()
+    cache = RecommendationCache(db_path=tmp_path / "cache.db")
+    odds_client = MagicMock()
+    odds_client.get_odds.return_value = [
+        NormalizedOdds(home_team="Arsenal", away_team="Everton", commence_time="2026-08-22T15:00:00Z",
+                        home_odds=1.8, draw_odds=3.6, away_odds=4.5),
+    ]
+
+    with patch("app.backend.recommendations.run_agent", return_value=_RECOMMENDATION) as mock_run:
+        refresh_match_at_t30(_fixture(), odds_client=odds_client, cache=cache, config=config, date_str=_future_date(1))
+
+    assert mock_run.call_args.kwargs["match_info"]["near_kickoff"] is True
+
+
 def test_league_parameter_defaults_to_e0_preserving_existing_behavior(tmp_path: Path) -> None:
     config = AgentConfig.default()
     cache = RecommendationCache(db_path=tmp_path / "cache.db")

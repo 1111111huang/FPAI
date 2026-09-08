@@ -13,10 +13,15 @@ from src.agent.market_resolution import (
 )
 
 
-def test_resolvable_markets_excludes_corners():
+def test_resolvable_markets_excludes_per_side_corners_but_includes_total():
+    """A101: home_corners/away_corners still have no numeric line field (only
+    current_odds/min_odds) and stay unresolvable. total_corners is different
+    -- it has a real, fixed line (9.5, matching total_goals' own fixed 2.5
+    convention) via the OddsPapi odds pull (A100), so its correctness IS
+    programmatically resolvable the same way total_goals already is."""
     assert "home_corners" not in RESOLVABLE_MARKETS
     assert "away_corners" not in RESOLVABLE_MARKETS
-    assert RESOLVABLE_MARKETS == {"result_3way", "btts", "total_goals"}
+    assert RESOLVABLE_MARKETS == {"result_3way", "btts", "total_goals", "total_corners"}
 
 
 def test_build_actual_outcome_home_win():
@@ -59,6 +64,39 @@ def test_market_correct_returns_none_for_corners():
     actual = build_actual_outcome(2, 1)
     assert market_correct({"market": "home_corners", "selection": "over_4.5"}, actual) is None
     assert market_correct({"market": "away_corners", "selection": "under_4.5"}, actual) is None
+
+
+def test_build_actual_outcome_includes_total_corners_when_both_sides_given():
+    actual = build_actual_outcome(2, 1, home_corners=6, away_corners=5)
+    assert actual["total_corners"] == 11
+    assert actual["total_corners_side"] == "over_9.5"
+
+
+def test_build_actual_outcome_under_9_5_corners():
+    actual = build_actual_outcome(1, 0, home_corners=4, away_corners=3)
+    assert actual["total_corners_side"] == "under_9.5"
+
+
+def test_build_actual_outcome_omits_total_corners_when_not_given():
+    """Every existing caller (app/backend/settlement.py) calls this with just
+    home_goals/away_goals -- must stay completely valid, degrading the same
+    way missing total_goals_odds already does elsewhere (key simply absent)."""
+    actual = build_actual_outcome(2, 1)
+    assert "total_corners" not in actual
+    assert "total_corners_side" not in actual
+
+
+def test_market_correct_total_corners():
+    actual = build_actual_outcome(2, 1, home_corners=6, away_corners=5)
+    assert market_correct({"market": "total_corners", "selection": "over_9.5"}, actual) is True
+    assert market_correct({"market": "total_corners", "selection": "under_9.5"}, actual) is False
+
+
+def test_market_correct_returns_none_for_total_corners_when_actual_lacks_corner_counts():
+    """Live settlement (app/backend/settlement.py) doesn't supply corner
+    counts yet -- must degrade to 'unknown', never a false loss/win."""
+    actual = build_actual_outcome(2, 1)
+    assert market_correct({"market": "total_corners", "selection": "over_9.5"}, actual) is None
 
 
 def test_resolve_recommendation_pick_finds_the_matching_candidate():

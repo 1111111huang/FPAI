@@ -30,6 +30,19 @@ describe("buildActualOutcome -- mirrors src/agent/market_resolution.py", () => {
   it("a 0-0 draw", () => {
     expect(buildActualOutcome(0, 0)).toEqual({ result: "draw", btts: "no", totalGoalsSide: "under_2.5" });
   });
+
+  it("A101: includes totalCorners/totalCornersSide when both corner counts are supplied", () => {
+    expect(buildActualOutcome(2, 1, 6, 5)).toEqual({
+      result: "home", btts: "yes", totalGoalsSide: "over_2.5",
+      totalCorners: 11, totalCornersSide: "over_9.5",
+    });
+  });
+
+  it("A101: omits totalCorners/totalCornersSide when corner counts aren't supplied -- every existing call site keeps working", () => {
+    const actual = buildActualOutcome(2, 1);
+    expect(actual).not.toHaveProperty("totalCorners");
+    expect(actual).not.toHaveProperty("totalCornersSide");
+  });
 });
 
 describe("marketCorrect -- mirrors src/agent/market_resolution.py", () => {
@@ -55,9 +68,20 @@ describe("marketCorrect -- mirrors src/agent/market_resolution.py", () => {
     expect(marketCorrect("total_goals", "under_2.5", over)).toBe(false);
   });
 
-  it("an unresolvable market (corners) returns null, not false -- caller must not coerce to a miss", () => {
+  it("an unresolvable market (per-side corners) returns null, not false -- caller must not coerce to a miss", () => {
     expect(marketCorrect("home_corners", "over_2.5", homeWin)).toBeNull();
     expect(marketCorrect("away_corners", "under_2.5", homeWin)).toBeNull();
+  });
+
+  it("total_corners resolves against the actual side when corner counts are supplied", () => {
+    // A101: fixed 9.5 line, mirroring src/agent/market_resolution.py exactly.
+    const over = buildActualOutcome(2, 1, 6, 5);
+    expect(marketCorrect("total_corners", "over_9.5", over)).toBe(true);
+    expect(marketCorrect("total_corners", "under_9.5", over)).toBe(false);
+  });
+
+  it("total_corners returns null when no corner counts were supplied -- live match results have none yet", () => {
+    expect(marketCorrect("total_corners", "over_9.5", homeWin)).toBeNull();
   });
 });
 

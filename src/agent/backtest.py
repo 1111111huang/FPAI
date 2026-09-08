@@ -8,8 +8,11 @@ synchronous BacktestHarness.run() and the concurrent agent-backtest CLI path
 
 from __future__ import annotations
 
+import functools
 import hashlib
+import json
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Literal
 
 import pandas as pd
@@ -17,6 +20,22 @@ import pandas as pd
 from src.agent.agent_config import AgentConfig
 from src.agent.market_resolution import build_actual_outcome, market_correct as _market_correct, resolve_recommendation_pick
 from src.utils.db_manager import DuckDBManager
+
+# A100: a manual, one-off historical pull (scripts/pull_oddspapi_btts_corners.py
+# + extract_oddspapi_odds_lookup.py) -- no automated pipeline populates this,
+# unlike raw_matches' own columns. Corners line fixed at 9.5 (99.9% real-tick
+# coverage across the pulled corpus, the highest of any line -- the natural
+# analogue of total_goals' own fixed 2.5 line). Absent entirely (file missing,
+# or this match_id never resolved/pulled) degrades to no btts_odds/corners_odds
+# on match_info, same as any other optional field here.
+_ODDSPAPI_LOOKUP_PATH = Path(__file__).parent.parent.parent / "data" / "oddspapi_btts_corners_odds.json"
+
+
+@functools.lru_cache(maxsize=1)
+def _load_oddspapi_odds_lookup() -> dict[str, dict]:
+    if not _ODDSPAPI_LOOKUP_PATH.exists():
+        return {}
+    return json.loads(_ODDSPAPI_LOOKUP_PATH.read_text())
 
 _VALID_SPLITS = ("all", "train", "test")
 
@@ -71,8 +90,18 @@ class BacktestRecord:
 
 
 def load_outcome(row: pd.Series) -> dict[str, Any]:
-    """Derive the resolvable outcome categories for a finished match."""
-    return build_actual_outcome(int(row["fthg"]), int(row["ftag"]))
+    """Derive the resolvable outcome categories for a finished match.
+
+    A101: also threads hc/ac (real raw_matches columns) through as
+    home_corners/away_corners when both present -- pd.notna() rather than
+    plain truthiness for the same reason total_goals_odds' own threading
+    uses it (a real DataFrame row's missing numeric value is NaN, not None,
+    and bool(float('nan')) is True in Python)."""
+    hc, ac = row.get("hc"), row.get("ac")
+    corners_kwargs = {}
+    if pd.notna(hc) and pd.notna(ac):
+        corners_kwargs = {"home_corners": int(hc), "away_corners": int(ac)}
+    return build_actual_outcome(int(row["fthg"]), int(row["ftag"]), **corners_kwargs)
 
 
 def _date_str(row: pd.Series) -> str:
@@ -86,10 +115,13 @@ def _build_match_info(row: pd.Series) -> dict[str, Any]:
     this market (football-data.co.uk's Avg>2.5/Avg<2.5 columns) that sat
     unused here -- every agent-train/agent-backtest run reported "no current
     odds" for total_goals even when a real price existed in the same row.
-    btts and corners have no equivalent real column anywhere in this system
+    btts and corners have no equivalent real column in raw_matches itself
     (live or historical) -- see documents/agent_techspec.md's "Secondary-market
-    odds coverage" section for the full investigation and what to check
-    before wiring up a new market here.
+    odds coverage" section for the full investigation. A100 (2026-09-07)
+    closed the backtest-specific side of that gap with a one-off manual
+    pull from a third-party vendor (OddsPapi) confirmed to have genuine
+    historical depth for BTTS/corners from 2026-01-01 onward -- see
+    _load_oddspapi_odds_lookup's own docstring for scope/limitations.
 
     A73, 2026-08-22: this function was correct in isolation from day one, but
     BacktestHarness.load_matches()'s own SQL SELECT never actually fetched
@@ -117,6 +149,18 @@ def _build_match_info(row: pd.Series) -> dict[str, Any]:
     # through into total_goals_odds instead of correctly treating it as absent.
     if pd.notna(over25) and pd.notna(under25):
         match_info["total_goals_odds"] = {"over_2.5": over25, "under_2.5": under25}
+
+    # A100: OddsPapi lookup, keyed by our own match_id -- covers a subset of
+    # matches (2026-01-01 onward only, confirmed vendor cutoff) and each
+    # market independently (btts ~95% real-tick coverage, corners ~99.9% at
+    # the 9.5 line within that window), so each is threaded in only when
+    # actually present rather than assumed to travel together.
+    oddspapi_odds = _load_oddspapi_odds_lookup().get(row["match_id"], {})
+    if "btts_odds" in oddspapi_odds:
+        match_info["btts_odds"] = oddspapi_odds["btts_odds"]
+    if "corners_9.5_odds" in oddspapi_odds:
+        corners = oddspapi_odds["corners_9.5_odds"]
+        match_info["corners_odds"] = {"over_9.5": corners["over"], "under_9.5": corners["under"]}
     return match_info
 
 
