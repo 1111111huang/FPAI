@@ -18,7 +18,7 @@ from unittest.mock import MagicMock, patch
 sys.path.append(str(Path(__file__).resolve().parents[3]))
 
 from app.backend.agent_config_hash import compute_agent_config_hash
-from app.backend.eod_batch import run_eod_batch
+from app.backend.eod_batch import already_fresh, run_eod_batch
 from app.backend.football_data_client import NormalizedMatch
 from app.backend.odds_api_client import NormalizedOdds, NormalizedSecondaryOdds
 from app.backend.recommendation_cache import RecommendationCache
@@ -900,3 +900,31 @@ def test_odds_fetched_per_distinct_fixture_date_when_fixtures_span_multiple_date
 
     assert captured["Sunderland"] == {"home": 2.5, "draw": 3.2, "away": 2.9}
     assert captured["Arsenal"] == {"home": 1.5, "draw": 4.0, "away": 6.0}
+
+
+def test_already_fresh_returns_false_for_a_cached_insufficient_data_result(tmp_path: Path) -> None:
+    """BUG-062-followup2: a cached generation that failed with
+    overall='insufficient_data' (e.g. today's real feature_store schema
+    gap) must never be treated as 'fresh' just because the odds happen to
+    match the prior (also-failed) attempt -- otherwise a transient forecast
+    failure poisons a match's recommendation forever, since nothing else
+    ever re-checks it once already_fresh() says there's nothing to do."""
+    cache = RecommendationCache(db_path=tmp_path / "cache.db")
+    odds = {"home": 2.2, "draw": 3.75, "away": 3.0}
+    cache.record_generation(
+        match_id="m1", date="2026-09-11", agent_config_hash="cfg-hash", odds=odds,
+        recommendation={**_RECOMMENDATION, "overall": "insufficient_data"}, triggered_by="scheduled",
+    )
+    assert already_fresh(cache, "m1", "2026-09-11", "cfg-hash", odds) is False
+
+
+def test_already_fresh_still_true_for_a_real_cached_result_with_unchanged_odds(tmp_path: Path) -> None:
+    """Unaffected control: a genuinely successful prior generation still
+    short-circuits regeneration when odds haven't moved, exactly as before."""
+    cache = RecommendationCache(db_path=tmp_path / "cache.db")
+    odds = {"home": 2.2, "draw": 3.75, "away": 3.0}
+    cache.record_generation(
+        match_id="m1", date="2026-09-11", agent_config_hash="cfg-hash", odds=odds,
+        recommendation=_RECOMMENDATION, triggered_by="scheduled",
+    )
+    assert already_fresh(cache, "m1", "2026-09-11", "cfg-hash", odds) is True

@@ -86,7 +86,17 @@ def already_fresh(
     against RecommendationCache's own `odds={}` convention for a
     no-odds generation (see run_eod_batch's `odds or {}` below)."""
     cached = cache.get_latest(match_id, date, agent_config_hash)
-    return cached is not None and cached.odds == (odds or {})
+    if cached is None:
+        return False
+    # BUG-062-followup2: a cached attempt that failed (insufficient_data --
+    # e.g. today's real feature_store schema gap) must never count as
+    # "fresh" just because the odds match its own prior, also-failed
+    # attempt -- otherwise a transient forecast failure poisons a match's
+    # cached recommendation forever, since nothing else ever re-checks it
+    # once this says there's nothing to do.
+    if cached.recommendation.get("overall") == "insufficient_data":
+        return False
+    return cached.odds == (odds or {})
 
 
 def _fixture_date(fixture: NormalizedMatch) -> str:
