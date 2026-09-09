@@ -516,6 +516,32 @@ def test_lessons_node_returns_empty_dict_when_db_file_does_not_exist(tmp_path):
     assert result == {}
 
 
+def test_lessons_node_returns_empty_dict_on_a_connection_config_collision():
+    """BUG-065: duckdb.ConnectionException (raised when a concurrent
+    connection to the same file is open with a different config -- e.g. a
+    background pregenerate pass mid-flight, while this node's own
+    read_only=True connection races it) is a sibling of IOException, not a
+    subclass -- must degrade the same "no lessons, don't crash" way,
+    not raise uncaught."""
+    import duckdb
+    from src.agent.pipeline import lessons_node
+    from src.agent import tools as agent_tools
+
+    agent_tools._snapshot_store.set_mode("live")
+    try:
+        with patch(
+            "src.utils.db_manager.DuckDBManager.connection",
+            side_effect=duckdb.ConnectionException(
+                "Can't open a connection to same database file with a different configuration than existing connections"
+            ),
+        ):
+            result = lessons_node({"competition_resolution": {"competition": "E0", "tier": "competition_specific"}})
+    finally:
+        agent_tools._snapshot_store.set_mode("live")
+
+    assert result == {}
+
+
 def test_pipeline_module_never_imports_lesson_write_or_review_functions():
     """A33 acceptance: the live code path (this module) must have no
     function available to it that can write, approve, or reject lessons --

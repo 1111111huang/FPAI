@@ -102,6 +102,37 @@ def test_run_agent_hitting_a_locked_database_degrades_to_a_clean_503_not_a_raw_5
     assert "temporarily locked" in response.json()["detail"]
 
 
+def test_run_agent_hitting_a_connection_config_collision_also_degrades_to_a_clean_503():
+    """BUG-065: found live 2026-09-08 -- a real duckdb.ConnectionException
+    ("Can't open a connection to same database file with a different
+    configuration than existing connections", raised when a concurrent
+    background job, e.g. pregenerate, holds a connection open with a
+    different read_only setting) hung a manual regenerate request for
+    minutes with zero bytes returned, instead of a clean 503. W185 already
+    widened DuckDBManager.connection()'s own *retry* loop to cover this
+    exception class alongside IOException (both are the same "another
+    connection is in the way" case) -- but this endpoint's except clause,
+    which only fires after those retries are exhausted, was never widened
+    to match, so an exhausted ConnectionException fell through as an
+    unhandled 500 instead of degrading like IOException already does."""
+    import duckdb
+
+    with patch(
+        "app.backend.recommendations.run_agent",
+        side_effect=duckdb.ConnectionException(
+            "Can't open a connection to same database file with a different configuration than existing connections"
+        ),
+    ):
+        with TestClient(app) as client:
+            response = client.post(
+                "/api/recommendations",
+                json={"home_team": "Arsenal", "away_team": "Everton", "date": "2026-08-22", "league": "E0"},
+            )
+
+    assert response.status_code == 503
+    assert "temporarily locked" in response.json()["detail"]
+
+
 def test_odds_are_passed_through_to_match_info():
     with patch("app.backend.recommendations.run_agent", return_value=_VALID_RECOMMENDATION) as mock_run:
         with TestClient(app) as client:

@@ -1070,7 +1070,16 @@ async def create_recommendation(
         # run_agent is a real ~10-30s synchronous call (LLM + Tavily) --
         # must run off the event loop or it blocks every other request.
         raw = await run_in_threadpool(recommendations.run_agent, match_info)
-    except duckdb.IOException as exc:
+    except (duckdb.IOException, duckdb.ConnectionException) as exc:
+        # BUG-065: ConnectionException (raised when a concurrent connection
+        # to the same file is open with a different config, e.g. a
+        # background pregenerate pass mid-flight) is a sibling of
+        # IOException, not a subclass -- W185 already widened
+        # DuckDBManager.connection()'s own retry loop to cover both, but
+        # this except clause (which only fires once those retries are
+        # exhausted) was never widened to match, so an exhausted
+        # ConnectionException fell through as an unhandled exception
+        # instead of degrading the same way IOException already does.
         LOGGER.warning("Recommendation generation hit a locked database (%s): %s", request.effective_match_id(), exc)
         raise HTTPException(
             status_code=503,

@@ -276,7 +276,13 @@ def lessons_node(state: dict) -> dict:
     try:
         with DuckDBManager().connection(read_only=True) as conn:
             lessons = load_approved_lessons(conn, competition_id, tier)
-    except duckdb.IOException:
+    except (duckdb.IOException, duckdb.ConnectionException):
+        # BUG-065: ConnectionException (raised when a concurrent connection
+        # to this same file is open with a different config -- this node's
+        # own read_only=True connection is exactly the kind that can race a
+        # read-write one elsewhere in the same process) is a sibling of
+        # IOException, not a subclass -- same transient-collision, "no
+        # lessons, don't crash" degrade applies to both.
         return {}
     if not lessons:
         return {}
