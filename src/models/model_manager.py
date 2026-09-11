@@ -15,7 +15,7 @@ import numpy as np
 import pandas as pd
 import yaml
 import joblib
-from sklearn.calibration import CalibratedClassifierCV
+from sklearn.calibration import _SigmoidCalibration
 from sklearn.isotonic import IsotonicRegression
 from sklearn.metrics import accuracy_score, log_loss, mean_absolute_error, mean_squared_error, precision_score
 
@@ -33,6 +33,27 @@ from src.utils.mlflow_config import configure_mlflow_tracking
 from src.utils.logger import get_logger
 
 LOGGER = get_logger(__name__)
+
+# BUG-066: isotonic regression's monotonic step-function fit produces wide
+# flat plateaus when fit on too few validation samples -- confirmed live,
+# E0 result_3way's promoted calibrator mapped every raw away-probability in
+# 0.4708-0.5139 (a genuinely differentiated range across real, distinct
+# matches) to one constant 0.428571, because only ~14 distinct validation
+# values informed that plateau. sklearn's own calibration docs recommend
+# sigmoid (Platt) scaling below ~1000 calibration samples for exactly this
+# overfitting failure mode; isotonic above that threshold still wins on
+# log_loss (US#61's own original finding).
+_MIN_ISOTONIC_SAMPLES = 1000
+
+
+def _make_calibrator(n_samples: int) -> IsotonicRegression | _SigmoidCalibration:
+    """Isotonic above _MIN_ISOTONIC_SAMPLES, else Platt/sigmoid scaling --
+    sklearn's own internal (the same one CalibratedClassifierCV uses for
+    method="sigmoid"), so no new dependency and identical .fit()/.predict()
+    interface as IsotonicRegression (nothing downstream needs to branch)."""
+    if n_samples >= _MIN_ISOTONIC_SAMPLES:
+        return IsotonicRegression(out_of_bounds="clip")
+    return _SigmoidCalibration()
 
 
 def _compute_sample_weight(y: pd.Series, task_type: str, alpha: float = 1.0) -> np.ndarray | None:
@@ -270,7 +291,7 @@ class ModelManager:
         y_val: pd.Series,
         model_path: Path,
     ) -> dict[str, float] | None:
-        """Fit isotonic regression calibrator on val-set probabilities and save as sidecar.
+        """Fit a probability calibrator on val-set probabilities and save as sidecar.
 
         Returns a dict with log_loss before/after calibration, or None for regressors.
         """
@@ -284,7 +305,7 @@ class ModelManager:
                 # see TargetResolver.get_label, home_win/btts .astype(int)/(Int64).
                 y_val_arr = pd.to_numeric(y_val, errors="coerce").astype(float).to_numpy()
                 pos_proba = raw_proba[:, 1]
-                calibrator = IsotonicRegression(out_of_bounds="clip")
+                calibrator = _make_calibrator(len(pos_proba))
                 calibrator.fit(pos_proba, y_val_arr)
                 cal_pos = calibrator.predict(pos_proba)
                 cal_proba = np.stack([1 - cal_pos, cal_pos], axis=1)
@@ -306,7 +327,7 @@ class ModelManager:
                 cal_proba = np.zeros_like(raw_proba)
                 for c in range(n_classes):
                     y_bin = (y_val_raw == class_labels[c]).astype(float)
-                    cal = IsotonicRegression(out_of_bounds="clip")
+                    cal = _make_calibrator(len(y_bin))
                     cal.fit(raw_proba[:, c], y_bin)
                     cal_proba[:, c] = cal.predict(raw_proba[:, c])
                     calibrators.append(cal)
