@@ -18,6 +18,12 @@ class BetOutcome:
     stake: float
     won: bool
     payout: float  # net profit (positive) or loss (negative) — already includes stake direction
+    # A107: the match's own recommendation.confidence (low/medium/high) --
+    # lets evaluation.py check whether the LLM's self-reported confidence is
+    # actually predictive of hit rate, without a separate join back to
+    # `records`. Defaulted, not required -- keeps every existing direct
+    # BetOutcome(...) construction (tests, mainly) unchanged.
+    confidence: str = "unknown"
 
 
 @dataclass
@@ -56,6 +62,7 @@ def simulate_flat_stake(
             bets.append(BetOutcome(
                 match_id=record.match_id, market=m["market"], selection=m["selection"],
                 odds=odds, stake=flat_stake, won=won, payout=payout,
+                confidence=record.recommendation.get("confidence", "unknown"),
             ))
 
     return BankrollResult(starting_bankroll=starting_bankroll, ending_bankroll=bankroll, equity_curve=equity_curve, bets=bets)
@@ -109,6 +116,7 @@ def simulate_kelly_stake(
             bets.append(BetOutcome(
                 match_id=record.match_id, market=m["market"], selection=m["selection"],
                 odds=odds, stake=stake, won=won, payout=payout,
+                confidence=record.recommendation.get("confidence", "unknown"),
             ))
 
     return BankrollResult(starting_bankroll=starting_bankroll, ending_bankroll=bankroll, equity_curve=equity_curve, bets=bets)

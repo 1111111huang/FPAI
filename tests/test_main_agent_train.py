@@ -1,11 +1,13 @@
 """Tests for main.py's run_agent_train CLI entry point (A33)."""
 from __future__ import annotations
 
+import json
 from unittest.mock import patch
 
 import duckdb
+from langchain_core.messages import AIMessage, SystemMessage
 
-from main import _write_train_artifacts
+from main import _write_telemetry_rows, _write_train_artifacts
 from src.agent.backtest import BacktestRecord
 
 
@@ -44,6 +46,50 @@ def test_write_train_artifacts_writes_one_lesson_and_telemetry_row_per_record():
 
     telemetry_row = conn.execute("SELECT match_id, run_id FROM agent_telemetry").fetchone()
     assert telemetry_row == ("m1", "run-1")
+
+
+def test_write_telemetry_rows_shared_helper_writes_one_row_per_full_state_record():
+    """A107: the extracted helper both _write_train_artifacts and
+    run_agent_backtest now call -- exercised directly here."""
+    conn = duckdb.connect(":memory:")
+    from src.agent.lessons import create_lessons_tables
+    create_lessons_tables(conn)
+
+    records = [
+        _record(match_id="m1", full_state={"competition_resolution": {"competition": "E0", "tier": "competition_specific"}}),
+        _record(match_id="m2", full_state=None),  # skipped -- no full_state
+    ]
+
+    scoped = _write_telemetry_rows(conn, records, run_id="run-1")
+
+    assert len(scoped) == 1
+    assert scoped[0][0].match_id == "m1"
+    assert scoped[0][1:] == ("E0", "competition_specific")
+    rows = conn.execute("SELECT match_id FROM agent_telemetry").fetchall()
+    assert rows == [("m1",)]
+
+
+def test_write_train_artifacts_persists_reasoning_trace_from_full_state_messages():
+    """A106: full_state["messages"] (the LLM's own reasoning/tool-call
+    trace) is serialized and persisted, not just the final recommendation."""
+    conn = duckdb.connect(":memory:")
+    record = _record(full_state={
+        "competition_resolution": {"competition": "E0", "tier": "competition_specific"},
+        "research_evidence": {"availability": "ok"},
+        "forecast_payload": {"result_3way": {}},
+        "messages": [
+            SystemMessage(content="system prompt"),
+            AIMessage(content="Away win looks like value here."),
+        ],
+    })
+
+    _write_train_artifacts(conn, [record], run_id="run-1")
+
+    reasoning_trace = conn.execute("SELECT reasoning_trace FROM agent_telemetry WHERE match_id = 'm1'").fetchone()[0]
+    assert json.loads(reasoning_trace) == [
+        {"role": "system", "content": "system prompt"},
+        {"role": "ai", "content": "Away win looks like value here."},
+    ]
 
 
 def test_write_train_artifacts_skips_records_without_full_state():

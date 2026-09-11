@@ -341,17 +341,33 @@ class ForecastService:
             # computed at training time -- a real, better-calibrated
             # version of these probabilities that nothing in this path
             # ever consumed before. No-op when metadata carries none.
-            calibrated_proba = _apply_calibration(raw_proba, metadata.get("calibrator"))
+            calibrator = metadata.get("calibrator")
+            calibrated_proba = _apply_calibration(raw_proba, calibrator)
             probabilities = self._coerce_probability_vector(calibrated_proba)
             labels = self._class_labels(definition, model, probabilities)
             probability_map = {
                 label: round(float(probability), 6)
                 for label, probability in zip(labels, probabilities, strict=False)
             }
-            return {
+            result: dict[str, Any] = {
                 "probabilities": probability_map,
                 "uncertainty": normalized_entropy_uncertainty(probabilities),
             }
+            # A107 (BUG-066 follow-up): the pre-calibration probabilities,
+            # only when a calibrator actually ran -- forecast_payload
+            # previously kept only the post-calibration value, so a
+            # calibration collapse (BUG-066: genuinely different raw
+            # probabilities all landing in one isotonic plateau) was
+            # invisible in the data itself, needing a forensic
+            # reconstruction directly against the calibrator sidecar.
+            if calibrator is not None:
+                raw_vector = self._coerce_probability_vector(raw_proba)
+                raw_labels = self._class_labels(definition, model, raw_vector)
+                result["raw_probabilities"] = {
+                    label: round(float(probability), 6)
+                    for label, probability in zip(raw_labels, raw_vector, strict=False)
+                }
+            return result
 
         expected = float(np.asarray(model.predict(feature_row), dtype=float).ravel()[0])
         payload: dict[str, Any] = {

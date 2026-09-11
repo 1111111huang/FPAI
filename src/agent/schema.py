@@ -33,6 +33,14 @@ class MarketCandidate(TypedDict):
     composite_score: float
     # A88: one line -- why this candidate won or lost.
     reason: str
+    # A107: the LLM's own self-reported recommendation_type, captured
+    # before any of the downgrade passes below can touch it -- so a
+    # guardrail-caused change (BUG-054's whole investigation needed a full
+    # reasoning-trace read to see "direct_bet -> conditional -> no_bet")
+    # is a plain initial_recommendation_type != recommendation_type
+    # comparison instead. Populated by extract_recommendation() itself,
+    # never by the LLM -- same convention as target_odds above.
+    initial_recommendation_type: Literal["direct_bet", "conditional", "no_bet"]
 
 
 class RecommendationPick(TypedDict):
@@ -716,6 +724,11 @@ def extract_recommendation(
                     f"requested {home_team!r} v {away_team!r}"
                 )
                 continue
+
+        # A107: snapshot each candidate's own self-reported recommendation_type
+        # before any downgrade pass below can overwrite it in place.
+        for candidate in data.get("candidates", []):
+            candidate["initial_recommendation_type"] = candidate["recommendation_type"]
 
         data = _downgrade_direct_bet_below_value_edge_floor(data, min_value_edge)
         data = _downgrade_direct_bet_below_draw_value_edge_floor(data, min_value_edge_result_3way_draw)

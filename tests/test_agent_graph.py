@@ -2,11 +2,11 @@
 import json
 import pytest
 from unittest.mock import MagicMock, patch
-from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 from langchain_core.tools import tool
 
 from src.agent.agent_config import AgentConfig
-from src.agent.graph import AgentState, _build_llm, _extract_text, build_graph, route_after_forecast
+from src.agent.graph import AgentState, _build_llm, _extract_text, build_graph, route_after_forecast, serialize_agent_messages
 
 
 @tool
@@ -911,3 +911,40 @@ def test_run_agent_never_attempts_structured_output_on_non_ollama_providers():
 
     assert recommendation["overall"] == "no_bet"
     mock_llm.with_structured_output.assert_not_called()
+
+
+def test_serialize_agent_messages_captures_role_and_content():
+    messages = [
+        SystemMessage(content="system prompt"),
+        HumanMessage(content="Analyse Leeds vs Liverpool."),
+        AIMessage(content="reasoning text"),
+    ]
+    trace = serialize_agent_messages(messages)
+    assert trace == [
+        {"role": "system", "content": "system prompt"},
+        {"role": "human", "content": "Analyse Leeds vs Liverpool."},
+        {"role": "ai", "content": "reasoning text"},
+    ]
+
+
+def test_serialize_agent_messages_captures_tool_calls_and_tool_responses():
+    ai_with_call = AIMessage(
+        content="",
+        tool_calls=[{"name": "web_search", "args": {"query": "Leeds form"}, "id": "call_1"}],
+    )
+    tool_response = ToolMessage(content="Leeds won 2 of last 5.", tool_call_id="call_1")
+
+    trace = serialize_agent_messages([ai_with_call, tool_response])
+
+    assert trace[0]["tool_calls"] == [{"name": "web_search", "args": {"query": "Leeds form"}}]
+    assert trace[1] == {"role": "tool", "content": "Leeds won 2 of last 5.", "tool_call_id": "call_1"}
+
+
+def test_serialize_agent_messages_handles_gemini_shaped_content_blocks():
+    messages = [AIMessage(content=[{"type": "text", "text": "part one"}, {"type": "text", "text": " part two"}])]
+    trace = serialize_agent_messages(messages)
+    assert trace[0]["content"] == "part one part two"
+
+
+def test_serialize_agent_messages_returns_empty_list_for_no_messages():
+    assert serialize_agent_messages([]) == []

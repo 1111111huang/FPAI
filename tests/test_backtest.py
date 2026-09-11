@@ -421,3 +421,54 @@ def test_backtest_harness_run_uses_process_match_row():
 
     assert records == ["RECORD-SENTINEL"]
     mock_process.assert_called_once()
+
+
+def test_run_agent_backtest_writes_telemetry_rows_for_records_with_full_state():
+    """A107: agent-backtest previously never captured full_state at all
+    (capture_state defaulted to False), so it wrote no telemetry beyond the
+    aggregate report -- now mirrors agent-train's own capture."""
+    import duckdb
+
+    from main import run_agent_backtest
+
+    fake_conn = duckdb.connect(":memory:")
+    record = BacktestRecord(
+        match_id="m1", home_team="City", away_team="Arsenal", date="2025-03-01", league="E0",
+        recommendation={"overall": "no_bet", "confidence": "medium", "prediction_basis": "x", "limitations": []},
+        actual={"result": "home", "btts": "yes", "total_goals": 3, "total_goals_side": "over_2.5"},
+        market_results=[],
+        full_state={
+            "competition_resolution": {"competition": "E0", "tier": "competition_specific"},
+            "research_evidence": None, "forecast_payload": None, "messages": [],
+        },
+    )
+
+    class _FakeConnCtx:
+        def __enter__(self):
+            return fake_conn
+
+        def __exit__(self, *exc_info):
+            return False
+
+    class _FakeDB:
+        def connection(self):
+            return _FakeConnCtx()
+
+    class _FakeHarness:
+        def __init__(self, config=None):
+            self.db = _FakeDB()
+
+        def load_matches(self, *args, **kwargs):
+            return pd.DataFrame([{"match_id": "m1"}])
+
+    with patch("src.agent.backtest.BacktestHarness", _FakeHarness), \
+         patch("src.agent.backtest.process_match_row", return_value=record), \
+         patch("src.agent.evaluation.save_report", return_value="fake-report-path"):
+        run_agent_backtest(
+            from_date="2025-01-01", to_date="2025-12-31", league="E0", stake_mode="flat",
+            sample=None, concurrency=1, config_path=None,
+        )
+
+    rows = fake_conn.execute("SELECT match_id, recommendation FROM agent_telemetry").fetchall()
+    assert len(rows) == 1
+    assert rows[0][0] == "m1"

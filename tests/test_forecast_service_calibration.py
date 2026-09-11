@@ -133,3 +133,54 @@ def test_predict_target_uses_calibrator_when_present(tmp_path: Path):
     probs = result["probabilities"]
     assert sum(probs.values()) == pytest.approx(1.0, abs=1e-4)
     assert probs != pytest.approx({"no": 0.2, "yes": 0.8}, abs=1e-6)
+
+
+def test_predict_target_includes_raw_probabilities_alongside_calibrated(tmp_path: Path):
+    """A107 (BUG-066 follow-up): forecast_payload must carry the
+    pre-calibration probabilities too, whenever a calibrator actually ran --
+    otherwise a future calibration collapse (BUG-066) is invisible in the
+    data itself again."""
+    class _FakeBinaryModel:
+        classes_ = np.array([0, 1])
+
+        def predict_proba(self, X):
+            return np.array([[0.2, 0.8]] * len(X))
+
+        def predict(self, X):
+            return np.array([1] * len(X))
+
+    cal = _fit_binary_calibrator()
+    sidecar = {"type": "binary", "calibrator": cal}
+
+    service = ForecastService.__new__(ForecastService)
+    definition = get_target_definition("btts")
+    import pandas as pd
+    feature_row = pd.DataFrame({"a": [1.0]})
+    metadata = {"calibrator": sidecar}
+
+    result = service._predict_target(definition, _FakeBinaryModel(), metadata, feature_row)
+
+    assert result["raw_probabilities"] == pytest.approx({"no": 0.2, "yes": 0.8}, abs=1e-6)
+    assert result["raw_probabilities"] != result["probabilities"]
+
+
+def test_predict_target_omits_raw_probabilities_when_no_calibrator():
+    """No calibrator ran -- raw_probabilities would be identical to
+    probabilities, so it's omitted rather than stored as a redundant copy."""
+    class _FakeBinaryModel:
+        classes_ = np.array([0, 1])
+
+        def predict_proba(self, X):
+            return np.array([[0.2, 0.8]] * len(X))
+
+        def predict(self, X):
+            return np.array([1] * len(X))
+
+    service = ForecastService.__new__(ForecastService)
+    definition = get_target_definition("btts")
+    import pandas as pd
+    feature_row = pd.DataFrame({"a": [1.0]})
+
+    result = service._predict_target(definition, _FakeBinaryModel(), {}, feature_row)
+
+    assert "raw_probabilities" not in result

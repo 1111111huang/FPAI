@@ -80,6 +80,13 @@ def create_lessons_tables(conn: duckdb.DuckDBPyConnection) -> None:
         )
         """
     )
+    # A106: the LLM's own reasoning/tool-call trace for this match (see
+    # src.agent.graph.serialize_agent_messages) -- previously discarded at
+    # persistence time even though run_agent(..., return_full_state=True)
+    # already captures it in full_state["messages"]. Migrated in place
+    # (ALTER ... IF NOT EXISTS) same as rule_text/source above; nullable so
+    # a pre-migration row just has NULL here.
+    conn.execute("ALTER TABLE agent_telemetry ADD COLUMN IF NOT EXISTS reasoning_trace TEXT")
 
 
 def insert_lesson_candidate(
@@ -115,12 +122,16 @@ def insert_telemetry(
     research_evidence: dict[str, Any] | None,
     forecast_payload: dict[str, Any] | None,
     recommendation: dict[str, Any] | None,
+    reasoning_trace: list[dict[str, Any]] | None = None,
 ) -> None:
+    """reasoning_trace (A106, optional/additive -- every pre-existing caller
+    that doesn't pass it keeps writing NULL, same as before this column
+    existed): src.agent.graph.serialize_agent_messages(full_state["messages"])."""
     conn.execute(
         """
         INSERT INTO agent_telemetry
-            (match_id, run_id, competition_resolution, research_evidence, forecast_payload, recommendation, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
+            (match_id, run_id, competition_resolution, research_evidence, forecast_payload, recommendation, reasoning_trace, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         """,
         [
             match_id,
@@ -129,6 +140,7 @@ def insert_telemetry(
             json.dumps(research_evidence),
             json.dumps(forecast_payload),
             json.dumps(recommendation),
+            json.dumps(reasoning_trace),
             datetime.now(timezone.utc),
         ],
     )

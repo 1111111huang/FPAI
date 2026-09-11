@@ -44,7 +44,7 @@ def test_create_lessons_tables_creates_both_tables():
     }
     assert telemetry_cols == {
         "match_id", "run_id", "competition_resolution", "research_evidence",
-        "forecast_payload", "recommendation", "created_at",
+        "forecast_payload", "recommendation", "reasoning_trace", "created_at",
     }
 
 
@@ -153,6 +153,40 @@ def test_insert_telemetry_round_trips_json_fields():
     assert json.loads(row[3]) == {"availability": "ok"}
     assert json.loads(row[4]) == {"result_3way": {"probabilities": {"home": 0.5}}}
     assert json.loads(row[5]) == {"overall": "no_bet"}
+
+
+def test_insert_telemetry_reasoning_trace_defaults_to_null():
+    """A106: pre-existing callers that don't pass reasoning_trace keep
+    writing JSON null, same as every other optional field on this row
+    (competition_resolution/research_evidence/forecast_payload already
+    round-trip None the same way -- json.dumps(None), not a SQL NULL)."""
+    conn = _conn()
+    insert_telemetry(
+        conn, match_id="m1", run_id="run-1", competition_resolution=None,
+        research_evidence=None, forecast_payload=None, recommendation={"overall": "no_bet"},
+    )
+    reasoning_trace = conn.execute(
+        "SELECT reasoning_trace FROM agent_telemetry WHERE match_id = 'm1'"
+    ).fetchone()[0]
+    assert json.loads(reasoning_trace) is None
+
+
+def test_insert_telemetry_round_trips_reasoning_trace():
+    conn = _conn()
+    trace = [
+        {"role": "system", "content": "You are a betting agent."},
+        {"role": "human", "content": "Analyse Leeds vs Liverpool."},
+        {"role": "ai", "content": "Let me check recent form.", "tool_calls": [{"name": "web_search", "args": {"query": "Leeds form"}}]},
+        {"role": "tool", "content": "Leeds won 2 of last 5.", "tool_call_id": "call_1"},
+        {"role": "ai", "content": "Based on the evidence, away win looks value."},
+    ]
+    insert_telemetry(
+        conn, match_id="m1", run_id="run-1", competition_resolution=None,
+        research_evidence=None, forecast_payload=None, recommendation={"overall": "direct_bet"},
+        reasoning_trace=trace,
+    )
+    row = conn.execute("SELECT reasoning_trace FROM agent_telemetry WHERE match_id = 'm1'").fetchone()
+    assert json.loads(row[0]) == trace
 
 
 def test_approve_lesson_sets_status_scope_rule_text_reviewed_at_reviewer():

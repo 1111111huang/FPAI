@@ -1441,7 +1441,8 @@ async def _run_backtest_concurrent(
     so one bad match doesn't abort the whole batch — mirrors run_agent_snapshot's
     error-tolerance pattern.
 
-    capture_state (A33): threaded through to process_match_row so agent-train
+    capture_state (A33; A107 -- now also passed by plain agent-backtest, not
+    just agent-train): threaded through to process_match_row so the caller
     can persist each match's raw evidence to DuckDB telemetry.
 
     allow_lessons_in_replay (A41): threaded through to process_match_row so
@@ -1504,6 +1505,7 @@ def run_agent_backtest(
     would evaluate them against (some of) the very matches that shaped them,
     the exact leakage A40's train/test split exists to prevent."""
     import asyncio
+    import uuid
 
     from src.agent.agent_config import AgentConfig
     from src.agent.backtest import BacktestHarness
@@ -1520,7 +1522,13 @@ def run_agent_backtest(
     matches = harness.load_matches(from_date, to_date, league=league, sample=sample, split=split, test_fraction=test_fraction)
     print(f"Running backtest over {len(matches)} matches (concurrency={concurrency}, split={split}, use_lessons={use_lessons})...")
 
-    records = asyncio.run(_run_backtest_concurrent(matches, cfg, concurrency, allow_lessons_in_replay=use_lessons))
+    # A107: capture_state=True -- previously only agent-train did this, so a
+    # plain agent-backtest run produced no per-match telemetry (reasoning
+    # trace, forecast_payload, competition_resolution) at all, only the
+    # aggregate report below. See _write_telemetry_rows.
+    records = asyncio.run(
+        _run_backtest_concurrent(matches, cfg, concurrency, capture_state=True, allow_lessons_in_replay=use_lessons)
+    )
 
     stake_fn = simulate_kelly_stake if stake_mode == "kelly" else simulate_flat_stake
     bankroll_result = stake_fn(records)
@@ -1528,6 +1536,14 @@ def run_agent_backtest(
     print_report(report)
     path = save_report(report, cfg)
     print(f"\nReport saved to {path}")
+
+    run_id = uuid.uuid4().hex
+    with harness.db.connection() as conn:
+        from src.agent.lessons import create_lessons_tables
+
+        create_lessons_tables(conn)
+        telemetry_written = len(_write_telemetry_rows(conn, records, run_id))
+    print(f"Wrote {telemetry_written} telemetry rows (run_id={run_id})")
 
 
 def _build_llm_invoke(config) -> Any:
@@ -1548,37 +1564,21 @@ def _build_llm_invoke(config) -> Any:
     return _invoke
 
 
-def _write_train_artifacts(
-    conn, records: list, run_id: str, batch_size: int = 1, config: Any = None,
-) -> tuple[int, int]:
-    """Write one telemetry row per scored record that captured full graph
-    state, and one pending lesson candidate per record (batch_size <= 1,
-    A33's original behavior, left as a fully separate code path so it stays
-    byte-identical) or per batch of up to batch_size same-(competition_id,
-    tier) records (batch_size > 1, A39). Records without full_state (e.g.
-    a per-match failure that skipped capture) are silently skipped -- there's
-    nothing to persist. Returns (lessons_written, telemetry_written).
+def _write_telemetry_rows(conn, records: list, run_id: str) -> list[tuple]:
+    """Write one agent_telemetry row per record that captured full graph
+    state (competition_resolution/research_evidence/forecast_payload/
+    recommendation/reasoning_trace) -- records without full_state (e.g. a
+    per-match failure that skipped capture) are silently skipped, nothing
+    to persist. Shared by agent-train's _write_train_artifacts and
+    agent-backtest's run_agent_backtest (A107) -- previously only
+    agent-train wrote any telemetry at all, so a plain `agent-backtest` run
+    produced nothing queryable beyond its aggregate JSON report. Returns
+    the (record, competition_id, tier) tuples for records actually written,
+    for callers (agent-train) that also need to scope lesson candidates."""
+    from src.agent.graph import serialize_agent_messages
+    from src.agent.lessons import extract_competition_scope, insert_telemetry
 
-    config (A42-follow-up): when given (and batch_size > 1), each batch's
-    lesson also gets an LLM-synthesized reflective narrative appended
-    (generate_batch_reflection) on top of the deterministic stats -- the
-    stats alone were reviewed and judged "not very sensible" (2026-07-28).
-    None (the batch_size <= 1 code path never receives it, and it's optional
-    here) skips the reflection entirely, keeping every existing caller that
-    doesn't pass config unaffected."""
-    from src.agent.lessons import (
-        create_lessons_tables,
-        extract_competition_scope,
-        generate_batch_lesson_text,
-        generate_batch_reflection,
-        generate_lesson_text,
-        insert_lesson_candidate,
-        insert_telemetry,
-    )
-
-    create_lessons_tables(conn)
     scoped = []  # (record, competition_id, tier), only records with full_state
-    telemetry_written = 0
     for record in records:
         if not record.full_state:
             continue
@@ -1591,9 +1591,42 @@ def _write_train_artifacts(
             research_evidence=record.full_state.get("research_evidence"),
             forecast_payload=record.full_state.get("forecast_payload"),
             recommendation=record.recommendation,
+            # A106: the LLM's own reasoning/tool-call trace, not just the
+            # final structured recommendation -- see serialize_agent_messages.
+            reasoning_trace=serialize_agent_messages(record.full_state.get("messages", [])),
         )
-        telemetry_written += 1
         scoped.append((record, competition_id, tier))
+    return scoped
+
+
+def _write_train_artifacts(
+    conn, records: list, run_id: str, batch_size: int = 1, config: Any = None,
+) -> tuple[int, int]:
+    """Write one telemetry row per scored record that captured full graph
+    state (via _write_telemetry_rows), and one pending lesson candidate per
+    record (batch_size <= 1, A33's original behavior, left as a fully
+    separate code path so it stays byte-identical) or per batch of up to
+    batch_size same-(competition_id, tier) records (batch_size > 1, A39).
+    Returns (lessons_written, telemetry_written).
+
+    config (A42-follow-up): when given (and batch_size > 1), each batch's
+    lesson also gets an LLM-synthesized reflective narrative appended
+    (generate_batch_reflection) on top of the deterministic stats -- the
+    stats alone were reviewed and judged "not very sensible" (2026-07-28).
+    None (the batch_size <= 1 code path never receives it, and it's optional
+    here) skips the reflection entirely, keeping every existing caller that
+    doesn't pass config unaffected."""
+    from src.agent.lessons import (
+        create_lessons_tables,
+        generate_batch_lesson_text,
+        generate_batch_reflection,
+        generate_lesson_text,
+        insert_lesson_candidate,
+    )
+
+    create_lessons_tables(conn)
+    scoped = _write_telemetry_rows(conn, records, run_id)
+    telemetry_written = len(scoped)
 
     if batch_size <= 1:
         lessons_written = 0

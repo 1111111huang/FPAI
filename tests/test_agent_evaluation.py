@@ -5,7 +5,9 @@ import json
 
 from src.agent.agent_config import AgentConfig
 from src.agent.evaluation import (
+    build_confidence_breakdown,
     build_evaluation_report,
+    build_no_bet_breakdown,
     compute_max_drawdown,
     config_hash,
     save_report,
@@ -79,6 +81,106 @@ def test_build_evaluation_report_total_staked_and_profit_zero_when_no_bets():
     report = build_evaluation_report([_Rec()], bankroll)
     assert report["total_staked"] == 0.0
     assert report["total_profit"] == 0.0
+
+
+def test_build_evaluation_report_market_breakdown_groups_by_market_and_selection():
+    """A105: per-(market, selection) counts/hit-rate/ROI, not just the
+    pooled aggregate -- the gap A104 hit when reports/agent_backtest/*.json
+    couldn't answer 'what did the agent actually bet on'."""
+    bankroll = BankrollResult(
+        starting_bankroll=1000.0, ending_bankroll=1005.0,
+        equity_curve=[1000.0, 1010.0, 1000.0, 1005.0],
+        bets=[
+            BetOutcome(match_id="m1", market="result_3way", selection="draw", odds=3.0, stake=10.0, won=True, payout=20.0),
+            BetOutcome(match_id="m2", market="result_3way", selection="draw", odds=3.0, stake=10.0, won=False, payout=-10.0),
+            BetOutcome(match_id="m3", market="total_goals", selection="under_2.5", odds=1.9, stake=10.0, won=True, payout=9.0),
+        ],
+    )
+    report = build_evaluation_report([], bankroll)
+
+    breakdown = report["market_breakdown"]
+    assert breakdown["result_3way/draw"] == {
+        "market": "result_3way", "selection": "draw", "picks": 2, "wins": 1,
+        "hit_rate": 0.5, "roi": 0.5, "total_staked": 20.0, "total_profit": 10.0,
+    }
+    assert breakdown["total_goals/under_2.5"] == {
+        "market": "total_goals", "selection": "under_2.5", "picks": 1, "wins": 1,
+        "hit_rate": 1.0, "roi": 0.9, "total_staked": 10.0, "total_profit": 9.0,
+    }
+
+
+def test_build_evaluation_report_market_breakdown_empty_when_no_bets():
+    bankroll = BankrollResult(starting_bankroll=1000.0, ending_bankroll=1000.0, equity_curve=[1000.0], bets=[])
+    report = build_evaluation_report([], bankroll)
+    assert report["market_breakdown"] == {}
+
+
+def test_build_confidence_breakdown_groups_by_confidence_and_orders_low_medium_high():
+    bets = [
+        BetOutcome(match_id="m1", market="result_3way", selection="draw", odds=3.0, stake=10.0, won=True, payout=20.0, confidence="high"),
+        BetOutcome(match_id="m2", market="btts", selection="yes", odds=1.9, stake=10.0, won=False, payout=-10.0, confidence="low"),
+        BetOutcome(match_id="m3", market="btts", selection="no", odds=1.9, stake=10.0, won=True, payout=9.0, confidence="low"),
+    ]
+    breakdown = build_confidence_breakdown(bets)
+
+    assert list(breakdown.keys()) == ["low", "high"]
+    assert breakdown["low"] == {
+        "confidence": "low", "picks": 2, "wins": 1, "hit_rate": 0.5, "roi": -0.05,
+        "total_staked": 20.0, "total_profit": -1.0,
+    }
+    assert breakdown["high"] == {
+        "confidence": "high", "picks": 1, "wins": 1, "hit_rate": 1.0, "roi": 2.0,
+        "total_staked": 10.0, "total_profit": 20.0,
+    }
+
+
+def test_build_confidence_breakdown_empty_when_no_bets():
+    assert build_confidence_breakdown([]) == {}
+
+
+class _NoBetRecord:
+    def __init__(self, overall, market_results=None):
+        self.recommendation = {"overall": overall}
+        self.market_results = market_results if market_results is not None else []
+
+
+def test_build_no_bet_breakdown_classifies_insufficient_data():
+    records = [_NoBetRecord("insufficient_data")]
+    assert build_no_bet_breakdown(records) == {"insufficient_data": 1}
+
+
+def test_build_no_bet_breakdown_classifies_model_declined():
+    records = [_NoBetRecord("no_bet", [{"initial_recommendation_type": "no_bet", "recommendation_type": "no_bet"}])]
+    assert build_no_bet_breakdown(records) == {"model_declined": 1}
+
+
+def test_build_no_bet_breakdown_classifies_guardrail_downgraded():
+    records = [_NoBetRecord("no_bet", [{"initial_recommendation_type": "direct_bet", "recommendation_type": "no_bet"}])]
+    assert build_no_bet_breakdown(records) == {"guardrail_downgraded": 1}
+
+
+def test_build_no_bet_breakdown_classifies_no_pick_resolved():
+    records = [_NoBetRecord("no_bet", [])]
+    assert build_no_bet_breakdown(records) == {"no_pick_resolved": 1}
+
+
+def test_build_no_bet_breakdown_classifies_unknown_for_pre_a107_records():
+    records = [_NoBetRecord("no_bet", [{"recommendation_type": "no_bet"}])]  # no initial_recommendation_type key
+    assert build_no_bet_breakdown(records) == {"unknown": 1}
+
+
+def test_build_no_bet_breakdown_ignores_direct_bet_and_conditional_records():
+    records = [_NoBetRecord("direct_bet"), _NoBetRecord("conditional")]
+    assert build_no_bet_breakdown(records) == {}
+
+
+def test_build_no_bet_breakdown_aggregates_across_multiple_records():
+    records = [
+        _NoBetRecord("insufficient_data"),
+        _NoBetRecord("insufficient_data"),
+        _NoBetRecord("no_bet", [{"initial_recommendation_type": "no_bet"}]),
+    ]
+    assert build_no_bet_breakdown(records) == {"insufficient_data": 2, "model_declined": 1}
 
 
 def test_config_hash_deterministic_and_order_independent():

@@ -153,6 +153,30 @@ def _extract_text(content: str | list) -> str:
     return str(content)
 
 
+def serialize_agent_messages(messages: list[BaseMessage]) -> list[dict[str, Any]]:
+    """A106: a JSON-safe transcript of the full agent conversation for one
+    match -- the LLM's own intermediate reasoning and tool-call trace, not
+    just the final structured MatchRecommendation.explanation. messages is
+    LangChain BaseMessage objects (see run_agent's own return_full_state
+    docstring: "NOT JSON-serializable ... callers should pick specific keys
+    out"); this is that pick, reused by both agent-train's telemetry write
+    and anything that wants to replay/inspect a match's reasoning later."""
+    trace: list[dict[str, Any]] = []
+    for msg in messages:
+        entry: dict[str, Any] = {
+            "role": getattr(msg, "type", msg.__class__.__name__),
+            "content": _extract_text(msg.content),
+        }
+        tool_calls = getattr(msg, "tool_calls", None)
+        if tool_calls:
+            entry["tool_calls"] = [{"name": tc.get("name"), "args": tc.get("args")} for tc in tool_calls]
+        tool_call_id = getattr(msg, "tool_call_id", None)
+        if tool_call_id:
+            entry["tool_call_id"] = tool_call_id
+        trace.append(entry)
+    return trace
+
+
 def _invoke_with_retry(runnable: Any, messages: list, attempts: int = 3) -> Any:
     """W151/A64: agent_node's calls to the LLM provider were the one
     external call left in this graph with no error handling at all --
