@@ -1594,8 +1594,6 @@ class FeatureFactory:
         row's month as strictly-future relative to every real row, so this
         is leakage-safe by construction, not by a second implementation).
         """
-        import numpy as np
-
         with self.db_manager.connection(read_only=True) as conn:
             league_df = conn.execute(
                 "SELECT match_id, league, date, home_team, away_team, fthg, ftag, hc, ac"
@@ -1607,12 +1605,33 @@ class FeatureFactory:
         league_df["home_team"] = league_df["home_team"].astype(str).map(standardize_team_name)
         league_df["away_team"] = league_df["away_team"].astype(str).map(standardize_team_name)
 
+        # fthg/ftag/hc/ac deliberately omitted here (left for the reindex
+        # below), not set to np.nan directly -- pandas' fetchdf() gives
+        # league_df these columns as int32/float32 (not its own float64
+        # default), and a plain dict literal's np.nan is always float64.
+        # Concatenating a real int32 column against a same-named column
+        # that's *entirely* NaN in this one-row frame hits pandas' own
+        # deprecated "empty or all-NA" dtype-inference path (FutureWarning:
+        # "DataFrame concatenation with empty or all-NA entries..."),
+        # exactly the case pandas' own message recommends fixing by
+        # "exclud[ing] the relevant entries before the concat operation" --
+        # verified byte-for-byte identical output/dtypes to the previous
+        # np.nan-in-the-literal approach, zero warnings.
         synthetic_row = pd.DataFrame([{
             "match_id": synthetic_id, "league": league, "date": pd.Timestamp(match_date),
             "home_team": home_team, "away_team": away_team,
-            "fthg": np.nan, "ftag": np.nan, "hc": np.nan, "ac": np.nan,
         }])
         combined_league_df = pd.concat([league_df, synthetic_row], ignore_index=True)
+        for col in ("fthg", "ftag", "hc", "ac"):
+            target_dtype = league_df[col].dtype
+            # An integer dtype (fthg/ftag) can never hold the synthetic
+            # row's NaN -- upcast to float64, matching what the previous
+            # np.nan-in-the-literal approach's own dtype inference already
+            # landed on for these two columns (verified). hc/ac are already
+            # float in league_df and stay at their own (float32) dtype.
+            if pd.api.types.is_integer_dtype(target_dtype):
+                target_dtype = "float64"
+            combined_league_df[col] = combined_league_df[col].astype(target_dtype)
         result = self._compute_dixon_coles_features(combined_league_df)
         return result[result["match_id"] == synthetic_id]
 
