@@ -962,7 +962,9 @@ async def get_fixtures(date_from: str | None = None, date_to: str | None = None)
     return matches
 
 
-def _fetch_odds_for_manual_request(request: RecommendationRequest, league: str | None) -> dict[str, float] | None:
+def _fetch_odds_for_manual_request(
+    request: RecommendationRequest, league: str | None,
+) -> tuple[dict[str, float] | None, str | None]:
     """W49: best-effort odds lookup for the manual 'regenerate now' path,
     reusing eod_batch.py's exact odds_client + match_odds team-matching
     logic (BUG-015's canonical-name matching included) rather than
@@ -977,10 +979,10 @@ def _fetch_odds_for_manual_request(request: RecommendationRequest, league: str |
     Swedish fixture's fetch actually queries Sweden's odds feed rather than
     silently querying EPL's.
 
-    Every failure mode degrades to None (no odds attached) rather than
-    raising: no odds client configured (build_odds_client() returns None
-    when no ODDS_API_KEY/sandbox override is set), no matching odds event
-    for this fixture, or the odds client call itself raising (e.g. a
+    Every failure mode degrades to (None, None) (no odds attached) rather
+    than raising: no odds client configured (build_odds_client() returns
+    None when no ODDS_API_KEY/sandbox override is set), no matching odds
+    event for this fixture, or the odds client call itself raising (e.g. a
     network error). This must never turn a previously-working no-odds
     request into a 500 -- it's strictly additive over the pre-W49
     behavior.
@@ -992,11 +994,20 @@ def _fetch_odds_for_manual_request(request: RecommendationRequest, league: str |
     still protects the safety margin (degrades to no-odds, never errors),
     but frequent manual clicks now measurably compete with the scheduler
     for the same budget within a given month -- worth watching if usage
-    patterns change, not something this fix can size in advance."""
+    patterns change, not something this fix can size in advance.
+
+    W203: also returns the matched odds event's own commence_time (real
+    kickoff instant) alongside the odds -- create_recommendation() uses it
+    for a has_kicked_off() check this endpoint never had (BUG-032-class
+    gap found live: this was the one recommendation-generation path in
+    the whole app with zero protection against overwriting a pre-match
+    recommendation with an "analysis" of a match already in progress).
+    None when no matching event was found -- same degrade-gracefully
+    contract as the odds themselves."""
     try:
         odds_client = build_odds_client()
         if odds_client is None:
-            return None
+            return None, None
         sport_key = ODDS_SPORT_KEY_BY_COMPETITION.get(league, DEFAULT_SPORT_KEY)
         # BUG-031: date=request.date, not the client's own default -- without
         # it, HistoricalOddsClient.get_odds() (sandbox mode) falls back to
@@ -1016,13 +1027,20 @@ def _fetch_odds_for_manual_request(request: RecommendationRequest, league: str |
             home_team=request.home_team, away_team=request.away_team,
             home_goals=None, away_goals=None,
         )
-        return eod_batch.match_odds(fixture, odds_by_teams)
+        # W203: matched_odds_event() is what match_odds() itself calls
+        # internally -- one lookup, not two, used for both the odds dict
+        # and the event's own commence_time.
+        event = eod_batch.matched_odds_event(fixture, odds_by_teams)
+        if event is None or event.home_odds is None or event.draw_odds is None or event.away_odds is None:
+            return None, None
+        odds = {"home": event.home_odds, "draw": event.draw_odds, "away": event.away_odds}
+        return odds, event.commence_time
     except Exception:
         LOGGER.warning(
             "Manual recommendation odds fetch failed for %s v %s (%s)",
             request.home_team, request.away_team, request.date, exc_info=True,
         )
-        return None
+        return None, None
 
 
 @app.post("/api/recommendations")
@@ -1043,6 +1061,7 @@ async def create_recommendation(
     odds-fetch-before-run_agent sequence whenever the caller didn't already
     supply odds explicitly -- an explicit request.odds always wins."""
     match_info = request.to_match_info()
+    commence_time: str | None = None
     if request.odds is None:
         # build_odds_client()/get_odds() make a real synchronous HTTP or DB
         # call (HistoricalOddsClient/OddsAPIClient) -- off the event loop,
@@ -1052,9 +1071,45 @@ async def create_recommendation(
         # duckdb.IOException from HistoricalOddsClient's sandbox-mode DB
         # read, W93 -- confirmed live, not assumed) -- nothing further
         # needed here for that side.
-        fetched_odds = await run_in_threadpool(_fetch_odds_for_manual_request, request, match_info.get("league"))
+        fetched_odds, commence_time = await run_in_threadpool(
+            _fetch_odds_for_manual_request, request, match_info.get("league")
+        )
         if fetched_odds is not None:
             match_info["odds"] = fetched_odds
+
+    # W203: a pre-match recommendation is meaningless once the match has
+    # actually started -- "current odds" past that point reflect in-game
+    # state, not a pre-match edge (same reasoning as eod_batch.has_kicked_off,
+    # which already guards every *scheduled* generation path -- this manual
+    # endpoint was the one gap, found live via direct user question).
+    # commence_time is only known when the odds-fetch branch above actually
+    # matched a real event; an explicit request.odds (the frontend has never
+    # populated this in practice, per W49's own docstring above) carries no
+    # kickoff signal at all, so there's nothing to check in that case --
+    # degrades to "allow it", not "block it", matching this endpoint's own
+    # established best-effort philosophy.
+    if commence_time:
+        fake_fixture = NormalizedMatch(
+            match_id=request.effective_match_id(), utc_date=commence_time, status="",
+            home_team=request.home_team, away_team=request.away_team,
+            home_goals=None, away_goals=None,
+        )
+        if eod_batch.has_kicked_off(fake_fixture, sandbox_clock.sandbox_now(timezone.utc)):
+            agent_config_hash = compute_agent_config_hash(AgentConfig.default())
+            cached = cache.get_latest(request.effective_match_id(), request.date, agent_config_hash)
+            if cached is None:
+                cached = cache.get_latest_any_config(request.effective_match_id(), request.date)
+            if cached is not None:
+                LOGGER.info(
+                    "Manual regenerate for match_id=%s skipped -- kickoff already passed; "
+                    "returning the last cached pre-match recommendation unchanged.",
+                    request.effective_match_id(),
+                )
+                return validate_and_degrade(cached.recommendation, request.home_team, request.away_team)
+            raise HTTPException(
+                status_code=409,
+                detail="This match has already kicked off, and no pre-match recommendation exists to show.",
+            )
 
     # W93: unlike the odds fetch above, run_agent (via ForecastService,
     # reading data/fpai_core.db) had no protection against DuckDB's real

@@ -4,6 +4,7 @@ W20's own future zero-network-calls requirement, applied here from the start).""
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 import sys
 from unittest.mock import MagicMock, patch
@@ -15,6 +16,17 @@ from fastapi.testclient import TestClient
 from app.backend import recommendations
 from app.backend.main import app
 from app.backend.odds_api_client import NormalizedOdds
+
+
+def _future_commence_time(days_from_now: int = 1) -> str:
+    """W203: a real wall-clock-relative future kickoff -- create_recommendation()
+    now checks has_kicked_off() against a matched odds event's own
+    commence_time, so a hardcoded past-relative-to-now literal (this file's
+    prior "2026-08-22", genuinely in the past by the time these tests
+    actually run) would trip that check as a side effect, same rot
+    eod_batch.py's/t30_refresh.py's own test suites already guard against
+    with their own _future_utc_datetime() helper."""
+    return (datetime.now(timezone.utc) + timedelta(days=days_from_now)).strftime("%Y-%m-%dT15:00:00Z")
 
 _VALID_CANDIDATE = {
     "market": "result_3way",
@@ -170,7 +182,7 @@ def _odds_client_returning(*events: NormalizedOdds) -> MagicMock:
 
 def test_odds_are_fetched_and_attached_when_not_supplied_and_a_match_is_found():
     fetched_event = NormalizedOdds(
-        home_team="Arsenal", away_team="Everton", commence_time="2026-08-22T15:00:00Z",
+        home_team="Arsenal", away_team="Everton", commence_time=_future_commence_time(),
         home_odds=1.5, draw_odds=4.0, away_odds=6.0,
     )
     with patch("app.backend.recommendations.run_agent", return_value=_VALID_RECOMMENDATION) as mock_run:
@@ -190,7 +202,7 @@ def test_odds_are_fetched_and_attached_when_not_supplied_and_a_match_is_found():
 def test_odds_fetch_uses_the_epl_sport_key_for_an_e0_request():
     """W58: must not rely on get_odds()'s own "soccer_epl" default parameter."""
     fetched_event = NormalizedOdds(
-        home_team="Arsenal", away_team="Everton", commence_time="2026-08-22T15:00:00Z",
+        home_team="Arsenal", away_team="Everton", commence_time=_future_commence_time(),
         home_odds=1.5, draw_odds=4.0, away_odds=6.0,
     )
     odds_client = _odds_client_returning(fetched_event)
@@ -235,7 +247,7 @@ def test_odds_fetch_uses_the_fixtures_own_date_not_the_client_default():
     genuinely existing for its actual date. This asserts the fix directly --
     `date` must be the fixture's own date, not omitted."""
     fetched_event = NormalizedOdds(
-        home_team="Brighton", away_team="Liverpool", commence_time="2026-03-21T00:00:00Z",
+        home_team="Brighton", away_team="Liverpool", commence_time=_future_commence_time(),
         home_odds=3.1, draw_odds=3.5, away_odds=2.2,
     )
     odds_client = _odds_client_returning(fetched_event)
@@ -254,7 +266,7 @@ def test_odds_fetch_uses_the_fixtures_own_date_not_the_client_default():
 
 def test_explicit_odds_take_precedence_over_fetched_odds():
     fetched_event = NormalizedOdds(
-        home_team="Arsenal", away_team="Everton", commence_time="2026-08-22T15:00:00Z",
+        home_team="Arsenal", away_team="Everton", commence_time=_future_commence_time(),
         home_odds=9.9, draw_odds=9.9, away_odds=9.9,
     )
     explicit_odds = {"home": 1.5, "draw": 4.0, "away": 6.0}
@@ -293,7 +305,7 @@ def test_no_odds_client_configured_degrades_to_no_odds_not_an_error():
 
 def test_no_matching_odds_event_degrades_to_no_odds_not_an_error():
     unrelated_event = NormalizedOdds(
-        home_team="Chelsea", away_team="Fulham", commence_time="2026-08-22T15:00:00Z",
+        home_team="Chelsea", away_team="Fulham", commence_time=_future_commence_time(),
         home_odds=1.5, draw_odds=4.0, away_odds=6.0,
     )
     with patch("app.backend.recommendations.run_agent", return_value=_VALID_RECOMMENDATION) as mock_run:
@@ -333,7 +345,7 @@ def test_fetched_odds_are_recorded_in_the_cache_not_just_used_for_generation():
     skip regeneration" dedup check sees a spurious change on every
     subsequent comparison."""
     fetched_event = NormalizedOdds(
-        home_team="Arsenal", away_team="Everton", commence_time="2026-08-22T15:00:00Z",
+        home_team="Arsenal", away_team="Everton", commence_time=_future_commence_time(),
         home_odds=1.5, draw_odds=4.0, away_odds=6.0,
     )
     mock_cache = MagicMock()
@@ -382,3 +394,107 @@ def test_reasoning_trace_and_forecast_payload_are_recorded_in_the_cache_a107():
     kwargs = mock_cache.record_generation.call_args.kwargs
     assert kwargs["reasoning_trace"] == [{"role": "ai", "content": "Home side has the stronger recent form."}]
     assert kwargs["forecast_payload"] == {"result_3way": {"probabilities": {"home": 0.6}}}
+
+
+# --- W203: manual regenerate must not touch a live/finished match --------
+
+def _past_commence_time() -> str:
+    return "2020-01-01T15:00:00Z"
+
+
+def test_manual_regenerate_returns_cached_recommendation_unchanged_when_kicked_off(tmp_path):
+    """W203: found live via direct user question -- create_recommendation()
+    was the one recommendation-generation path with no has_kicked_off()
+    guard, unlike every scheduled path (EOD/T-30/pregenerate). A match
+    already in progress must not get overwritten with an "analysis" of
+    in-game odds."""
+    from app.backend.agent_config_hash import compute_agent_config_hash
+    from app.backend.recommendation_cache import RecommendationCache
+    from src.agent.agent_config import AgentConfig
+
+    real_cache = RecommendationCache(db_path=tmp_path / "cache.db")
+    agent_config_hash = compute_agent_config_hash(AgentConfig.default())
+    real_cache.record_generation(
+        match_id="Arsenal__Everton__2026-08-22", date="2026-08-22", agent_config_hash=agent_config_hash,
+        odds={"home": 1.5, "draw": 4.0, "away": 6.0}, recommendation=_VALID_RECOMMENDATION,
+        triggered_by="scheduled",
+    )
+    past_event = NormalizedOdds(
+        home_team="Arsenal", away_team="Everton", commence_time=_past_commence_time(),
+        home_odds=1.6, draw_odds=3.8, away_odds=5.0,
+    )
+    app.dependency_overrides[recommendations.get_cache] = lambda: real_cache
+    try:
+        with patch("app.backend.recommendations.run_agent") as mock_run:
+            with patch("app.backend.main.build_odds_client", return_value=_odds_client_returning(past_event)):
+                with TestClient(app) as client:
+                    response = client.post(
+                        "/api/recommendations",
+                        json={"home_team": "Arsenal", "away_team": "Everton", "date": "2026-08-22", "league": "E0"},
+                    )
+    finally:
+        app.dependency_overrides.clear()
+
+    mock_run.assert_not_called()
+    assert response.status_code == 200
+    assert response.json()["overall"] == "direct_bet"  # the pre-match recommendation, unchanged
+
+
+def test_manual_regenerate_errors_cleanly_when_kicked_off_with_no_prior_recommendation(tmp_path):
+    from app.backend.recommendation_cache import RecommendationCache
+
+    real_cache = RecommendationCache(db_path=tmp_path / "cache.db")
+    past_event = NormalizedOdds(
+        home_team="Arsenal", away_team="Everton", commence_time=_past_commence_time(),
+        home_odds=1.6, draw_odds=3.8, away_odds=5.0,
+    )
+    app.dependency_overrides[recommendations.get_cache] = lambda: real_cache
+    try:
+        with patch("app.backend.recommendations.run_agent") as mock_run:
+            with patch("app.backend.main.build_odds_client", return_value=_odds_client_returning(past_event)):
+                with TestClient(app) as client:
+                    response = client.post(
+                        "/api/recommendations",
+                        json={"home_team": "Arsenal", "away_team": "Everton", "date": "2026-08-22", "league": "E0"},
+                    )
+    finally:
+        app.dependency_overrides.clear()
+
+    mock_run.assert_not_called()
+    assert response.status_code == 409
+
+
+def test_manual_regenerate_still_runs_normally_for_a_genuinely_upcoming_match():
+    """Control: a real future commence_time must not trip the guard."""
+    future_event = NormalizedOdds(
+        home_team="Arsenal", away_team="Everton", commence_time=_future_commence_time(),
+        home_odds=1.6, draw_odds=3.8, away_odds=5.0,
+    )
+    with patch("app.backend.recommendations.run_agent", return_value=_VALID_RECOMMENDATION) as mock_run:
+        with patch("app.backend.main.build_odds_client", return_value=_odds_client_returning(future_event)):
+            with TestClient(app) as client:
+                response = client.post(
+                    "/api/recommendations",
+                    json={"home_team": "Arsenal", "away_team": "Everton", "date": "2026-08-22", "league": "E0"},
+                )
+
+    mock_run.assert_called_once()
+    assert response.status_code == 200
+
+
+def test_manual_regenerate_skips_kickoff_check_when_odds_explicitly_supplied():
+    """No commence_time signal is available when the caller supplies odds
+    directly (the frontend has never done this in practice, per W49's own
+    docstring) -- degrades to "allow it", not "block it"."""
+    with patch("app.backend.recommendations.run_agent", return_value=_VALID_RECOMMENDATION) as mock_run:
+        with TestClient(app) as client:
+            response = client.post(
+                "/api/recommendations",
+                json={
+                    "home_team": "Arsenal", "away_team": "Everton", "date": "2026-08-22",
+                    "odds": {"home": 1.5, "draw": 4.0, "away": 6.0},
+                },
+            )
+
+    mock_run.assert_called_once()
+    assert response.status_code == 200
