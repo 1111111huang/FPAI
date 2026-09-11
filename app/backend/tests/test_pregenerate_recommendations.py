@@ -105,6 +105,135 @@ def test_groups_fixtures_by_league_and_runs_one_batch_per_league(monkeypatch):
     assert results["SWE"] == {"generated": 1, "skipped": 0, "unchanged": 0}
 
 
+def test_force_flag_reaches_run_eod_batch(monkeypatch):
+    """W204: direct user request -- an admin-triggered force-refresh must
+    actually reach run_eod_batch's own force param (already_fresh() bypass),
+    not just exist as an unused kwarg."""
+    monkeypatch.delenv("APP_ACCESS_TOKEN", raising=False)
+    fixtures = [_fixture("m1", "E0")]
+    captured = {}
+
+    async def _fake_run_eod_batch(**kwargs):
+        captured["force"] = kwargs["force"]
+        return EodBatchResult(fixtures=kwargs["fixtures"], generated=1, skipped=0)
+
+    with patch("app.backend.main.get_fixtures", new=AsyncMock(return_value=fixtures)), \
+         patch("app.backend.main.build_odds_client", return_value=None), \
+         patch("app.backend.main.recommendations.get_cache", return_value=MagicMock()), \
+         patch("app.backend.eod_batch.run_eod_batch", side_effect=_fake_run_eod_batch):
+        import asyncio
+        asyncio.run(main._pregenerate_recommendations(days_ahead=5, scheduler=None, force=True))
+
+    assert captured["force"] is True
+
+
+def test_force_defaults_to_false_preserving_existing_behavior(monkeypatch):
+    monkeypatch.delenv("APP_ACCESS_TOKEN", raising=False)
+    fixtures = [_fixture("m1", "E0")]
+    captured = {}
+
+    async def _fake_run_eod_batch(**kwargs):
+        captured["force"] = kwargs["force"]
+        return EodBatchResult(fixtures=kwargs["fixtures"], generated=1, skipped=0)
+
+    with patch("app.backend.main.get_fixtures", new=AsyncMock(return_value=fixtures)), \
+         patch("app.backend.main.build_odds_client", return_value=None), \
+         patch("app.backend.main.recommendations.get_cache", return_value=MagicMock()), \
+         patch("app.backend.eod_batch.run_eod_batch", side_effect=_fake_run_eod_batch):
+        import asyncio
+        asyncio.run(main._pregenerate_recommendations(days_ahead=5, scheduler=None))
+
+    assert captured["force"] is False
+
+
+def test_explicit_date_range_overrides_days_ahead(monkeypatch):
+    """W204: date_from/date_to (both given) target any window, not just
+    "today onward" -- e.g. backfilling a specific day a prior pass failed
+    on (the football-data.org 429 scenario this session hit live)."""
+    monkeypatch.delenv("APP_ACCESS_TOKEN", raising=False)
+    captured = {}
+
+    async def _fake_get_fixtures(date_from, date_to):
+        captured["date_from"] = date_from
+        captured["date_to"] = date_to
+        return [_fixture("m1", "E0")]
+
+    with patch("app.backend.main.get_fixtures", new=AsyncMock(side_effect=_fake_get_fixtures)), \
+         patch("app.backend.main.build_odds_client", return_value=None), \
+         patch("app.backend.main.recommendations.get_cache", return_value=MagicMock()), \
+         patch("app.backend.eod_batch.run_eod_batch", new=AsyncMock(
+             return_value=EodBatchResult(fixtures=[], generated=0, skipped=0)
+         )):
+        import asyncio
+        asyncio.run(main._pregenerate_recommendations(
+            days_ahead=5, scheduler=None, date_from="2026-09-05", date_to="2026-09-06",
+        ))
+
+    # days_ahead=5 would compute a completely different range -- confirms
+    # the explicit override actually won, not just that the call succeeded.
+    assert captured == {"date_from": "2026-09-05", "date_to": "2026-09-06"}
+
+
+def test_one_sided_date_range_falls_back_to_days_ahead(monkeypatch):
+    """Only date_from OR only date_to (not both) is treated as no override --
+    a half-open range can't be resolved unambiguously against days_ahead,
+    same "both required together" contract as main.py's own
+    _split_fixture_date_range precedent elsewhere in this file."""
+    monkeypatch.delenv("APP_ACCESS_TOKEN", raising=False)
+    captured = {}
+
+    async def _fake_get_fixtures(date_from, date_to):
+        captured["date_from"] = date_from
+        captured["date_to"] = date_to
+        return []
+
+    with patch("app.backend.main.get_fixtures", new=AsyncMock(side_effect=_fake_get_fixtures)), \
+         patch("app.backend.main.build_odds_client", return_value=None), \
+         patch("app.backend.main.recommendations.get_cache", return_value=MagicMock()):
+        import asyncio
+        asyncio.run(main._pregenerate_recommendations(days_ahead=5, scheduler=None, date_from="2026-09-05"))
+
+    assert captured["date_from"] != "2026-09-05"
+
+
+def test_league_filter_narrows_to_one_competition(monkeypatch):
+    """W204: direct user request -- restrict a refresh to one league,
+    without generating for every other enabled one."""
+    monkeypatch.delenv("APP_ACCESS_TOKEN", raising=False)
+    fixtures = [_fixture("m1", "E0"), _fixture("m2", "SWE")]
+    batch_calls = []
+
+    async def _fake_run_eod_batch(**kwargs):
+        batch_calls.append(kwargs)
+        return EodBatchResult(fixtures=kwargs["fixtures"], generated=len(kwargs["fixtures"]), skipped=0)
+
+    with patch("app.backend.main.get_fixtures", new=AsyncMock(return_value=fixtures)), \
+         patch("app.backend.main.build_odds_client", return_value=None), \
+         patch("app.backend.main.recommendations.get_cache", return_value=MagicMock()), \
+         patch("app.backend.eod_batch.run_eod_batch", side_effect=_fake_run_eod_batch):
+        import asyncio
+        results = asyncio.run(main._pregenerate_recommendations(days_ahead=5, scheduler=None, league_filter="E0"))
+
+    assert len(batch_calls) == 1
+    assert batch_calls[0]["league"] == "E0"
+    assert "SWE" not in results
+
+
+def test_league_filter_for_a_league_with_no_fixtures_in_range_is_a_no_op(monkeypatch):
+    monkeypatch.delenv("APP_ACCESS_TOKEN", raising=False)
+    fixtures = [_fixture("m1", "E0")]
+
+    with patch("app.backend.main.get_fixtures", new=AsyncMock(return_value=fixtures)), \
+         patch("app.backend.main.build_odds_client", return_value=None), \
+         patch("app.backend.main.recommendations.get_cache", return_value=MagicMock()), \
+         patch("app.backend.eod_batch.run_eod_batch") as mock_batch:
+        import asyncio
+        results = asyncio.run(main._pregenerate_recommendations(days_ahead=5, scheduler=None, league_filter="SWE"))
+
+    mock_batch.assert_not_called()
+    assert results == {}
+
+
 def test_bug_045_defaults_to_a_lower_concurrency_than_eod_batchs_own_default(monkeypatch):
     """Confirmed live (2026-08-13): boot-time pregenerate stacking
     eod_batch's own default concurrency=5 directly on top of a freshly
@@ -231,8 +360,12 @@ def test_admin_endpoint_returns_immediately_without_waiting_for_pregenerate(monk
             response = client.post("/api/admin/pregenerate-recommendations", params={"days_ahead": 7})
 
     assert response.status_code == 200
-    assert response.json() == {"days_ahead": 7, "status": "started"}
-    mock_pregenerate.assert_called_once_with(days_ahead=7, scheduler=None)
+    assert response.json() == {
+        "days_ahead": 7, "date_from": None, "date_to": None, "league": None, "force": False, "status": "started",
+    }
+    mock_pregenerate.assert_called_once_with(
+        days_ahead=7, scheduler=None, date_from=None, date_to=None, league_filter=None, force=False,
+    )
 
 
 def test_fire_and_forget_keeps_a_reference_until_the_task_completes():

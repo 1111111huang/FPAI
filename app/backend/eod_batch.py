@@ -208,6 +208,7 @@ async def run_eod_batch(
     fixtures: list[NormalizedMatch] | None = None,
     on_progress: Callable[[NormalizedMatch, str], None] | None = None,
     league: str = LEAGUE_CODE,
+    force: bool = False,
 ) -> EodBatchResult:
     """W62: `league` (defaults to `LEAGUE_CODE`/"E0", preserving every
     existing caller's exact behavior unchanged) tags every generated
@@ -239,7 +240,14 @@ async def run_eod_batch(
     "generated"/"skipped"/"unchanged" (W151 -- already_fresh() found a
     cache entry with identical odds, no LLM call made). A CLI progress
     hook for W50's sandbox precompute step; the real scheduler path never
-    passes it."""
+    passes it.
+
+    W204: `force=True` bypasses the already_fresh() dedup check only --
+    every fixture regenerates regardless of whether its odds moved since
+    the last cached generation. Does NOT bypass has_kicked_off() (checked
+    first, unconditionally) -- a live/finished match is never regenerated
+    regardless of `force`, same BUG-067 protection as every other path.
+    Default False preserves every existing caller's exact behavior."""
     if fixtures is None:
         # W76: keyed off `league` (already accepted below), not the E0-only
         # COMPETITION_CODE constant -- this fallback is dead in practice for
@@ -305,7 +313,9 @@ async def run_eod_batch(
         # a recommendation with these exact odds -- nothing has changed,
         # so skip the redundant (real-money) LLM call. T-30 still gets
         # scheduled for this fixture regardless, unchanged below.
-        if already_fresh(cache, fixture.match_id, fixture_date, agent_config_hash, odds):
+        # W204: force=True skips this check entirely -- an explicit "regenerate
+        # everything in this range" admin request, not a routine dedup pass.
+        if not force and already_fresh(cache, fixture.match_id, fixture_date, agent_config_hash, odds):
             result.unchanged += 1
             if on_progress is not None:
                 on_progress(fixture, "unchanged")

@@ -149,6 +149,97 @@ def test_fixture_already_kicked_off_is_skipped_and_not_scheduled_for_t30(tmp_pat
     assert cache.get_latest("m1", _future_date(-1), agent_config_hash) is None
 
 
+def test_force_still_never_touches_an_already_kicked_off_match(tmp_path: Path) -> None:
+    """W204: force=True bypasses already_fresh()'s odds-unchanged dedup, but
+    must never bypass has_kicked_off() -- an explicit "refresh this range"
+    admin request is still never allowed to overwrite a live/finished
+    match's recommendation (BUG-067's whole point)."""
+    fixtures_client = MagicMock()
+    fixtures_client.get_fixtures.return_value = [
+        _fixture("m1", "Arsenal", "Everton", utc_date=_future_utc_datetime(-1)),  # kicked off yesterday
+        _fixture("m2", "Chelsea", "Fulham"),  # still pre-match
+    ]
+    odds_client = MagicMock()
+    odds_client.get_odds.return_value = []
+    cache = RecommendationCache(db_path=tmp_path / "cache.db")
+    config = AgentConfig.default()
+
+    with patch("app.backend.recommendations.run_agent", return_value=_RECOMMENDATION) as mock_run:
+        result = asyncio.run(
+            run_eod_batch(
+                fixtures_client=fixtures_client, odds_client=odds_client, cache=cache, config=config,
+                schedule_t30=lambda f: None, date_str=_future_date(1), force=True,
+            )
+        )
+
+    assert result.generated == 1
+    assert result.skipped == 1
+    mock_run.assert_called_once()  # only for m2 -- force never reaches the kicked-off m1
+
+
+def test_force_true_regenerates_even_when_odds_are_unchanged(tmp_path: Path) -> None:
+    """W204: the actual point of force -- bypass already_fresh()'s
+    odds-unchanged skip for a genuinely upcoming match."""
+    fixture = _fixture("m1", "Arsenal", "Everton")
+    fixtures_client = MagicMock()
+    fixtures_client.get_fixtures.return_value = [fixture]
+    odds_client = MagicMock()
+    odds_client.get_odds.return_value = [
+        NormalizedOdds(home_team="Arsenal", away_team="Everton", commence_time=fixture.utc_date,
+                        home_odds=1.8, draw_odds=3.6, away_odds=4.5),
+    ]
+    cache = RecommendationCache(db_path=tmp_path / "cache.db")
+    config = AgentConfig.default()
+    agent_config_hash = compute_agent_config_hash(config)
+    cache.record_generation(
+        match_id="m1", date=_future_date(1), agent_config_hash=agent_config_hash,
+        odds={"home": 1.8, "draw": 3.6, "away": 4.5}, recommendation=_RECOMMENDATION, triggered_by="scheduled",
+    )
+
+    with patch("app.backend.recommendations.run_agent", return_value=_RECOMMENDATION) as mock_run:
+        result = asyncio.run(
+            run_eod_batch(
+                fixtures_client=fixtures_client, odds_client=odds_client, cache=cache, config=config,
+                schedule_t30=lambda f: None, date_str=_future_date(1), force=True,
+            )
+        )
+
+    mock_run.assert_called_once()  # would have been skipped as "unchanged" without force
+    assert result.generated == 1
+    assert result.unchanged == 0
+
+
+def test_force_defaults_to_false_preserving_already_fresh_dedup(tmp_path: Path) -> None:
+    """Control: every existing caller that doesn't pass force= keeps the
+    exact pre-W204 dedup behavior."""
+    fixture = _fixture("m1", "Arsenal", "Everton")
+    fixtures_client = MagicMock()
+    fixtures_client.get_fixtures.return_value = [fixture]
+    odds_client = MagicMock()
+    odds_client.get_odds.return_value = [
+        NormalizedOdds(home_team="Arsenal", away_team="Everton", commence_time=fixture.utc_date,
+                        home_odds=1.8, draw_odds=3.6, away_odds=4.5),
+    ]
+    cache = RecommendationCache(db_path=tmp_path / "cache.db")
+    config = AgentConfig.default()
+    agent_config_hash = compute_agent_config_hash(config)
+    cache.record_generation(
+        match_id="m1", date=_future_date(1), agent_config_hash=agent_config_hash,
+        odds={"home": 1.8, "draw": 3.6, "away": 4.5}, recommendation=_RECOMMENDATION, triggered_by="scheduled",
+    )
+
+    with patch("app.backend.recommendations.run_agent") as mock_run:
+        result = asyncio.run(
+            run_eod_batch(
+                fixtures_client=fixtures_client, odds_client=odds_client, cache=cache, config=config,
+                schedule_t30=lambda f: None, date_str=_future_date(1),
+            )
+        )
+
+    mock_run.assert_not_called()
+    assert result.unchanged == 1
+
+
 def test_a_locked_database_mid_batch_skips_only_that_match_not_the_whole_batch(tmp_path: Path) -> None:
     """W94 (documents/app_user_stories.md Phase 21): confirms, rather than
     assumes, that this file's existing generic except Exception (proven

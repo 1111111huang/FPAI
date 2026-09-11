@@ -301,6 +301,10 @@ async def _pregenerate_recommendations(
     days_ahead: int = _PREGENERATE_DEFAULT_DAYS_AHEAD,
     scheduler: RecoverableScheduler | None = None,
     concurrency: int = _PREGENERATE_DEFAULT_CONCURRENCY,
+    date_from: str | None = None,
+    date_to: str | None = None,
+    league_filter: str | None = None,
+    force: bool = False,
 ) -> dict:
     """W103: generates and caches recommendations for real upcoming
     fixtures across every competition right now, reusing eod_batch.py's
@@ -323,12 +327,24 @@ async def _pregenerate_recommendations(
     Every league still runs sequentially (this loop `await`s one league's
     whole batch before starting the next), so this bounds how many
     concurrent agent calls stack on top of a freshly booted process at any
-    one instant, not how many run in total."""
+    one instant, not how many run in total.
+
+    W204: `date_from`/`date_to` (both required together, else ignored)
+    override the `days_ahead`-computed range with an explicit window --
+    lets an admin target any range, not just "today onward", e.g.
+    backfilling a specific day a prior pass failed on. `league_filter`
+    narrows to one competition instead of every enabled one. `force`
+    (see run_eod_batch's own docstring) bypasses the already_fresh() dedup
+    entirely -- every matching fixture regenerates regardless of whether
+    its odds moved, an explicit "refresh this range" request rather than
+    the routine gap-filling this function's default behavior already is.
+    Never bypasses has_kicked_off() -- a live/finished match is still
+    never touched, force or not (BUG-067)."""
     from datetime import timedelta
 
     today = _current_real_date()
-    date_from = today.isoformat()
-    date_to = (today + timedelta(days=days_ahead)).isoformat()
+    resolved_date_from = date_from if (date_from and date_to) else today.isoformat()
+    resolved_date_to = date_to if (date_from and date_to) else (today + timedelta(days=days_ahead)).isoformat()
     # W179: found live (2026-08-27) -- get_fixtures() deliberately raises a
     # clean HTTPException(503) on an upstream 429/outage (see
     # _fetch_and_cache_fixtures's own docstring), the right contract for its
@@ -341,17 +357,25 @@ async def _pregenerate_recommendations(
     # Isolated the same way the per-league loop below already isolates a
     # single league's own eod_batch failure from every other league's.
     try:
-        fixtures = await get_fixtures(date_from=date_from, date_to=date_to)
+        fixtures = await get_fixtures(date_from=resolved_date_from, date_to=resolved_date_to)
     except Exception:
         LOGGER.warning(
-            "Pregenerate: get_fixtures failed (days_ahead=%d) -- upstream fixture provider "
-            "unavailable, skipping this pregenerate pass entirely.", days_ahead, exc_info=True,
+            "Pregenerate: get_fixtures failed (date_from=%s, date_to=%s) -- upstream fixture provider "
+            "unavailable, skipping this pregenerate pass entirely.", resolved_date_from, resolved_date_to, exc_info=True,
         )
         return {}
 
     fixtures_by_league: dict[str, list] = {}
     for fixture in fixtures:
         fixtures_by_league.setdefault(fixture.competition or "E0", []).append(fixture)
+    if league_filter:
+        # W204: narrow to just the requested competition -- still one
+        # get_fixtures() call for every enabled league above (unchanged,
+        # simplest correct option; a caller after tighter Odds-API/
+        # football-data.org credit conservation for a single-league refresh
+        # could fetch narrower, not needed for today's use case), just
+        # nothing generated for the leagues not requested.
+        fixtures_by_league = {league_filter: fixtures_by_league.get(league_filter, [])}
 
     odds_client = build_odds_client()
     cache = recommendations.get_cache()
@@ -361,21 +385,24 @@ async def _pregenerate_recommendations(
         if not league_fixtures:
             continue
         schedule_t30 = (
-            build_schedule_t30(scheduler, odds_client, cache, config, date_from, league=league)
+            build_schedule_t30(scheduler, odds_client, cache, config, resolved_date_from, league=league)
             if scheduler is not None
             else (lambda fixture: None)
         )
         try:
             result = await eod_batch.run_eod_batch(
                 fixtures_client=get_fixtures_client(), odds_client=odds_client, cache=cache, config=config,
-                schedule_t30=schedule_t30, date_str=date_from, fixtures=league_fixtures, league=league,
-                concurrency=concurrency,
+                schedule_t30=schedule_t30, date_str=resolved_date_from, fixtures=league_fixtures, league=league,
+                concurrency=concurrency, force=force,
             )
         except Exception:
             LOGGER.warning("Pregenerate: batch failed for league=%s -- other leagues unaffected.", league, exc_info=True)
             continue
         results[league] = {"generated": result.generated, "skipped": result.skipped, "unchanged": result.unchanged}
-    LOGGER.info("Pregenerate complete | days_ahead=%d | concurrency=%d | results=%s", days_ahead, concurrency, results)
+    LOGGER.info(
+        "Pregenerate complete | date_from=%s | date_to=%s | league_filter=%s | force=%s | concurrency=%d | results=%s",
+        resolved_date_from, resolved_date_to, league_filter, force, concurrency, results,
+    )
     return results
 
 
@@ -722,7 +749,12 @@ def trigger_data_refresh(league: _REFRESH_LEAGUE_NAMES) -> dict:
 
 @app.post("/api/admin/pregenerate-recommendations")
 async def pregenerate_recommendations_endpoint(
-    request: Request, days_ahead: int = _PREGENERATE_DEFAULT_DAYS_AHEAD
+    request: Request,
+    days_ahead: int = _PREGENERATE_DEFAULT_DAYS_AHEAD,
+    date_from: str | None = None,
+    date_to: str | None = None,
+    league: str | None = None,
+    force: bool = False,
 ) -> dict:
     """W103: manual trigger for _pregenerate_recommendations (see its own
     docstring) -- independent of whether the scheduler is on, and doesn't
@@ -731,10 +763,25 @@ async def pregenerate_recommendations_endpoint(
     triggers. Reads the scheduler lifespan stored on app.state (None if
     ENABLE_SCHEDULER is off) so a pregenerated match still gets its T-30
     refresh scheduled when a scheduler is actually running. Already
-    protected by RequireAppTokenMiddleware."""
+    protected by RequireAppTokenMiddleware.
+
+    W204: direct user request -- "refresh all the matches in the given
+    date range or league range". `date_from`+`date_to` (both required
+    together, else ignored -- ISO date strings, e.g. "2026-09-11") pick an
+    explicit window instead of `days_ahead`'s "today onward". `league`
+    narrows to one competition (e.g. "E0"). `force=true` bypasses the
+    already_fresh() odds-unchanged skip, regenerating every matching
+    fixture regardless -- still never touches a live/finished match
+    (has_kicked_off() is unconditional, BUG-067)."""
     scheduler = getattr(request.app.state, "scheduler", None)
-    _fire_and_forget(_pregenerate_recommendations(days_ahead=days_ahead, scheduler=scheduler))
-    return {"days_ahead": days_ahead, "status": "started"}
+    _fire_and_forget(_pregenerate_recommendations(
+        days_ahead=days_ahead, scheduler=scheduler,
+        date_from=date_from, date_to=date_to, league_filter=league, force=force,
+    ))
+    return {
+        "days_ahead": days_ahead, "date_from": date_from, "date_to": date_to,
+        "league": league, "force": force, "status": "started",
+    }
 
 
 @app.get("/api/sandbox/status")
