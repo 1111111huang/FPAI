@@ -928,3 +928,38 @@ def test_already_fresh_still_true_for_a_real_cached_result_with_unchanged_odds(t
         recommendation=_RECOMMENDATION, triggered_by="scheduled",
     )
     assert already_fresh(cache, "m1", "2026-09-11", "cfg-hash", odds) is True
+
+
+def test_generation_persists_reasoning_trace_and_forecast_payload_a107(tmp_path: Path) -> None:
+    """A107: run_agent() now always returns full graph state -- _generate_one
+    must unwrap it and thread reasoning_trace/forecast_payload through to
+    cache.record_generation(), the same tracing agent-train/agent-backtest
+    already persist to agent_telemetry."""
+    fixtures_client = MagicMock()
+    fixtures_client.get_fixtures.return_value = [_fixture("m1", "Arsenal", "Everton")]
+    odds_client = MagicMock()
+    odds_client.get_odds.return_value = []
+    cache = RecommendationCache(db_path=tmp_path / "cache.db")
+    config = AgentConfig.default()
+
+    full_state = {
+        "recommendation": _RECOMMENDATION,
+        "messages": [{"role": "ai", "content": "irrelevant -- serialize_agent_messages handles real BaseMessage objects"}],
+        "forecast_payload": {"result_3way": {"probabilities": {"home": 0.5}}},
+    }
+    # A bare dict isn't a real LangChain message list -- swap in one real
+    # message so serialize_agent_messages has something genuine to work with.
+    from langchain_core.messages import AIMessage
+    full_state["messages"] = [AIMessage(content="Away win looks like value here.")]
+
+    with patch("app.backend.recommendations.run_agent", return_value=full_state):
+        asyncio.run(
+            run_eod_batch(
+                fixtures_client=fixtures_client, odds_client=odds_client, cache=cache, config=config,
+                schedule_t30=lambda f: None, date_str=_future_date(1),
+            )
+        )
+
+    entry = cache.get_latest("m1", _future_date(1), compute_agent_config_hash(config))
+    assert entry.reasoning_trace == [{"role": "ai", "content": "Away win looks like value here."}]
+    assert entry.forecast_payload == {"result_3way": {"probabilities": {"home": 0.5}}}

@@ -1069,7 +1069,7 @@ async def create_recommendation(
     try:
         # run_agent is a real ~10-30s synchronous call (LLM + Tavily) --
         # must run off the event loop or it blocks every other request.
-        raw = await run_in_threadpool(recommendations.run_agent, match_info)
+        agent_result = await run_in_threadpool(recommendations.run_agent, match_info)
     except (duckdb.IOException, duckdb.ConnectionException) as exc:
         # BUG-065: ConnectionException (raised when a concurrent connection
         # to the same file is open with a different config, e.g. a
@@ -1088,6 +1088,7 @@ async def create_recommendation(
                 "Please try again in a minute."
             ),
         ) from exc
+    raw, reasoning_trace, forecast_payload = recommendations.unwrap_agent_result(agent_result)
     result = validate_and_degrade(raw, request.home_team, request.away_team)
 
     cache.record_generation(
@@ -1103,6 +1104,9 @@ async def create_recommendation(
         odds=match_info.get("odds", {}),
         recommendation=result.model_dump(),
         triggered_by="manual_regenerate",
+        # A107: same tracing agent-train/agent-backtest already persist to
+        # agent_telemetry -- see recommendations.run_agent's docstring.
+        reasoning_trace=reasoning_trace, forecast_payload=forecast_payload,
     )
     return result
 

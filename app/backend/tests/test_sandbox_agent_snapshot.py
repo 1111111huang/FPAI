@@ -175,7 +175,8 @@ def test_passes_through_to_the_real_run_agent_when_sandbox_mode_is_off(monkeypat
         result = recommendations.run_agent(_MATCH_INFO)
 
     assert result == _RECOMMENDATION
-    mock_run.assert_called_once_with(_MATCH_INFO, config=None)
+    # A107: run_agent() always requests full graph state now -- see its own docstring.
+    mock_run.assert_called_once_with(_MATCH_INFO, config=None, return_full_state=True)
     mock_configure.assert_not_called()
 
 
@@ -429,7 +430,7 @@ def test_two_concurrent_requests_for_the_same_match_do_not_both_record(monkeypat
     thread1_entered_call = threading.Event()
     release_thread1 = threading.Event()
 
-    def slow_real_run_agent(match_info, config=None):
+    def slow_real_run_agent(match_info, config=None, **kwargs):
         with call_count_guard:
             call_count["n"] += 1
             my_index = call_count["n"]

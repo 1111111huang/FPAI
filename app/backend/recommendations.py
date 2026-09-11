@@ -146,12 +146,16 @@ def _lookup_corpus_match_id(home_team: str, away_team: str, date: str, league: s
 def _run_agent_in_mode(mode: str, match_info: dict, config, match_id: str, base_dir: Path):
     """Configure the snapshot store for `mode` and run the real agent,
     always resetting the store to live mode afterward regardless of
-    outcome."""
+    outcome.
+
+    A107: always requests the agent's full graph state (return_full_state=
+    True) -- see run_agent()'s own docstring for why this is safe for
+    every existing caller."""
     agent_tools.configure_snapshot_store(
         mode, match_id=match_id, match_date=match_info.get("date"), base_dir=base_dir,
     )
     try:
-        result = _real_run_agent(match_info, config=config)
+        result = _real_run_agent(match_info, config=config, return_full_state=True)
         if mode == "record":
             # Mirrors main.py's agent-snapshot CLI convention exactly (the
             # only other writer of this marker) -- without it, a
@@ -214,6 +218,21 @@ def run_agent(match_info: dict, config=None):
     recording fresh into the sandbox partition only when neither does.
     Otherwise passes straight through to the real, live run_agent.
 
+    A107: always requests and returns the agent's full graph state
+    (return_full_state=True at the src.agent.graph.run_agent call itself --
+    {"recommendation": ..., "messages": ..., "forecast_payload": ..., ...}),
+    not just the recommendation dict -- so the 3 real callers (eod_batch.py,
+    t30_refresh.py, main.py's manual regenerate) can persist the reasoning
+    trace and forecast payload alongside the recommendation, the same
+    tracing agent-train/agent-backtest already get (see main.py's own
+    _write_telemetry_rows). Safe for every caller that only wants the
+    recommendation: a MatchRecommendation's own schema never has a
+    top-level "recommendation" key (its fields are match/overall/
+    candidates/...), so it's structurally unambiguous from a full_state
+    dict -- those callers (and every test mocking this function or
+    _real_run_agent with a bare recommendation dict) unwrap via a plain
+    `"recommendation" in result` check, unaffected either way.
+
     W43: a replay-mode SnapshotMissingError can happen even for a match
     that's genuinely already recorded -- SnapshotStore's replay lookup key
     is a hash of the tool call's exact input arguments (e.g. an LLM-chosen
@@ -233,7 +252,7 @@ def run_agent(match_info: dict, config=None):
     the second blocks until the first finishes, then re-checks disk and
     correctly finds the just-written marker (replay)."""
     if not is_sandbox_mode():
-        return _real_run_agent(match_info, config=config)
+        return _real_run_agent(match_info, config=config, return_full_state=True)
 
     sandbox_match_id = _composite_match_key(
         match_info.get("home_team"), match_info.get("away_team"), match_info.get("date"),
@@ -249,6 +268,31 @@ def run_agent(match_info: dict, config=None):
                 "sandbox_agent_replay_miss | match=%s | retrying_in_record_mode", match_id,
             )
             return _run_agent_in_mode("record", match_info, config, sandbox_match_id, _SANDBOX_SNAPSHOT_BASE_DIR)
+
+
+def unwrap_agent_result(result: dict) -> tuple[dict, list[dict], dict | None]:
+    """A107: split run_agent()'s return value into (recommendation,
+    reasoning_trace, forecast_payload). Used by the 3 real generation call
+    sites (eod_batch.py, t30_refresh.py, main.py) instead of inline
+    duck-typing at each -- one implementation instead of three that could
+    drift.
+
+    A real, unmocked run_agent() call always returns full_state now (see
+    its own docstring) -- "recommendation" and "messages" both present.
+    A test mocking run_agent()/_real_run_agent with a bare recommendation
+    dict (the pre-A107 shape, used throughout this codebase's existing
+    test suite) has neither key -- MatchRecommendation's own schema never
+    uses "recommendation" as a top-level field name, so this is a
+    structurally unambiguous discriminator, not a fragile heuristic."""
+    if isinstance(result, dict) and "recommendation" in result and "messages" in result:
+        from src.agent.graph import serialize_agent_messages
+
+        return (
+            result["recommendation"],
+            serialize_agent_messages(result.get("messages", [])),
+            result.get("forecast_payload"),
+        )
+    return result, [], None
 
 
 def get_cache() -> RecommendationCache:
@@ -326,6 +370,14 @@ class MarketCandidateOut(BaseModel):
     # validates, same convention as target_odds above.
     composite_score: float = 0.0
     reason: str = ""
+    # A107: the LLM's own recommendation_type before any of
+    # src/agent/schema.py's downgrade passes ran (that file's own
+    # MarketCandidate.initial_recommendation_type) -- defaulted so a
+    # pre-A107 cached row (no such key at all) still validates, same
+    # convention as target_odds/composite_score above. Plain `str | None`,
+    # not the stricter Literal src/agent/schema.py uses -- matching this
+    # class's own already-loose `recommendation_type: str` typing.
+    initial_recommendation_type: str | None = None
 
 
 class RecommendationPickOut(BaseModel):

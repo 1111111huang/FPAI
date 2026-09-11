@@ -55,6 +55,13 @@ class CacheEntry:
     recommendation: dict
     generated_at: str
     triggered_by: TriggeredBy
+    # A107: the LLM's own reasoning/tool-call trace (src.agent.graph.
+    # serialize_agent_messages) and the raw forecast tool payload for this
+    # generation -- the same tracing agent-train/agent-backtest already
+    # persist to agent_telemetry, now captured for live generations too.
+    # Both nullable/additive: a pre-A107 row simply has neither.
+    reasoning_trace: list[dict] | None = None
+    forecast_payload: dict | None = None
 
 
 class RecommendationCache:
@@ -86,6 +93,15 @@ class RecommendationCache:
                 "CREATE INDEX IF NOT EXISTS idx_recgen_key "
                 "ON recommendation_generations (match_id, date, agent_config_hash)"
             )
+            # A107: additive migration for a table that may already exist
+            # (real rows) from before these columns existed -- same
+            # idempotent PRAGMA-guarded ALTER TABLE discipline
+            # recommendation_outcomes.py's own W175/W176 columns already
+            # established (SQLite's ADD COLUMN has no IF NOT EXISTS).
+            existing_columns = {row[1] for row in conn.execute("PRAGMA table_info(recommendation_generations)")}
+            for column in ("reasoning_trace_json", "forecast_payload_json"):
+                if column not in existing_columns:
+                    conn.execute(f"ALTER TABLE recommendation_generations ADD COLUMN {column} TEXT")
 
     def record_generation(
         self,
@@ -96,23 +112,30 @@ class RecommendationCache:
         recommendation: dict,
         triggered_by: TriggeredBy,
         generated_at: str | None = None,
+        reasoning_trace: list[dict] | None = None,
+        forecast_payload: dict | None = None,
     ) -> None:
         generated_at = generated_at or datetime.now(timezone.utc).replace(microsecond=0).isoformat()
         with self._connect() as conn:
             conn.execute(
                 """
                 INSERT INTO recommendation_generations
-                (match_id, date, agent_config_hash, odds_json, recommendation_json, generated_at, triggered_by)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                (match_id, date, agent_config_hash, odds_json, recommendation_json, generated_at, triggered_by,
+                 reasoning_trace_json, forecast_payload_json)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
-                (match_id, date, agent_config_hash, json.dumps(odds), json.dumps(recommendation), generated_at, triggered_by),
+                (
+                    match_id, date, agent_config_hash, json.dumps(odds), json.dumps(recommendation), generated_at, triggered_by,
+                    json.dumps(reasoning_trace), json.dumps(forecast_payload),
+                ),
             )
 
     def get_latest(self, match_id: str, date: str, agent_config_hash: str) -> CacheEntry | None:
         with self._connect() as conn:
             row = conn.execute(
                 """
-                SELECT match_id, date, agent_config_hash, odds_json, recommendation_json, generated_at, triggered_by
+                SELECT match_id, date, agent_config_hash, odds_json, recommendation_json, generated_at, triggered_by,
+                       reasoning_trace_json, forecast_payload_json
                 FROM recommendation_generations
                 WHERE match_id = ? AND date = ? AND agent_config_hash = ?
                 ORDER BY id DESC LIMIT 1
@@ -139,7 +162,8 @@ class RecommendationCache:
         with self._connect() as conn:
             row = conn.execute(
                 """
-                SELECT match_id, date, agent_config_hash, odds_json, recommendation_json, generated_at, triggered_by
+                SELECT match_id, date, agent_config_hash, odds_json, recommendation_json, generated_at, triggered_by,
+                       reasoning_trace_json, forecast_payload_json
                 FROM recommendation_generations
                 WHERE match_id = ? AND date = ?
                 ORDER BY id DESC LIMIT 1
@@ -152,7 +176,8 @@ class RecommendationCache:
         with self._connect() as conn:
             rows = conn.execute(
                 """
-                SELECT match_id, date, agent_config_hash, odds_json, recommendation_json, generated_at, triggered_by
+                SELECT match_id, date, agent_config_hash, odds_json, recommendation_json, generated_at, triggered_by,
+                       reasoning_trace_json, forecast_payload_json
                 FROM recommendation_generations
                 WHERE match_id = ? AND date = ? AND agent_config_hash = ?
                 ORDER BY id ASC
@@ -176,7 +201,8 @@ class RecommendationCache:
             # an index on (match_id, date, id) or a GROUP BY + IN pattern.
             rows = conn.execute(
                 """
-                SELECT match_id, date, agent_config_hash, odds_json, recommendation_json, generated_at, triggered_by
+                SELECT match_id, date, agent_config_hash, odds_json, recommendation_json, generated_at, triggered_by,
+                       reasoning_trace_json, forecast_payload_json
                 FROM recommendation_generations rg
                 WHERE id = (
                     SELECT MAX(id) FROM recommendation_generations rg2
@@ -206,4 +232,10 @@ class RecommendationCache:
             recommendation=json.loads(row[4]),
             generated_at=row[5],
             triggered_by=row[6],
+            # A107: a genuinely pre-migration row has SQL NULL here (ALTER
+            # TABLE ADD COLUMN backfills existing rows with NULL, not the
+            # JSON string "null" record_generation's own default writes for
+            # a NEW row with no trace) -- guard against json.loads(None).
+            reasoning_trace=json.loads(row[7]) if row[7] is not None else None,
+            forecast_payload=json.loads(row[8]) if row[8] is not None else None,
         )

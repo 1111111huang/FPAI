@@ -54,7 +54,12 @@ def _seed_cache(cache: RecommendationCache, config: AgentConfig, odds: dict) -> 
     )
 
 
-def test_skips_refresh_when_odds_unchanged(tmp_path: Path) -> None:
+def test_refreshes_even_when_odds_unchanged_for_lineup_confirmation(tmp_path: Path) -> None:
+    """W202 (2026-09-11 direct user request): T-30 is the one point close
+    enough to kickoff for near_kickoff=True's confirmed-lineup web search
+    to matter -- that's real new information even when the price hasn't
+    moved, so T-30 no longer skips on unchanged odds the way W10 originally
+    did (see t30_refresh.py's own module docstring)."""
     config = AgentConfig.default()
     cache = RecommendationCache(db_path=tmp_path / "cache.db")
     _seed_cache(cache, config, odds={"home": 1.8, "draw": 3.6, "away": 4.5})
@@ -65,15 +70,13 @@ def test_skips_refresh_when_odds_unchanged(tmp_path: Path) -> None:
                         home_odds=1.8, draw_odds=3.6, away_odds=4.5),
     ]
 
-    with patch("app.backend.recommendations.run_agent") as mock_run_agent:
+    with patch("app.backend.recommendations.run_agent", return_value=_RECOMMENDATION) as mock_run_agent:
         result = refresh_match_at_t30(_fixture(), odds_client=odds_client, cache=cache, config=config, date_str=_future_date(1))
 
-    mock_run_agent.assert_not_called()
-    assert result.outcome == "skipped_no_change"
+    mock_run_agent.assert_called_once()
+    assert result.outcome == "refreshed"
     agent_config_hash = compute_agent_config_hash(config)
-    entry = cache.get_latest("m1", _future_date(1), agent_config_hash)
-    assert entry.triggered_by == "scheduled"
-    assert len(cache.get_history("m1", _future_date(1), agent_config_hash)) == 1  # no new row written
+    assert len(cache.get_history("m1", _future_date(1), agent_config_hash)) == 2  # a new row was written
 
 
 def test_get_odds_is_called_with_an_explicit_epl_sport_key(tmp_path: Path) -> None:
@@ -168,6 +171,36 @@ def test_refreshes_when_odds_changed(tmp_path: Path) -> None:
     history = cache.get_history("m1", _future_date(1), agent_config_hash)
     assert len(history) == 2
     assert history[-1].odds == {"home": 1.6, "draw": 3.8, "away": 5.0}
+
+
+def test_refresh_persists_reasoning_trace_and_forecast_payload_a107(tmp_path: Path) -> None:
+    """A107: run_agent() now always returns full graph state -- refresh_match_at_t30
+    must unwrap it and thread reasoning_trace/forecast_payload through to
+    cache.record_generation()."""
+    from langchain_core.messages import AIMessage
+
+    config = AgentConfig.default()
+    cache = RecommendationCache(db_path=tmp_path / "cache.db")
+    _seed_cache(cache, config, odds={"home": 1.8, "draw": 3.6, "away": 4.5})
+
+    odds_client = MagicMock()
+    odds_client.get_odds.return_value = [
+        NormalizedOdds(home_team="Arsenal", away_team="Everton", commence_time="2026-08-22T15:00:00Z",
+                        home_odds=1.6, draw_odds=3.8, away_odds=5.0),  # moved
+    ]
+    full_state = {
+        "recommendation": _RECOMMENDATION,
+        "messages": [AIMessage(content="Price moved in our favour, reconfirming the pick.")],
+        "forecast_payload": {"result_3way": {"probabilities": {"home": 0.55}}},
+    }
+
+    with patch("app.backend.recommendations.run_agent", return_value=full_state):
+        refresh_match_at_t30(_fixture(), odds_client=odds_client, cache=cache, config=config, date_str=_future_date(1))
+
+    agent_config_hash = compute_agent_config_hash(config)
+    entry = cache.get_latest("m1", _future_date(1), agent_config_hash)
+    assert entry.reasoning_trace == [{"role": "ai", "content": "Price moved in our favour, reconfirming the pick."}]
+    assert entry.forecast_payload == {"result_3way": {"probabilities": {"home": 0.55}}}
 
 
 def test_generates_fresh_when_no_prior_cache_entry_exists(tmp_path: Path) -> None:
@@ -289,7 +322,11 @@ def test_secondary_odds_fetched_and_threaded_into_match_info_and_odds_dedup_key(
 
 
 def test_secondary_odds_reused_from_cache_not_refetched_when_h2h_unchanged(tmp_path: Path) -> None:
-    """W164a's credit-saving reuse must also apply at T-30, not just EOD."""
+    """W164a's credit-saving reuse must also apply at T-30, not just EOD --
+    independent of W202's always-refresh change: add_secondary_odds() still
+    avoids a redundant get_event_odds() call when h2h is unchanged, even
+    though refresh_match_at_t30() now always proceeds to a real run_agent()
+    call regardless."""
     config = AgentConfig.default()
     cache = RecommendationCache(db_path=tmp_path / "cache.db")
     agent_config_hash = compute_agent_config_hash(config)
@@ -307,12 +344,12 @@ def test_secondary_odds_reused_from_cache_not_refetched_when_h2h_unchanged(tmp_p
                         home_odds=1.8, draw_odds=3.6, away_odds=4.5, event_id="evt1"),  # unchanged h2h
     ]
 
-    with patch("app.backend.recommendations.run_agent") as mock_run_agent:
+    with patch("app.backend.recommendations.run_agent", return_value=_RECOMMENDATION) as mock_run_agent:
         result = refresh_match_at_t30(_fixture(), odds_client=odds_client, cache=cache, config=config, date_str=_future_date(1))
 
-    odds_client.get_event_odds.assert_not_called()
-    mock_run_agent.assert_not_called()  # h2h AND secondary both matched the prior row -> already_fresh() short-circuits
-    assert result.outcome == "skipped_no_change"
+    odds_client.get_event_odds.assert_not_called()  # secondary odds still reused from cache
+    mock_run_agent.assert_called_once()  # but the refresh itself is no longer skipped (W202)
+    assert result.outcome == "refreshed"
 
 
 def test_secondary_odds_not_fetched_when_odds_client_lacks_get_event_odds(tmp_path: Path) -> None:

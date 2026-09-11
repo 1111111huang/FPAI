@@ -353,3 +353,32 @@ def test_fetched_odds_are_recorded_in_the_cache_not_just_used_for_generation():
     mock_cache.record_generation.assert_called_once()
     recorded_odds = mock_cache.record_generation.call_args.kwargs["odds"]
     assert recorded_odds == {"home": 1.5, "draw": 4.0, "away": 6.0}
+
+
+def test_reasoning_trace_and_forecast_payload_are_recorded_in_the_cache_a107():
+    """A107: run_agent() now always returns full graph state -- the manual
+    regenerate endpoint must unwrap it and thread reasoning_trace/
+    forecast_payload through to cache.record_generation()."""
+    from langchain_core.messages import AIMessage
+
+    full_state = {
+        "recommendation": _VALID_RECOMMENDATION,
+        "messages": [AIMessage(content="Home side has the stronger recent form.")],
+        "forecast_payload": {"result_3way": {"probabilities": {"home": 0.6}}},
+    }
+    mock_cache = MagicMock()
+    app.dependency_overrides[recommendations.get_cache] = lambda: mock_cache
+    try:
+        with patch("app.backend.recommendations.run_agent", return_value=full_state):
+            with TestClient(app) as client:
+                response = client.post(
+                    "/api/recommendations",
+                    json={"home_team": "Arsenal", "away_team": "Everton", "date": "2026-08-22", "league": "E0"},
+                )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    kwargs = mock_cache.record_generation.call_args.kwargs
+    assert kwargs["reasoning_trace"] == [{"role": "ai", "content": "Home side has the stronger recent form."}]
+    assert kwargs["forecast_payload"] == {"result_3way": {"probabilities": {"home": 0.6}}}

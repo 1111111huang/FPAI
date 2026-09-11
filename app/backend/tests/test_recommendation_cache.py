@@ -217,3 +217,58 @@ def test_list_latest_per_match_returns_one_row_per_match_regardless_of_hash(tmp_
 def test_list_latest_per_match_returns_empty_list_when_nothing_cached(tmp_path: Path) -> None:
     cache = RecommendationCache(db_path=tmp_path / "cache.db")
     assert cache.list_latest_per_match() == []
+
+
+# --- A107: reasoning_trace/forecast_payload -- same tracing agent-train/
+# agent-backtest persist to agent_telemetry, now captured for live
+# generations (eod_batch.py/t30_refresh.py/main.py) too. ---
+
+def test_record_and_retrieve_reasoning_trace_and_forecast_payload(tmp_path: Path) -> None:
+    cache = RecommendationCache(db_path=tmp_path / "cache.db")
+    trace = [{"role": "ai", "content": "Checking recent form."}]
+    payload = {"result_3way": {"probabilities": {"home": 0.5}}}
+
+    cache.record_generation(
+        match_id="m1", date="2026-08-22", agent_config_hash="cfg-hash",
+        odds={}, recommendation={"overall": "no_bet"}, triggered_by="scheduled",
+        reasoning_trace=trace, forecast_payload=payload,
+    )
+    entry = cache.get_latest("m1", "2026-08-22", "cfg-hash")
+
+    assert entry.reasoning_trace == trace
+    assert entry.forecast_payload == payload
+
+
+def test_reasoning_trace_and_forecast_payload_default_to_none(tmp_path: Path) -> None:
+    """Every pre-A107 call site (and every pre-existing test in this file)
+    doesn't pass these -- must default cleanly, not raise."""
+    cache = RecommendationCache(db_path=tmp_path / "cache.db")
+    cache.record_generation(
+        match_id="m1", date="2026-08-22", agent_config_hash="cfg-hash",
+        odds={}, recommendation={"overall": "no_bet"}, triggered_by="scheduled",
+    )
+    entry = cache.get_latest("m1", "2026-08-22", "cfg-hash")
+
+    assert entry.reasoning_trace is None
+    assert entry.forecast_payload is None
+
+
+def test_row_to_entry_handles_a_genuinely_pre_migration_null_row(tmp_path: Path) -> None:
+    """A real pre-A107 row has SQL NULL for these columns (ALTER TABLE ADD
+    COLUMN backfills existing rows with NULL, not the JSON string "null"
+    record_generation's own default writes for a brand-new row) -- must not
+    raise on json.loads(None)."""
+    db_path = tmp_path / "cache.db"
+    cache = RecommendationCache(db_path=db_path)
+    import sqlite3
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            "INSERT INTO recommendation_generations "
+            "(match_id, date, agent_config_hash, odds_json, recommendation_json, generated_at, triggered_by) "
+            "VALUES ('m1', '2026-08-22', 'cfg-hash', '{}', '{}', '2026-08-22T10:00:00+00:00', 'scheduled')"
+        )
+
+    entry = cache.get_latest("m1", "2026-08-22", "cfg-hash")
+
+    assert entry.reasoning_trace is None
+    assert entry.forecast_payload is None

@@ -1,18 +1,21 @@
 """W10: per-match refresh 30 minutes before kickoff (D2a). Fetches fresh
-odds (W07) first and compares them against the odds used for the
-currently-cached recommendation (W11) -- only re-runs run_agent() if the
-odds actually changed (exact match = skip, logged as "no new data, refresh
-skipped"), both saving LLM/Tavily cost and reducing how often the agent's
-known run-to-run non-reproducibility (agent_techspec.md sec18.6) gets
-exercised for no reason.
+odds (W07) first, then always re-runs run_agent() -- direct user request
+(2026-09-11): T-30 is the one point in the pipeline that runs close enough
+to kickoff for research_node's confirmed-starting-lineup web search
+(near_kickoff=True, below) to find real, non-speculative team news, so it's
+worth the LLM/Tavily cost even when the odds themselves haven't moved --
+the lineup confirmation is the new information, not just the price. (Until
+2026-09-11 this compared fresh odds against the cached recommendation's own
+odds and skipped an unchanged price entirely, purely as a cost-saving
+dedup -- already_fresh() is kept for eod_batch.py's own, unrelated dedup
+use, just no longer consulted here.)
 
 Best-effort throughout: a fixture whose odds can't be fetched or matched
 (W07's credit budget exhausted, or the fixture no longer appears in the
 odds feed -- e.g. removed/postponed), or a run_agent() error, leaves the
-prior recommendation in place rather than failing the job. If no prior
-cache entry exists at all (e.g. tonight's EOD generation errored for this
-match), there's no baseline to compare against and nothing to lose by
-generating fresh.
+prior recommendation in place rather than failing the job. No prior cache
+entry at all (e.g. tonight's EOD generation errored for this match) is
+simply a first generation, not a special case.
 """
 
 from __future__ import annotations
@@ -25,7 +28,7 @@ from datetime import timezone
 from app.backend import recommendations
 from app.backend.agent_config_hash import compute_agent_config_hash
 from app.backend.eod_batch import (
-    LEAGUE_CODE, add_secondary_odds, already_fresh, has_kicked_off, match_odds, odds_lookup,
+    LEAGUE_CODE, add_secondary_odds, has_kicked_off, match_odds, odds_lookup,
 )
 from app.backend.football_data_client import NormalizedMatch
 from app.backend.odds_api_client import OddsAPIClient
@@ -38,7 +41,7 @@ from src.utils.logger import get_logger
 
 LOGGER = get_logger(__name__)
 
-Outcome = Literal["refreshed", "skipped_no_change", "skipped_no_odds", "skipped_error", "skipped_kicked_off"]
+Outcome = Literal["refreshed", "skipped_no_odds", "skipped_error", "skipped_kicked_off"]
 
 
 @dataclass
@@ -120,29 +123,28 @@ def refresh_match_at_t30(
     # exact "most picks are draws" bug W164 fixed (the agent's own prompt
     # rule is "if you don't have a real current price for a market, don't
     # recommend it at all" -- config/prompts/agent_v1.txt -- so no
-    # totals/btts odds structurally means no totals/btts picks). Must run
-    # before already_fresh() below: it folds totals/btts into fresh_odds
-    # too, so a secondary-market-only price move still counts as a change.
+    # totals/btts odds structurally means no totals/btts picks). Still
+    # reuses a cached secondary-odds fetch when h2h is unchanged (its own
+    # internal check, independent of the always-refresh change above) --
+    # that's a real avoided API call, not a skipped generation.
     add_secondary_odds(
         match_info, fresh_odds, odds_client, cache, fixture, date_str,
         agent_config_hash, ODDS_SPORT_KEY_BY_COMPETITION[league], odds_by_teams,
     )
 
-    # W151: shared with eod_batch.py's own EOD-pass dedup check -- one
-    # "does this need regenerating" rule for both scheduled entry points.
-    if already_fresh(cache, fixture.match_id, date_str, agent_config_hash, fresh_odds):
-        LOGGER.info("T-30 refresh: no new data, refresh skipped for match_id=%s.", fixture.match_id)
-        return T30RefreshResult(match_id=fixture.match_id, outcome="skipped_no_change")
-
     try:
-        raw = recommendations.run_agent(match_info=match_info, config=config)
+        agent_result = recommendations.run_agent(match_info=match_info, config=config)
     except Exception as exc:
         LOGGER.warning("T-30 refresh: run_agent failed for match_id=%s: %s", fixture.match_id, exc)
         return T30RefreshResult(match_id=fixture.match_id, outcome="skipped_error")
 
+    raw, reasoning_trace, forecast_payload = recommendations.unwrap_agent_result(agent_result)
     degraded = validate_and_degrade(raw, fixture.home_team, fixture.away_team)
     cache.record_generation(
         match_id=fixture.match_id, date=date_str, agent_config_hash=agent_config_hash,
         odds=fresh_odds, recommendation=degraded.model_dump(), triggered_by="scheduled",
+        # A107: same tracing agent-train/agent-backtest already persist to
+        # agent_telemetry -- see recommendations.run_agent's docstring.
+        reasoning_trace=reasoning_trace, forecast_payload=forecast_payload,
     )
     return T30RefreshResult(match_id=fixture.match_id, outcome="refreshed")

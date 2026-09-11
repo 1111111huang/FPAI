@@ -313,7 +313,7 @@ async def run_eod_batch(
 
         async with semaphore:
             try:
-                raw = await asyncio.to_thread(recommendations.run_agent, match_info=match_info, config=config)
+                agent_result = await asyncio.to_thread(recommendations.run_agent, match_info=match_info, config=config)
             except Exception as exc:
                 LOGGER.warning(
                     "EOD batch: skipping match_id=%s (%s v %s): %s",
@@ -324,10 +324,14 @@ async def run_eod_batch(
                     on_progress(fixture, "skipped")
                 return
 
+        raw, reasoning_trace, forecast_payload = recommendations.unwrap_agent_result(agent_result)
         degraded = validate_and_degrade(raw, fixture.home_team, fixture.away_team)
         cache.record_generation(
             match_id=fixture.match_id, date=fixture_date, agent_config_hash=agent_config_hash,
             odds=odds or {}, recommendation=degraded.model_dump(), triggered_by="scheduled",
+            # A107: same tracing agent-train/agent-backtest already persist
+            # to agent_telemetry -- see recommendations.run_agent's docstring.
+            reasoning_trace=reasoning_trace, forecast_payload=forecast_payload,
         )
         result.generated += 1
         if on_progress is not None:

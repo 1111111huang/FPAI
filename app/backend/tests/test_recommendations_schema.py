@@ -192,6 +192,27 @@ def test_target_odds_passes_through_unchanged_w83():
     assert result.candidates[0].target_odds == 2.35
 
 
+def test_initial_recommendation_type_passes_through_unchanged_a107():
+    """A107: src/agent/schema.py's own initial_recommendation_type
+    (the LLM's self-reported type before any downgrade pass ran) must
+    reach the API response/cache unchanged, not be silently dropped by
+    this app's own independent validation layer."""
+    market = {**_VALID_CANDIDATE, "recommendation_type": "no_bet", "initial_recommendation_type": "direct_bet"}
+    raw = {**_VALID_RAW, "candidates": [market]}
+
+    result = validate_and_degrade(raw, "Arsenal", "Everton")
+
+    assert result.candidates[0].initial_recommendation_type == "direct_bet"
+    assert result.candidates[0].recommendation_type == "no_bet"
+
+
+def test_missing_initial_recommendation_type_defaults_to_none_for_pre_a107_cached_data():
+    """A recommendation cached before A107 shipped won't have this key at
+    all -- must default, not raise, same convention as target_odds below."""
+    result = validate_and_degrade(_VALID_RAW, "Arsenal", "Everton")
+    assert result.candidates[0].initial_recommendation_type is None
+
+
 def test_missing_target_odds_defaults_to_none_for_pre_a52_cached_data_w83():
     """A recommendation cached before A52 shipped won't have this key at
     all -- must default, not raise, same convention as feature_completeness."""

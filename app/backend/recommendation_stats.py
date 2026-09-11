@@ -40,10 +40,27 @@ def _breakdown_by(outcomes: list[RecommendationOutcome], key: str) -> dict[str, 
 
 
 def _to_backtest_records(outcomes: list[RecommendationOutcome]) -> list[BacktestRecord]:
+    """A107 bugfix: `recommendation` used to be `{}` unconditionally, so
+    build_evaluation_report()'s confidence_breakdown (src/agent/evaluation.py,
+    reads record.recommendation.get("confidence") via staking.py's
+    BetOutcome.confidence) silently bucketed every live bet under "unknown"
+    -- found while checking whether backtest's new investigative-tracking
+    additions (A105-A107) also apply live. Fixed by threading through the
+    real per-outcome confidence RecommendationOutcome already stores (used
+    correctly elsewhere in this file, e.g. _breakdown_by(outcomes,
+    "confidence")).
+
+    `overall`/candidates' `initial_recommendation_type` are deliberately
+    left unset -- RecommendationOutcome only ever exists for an already-
+    actionable pick (this store's own docstring: "resolves every
+    actionable recommendation the agent produced"), never a no_bet/
+    insufficient_data one, so build_no_bet_breakdown has nothing to
+    classify here regardless; no fabricated placeholder is more honest
+    than a wrong one."""
     return [
         BacktestRecord(
             match_id=o.match_id, home_team="", away_team="", date=o.date, league=o.competition or "",
-            recommendation={}, actual={},
+            recommendation={"confidence": o.confidence}, actual={},
             market_results=[{
                 "market": o.market, "selection": o.selection, "recommendation_type": o.recommendation_type,
                 "current_odds": o.odds, "value_edge": o.value_edge, "correct": o.correct,

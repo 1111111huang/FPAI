@@ -9,7 +9,7 @@ import sys
 sys.path.append(str(Path(__file__).resolve().parents[3]))
 
 from app.backend.recommendation_outcomes import RecommendationOutcome
-from app.backend.recommendation_stats import _segment_kelly_report, compute_recommendation_stats
+from app.backend.recommendation_stats import _segment_kelly_report, _to_backtest_records, compute_recommendation_stats
 
 
 def _outcome(
@@ -28,6 +28,27 @@ def test_empty_outcomes_returns_zeroed_stats():
     assert stats["overall"]["sample_size"] == 0
     assert stats["overall"]["hit_rate"] == 0.0
     assert stats["kelly_roi_simulation"]["bets_placed"] == 0
+
+
+def test_to_backtest_records_carries_real_confidence_not_empty_a107():
+    """A107 bugfix: _to_backtest_records() used to build records with
+    recommendation={}, so build_evaluation_report()'s confidence_breakdown
+    (src/agent/evaluation.py, reads record.recommendation.get("confidence")
+    via BetOutcome.confidence) silently bucketed every live bet under
+    "unknown" regardless of its real, already-tracked confidence."""
+    records = _to_backtest_records([_outcome(confidence="high")])
+    assert records[0].recommendation == {"confidence": "high"}
+
+
+def test_kelly_roi_simulation_confidence_breakdown_uses_real_confidence_a107():
+    outcomes = [
+        _outcome(match_id="m1", confidence="high", correct=True),
+        _outcome(match_id="m2", confidence="low", correct=False),
+    ]
+    stats = compute_recommendation_stats(outcomes)
+    breakdown = stats["kelly_roi_simulation"]["confidence_breakdown"]
+    assert "unknown" not in breakdown
+    assert set(breakdown) == {"high", "low"}
 
 
 def test_overall_hit_rate_across_mixed_outcomes():
