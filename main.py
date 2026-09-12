@@ -1605,17 +1605,18 @@ def _write_train_artifacts(
     """Write one telemetry row per scored record that captured full graph
     state (via _write_telemetry_rows), and one pending lesson candidate per
     record (batch_size <= 1, A33's original behavior, left as a fully
-    separate code path so it stays byte-identical) or per batch of up to
-    batch_size same-(competition_id, tier) records (batch_size > 1, A39).
-    Returns (lessons_written, telemetry_written).
+    separate code path) or per batch of up to batch_size same-(competition_id,
+    tier) records (batch_size > 1, A39). Returns (lessons_written,
+    telemetry_written).
 
-    config (A42-follow-up): when given (and batch_size > 1), each batch's
-    lesson also gets an LLM-synthesized reflective narrative appended
-    (generate_batch_reflection) on top of the deterministic stats -- the
-    stats alone were reviewed and judged "not very sensible" (2026-07-28).
-    None (the batch_size <= 1 code path never receives it, and it's optional
-    here) skips the reflection entirely, keeping every existing caller that
-    doesn't pass config unaffected."""
+    config: used to build an llm_invoke on BOTH paths now (A109) --
+    batch_size <= 1 reflects per match via generate_match_reflection,
+    batch_size > 1 appends an LLM-synthesized narrative on top of the
+    deterministic batch stats via generate_batch_reflection (A42-follow-up,
+    the stats alone were reviewed and judged "not very sensible",
+    2026-07-28). config=None on either path skips the LLM call and falls
+    back to the deterministic template/stats -- keeping every existing
+    caller that doesn't pass config unaffected."""
     from src.agent.lessons import (
         create_lessons_tables,
         generate_batch_lesson_text,
@@ -1631,6 +1632,16 @@ def _write_train_artifacts(
     if batch_size <= 1:
         from src.agent.graph import serialize_agent_messages
 
+        # ponytail: this loop runs inside run_agent_train's `with
+        # harness.db.connection()` block, so an LLM round-trip per match
+        # (A109's reflection) now holds data/fpai_core.db's exclusive write
+        # lock for the whole run, not just the DB writes -- a large
+        # agent-train run will make the live app's scheduled jobs/serving
+        # reads fail/retry against the locked file for that whole window.
+        # live_lessons.py's prepare_lesson_batches/commit_lesson_batches
+        # split avoids exactly this (all LLM work happens before any
+        # connection is opened); hoist this loop the same way if a large
+        # agent-train run starts colliding with production traffic.
         llm_invoke = _build_llm_invoke(config) if config is not None else None
         lessons_written = 0
         for record, competition_id, tier in scoped:

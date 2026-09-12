@@ -20,6 +20,10 @@ from typing import Any, Callable
 
 import duckdb
 
+from src.utils.logger import get_logger
+
+LOGGER = get_logger(__name__)
+
 _VALID_SCOPES = ("competition", "tier")
 
 
@@ -502,7 +506,8 @@ def generate_match_reflection(
     )
     try:
         reflection = llm_invoke(prompt)
-    except Exception:
+    except Exception as exc:
+        LOGGER.warning("generate_match_reflection: llm_invoke failed (%s), falling back to template.", exc)
         return generate_lesson_text(record)
     return reflection.strip() or generate_lesson_text(record)
 

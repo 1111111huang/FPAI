@@ -211,9 +211,10 @@ def test_generate_daily_lessons_prepends_the_live_source_note_and_skips_reflecti
 
 def test_generate_daily_lessons_reflects_per_match_when_llm_invoke_and_trace_are_available(tmp_path: Path) -> None:
     """A109: per-match reflection needs a recorded reasoning_trace (from the
-    cache entry, same shape train uses) to actually invoke the LLM -- a
-    cache hit with no reasoning_trace still falls back to the template
-    (covered by the unmodified test right above this one)."""
+    cache entry, same shape train uses) to actually invoke the LLM. The
+    case where a cache entry exists but has no reasoning_trace recorded
+    (the realistic pre-A108-row case) is covered by the new test right
+    below this one."""
     cache = RecommendationCache(db_path=tmp_path / "cache.db")
     cache.record_generation(
         "m1", "2026-08-22", "hash1", {}, _rec(), "scheduled",
@@ -234,6 +235,31 @@ def test_generate_daily_lessons_reflects_per_match_when_llm_invoke_and_trace_are
 
     lesson_text = conn.execute("SELECT lesson_text FROM agent_lessons").fetchone()[0]
     assert lesson_text == "Live-sourced batch: reflects only the market actually recommended per match, not every market the agent evaluated.\n\na real reflection"
+
+
+def test_generate_daily_lessons_falls_back_to_template_when_cache_entry_has_no_reasoning_trace(tmp_path: Path) -> None:
+    """The realistic pre-A108 case: a cache hit exists but reasoning_trace
+    was never recorded on it -- generate_match_reflection must fall back to
+    the template even though llm_invoke is given, not silently skip or
+    error on the match."""
+    cache = RecommendationCache(db_path=tmp_path / "cache.db")
+    cache.record_generation("m1", "2026-08-22", "hash1", {}, _rec(), "scheduled")  # no reasoning_trace kwarg
+    store = RecommendationOutcomeStore(db_path=tmp_path / "outcomes.db")
+    store.insert(
+        match_id="m1", date="2026-08-22", competition="Premier League", market="result_3way",
+        selection="home", recommendation_type="direct_bet", confidence="medium", odds=2.0,
+        value_edge=0.1, correct=True, generated_at="2026-08-22T10:00:00+00:00",
+        competition_id="E0", home_goals=2, away_goals=1,
+    )
+    client = MagicMock()
+    client.get_results.return_value = []
+    conn = _duckdb_conn()
+
+    generate_daily_lessons(cache, store, client, conn, llm_invoke=lambda prompt: "unused reflection")
+
+    lesson_text = conn.execute("SELECT lesson_text FROM agent_lessons").fetchone()[0]
+    assert "unused reflection" not in lesson_text
+    assert lesson_text.startswith("Live-sourced batch:")
 
 
 def test_generate_daily_lessons_resolves_pending_recommendations_first(tmp_path: Path) -> None:
