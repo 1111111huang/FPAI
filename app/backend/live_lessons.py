@@ -72,8 +72,8 @@ class PreparedLessonBatch:
 def _to_lesson_record(outcome: RecommendationOutcome, cache: RecommendationCache) -> BacktestRecord:
     """Enrichment-complete adapter -- unlike recommendation_stats.py's own
     minimal _to_backtest_records (which only needs market_results for the
-    Kelly simulation), generate_batch_lesson_text/generate_batch_reflection
-    also read home_team/away_team/recommendation.{overall,confidence,
+    Kelly simulation), generate_match_reflection (and its generate_lesson_text
+    fallback) also read home_team/away_team/recommendation.{overall,confidence,
     explanation,limitations}/actual.result. A cache miss or a pre-migration
     outcome (competition_id/home_goals/away_goals all NULL, resolved before
     W175) degrades to blank fields rather than raising -- the record still
