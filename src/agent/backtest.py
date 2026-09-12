@@ -87,6 +87,7 @@ class BacktestRecord:
     actual: dict[str, Any]
     market_results: list[dict[str, Any]] = field(default_factory=list)
     full_state: dict[str, Any] | None = None
+    match_stats: dict[str, Any] | None = None
 
 
 def load_outcome(row: pd.Series) -> dict[str, Any]:
@@ -102,6 +103,35 @@ def load_outcome(row: pd.Series) -> dict[str, Any]:
     if pd.notna(hc) and pd.notna(ac):
         corners_kwargs = {"home_corners": int(hc), "away_corners": int(ac)}
     return build_actual_outcome(int(row["fthg"]), int(row["ftag"]), **corners_kwargs)
+
+
+# A109: shots/shots-on-target/cards columns raw_matches already carries for
+# most sources (not Sweden -- see src/ingestion/football_data/sweden_loader.py),
+# standard football-data.co.uk schema. Used only as extra grounding for
+# generate_match_reflection()'s reflective lesson -- never for market
+# resolution (that's load_outcome/build_actual_outcome's job; shots and
+# cards aren't a tradeable market here), so kept as a wholly separate dict
+# rather than threaded into build_actual_outcome.
+_MATCH_STAT_PAIRS = {
+    "shots": ("hs", "as"),
+    "shots_on_target": ("hst", "ast"),
+    "yellow_cards": ("hy", "ay"),
+    "red_cards": ("hr", "ar"),
+}
+
+
+def load_match_stats(row: pd.Series) -> dict[str, Any] | None:
+    """Box-score stats for a historical match, whichever of shots/shots-on-
+    target/cards are actually present on this row -- same pd.notna() pair-
+    presence check load_outcome already uses for hc/ac. None if the source
+    has none of these columns at all (e.g. Sweden)."""
+    stats: dict[str, Any] = {}
+    for stat, (home_col, away_col) in _MATCH_STAT_PAIRS.items():
+        home_val, away_val = row.get(home_col), row.get(away_col)
+        if pd.notna(home_val) and pd.notna(away_val):
+            stats[f"home_{stat}"] = int(home_val)
+            stats[f"away_{stat}"] = int(away_val)
+    return stats or None
 
 
 def _date_str(row: pd.Series) -> str:
@@ -245,6 +275,7 @@ def process_match_row(
         agent_tools.configure_snapshot_store("live")
 
     actual = load_outcome(row)
+    match_stats = load_match_stats(row)
     # A92: market_results reflects only the one candidate the agent actually
     # picked, not every candidate that independently passed guardrails --
     # recommendation.get("markets", []) used to iterate all of them, but that
@@ -268,6 +299,7 @@ def process_match_row(
         actual=actual,
         market_results=market_results,
         full_state=full_state,
+        match_stats=match_stats,
     )
 
 

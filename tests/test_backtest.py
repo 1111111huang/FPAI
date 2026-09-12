@@ -12,6 +12,7 @@ from src.agent.backtest import (
     BacktestHarness,
     BacktestRecord,
     _build_match_info,
+    load_match_stats,
     load_outcome,
     match_in_test_split,
     process_match_row,
@@ -68,6 +69,32 @@ def test_load_outcome_draw_and_no_btts():
     assert outcome["result"] == "draw"
     assert outcome["btts"] == "no"
     assert outcome["total_goals_side"] == "under_2.5"
+
+
+# ---------------------------------------------------------------------------
+# load_match_stats: A109 -- box-score stats (shots, cards) for lesson reflection
+# ---------------------------------------------------------------------------
+
+def test_load_match_stats_includes_shots_and_cards_when_present():
+    row = _row(hs=14.0, **{"as": 8.0}, hst=6.0, ast=3.0, hy=2.0, ay=1.0, hr=0.0, ar=1.0)
+    stats = load_match_stats(row)
+    assert stats == {
+        "home_shots": 14, "away_shots": 8,
+        "home_shots_on_target": 6, "away_shots_on_target": 3,
+        "home_yellow_cards": 2, "away_yellow_cards": 1,
+        "home_red_cards": 0, "away_red_cards": 1,
+    }
+
+
+def test_load_match_stats_omits_pairs_with_nan_and_returns_none_if_all_absent():
+    row = _row(hs=float("nan"), **{"as": float("nan")})  # no hst/ast/hy/ay/hr/ar at all
+    assert load_match_stats(row) is None
+
+
+def test_load_match_stats_includes_only_whichever_pairs_are_present():
+    row = _row(hs=10.0, **{"as": 5.0})  # shots present, cards columns absent entirely
+    stats = load_match_stats(row)
+    assert stats == {"home_shots": 10, "away_shots": 5}
 
 
 # ---------------------------------------------------------------------------
