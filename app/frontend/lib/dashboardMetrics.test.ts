@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { countByOverall, groupByDate, groupByLeague, rankTopEdges, sortMatches } from "./dashboardMetrics";
+import { computeStakingSummary, countByOverall, groupByDate, groupByLeague, rankTopEdges, sortMatches } from "./dashboardMetrics";
 import type { Match } from "@/components/MatchUI";
 
 function match(overrides: Partial<Match> = {}): Match {
@@ -40,7 +40,9 @@ describe("countByOverall", () => {
       conditional: 1,
       no_bet: 0,
       insufficient_data: 0,
-      completed: 0,
+      completed_hit: 0,
+      completed_miss: 0,
+      completed_unresolved: 0,
     });
   });
 
@@ -50,12 +52,16 @@ describe("countByOverall", () => {
       conditional: 0,
       no_bet: 0,
       insufficient_data: 0,
-      completed: 0,
+      completed_hit: 0,
+      completed_miss: 0,
+      completed_unresolved: 0,
     });
   });
 
-  it("direct user request: a completed match counts under 'completed', not its original overall bucket", () => {
+  it("direct user request: a completed match with no determinable pick counts under 'completed_unresolved', not its original overall bucket", () => {
     const matches = [
+      // recommendationPick stays null (fixture default) -- no candidate to
+      // resolve, so computeHit() is null regardless of `overall`.
       match({ id: "1", status: "completed", overall: "direct_bet" }),
       match({ id: "2", status: "completed", overall: "conditional" }),
       match({ id: "3", overall: "direct_bet" }), // still upcoming -- counts normally
@@ -65,7 +71,28 @@ describe("countByOverall", () => {
       conditional: 0,
       no_bet: 0,
       insufficient_data: 0,
-      completed: 2,
+      completed_hit: 0,
+      completed_miss: 0,
+      completed_unresolved: 2,
+    });
+  });
+
+  it("direct user follow-up request: a completed match's actual pick outcome splits it into completed_hit or completed_miss", () => {
+    const candidates: Match["candidates"] = [
+      { market: "result_3way", selection: "home", recommendationType: "direct_bet", currentOdds: 2.0, minOdds: 1.5, mlProbability: 0.5, impliedProbability: 0.5, valueEdge: 0.05 },
+    ];
+    const matches = [
+      match({ id: "1", status: "completed", result: { home: 2, away: 0 }, candidates, recommendationPick: { market: "result_3way", selection: "home" } }), // hit
+      match({ id: "2", status: "completed", result: { home: 0, away: 1 }, candidates, recommendationPick: { market: "result_3way", selection: "home" } }), // miss
+    ];
+    expect(countByOverall(matches)).toEqual({
+      direct_bet: 0,
+      conditional: 0,
+      no_bet: 0,
+      insufficient_data: 0,
+      completed_hit: 1,
+      completed_miss: 1,
+      completed_unresolved: 0,
     });
   });
 
@@ -76,7 +103,9 @@ describe("countByOverall", () => {
       conditional: 0,
       no_bet: 0,
       insufficient_data: 0,
-      completed: 0,
+      completed_hit: 0,
+      completed_miss: 0,
+      completed_unresolved: 0,
     });
   });
 
@@ -87,7 +116,9 @@ describe("countByOverall", () => {
       conditional: 0,
       no_bet: 0,
       insufficient_data: 0,
-      completed: 0,
+      completed_hit: 0,
+      completed_miss: 0,
+      completed_unresolved: 0,
     });
   });
 });
@@ -151,6 +182,42 @@ describe("rankTopEdges", () => {
     // higher raw edge (0.15) -- proves this reads the resolved pick, not
     // bestMarket()'s old max(valueEdge) behavior.
     expect(top.edge).toBeCloseTo(0.07);
+  });
+});
+
+describe("computeStakingSummary", () => {
+  const directBetPick = (odds: number) => ({
+    candidates: [{ market: "result_3way" as const, selection: "home", recommendationType: "direct_bet" as const, currentOdds: odds, minOdds: 1.5, mlProbability: 0.5, impliedProbability: 0.5, valueEdge: 0.05 }],
+    recommendationPick: { market: "result_3way", selection: "home" },
+  });
+
+  it("direct user request: sums staked/won and averages odds across completed, actually-staked picks", () => {
+    const matches = [
+      // 2 UB @ 2.0, hits -> +2 UB won.
+      match({ id: "1", status: "completed", result: { home: 1, away: 0 }, unitBetMultiplier: 2, ...directBetPick(2.0) }),
+      // 3 UB @ 3.0, misses -> -3 UB won.
+      match({ id: "2", status: "completed", result: { home: 0, away: 1 }, unitBetMultiplier: 3, ...directBetPick(3.0) }),
+    ];
+    const summary = computeStakingSummary(matches);
+    expect(summary.staked).toBeCloseTo(5); // 2 + 3
+    expect(summary.won).toBeCloseTo(-1); // +2 - 3
+    expect(summary.avgOdds).toBeCloseTo(2.5); // (2.0 + 3.0) / 2
+  });
+
+  it("returns a null avgOdds (and zero staked/won) when no match has a settled, actually-staked pick", () => {
+    const matches = [match({ id: "1" }), match({ id: "2", status: "completed", overall: "no_bet" })];
+    expect(computeStakingSummary(matches)).toEqual({ staked: 0, won: 0, avgOdds: null });
+  });
+
+  it("excludes a completed conditional pick -- never an actual stake at currentOdds, same gate computeMoneyWon uses", () => {
+    const matches = [
+      match({
+        id: "1", status: "completed", result: { home: 1, away: 0 }, unitBetMultiplier: 2,
+        candidates: [{ market: "result_3way", selection: "home", recommendationType: "conditional", currentOdds: 2.0, minOdds: 1.5, mlProbability: 0.5, impliedProbability: 0.5, valueEdge: 0.05, targetOdds: 2.2 }],
+        recommendationPick: { market: "result_3way", selection: "home" },
+      }),
+    ];
+    expect(computeStakingSummary(matches)).toEqual({ staked: 0, won: 0, avgOdds: null });
   });
 });
 

@@ -506,6 +506,43 @@ export function hasPositiveEdge(match: Match): boolean {
   return !!m && m.currentOdds != null && m.recommendationType !== "no_bet" && m.valueEdge >= 0;
 }
 
+/** Whether a completed match's recommended pick actually hit. null covers
+ * "not completed yet", "no recommendation", "no actual pick was ever made"
+ * (recommendationType "no_bet" -- see the comment on MatchCard's own `hit`
+ * computation this was extracted from for why that's excluded rather than
+ * graded), an unresolvable market (e.g. corners), or a missing result --
+ * the same null-propagation contract HitBadge already establishes. Shared
+ * so DashboardRail's Edge Distribution donut can classify a completed
+ * match by hit/miss using the exact rule MatchCard's badge uses, not a
+ * second copy that could drift. */
+export function computeHit(match: Match): boolean | null {
+  if (match.status !== "completed" || !match.hasRecommendation || !match.result) return null;
+  const shown = resolveRecommendation(match);
+  if (!shown || shown.recommendationType === "no_bet") return null;
+  return marketCorrect(shown.market, shown.selection, buildActualOutcome(match.result.home, match.result.away));
+}
+
+/** Money actually won/lost on the pick, in UB (an abstract Unit Bet, not a
+ * dollar figure) -- BUG-053. Deliberately narrower than `computeHit(match)
+ * !== null` alone -- a `conditional` market ("wait for a better price") can
+ * still carry a non-null unitBetMultiplier (schema.py's
+ * _attach_unit_bet_multiplier only excludes no_bet, not conditional)
+ * despite never having been an actual bet at currentOdds, so this also
+ * requires recommendationType === "direct_bet" specifically. profit =
+ * stake*(odds-1) on a hit, -stake on a miss -- the same formula
+ * src/agent/staking.py's simulate_flat_stake/simulate_kelly_stake and
+ * app/backend/bet_tracker.py's real settlement all already use. Shared so
+ * DashboardRail's staking summary can aggregate the exact same per-match
+ * profit MatchCard's own footer already shows, not a second copy. */
+export function computeMoneyWon(match: Match): number | null {
+  const hit = computeHit(match);
+  const shown = resolveRecommendation(match);
+  if (hit === null || shown?.recommendationType !== "direct_bet" || shown.currentOdds == null || match.unitBetMultiplier == null) {
+    return null;
+  }
+  return hit ? match.unitBetMultiplier * (shown.currentOdds - 1) : -match.unitBetMultiplier;
+}
+
 const TEAM_COLORS: Record<string, { primary: string; secondary?: string }> = {
   Liverpool: { primary: "#C8102E" },
   Arsenal: { primary: "#EF0107", secondary: "#FFFFFF" },
@@ -840,28 +877,10 @@ export function MatchCard({
   // the correct outcome) -- misleading, since Hit/Not Hit should describe
   // whether an actual recommended pick paid off, not whether an unactioned
   // market's own selection happened to match the result.
-  const hit =
-    isCompleted && match.hasRecommendation && shown && shown.recommendationType !== "no_bet" && match.result
-      ? marketCorrect(shown.market, shown.selection, buildActualOutcome(match.result.home, match.result.away))
-      : null;
+  const hit = computeHit(match);
   // BUG-053 follow-up (direct user request): money actually won/lost on the
   // pick, in UB, replacing the Odds/Result box once a match completes.
-  // Deliberately narrower than `hit !== null` alone -- a `conditional`
-  // market ("wait for a better price") can still carry a non-null
-  // unitBetMultiplier (schema.py's _attach_unit_bet_multiplier only
-  // excludes no_bet, not conditional) despite never having been an actual
-  // bet at currentOdds, so this also requires recommendationType ===
-  // "direct_bet" specifically. profit = stake*(odds-1) on a hit, -stake on
-  // a miss -- the same formula src/agent/staking.py's simulate_flat_stake/
-  // simulate_kelly_stake and app/backend/bet_tracker.py's real settlement
-  // all already use.
-  const moneyWon =
-    isCompleted && hit !== null && shown?.recommendationType === "direct_bet" &&
-    shown.currentOdds != null && match.unitBetMultiplier != null
-      ? hit
-        ? match.unitBetMultiplier * (shown.currentOdds - 1)
-        : -match.unitBetMultiplier
-      : null;
+  const moneyWon = computeMoneyWon(match);
   // The fallback list spans many different days (W46/W51's 90-day window),
   // so the day label must show on every card, not just ones with no market
   // to display -- previously `shown ? market/selection : day` hid it

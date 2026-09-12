@@ -1,22 +1,40 @@
-import { resolveRecommendation, dayDiff, type Match, type Overall } from "@/components/MatchUI";
+import { computeHit, computeMoneyWon, resolveRecommendation, dayDiff, type Match, type Overall } from "@/components/MatchUI";
 
-// Direct user request: "completed" as a 5th, mutually-exclusive category --
+// Direct user request: "completed" as extra, mutually-exclusive categories --
 // not part of the Overall union (that's a recommendation type, this is a
-// match-status fact), so tracked as an extra field rather than folded into
+// match-status fact), so tracked as extra fields rather than folded into
 // the Overall-keyed counts. A completed match counts here regardless of its
 // original overall -- once decided, "what kind of pick it was" is secondary
 // to "it's done" for an Edge Distribution panel about upcoming opportunity.
 // A live match still counts under its own overall bucket -- not yet decided.
-export type OverallCounts = Record<Overall, number> & { completed: number };
+//
+// Direct user request (follow-up): split further into hit/not-hit, using
+// computeHit()'s exact rule (the same one MatchCard's own HitBadge uses) --
+// completed_unresolved is the same "no determinable hit" catch-all
+// computeHit already establishes (no actual pick was made -- overall
+// "no_bet" -- an unresolvable market e.g. corners, or a missing result),
+// kept as its own bucket rather than folded into "not hit" so a match that
+// was never actually bet on doesn't misleadingly count as a loss.
+export type OverallCounts = Record<Overall, number> & {
+  completed_hit: number;
+  completed_miss: number;
+  completed_unresolved: number;
+};
 
 /** Counts only matches with a generated recommendation -- a match still
  * showing "Not yet generated" has no overall worth counting. */
 export function countByOverall(matches: Match[]): OverallCounts {
-  const counts: OverallCounts = { direct_bet: 0, conditional: 0, no_bet: 0, insufficient_data: 0, completed: 0 };
+  const counts: OverallCounts = {
+    direct_bet: 0, conditional: 0, no_bet: 0, insufficient_data: 0,
+    completed_hit: 0, completed_miss: 0, completed_unresolved: 0,
+  };
   for (const m of matches) {
     if (!m.hasRecommendation) continue;
     if (m.status === "completed") {
-      counts.completed += 1;
+      const hit = computeHit(m);
+      if (hit === true) counts.completed_hit += 1;
+      else if (hit === false) counts.completed_miss += 1;
+      else counts.completed_unresolved += 1;
       continue;
     }
     counts[m.overall] += 1;
@@ -56,6 +74,36 @@ export function rankTopEdges(matches: Match[], limit: number): TopEdge[] {
     priced.push({ match: m, edge });
   }
   return priced.sort((a, b) => b.edge - a.edge).slice(0, limit);
+}
+
+export type StakingSummary = { staked: number; won: number; avgOdds: number | null };
+
+/** Direct user request: a right-rail staking summary -- total staked, total
+ * won/lost, and average odds taken -- in UB (Unit Bets), aggregated across
+ * every completed, actually-staked (direct_bet, priced, has a real
+ * unitBetMultiplier) match currently loaded. Same "what's loaded today"
+ * honest scoping every other DashboardRail stat already uses -- not a
+ * global all-time figure, that's BetTracker's own real-money StatsBar, a
+ * different data source entirely (real logged bets, not model picks).
+ * computeMoneyWon(m) !== null is the exact same gate MatchCard's own footer
+ * uses to decide whether to show a settled profit at all, so a match this
+ * loop counts is guaranteed to also carry a real unitBetMultiplier/
+ * currentOdds -- reused here rather than a second copy of that gate. */
+export function computeStakingSummary(matches: Match[]): StakingSummary {
+  let staked = 0;
+  let won = 0;
+  let oddsSum = 0;
+  let count = 0;
+  for (const m of matches) {
+    const moneyWon = computeMoneyWon(m);
+    if (moneyWon === null) continue;
+    const odds = resolveRecommendation(m)!.currentOdds!;
+    staked += m.unitBetMultiplier!;
+    won += moneyWon;
+    oddsSum += odds;
+    count += 1;
+  }
+  return { staked, won, avgOdds: count > 0 ? oddsSum / count : null };
 }
 
 // W110: exported so MatchAnalysisPage (MatchUI.tsx) can show the same full
