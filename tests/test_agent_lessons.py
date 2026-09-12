@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 
 import duckdb
 import pytest
+from langchain_core.messages import AIMessage
 
 from src.agent.lessons import (
     approve_lesson,
@@ -14,7 +15,7 @@ from src.agent.lessons import (
     extract_competition_scope,
     find_conflicting_rule,
     generate_batch_lesson_text,
-    generate_batch_reflection,
+    generate_batch_match_comparisons,
     generate_lesson_text,
     generate_match_reflection,
     generate_rule_from_lesson,
@@ -330,6 +331,7 @@ class _FakeRecord:
     def __init__(
         self, league, recommendation, market_results, actual,
         match_id="m", date="2025-01-01", home_team="Home", away_team="Away",
+        full_state=None, match_stats=None,
     ):
         self.league = league
         self.recommendation = recommendation
@@ -339,6 +341,8 @@ class _FakeRecord:
         self.date = date
         self.home_team = home_team
         self.away_team = away_team
+        self.full_state = full_state
+        self.match_stats = match_stats
 
 
 def test_generate_lesson_text_includes_context_overall_and_market_outcomes():
@@ -540,74 +544,74 @@ def test_generate_batch_lesson_text_aggregates_hit_rate_and_worst_market():
     assert "injury/availability (1/2)" in text
 
 
-def test_generate_batch_reflection_includes_stats_and_examples_in_prompt():
-    # explanation is a list[str] in the real schema (src/agent/schema.py:40,
-    # normalize_explanation's "one item per aspect" bullet-point design) --
-    # every real recommendation this whole session has had it as a list, not
-    # a plain string. Found live: a string here masked a real crash in
-    # _describe_record's .strip() call on what's actually always a list.
+def test_generate_batch_match_comparisons_includes_each_match_reasoning_and_stats_in_prompt():
+    """2026-09-12 redesign: replaces generate_batch_reflection -- every
+    match in the batch gets its own reasoning trace and match_stats in the
+    prompt (not just the final explanation _describe_record used to settle
+    for), asked to compare pre-match expectation to actual match."""
     records = [
         _FakeRecord(
             league="E0", match_id="m1", date="2025-01-01", home_team="City", away_team="Villa",
             recommendation={"overall": "direct_bet", "confidence": "high", "explanation": ["Confident home win pick."], "limitations": []},
             market_results=[{"market": "result_3way", "selection": "home", "correct": False}],
             actual={"result": "away"},
+            full_state={"messages": [AIMessage(content="City favored on home form.")]},
+            match_stats={"home_shots": 14, "away_shots": 8},
         ),
         _FakeRecord(
             league="E0", match_id="m2", date="2025-01-08", home_team="Spurs", away_team="Fulham",
-            recommendation={"overall": "direct_bet", "confidence": "high", "explanation": ["Strong home form.", "Good recent H2H record."], "limitations": []},
+            recommendation={"overall": "direct_bet", "confidence": "high", "explanation": ["Strong home form."], "limitations": []},
             market_results=[{"market": "result_3way", "selection": "home", "correct": True}],
             actual={"result": "home"},
+            full_state={"messages": [AIMessage(content="Spurs dominant at home this season.")]},
+            match_stats={"home_shots": 18, "away_shots": 6},
         ),
     ]
-    stats_text = generate_batch_lesson_text(records)
     captured = {}
 
     def fake_invoke(prompt: str) -> str:
         captured["prompt"] = prompt
-        return "The agent overrated home favourites; City's loss shows overconfidence in home form alone."
+        return "Match 1: expected home, away won on a counter. Match 2: home dominance confirmed. Pattern: trust home-form reads less when underlying shot data is thin."
 
-    reflection = generate_batch_reflection(records, stats_text, fake_invoke)
+    comparison = generate_batch_match_comparisons(records, fake_invoke)
 
-    assert reflection == "The agent overrated home favourites; City's loss shows overconfidence in home form alone."
-    assert stats_text in captured["prompt"]
-    assert "City vs Villa" in captured["prompt"]
-    assert "Confident home win pick." in captured["prompt"]
-    assert "Spurs vs Fulham" in captured["prompt"]
-    assert "Strong home form." in captured["prompt"]
+    assert comparison.startswith("Match 1: expected home")
+    prompt = captured["prompt"]
+    assert "City vs Villa" in prompt
+    assert "City favored on home form." in prompt
+    assert "home_shots=14" in prompt
+    assert "Spurs vs Fulham" in prompt
+    assert "Spurs dominant at home this season." in prompt
+    assert "home_shots=18" in prompt
 
 
-def test_generate_batch_reflection_prompt_asks_for_a_specific_missing_web_search_query():
-    """Direct user request (2026-09-07): the reflection should also name a
-    concrete web_search query that could have filled an information gap
-    behind a real miss -- not generic hedging ("more team news would help"),
-    which the prompt already explicitly guards against for its other points.
-    A specific, literal example query anchors the model the same way
-    "reference the specific examples above" already does."""
+def test_generate_batch_match_comparisons_degrades_gracefully_without_trace_or_stats():
+    """A record with no full_state (replay failure) or match_stats (live,
+    or a source lacking box-score columns) must not crash -- degrades to
+    an explicit placeholder in that match's block, same discipline
+    generate_match_reflection's fallback uses."""
     records = [
         _FakeRecord(
-            league="E0", match_id="m1", date="2025-01-01", home_team="City", away_team="Villa",
-            recommendation={"overall": "direct_bet", "confidence": "high", "explanation": ["Confident home win pick."], "limitations": []},
-            market_results=[{"market": "result_3way", "selection": "home", "correct": False}],
-            actual={"result": "away"},
+            league="E0", match_id="m1", home_team="City", away_team="Villa",
+            recommendation={"overall": "no_bet", "confidence": "low", "explanation": [], "limitations": []},
+            market_results=[], actual={"result": "draw"},
         ),
     ]
-    stats_text = generate_batch_lesson_text(records)
+
     captured = {}
 
     def fake_invoke(prompt: str) -> str:
         captured["prompt"] = prompt
-        return "reflection"
+        return "ok"
 
-    generate_batch_reflection(records, stats_text, fake_invoke)
+    comparison = generate_batch_match_comparisons(records, fake_invoke)
 
-    prompt = captured["prompt"]
-    assert "web_search query" in prompt
-    assert "not a generic" in prompt or "not generic" in prompt
-    assert "confirmed starting XI" in prompt or "e.g." in prompt  # a literal example query anchors the model
+    assert comparison == "ok"
+    assert "(no reasoning trace captured)" in captured["prompt"]
+    assert "(no match stats available)" in captured["prompt"]
 
 
-def test_generate_batch_reflection_returns_none_on_llm_failure():
+def test_generate_batch_match_comparisons_returns_none_on_llm_failure():
     records = [
         _FakeRecord(
             league="E0",
@@ -616,15 +620,14 @@ def test_generate_batch_reflection_returns_none_on_llm_failure():
             actual={"result": "away"},
         ),
     ]
-    stats_text = generate_batch_lesson_text(records)
 
     def failing_invoke(prompt: str) -> str:
         raise RuntimeError("API down")
 
-    assert generate_batch_reflection(records, stats_text, failing_invoke) is None
+    assert generate_batch_match_comparisons(records, failing_invoke) is None
 
 
-def test_generate_batch_reflection_returns_none_on_empty_response():
+def test_generate_batch_match_comparisons_returns_none_on_empty_response():
     records = [
         _FakeRecord(
             league="E0",
@@ -633,9 +636,8 @@ def test_generate_batch_reflection_returns_none_on_empty_response():
             actual={"result": "away"},
         ),
     ]
-    stats_text = generate_batch_lesson_text(records)
 
-    assert generate_batch_reflection(records, stats_text, lambda p: "   ") is None
+    assert generate_batch_match_comparisons(records, lambda p: "   ") is None
 
 
 def test_generate_rule_from_lesson_returns_llm_output_stripped():
@@ -698,7 +700,7 @@ def test_find_conflicting_rule_returns_explanation_when_conflict_found():
 
 
 def test_find_conflicting_rule_propagates_llm_exceptions():
-    """Unlike generate_batch_reflection/generate_rule_from_lesson, failures
+    """Unlike generate_batch_match_comparisons/generate_rule_from_lesson, failures
     here must NOT be swallowed into None -- callers need to distinguish
     'check failed' from 'check ran, found nothing' to fail open vs. closed
     correctly (see run_agent_lessons_approve)."""

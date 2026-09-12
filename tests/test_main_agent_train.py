@@ -191,9 +191,11 @@ def test_write_train_artifacts_batches_same_scope_records():
     assert rows == [("m1,m2",), ("m3",)]
 
 
-def test_write_train_artifacts_appends_llm_reflection_when_config_given():
-    """A42-follow-up: passing config threads an LLM reflection onto each
-    batch's lesson text, on top of the deterministic stats."""
+def test_write_train_artifacts_uses_batch_match_comparisons_when_config_given():
+    """2026-09-12 redesign: passing config replaces the batch's lesson text
+    entirely with generate_batch_match_comparisons()'s per-match-vs-actual
+    comparison (not appended on top of the deterministic stats anymore --
+    see generate_batch_lesson_text()'s own docstring update)."""
     conn = duckdb.connect(":memory:")
     records = [
         _record(match_id="m1", league="E0", full_state={
@@ -204,7 +206,7 @@ def test_write_train_artifacts_appends_llm_reflection_when_config_given():
         }),
     ]
 
-    with patch("main._build_llm_invoke", return_value=lambda prompt: "Reflection text here.") as mock_builder:
+    with patch("main._build_llm_invoke", return_value=lambda prompt: "Per-match comparison text here.") as mock_builder:
         lessons_written, telemetry_written = _write_train_artifacts(
             conn, records, run_id="run-5", batch_size=5, config="fake-config",
         )
@@ -212,8 +214,7 @@ def test_write_train_artifacts_appends_llm_reflection_when_config_given():
     mock_builder.assert_called_once_with("fake-config")
     assert (lessons_written, telemetry_written) == (1, 2)
     lesson_text = conn.execute("SELECT lesson_text FROM agent_lessons").fetchone()[0]
-    assert "Reflection: Reflection text here." in lesson_text
-    assert lesson_text.startswith("WHEN evaluating a batch of 2 matches")
+    assert lesson_text == "Per-match comparison text here."
 
 
 def test_write_train_artifacts_skips_llm_reflection_when_config_is_none():

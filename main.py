@@ -1548,11 +1548,12 @@ def run_agent_backtest(
 
 def _build_llm_invoke(config) -> Any:
     """Wrap this run's configured LLM into a plain str->str callable, so
-    src/agent/lessons.py's generate_batch_reflection() stays decoupled from
-    langchain (see that function's docstring). Reuses _build_llm/_extract_text
-    from src.agent.graph -- the same provider the agent-train run itself used
-    (DeepSeek, Anthropic, whichever --config specified) writes the batch's
-    reflection too, not a hardcoded second provider."""
+    src/agent/lessons.py's generate_match_reflection()/generate_batch_match_comparisons()
+    stay decoupled from langchain (see those functions' docstrings). Reuses
+    _build_llm/_extract_text from src.agent.graph -- the same provider the
+    agent-train run itself used (DeepSeek, Anthropic, whichever --config
+    specified) writes the lesson's reflection too, not a hardcoded second
+    provider."""
     from src.agent.graph import _build_llm, _extract_text
 
     llm = _build_llm(config)
@@ -1610,17 +1611,20 @@ def _write_train_artifacts(
     telemetry_written).
 
     config: used to build an llm_invoke on BOTH paths now (A109) --
-    batch_size <= 1 reflects per match via generate_match_reflection,
-    batch_size > 1 appends an LLM-synthesized narrative on top of the
-    deterministic batch stats via generate_batch_reflection (A42-follow-up,
-    the stats alone were reviewed and judged "not very sensible",
-    2026-07-28). config=None on either path skips the LLM call and falls
-    back to the deterministic template/stats -- keeping every existing
-    caller that doesn't pass config unaffected."""
+    batch_size <= 1 reflects per match via generate_match_reflection;
+    batch_size > 1 compares every match in the batch against its own
+    pre-match-expectation-vs-actual-match read via
+    generate_batch_match_comparisons (2026-09-12 redesign, replacing the
+    A42-follow-up generate_batch_reflection, which only layered an LLM
+    narrative over the batch's top-N misses/hits on top of
+    generate_batch_lesson_text()'s Counter-based aggregate). config=None on
+    either path skips the LLM call and falls back to the deterministic
+    template/stats -- keeping every existing caller that doesn't pass
+    config unaffected."""
     from src.agent.lessons import (
         create_lessons_tables,
         generate_batch_lesson_text,
-        generate_batch_reflection,
+        generate_batch_match_comparisons,
         generate_match_reflection,
         insert_lesson_candidate,
     )
@@ -1667,14 +1671,13 @@ def _write_train_artifacts(
         if not current_batch:
             return
         competition_id, tier = current_scope
-        stats_text = generate_batch_lesson_text(current_batch)
-        lesson_text = stats_text
+        lesson_text = None
         if llm_invoke is not None:
-            reflection = generate_batch_reflection(current_batch, stats_text, llm_invoke)
-            if reflection:
-                lesson_text = f"{stats_text}\n\nReflection: {reflection}"
-            else:
-                print(f"  note: LLM reflection unavailable for batch of {len(current_batch)} ({competition_id}/{tier})")
+            lesson_text = generate_batch_match_comparisons(current_batch, llm_invoke)
+            if not lesson_text:
+                print(f"  note: LLM comparison unavailable for batch of {len(current_batch)} ({competition_id}/{tier})")
+        if not lesson_text:
+            lesson_text = generate_batch_lesson_text(current_batch)
         match_ids = ",".join(r.match_id for r in current_batch)
         insert_lesson_candidate(conn, lesson_text, competition_id, tier, match_ids)
         lessons_written += 1

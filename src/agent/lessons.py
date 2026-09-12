@@ -188,7 +188,7 @@ def generate_rule_from_lesson(lesson_text: str, llm_invoke: Callable[[str], str]
     from the lesson's table but the summary." Mirrors the exact extraction
     task performed manually earlier in that same session.
 
-    Same decoupled-from-langchain design as generate_batch_reflection: takes
+    Same decoupled-from-langchain design as generate_match_reflection: takes
     a plain str -> str callable, not an LLM object.
 
     Returns None on any failure (exception or blank response) -- callers
@@ -308,7 +308,7 @@ def find_conflicting_rule(new_rule_text: str, existing_rules: list[str], llm_inv
     naming which existing rule conflicts and why -- when one is found.
 
     Deliberately does NOT catch exceptions from llm_invoke (unlike
-    generate_batch_reflection/generate_rule_from_lesson, which both collapse
+    generate_batch_match_comparisons/generate_rule_from_lesson, which both collapse
     "the call failed" into the same None as "nothing found"): a failed check
     and a clean check both returning None would make it impossible for a
     caller to fail open vs. fail closed differently, and those two outcomes
@@ -479,7 +479,7 @@ def generate_match_reflection(
     Falls back to generate_lesson_text(record) whenever there's nothing to
     reflect on (no trace), no LLM to do it with, the LLM call raises, or the
     response is empty/blank -- same 'never lose the lesson' contract
-    generate_batch_reflection already uses for its own LLM call, just
+    generate_batch_match_comparisons uses for its own LLM call, just
     covering the input-missing case too, not only a provider failure."""
     if not reasoning_trace or llm_invoke is None:
         return generate_lesson_text(record)
@@ -548,7 +548,13 @@ def generate_batch_lesson_text(records: list[Any]) -> str:
     the batch itself. Callers are responsible for only ever batching records
     that share one competition_id/tier (insert_lesson_candidate takes a
     single value of each per row) -- this function has no scope awareness
-    of its own."""
+    of its own.
+
+    2026-09-12: no longer the lead content generate_batch_match_comparisons()
+    gets layered onto -- main.py's batch_size>1 path now uses this purely
+    as the no-LLM fallback (config=None, or the LLM call itself fails),
+    same template-vs-LLM-reflection split generate_lesson_text() has for the
+    single-match path."""
     if not records:
         raise ValueError("generate_batch_lesson_text requires at least one record")
 
@@ -625,98 +631,72 @@ def generate_batch_lesson_text(records: list[Any]) -> str:
     )
 
 
-_CONFIDENCE_RANK = {"high": 3, "medium": 2, "low": 1}
+def _describe_match_for_comparison(r: Any) -> str:
+    """One match's block for generate_batch_match_comparisons()'s prompt --
+    same per-match ingredients generate_match_reflection() uses (reasoning
+    trace, match_stats, actual result), not just the final explanation
+    _describe_record() used to settle for. reasoning_trace is re-derived
+    from r.full_state here (not threaded in separately) since this function
+    is given whole BacktestRecords, same as generate_batch_lesson_text()."""
+    from src.agent.graph import serialize_agent_messages
 
-
-def _classify_and_rank(records: list[Any]) -> tuple[list[Any], list[Any]]:
-    """Split a batch into (misses, hits) by whether more of a record's
-    resolved markets were incorrect than correct, each ranked
-    highest-confidence-first -- the most informative examples for a
-    reflection are the calls the agent was most sure about, not a random
-    sample. Records with no resolved markets (insufficient_data, or every
-    market unresolved) land in neither list."""
-    misses, hits = [], []
-    for r in records:
-        correct = sum(1 for m in r.market_results if m.get("correct") is True)
-        incorrect = sum(1 for m in r.market_results if m.get("correct") is False)
-        if incorrect > correct:
-            misses.append(r)
-        elif correct > incorrect:
-            hits.append(r)
-    rank_key = lambda r: -_CONFIDENCE_RANK.get(r.recommendation.get("confidence", ""), 0)
-    misses.sort(key=rank_key)
-    hits.sort(key=rank_key)
-    return misses, hits
-
-
-def _describe_record(r: Any) -> str:
     overall = r.recommendation.get("overall", "unknown")
     confidence = r.recommendation.get("confidence", "unknown")
-    # Found live: explanation is list[str] in the real schema (schema.py's
-    # normalize_explanation, "one item per aspect") -- every real
-    # recommendation has it as a list, not a string. .strip() on that raised
-    # uncaught (generate_batch_reflection has no try/except of its own around
-    # this), aborting the whole agent-train run's lesson-writing step.
-    explanation_raw = r.recommendation.get("explanation") or []
-    explanation = "; ".join(explanation_raw) if isinstance(explanation_raw, list) else str(explanation_raw).strip()
-    markets_str = "; ".join(
-        f"{m.get('market')}={m.get('selection')} "
-        f"({'correct' if m.get('correct') is True else 'incorrect' if m.get('correct') is False else 'unresolved'})"
-        for m in r.market_results
-    ) or "no markets recommended"
+    markets_summary, _ = _market_and_limitations_summary(r)
+    stats_str = (
+        ", ".join(f"{k}={v}" for k, v in r.match_stats.items())
+        if r.match_stats else "(no match stats available)"
+    )
+    reasoning_trace = serialize_agent_messages(r.full_state.get("messages", [])) if r.full_state else []
+    trace_text = (
+        "\n".join(f"[{m.get('role')}] {m.get('content')}" for m in reasoning_trace)
+        if reasoning_trace else "(no reasoning trace captured)"
+    )
     return (
-        f"{r.home_team} vs {r.away_team} ({r.date}): recommended {overall} (confidence={confidence}). "
-        f"Markets: {markets_str}. Actual result: {r.actual.get('result')}. "
-        f'Agent\'s reasoning at the time: "{explanation}"'
+        f"MATCH: {r.home_team} vs {r.away_team} ({r.date})\n"
+        f"Recommendation: {overall} (confidence={confidence}). Markets: {markets_summary}. "
+        f"Actual result: {r.actual.get('result')}. Match stats: {stats_str}.\n"
+        f"Agent's reasoning and tool calls at the time:\n{trace_text}"
     )
 
 
-def generate_batch_reflection(
-    records: list[Any], stats_text: str, llm_invoke: Callable[[str], str], n_examples: int = 5,
-) -> str | None:
-    """A42-follow-up (2026-07-28): LLM-synthesized reflective narrative over
-    a batch, layered on top of generate_batch_lesson_text()'s deterministic
-    stats rather than replacing them -- requested directly by the user after
-    reviewing the pure-stats version ("not very sensible... I hope to see
-    model's reasoning on reflecting the mistakes/accomplishments"). The
-    stats stay the trustworthy, unhallucinatable anchor (passed in as
-    stats_text, computed once by the caller rather than recomputed here);
-    this adds the qualitative judgment on top.
+def generate_batch_match_comparisons(records: list[Any], llm_invoke: Callable[[str], str]) -> str | None:
+    """2026-09-12 (direct user redesign, replacing A42-follow-up's
+    generate_batch_reflection): a batch lesson used to anchor on
+    generate_batch_lesson_text()'s Counter-based aggregate stats, with an
+    LLM narrative over only the batch's top-N highest-confidence misses/hits
+    layered on top -- per-match detail (and match_stats entirely) never
+    reached the model. Replaced: every match in the batch gets its own
+    pre-match-expectation-vs-actual-match comparison (same ingredients
+    generate_match_reflection() uses for the single-match path), and the
+    model is asked to roll those up into the one pattern worth fixing --
+    mirroring the single-match redesign's philosophy at batch scale instead
+    of bolting statistics on as a separate anchor.
 
     Deliberately takes a plain llm_invoke: str -> str callable instead of a
-    langchain LLM object, so this module stays decoupled from langchain and
-    trivially testable (pass a lambda/fake in tests, no message objects or
-    mocked client needed). Callers (main.py) are responsible for wrapping
-    their actual LLM into that shape.
+    langchain LLM object, same decoupling generate_match_reflection uses.
 
-    Returns None on any failure (network error, provider error, anything) --
-    the caller falls back to stats-only rather than losing the whole lesson
-    candidate over a transient API problem. This is a best-effort narrative,
-    not a required field."""
-    misses, hits = _classify_and_rank(records)
-    misses_text = "\n".join(f"{i + 1}. {_describe_record(r)}" for i, r in enumerate(misses[:n_examples])) or "(none)"
-    hits_text = "\n".join(f"{i + 1}. {_describe_record(r)}" for i, r in enumerate(hits[:n_examples])) or "(none)"
-
+    Returns None on any failure (network error, provider error, empty
+    response) -- the caller (main.py) falls back to
+    generate_batch_lesson_text()'s deterministic stats rather than losing
+    the whole lesson candidate over a transient API problem."""
+    blocks = "\n\n".join(
+        f"--- Match {i + 1} ---\n{_describe_match_for_comparison(r)}" for i, r in enumerate(records)
+    )
     prompt = (
-        "You are reviewing a batch of betting recommendations an automated agent made for historical matches, "
-        "now that the actual results are known. Below are deterministic statistics for the batch, followed by "
-        "the agent's highest-confidence mistakes and its highest-confidence correct calls, each with the agent's "
-        "own reasoning at the time.\n\n"
-        f"STATISTICS:\n{stats_text}\n\n"
-        f"NOTABLE MISSES (high-confidence calls that were wrong):\n{misses_text}\n\n"
-        f"NOTABLE HITS (high-confidence calls that were right):\n{hits_text}\n\n"
-        "Write a short reflective analysis (4-6 sentences) covering: (a) any systematic pattern behind the "
-        "misses -- what kind of reasoning or evidence gap led the agent astray, (b) what the agent got right "
-        "and why, (c) one concrete, actionable adjustment for future recommendations in this competition, "
-        "(d) one specific web_search query that, if run before the pick, could plausibly have surfaced the "
-        "missing information behind at least one of the misses above -- a literal example query tied to that "
-        "match, e.g. \"Villarreal confirmed starting XI 2026-05-17\", not a generic sentiment like \"search for "
-        "more team news\". "
-        "Reference the specific examples above. Do not invent facts not present in the statistics or examples, "
-        "and do not use generic hedging language like 'more data would help'."
+        f"You are reviewing a batch of {len(records)} betting recommendations an automated agent made for "
+        "historical matches, now that the actual results are known. Below is each match's recommendation, "
+        "actual result, match stats (when available), and the agent's own pre-match reasoning.\n\n"
+        f"{blocks}\n\n"
+        "For EACH match above, in one short sentence, compare what the agent's reasoning expected pre-match "
+        "to what the match stats (or, if unavailable, the final result and market outcome) show actually "
+        "happened, and name the gap if any. Then write one final paragraph (3-5 sentences) naming the SINGLE "
+        "most important, recurring pattern across these matches and one concrete, actionable adjustment for "
+        "future recommendations in this competition. Do not invent facts not present above, and do not use "
+        "generic hedging language like 'more data would help'."
     )
     try:
-        reflection = llm_invoke(prompt)
+        comparison = llm_invoke(prompt)
     except Exception:
         return None
-    return reflection.strip() or None
+    return comparison.strip() or None
