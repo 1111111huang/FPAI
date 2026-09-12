@@ -21,6 +21,7 @@ from app.backend.live_lessons import (
     auto_judge_live_lessons,
     commit_lesson_batches,
     generate_daily_lessons,
+    prepare_lesson_batches,
 )
 from app.backend.recommendation_cache import RecommendationCache
 from app.backend.recommendation_outcomes import RecommendationOutcome, RecommendationOutcomeStore
@@ -286,6 +287,121 @@ def test_generate_daily_lessons_resolves_pending_recommendations_first(tmp_path:
 
     assert len(lesson_ids) == 1
     assert store.list_all()[0].correct is True
+
+
+def _dm_with_raw_matches(tmp_path: Path, rows: list[dict]) -> DuckDBManager:
+    """A109: a minimal raw_matches table (just the columns
+    load_match_stats/the match_stats lookup actually read) for testing the
+    live-side raw_matches join -- real raw_matches has many more columns,
+    irrelevant to this lookup."""
+    dm = DuckDBManager()
+    dm.db_path = tmp_path / "fpai_core.db"
+    with dm.connection() as conn:
+        conn.execute(
+            'CREATE TABLE raw_matches (league VARCHAR, date DATE, home_team VARCHAR, away_team VARCHAR, '
+            'hs DOUBLE, "as" DOUBLE, hst DOUBLE, ast DOUBLE, hy DOUBLE, ay DOUBLE, hr DOUBLE, ar DOUBLE)'
+        )
+        for r in rows:
+            conn.execute(
+                'INSERT INTO raw_matches VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+                [r["league"], r["date"], r["home_team"], r["away_team"], r["hs"], r["as"],
+                 r["hst"], r["ast"], r["hy"], r["ay"], r["hr"], r["ar"]],
+            )
+    return dm
+
+
+def test_prepare_lesson_batches_includes_match_stats_when_raw_matches_has_the_row(tmp_path: Path) -> None:
+    """A109: the new live-side match_stats lookup -- a raw_matches row for
+    the same (league, date, team names) grounds generate_match_reflection's
+    prompt exactly like the train path already does."""
+    cache = RecommendationCache(db_path=tmp_path / "cache.db")
+    cache.record_generation(
+        "m1", "2026-08-22", "hash1", {}, _rec(), "scheduled",
+        reasoning_trace=[{"role": "ai", "content": "Arsenal favored at home."}],
+    )
+    store = RecommendationOutcomeStore(db_path=tmp_path / "outcomes.db")
+    store.insert(
+        match_id="m1", date="2026-08-22", competition="Premier League", market="result_3way",
+        selection="home", recommendation_type="direct_bet", confidence="medium", odds=2.0,
+        value_edge=0.1, correct=True, generated_at="2026-08-22T10:00:00+00:00",
+        competition_id="E0", home_goals=2, away_goals=1,
+    )
+    dm = _dm_with_raw_matches(tmp_path, [{
+        "league": "E0", "date": "2026-08-22", "home_team": "Arsenal", "away_team": "Everton",
+        "hs": 14.0, "as": 8.0, "hst": 6.0, "ast": 3.0, "hy": 1.0, "ay": 2.0, "hr": 0.0, "ar": 0.0,
+    }])
+
+    seen_prompts = []
+
+    def spy_invoke(prompt: str) -> str:
+        seen_prompts.append(prompt)
+        return "ok"
+
+    batches = prepare_lesson_batches(cache, store, dm, spy_invoke)
+
+    assert len(batches) == 1
+    assert "home_shots=14" in seen_prompts[0]
+    assert "away_shots=8" in seen_prompts[0]
+
+
+def test_prepare_lesson_batches_degrades_gracefully_when_raw_matches_has_no_matching_row(tmp_path: Path) -> None:
+    """A109: the common case for now -- the weekly raw_matches refresh
+    hasn't caught up with this match yet (or never will, e.g. a source
+    with no box-score columns at all). Must not crash or skip the match,
+    just omit the stats grounding, same as train's own Sweden case."""
+    cache = RecommendationCache(db_path=tmp_path / "cache.db")
+    cache.record_generation(
+        "m1", "2026-08-22", "hash1", {}, _rec(), "scheduled",
+        reasoning_trace=[{"role": "ai", "content": "Arsenal favored at home."}],
+    )
+    store = RecommendationOutcomeStore(db_path=tmp_path / "outcomes.db")
+    store.insert(
+        match_id="m1", date="2026-08-22", competition="Premier League", market="result_3way",
+        selection="home", recommendation_type="direct_bet", confidence="medium", odds=2.0,
+        value_edge=0.1, correct=True, generated_at="2026-08-22T10:00:00+00:00",
+        competition_id="E0", home_goals=2, away_goals=1,
+    )
+    dm = _dm_with_raw_matches(tmp_path, [])  # table exists, but empty -- no match yet
+
+    seen_prompts = []
+
+    def spy_invoke(prompt: str) -> str:
+        seen_prompts.append(prompt)
+        return "ok"
+
+    batches = prepare_lesson_batches(cache, store, dm, spy_invoke)
+
+    assert len(batches) == 1
+    assert "Post-match stats" not in seen_prompts[0]
+
+
+def test_prepare_lesson_batches_skips_the_lookup_entirely_without_a_duckdb_manager(tmp_path: Path) -> None:
+    """Regression guard: duckdb_manager=None (the default, every
+    pre-existing caller) must behave exactly as before this feature --
+    no lookup attempted, no crash from a missing raw_matches table."""
+    cache = RecommendationCache(db_path=tmp_path / "cache.db")
+    cache.record_generation(
+        "m1", "2026-08-22", "hash1", {}, _rec(), "scheduled",
+        reasoning_trace=[{"role": "ai", "content": "Arsenal favored at home."}],
+    )
+    store = RecommendationOutcomeStore(db_path=tmp_path / "outcomes.db")
+    store.insert(
+        match_id="m1", date="2026-08-22", competition="Premier League", market="result_3way",
+        selection="home", recommendation_type="direct_bet", confidence="medium", odds=2.0,
+        value_edge=0.1, correct=True, generated_at="2026-08-22T10:00:00+00:00",
+        competition_id="E0", home_goals=2, away_goals=1,
+    )
+
+    seen_prompts = []
+
+    def spy_invoke(prompt: str) -> str:
+        seen_prompts.append(prompt)
+        return "ok"
+
+    batches = prepare_lesson_batches(cache, store, llm_invoke=spy_invoke)  # no duckdb_manager
+
+    assert len(batches) == 1
+    assert "Post-match stats" not in seen_prompts[0]
 
 
 def test_commit_lesson_batches_writes_source_live(tmp_path: Path) -> None:

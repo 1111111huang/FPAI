@@ -21,7 +21,7 @@ from app.backend.historical_odds_client import HistoricalOddsClient
 from app.backend.live_lessons import auto_judge_live_lessons, commit_lesson_batches, prepare_lesson_batches
 from app.backend.odds_api_client import CreditCounter, FileCreditCounterStore, OddsAPIClient
 from app.backend.recommendation_cache import RecommendationCache
-from app.backend.recommendation_outcomes import RecommendationOutcomeStore
+from app.backend.recommendation_outcomes import RecommendationOutcomeStore, resolve_pending_recommendations
 from app.backend.scheduler import NY_TZ, RecoverableScheduler
 from app.backend.sandbox_clock import sandbox_date, sandbox_now
 from app.backend.sweden_fixtures_client import SwedenFixturesClient
@@ -337,18 +337,25 @@ def register_lessons_job(
     config: AgentConfig,
     sweden_client: object | None = None,
 ) -> None:
-    """Registers two jobs (W175-W185): the daily live-lessons job resolves
-    pending recommendation_outcomes (W167) and batches whatever's newly
-    unbatched into agent_lessons candidates via live_lessons.py's
-    prepare_lesson_batches/commit_lesson_batches, at LESSONS_HOUR (06:00 ET,
-    distinct from EOD_HOUR's 23:00, and after football-data.org has
-    typically posted the prior day's results) -- same schedule_daily
-    restart/catch-up guarantee as the EOD job. It no longer judges anything
-    itself (W183-W185): a separate weekly job (LESSONS_WEEKLY_*) judges
-    every candidate still pending, grouped by (competition_id, tier), via
-    auto_judge_live_lessons -- see docs/superpowers/specs/
-    2026-08-27-weekly-lesson-judging-design.md for why judging moved off
-    the daily cadence.
+    """Registers two jobs (W175-W185, restructured again 2026-09-12/A109):
+    the daily job ONLY resolves pending recommendation_outcomes (W167) --
+    kept daily so anything reading recommendation_outcomes directly (the
+    dashboard) stays fresh -- at LESSONS_HOUR (06:00 ET, distinct from
+    EOD_HOUR's 23:00, and after football-data.org has typically posted the
+    prior day's results), same schedule_daily restart/catch-up guarantee
+    as the EOD job. Lesson TEXT generation (live_lessons.py's
+    prepare_lesson_batches/commit_lesson_batches) moved off the daily
+    cadence onto the weekly job, right before judging: A109's match_stats
+    grounding needs real box-score columns (shots, cards) in raw_matches,
+    which only exist there via the weekly raw_matches refresh
+    (schedule-refresh) -- running generation daily almost always hit
+    before that refresh had caught up with yesterday's match, so match_
+    stats was structurally always None. Running it weekly instead gives
+    that refresh a real week's head start. The weekly job (LESSONS_WEEKLY_*)
+    judges every candidate still pending afterward, grouped by
+    (competition_id, tier), via auto_judge_live_lessons -- see
+    docs/superpowers/specs/2026-08-27-weekly-lesson-judging-design.md for
+    why judging itself moved off the daily cadence originally.
 
     duckdb_manager: a write-mode DuckDBManager (matches main.py's own
     `agent-lessons approve` CLI pattern) -- distinct from lessons_node's
@@ -358,41 +365,36 @@ def register_lessons_job(
     SANDBOX_MODE, matching lessons_node's own always-real-path read
     behavior.
 
-    Each job's own DuckDB connection is opened only around its brief write
-    step -- prepare_lesson_batches/auto_judge_live_lessons both do all
-    their network-bound (football-data.org results lookups, possibly
-    rate-limited) and LLM-bound (reflection, judging) work first, with no
-    DuckDB connection open at all, so data/fpai_core.db's exclusive file
-    lock is never held across either (Task 4 code-quality review finding,
-    unchanged by this split)."""
+    Each job's own DuckDB connection is opened only around its brief steps
+    -- prepare_lesson_batches/auto_judge_live_lessons both do all their
+    LLM-bound (reflection, judging) work first, with no DuckDB connection
+    open at all, so data/fpai_core.db's exclusive file lock is never held
+    across either (Task 4 code-quality review finding, unchanged by this
+    split). resolve_pending_recommendations' own network-bound
+    football-data.org lookups run in the daily job, which never opens a
+    DuckDB connection of its own at all -- store/cache are each their own
+    SQLite file."""
 
     def _lessons_job() -> None:
-        try:
-            llm_invoke = _build_lessons_llm_invoke(config)
-        except Exception:
-            LOGGER.warning(
-                "live_lessons: could not build an LLM client -- generating stats-only "
-                "lessons for today instead of failing the whole run.", exc_info=True,
-            )
-            llm_invoke = None
-
-        batches = prepare_lesson_batches(cache, store, client, sweden_client, llm_invoke)
-
-        with duckdb_manager.connection() as conn:
-            create_lessons_tables(conn)
-            lesson_ids = commit_lesson_batches(conn, store, batches)
-        LOGGER.info("Daily live lessons: %d candidate(s) generated.", len(lesson_ids))
+        resolved = resolve_pending_recommendations(cache, store, client, sweden_client)
+        LOGGER.info("Daily outcome resolution: %d recommendation(s) resolved.", len(resolved))
 
     def _weekly_review_job() -> None:
         try:
             llm_invoke = _build_lessons_llm_invoke(config)
         except Exception:
             LOGGER.warning(
-                "live_lessons: could not build an LLM client -- skipping this week's "
-                "auto-judge review (every pending candidate waits for next week's run).",
-                exc_info=True,
+                "live_lessons: could not build an LLM client -- generating stats-only lessons and "
+                "skipping this week's auto-judge review (every pending candidate waits for next "
+                "week's run).", exc_info=True,
             )
             llm_invoke = None
+
+        batches = prepare_lesson_batches(cache, store, duckdb_manager, llm_invoke)
+        with duckdb_manager.connection() as conn:
+            create_lessons_tables(conn)
+            lesson_ids = commit_lesson_batches(conn, store, batches)
+        LOGGER.info("Weekly live lessons: %d candidate(s) generated.", len(lesson_ids))
 
         judged = auto_judge_live_lessons(duckdb_manager, llm_invoke)
         action_counts = Counter(j["action"] for j in judged)

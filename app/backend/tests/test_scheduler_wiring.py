@@ -501,7 +501,76 @@ def test_register_lessons_job_runs_at_a_different_hour_than_eod() -> None:
     assert LESSONS_HOUR != EOD_HOUR
 
 
-def test_register_lessons_job_generates_a_candidate_and_marks_the_scheduler_run(tmp_path: Path) -> None:
+def test_register_lessons_job_daily_resolves_outcomes_but_writes_no_lesson_yet(tmp_path: Path) -> None:
+    """A109 (2026-09-12): lesson-text generation moved off the daily
+    cadence onto the weekly job (see register_lessons_job's own
+    docstring) -- the daily job now only resolves outcomes. `now` is a
+    fixed Monday, well past LESSONS_HOUR but nowhere near the following
+    Sunday's weekly trigger, so only the daily job's catch-up fires."""
+    cache = RecommendationCache(db_path=tmp_path / "cache.db")
+    # No store.insert() here -- RecommendationOutcomeStore.insert() only
+    # ever creates an ALREADY-resolved row (correct: bool is required, not
+    # optional). A genuinely-unresolved recommendation only exists in the
+    # cache until resolve_pending_recommendations() itself creates its
+    # first recommendation_outcomes row -- same setup
+    # test_generate_daily_lessons_resolves_pending_recommendations_first
+    # (test_live_lessons.py) uses for this identical scenario.
+    cache.record_generation("m1", "2026-08-22", "hash1", {}, {
+        "match": {"home": "Arsenal", "away": "Everton", "date": "2026-08-22", "league": "E0"},
+        "overall": "direct_bet",
+        "candidates": [{
+            "market": "result_3way", "selection": "home", "recommendation_type": "direct_bet",
+            "current_odds": 2.0, "value_edge": 0.1, "composite_score": 0.6, "reason": "Test fixture.",
+        }],
+        "recommendation_pick": {"market": "result_3way", "selection": "home"},
+        "confidence": "medium", "explanation": ["good value"], "limitations": [],
+        "prediction_basis": "team_history_and_market",
+    }, "scheduled")
+    store = RecommendationOutcomeStore(db_path=tmp_path / "outcomes.db")
+    client = MagicMock()
+    client.get_results.return_value = [
+        NormalizedMatch(
+            match_id="m1", utc_date="2026-08-22T15:00:00Z", status="FINISHED",
+            home_team="Arsenal", away_team="Everton", home_goals=2, away_goals=1,
+        ),
+    ]
+    duckdb_manager = DuckDBManager()
+    duckdb_manager.db_path = tmp_path / "fpai_core.db"
+    config = AgentConfig.default()
+    run_log = JobRunLog(db_path=tmp_path / "job_runs.db")
+
+    assert LESSONS_WEEKLY_DAY_OF_WEEK == 6  # Sunday
+    now = datetime(2026, 8, 24, LESSONS_HOUR + 1, 0, tzinfo=NY_TZ)  # Monday, past LESSONS_HOUR
+    scheduler = RecoverableScheduler(run_log=run_log, now_fn=lambda: now)
+
+    with patch("app.backend.scheduler_wiring._build_lessons_llm_invoke", return_value=None):
+        register_lessons_job(
+            scheduler, cache=cache, store=store, client=client,
+            duckdb_manager=duckdb_manager, config=config,
+        )
+        assert _wait_until(lambda: run_log.has_run(LESSONS_JOB_ID, now.date().isoformat()))
+
+    resolved = store.list_unbatched_for_lessons()
+    assert len(resolved) == 1
+    assert resolved[0].correct is True  # the daily job did resolve it
+
+    # The weekly job (which creates agent_lessons via create_lessons_tables)
+    # never ran -- the table shouldn't exist at all yet.
+    assert not duckdb_manager.db_path.exists() or not _agent_lessons_table_exists(duckdb_manager)
+
+
+def _agent_lessons_table_exists(duckdb_manager: DuckDBManager) -> bool:
+    with duckdb_manager.connection(read_only=True) as conn:
+        tables = {row[0] for row in conn.execute("SELECT table_name FROM information_schema.tables").fetchall()}
+    return "agent_lessons" in tables
+
+
+def test_register_lessons_job_weekly_job_generates_the_lesson_from_resolved_outcomes(tmp_path: Path) -> None:
+    """A109 (2026-09-12): the weekly job now owns lesson generation (not
+    just judging) -- an already-resolved-but-unbatched outcome (as the
+    daily job above would leave it) gets turned into a real agent_lessons
+    row once the weekly trigger fires, with no human/daily-job step
+    required in between."""
     cache = RecommendationCache(db_path=tmp_path / "cache.db")
     store = RecommendationOutcomeStore(db_path=tmp_path / "outcomes.db")
     store.insert(
@@ -517,7 +586,8 @@ def test_register_lessons_job_generates_a_candidate_and_marks_the_scheduler_run(
     config = AgentConfig.default()
     run_log = JobRunLog(db_path=tmp_path / "job_runs.db")
 
-    now = datetime(_FUTURE_DAY.year, _FUTURE_DAY.month, _FUTURE_DAY.day, 23, 30, tzinfo=NY_TZ)
+    assert LESSONS_WEEKLY_DAY_OF_WEEK == 6  # Sunday -- 2026-08-23 below must match
+    now = datetime(2026, 8, 23, LESSONS_WEEKLY_HOUR, LESSONS_WEEKLY_MINUTE + 5, tzinfo=NY_TZ)
     scheduler = RecoverableScheduler(run_log=run_log, now_fn=lambda: now)
 
     with patch("app.backend.scheduler_wiring._build_lessons_llm_invoke", return_value=None):
@@ -525,10 +595,11 @@ def test_register_lessons_job_generates_a_candidate_and_marks_the_scheduler_run(
             scheduler, cache=cache, store=store, client=client,
             duckdb_manager=duckdb_manager, config=config,
         )
-        assert _wait_until(lambda: run_log.has_run(LESSONS_JOB_ID, now.date().isoformat()))
+        assert _wait_until(lambda: run_log.has_run(LESSONS_WEEKLY_JOB_ID, "2026-08-23"))
 
     with duckdb_manager.connection(read_only=True) as conn:
         assert conn.execute("SELECT COUNT(*) FROM agent_lessons").fetchone()[0] == 1
+    assert store.list_unbatched_for_lessons() == []  # marked batched by the weekly job
 
 
 def test_register_lessons_job_weekly_review_judges_accumulated_candidates(tmp_path: Path) -> None:
@@ -577,9 +648,11 @@ def test_register_lessons_job_weekly_review_judges_accumulated_candidates(tmp_pa
 
 
 def test_register_lessons_job_degrades_to_stats_only_when_llm_build_fails(tmp_path: Path) -> None:
-    """Task 4 code-quality review: a broken/misconfigured LLM provider must
-    not fail the whole day's run -- _lessons_job() catches the build
-    failure and proceeds with llm_invoke=None (a stats-only lesson) instead."""
+    """Task 4 code-quality review, re-targeted 2026-09-12 at the weekly job
+    since it now owns generation: a broken/misconfigured LLM provider must
+    not fail the whole week's run -- _weekly_review_job() catches the build
+    failure and proceeds with llm_invoke=None (a stats-only lesson, and a
+    no-op auto-judge pass) instead."""
     cache = RecommendationCache(db_path=tmp_path / "cache.db")
     store = RecommendationOutcomeStore(db_path=tmp_path / "outcomes.db")
     store.insert(
@@ -595,7 +668,8 @@ def test_register_lessons_job_degrades_to_stats_only_when_llm_build_fails(tmp_pa
     config = AgentConfig.default()
     run_log = JobRunLog(db_path=tmp_path / "job_runs.db")
 
-    now = datetime(_FUTURE_DAY.year, _FUTURE_DAY.month, _FUTURE_DAY.day, 23, 30, tzinfo=NY_TZ)
+    assert LESSONS_WEEKLY_DAY_OF_WEEK == 6  # Sunday -- 2026-08-23 below must match
+    now = datetime(2026, 8, 23, LESSONS_WEEKLY_HOUR, LESSONS_WEEKLY_MINUTE + 5, tzinfo=NY_TZ)
     scheduler = RecoverableScheduler(run_log=run_log, now_fn=lambda: now)
 
     with patch("app.backend.scheduler_wiring._build_lessons_llm_invoke", side_effect=RuntimeError("boom")):
@@ -603,7 +677,9 @@ def test_register_lessons_job_degrades_to_stats_only_when_llm_build_fails(tmp_pa
             scheduler, cache=cache, store=store, client=client,
             duckdb_manager=duckdb_manager, config=config,
         )
-        assert _wait_until(lambda: run_log.has_run(LESSONS_JOB_ID, now.date().isoformat()))
+        assert _wait_until(lambda: run_log.has_run(LESSONS_WEEKLY_JOB_ID, "2026-08-23"))
 
     with duckdb_manager.connection(read_only=True) as conn:
-        assert conn.execute("SELECT COUNT(*) FROM agent_lessons").fetchone()[0] == 1
+        rows = conn.execute("SELECT status FROM agent_lessons").fetchall()
+    assert len(rows) == 1
+    assert rows[0][0] == "pending"  # auto-judge never ran (llm_invoke=None -> no-op)

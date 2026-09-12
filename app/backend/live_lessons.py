@@ -26,7 +26,7 @@ from app.backend.recommendation_outcomes import (
     RecommendationOutcomeStore,
     resolve_pending_recommendations,
 )
-from src.agent.backtest import BacktestRecord
+from src.agent.backtest import BacktestRecord, load_match_stats
 from src.agent.lessons import (
     approve_lesson,
     find_conflicting_rule,
@@ -40,6 +40,7 @@ from src.agent.lessons import (
 )
 from src.agent.market_resolution import build_actual_outcome
 from src.agent.schema import reported_teams
+from src.ingestion.common.team_mapping import TeamNameMapper
 from src.logic.competition_registry import get_competition_definition
 from src.utils.db_manager import DuckDBManager
 from src.utils.logger import get_logger
@@ -55,13 +56,17 @@ LIVE_SOURCE_NOTE = (
 @dataclass
 class PreparedLessonBatch:
     """Output of prepare_lesson_batches() -- everything needed to write one
-    agent_lessons row, computed with NO DuckDB connection open. Kept
+    agent_lessons row, computed with NO DuckDB connection HELD across its
+    slow work (an LLM reflection call per match) -- only a brief, already-
+    closed read for match_stats grounding happens first (A109). Kept
     separate from the actual write (commit_lesson_batches()) specifically
-    so the DuckDB exclusive file lock is never held across network calls
-    (resolve_pending_recommendations' football-data.org lookups) or an LLM
-    reflection call -- found during Task 4's code-quality review, which
-    traced the lock being held across both in the original single-phase
-    generate_daily_lessons()."""
+    so the DuckDB exclusive file lock is never held across that LLM work --
+    found during Task 4's code-quality review, which traced the lock being
+    held across both network calls and LLM work in the original
+    single-phase generate_daily_lessons(); resolve_pending_recommendations'
+    own football-data.org lookups moved out of this phase entirely
+    (2026-09-12, now the caller's own daily-cadence responsibility, see
+    register_lessons_job)."""
     competition_id: str
     tier: str
     lesson_text: str
@@ -105,26 +110,95 @@ def _to_lesson_record(outcome: RecommendationOutcome, cache: RecommendationCache
     )
 
 
+def _match_stats_lookup(
+    duckdb_manager: DuckDBManager | None, groups: dict[tuple[str, str], list[RecommendationOutcome]],
+) -> dict[tuple[str, str], Any]:
+    """2026-09-12: one brief upfront read (closed before any LLM work
+    starts below, same discipline this module's own docstrings already
+    established) for match_stats grounding -- the box-score columns
+    (shots, cards) A109's generate_match_reflection uses for train, never
+    available to live before now since FootballDataClient's own API
+    genuinely has no such field (confirmed live against the real API; not
+    an extraction gap like A69/A73's). raw_matches DOES eventually get real
+    shots/cards, but only via the weekly raw_matches refresh
+    (schedule-refresh) -- register_lessons_job now runs lesson generation
+    weekly too (not daily) specifically so that refresh has usually already
+    caught up with last week's matches by the time this runs. Returns one
+    DataFrame per (competition_id, date) group, scoped to that league+date
+    (raw_matches has no live match_id to join on -- football-data.org's own
+    ids and raw_matches' content-hashed ones are different ID systems
+    entirely); empty for a group with no raw_matches row yet, or if
+    duckdb_manager is None (callers that don't have one, e.g. fast unit
+    tests uninterested in match_stats) or raw_matches doesn't exist at all
+    in that DB."""
+    # The file itself not existing yet (e.g. this is the very first run,
+    # before commit_lesson_batches' create_lessons_tables has ever created
+    # it) is routine, not transient -- checked explicitly rather than
+    # falling into DuckDBManager.connection()'s own retry-on-IOException
+    # loop, which would otherwise burn several real seconds of sleep-and-
+    # retry on every such call for no benefit (the file still won't exist
+    # on attempt 6 either).
+    if duckdb_manager is None or not duckdb_manager.db_path.exists():
+        return {}
+    lookup: dict[tuple[str, str], Any] = {}
+    try:
+        with duckdb_manager.connection(read_only=True) as conn:
+            for competition_id, date in groups:
+                lookup[(competition_id, date)] = conn.execute(
+                    'SELECT home_team, away_team, hs, "as", hst, ast, hy, ay, hr, ar '
+                    "FROM raw_matches WHERE league = ? AND date = ?",
+                    [competition_id, date],
+                ).fetchdf()
+    except Exception:
+        LOGGER.warning("live_lessons: match_stats lookup against raw_matches failed -- proceeding without it.", exc_info=True)
+        return {}
+    return lookup
+
+
+def _match_stats_for_record(record: BacktestRecord, raw_today: Any, mapper: TeamNameMapper) -> dict[str, Any] | None:
+    """Join one live match to its raw_matches row by (mapped team names),
+    reusing the exact fuzzy-resolution TeamNameMapper src/ingestion/fotmob/
+    merge.py's resolve_match_ids already established for this identical
+    problem (a source's own team-name spelling vs. raw_matches' canonical
+    one) -- scoped to one (league, date)'s candidate pool the same way,
+    not the whole season's, since that's already this group's scope."""
+    if raw_today is None or raw_today.empty or not record.home_team or not record.away_team:
+        return None
+    team_pool = set(raw_today["home_team"]).union(raw_today["away_team"])
+    mapped_home = mapper.map_team(record.home_team, team_pool)
+    mapped_away = mapper.map_team(record.away_team, team_pool)
+    matched = raw_today[(raw_today["home_team"] == mapped_home) & (raw_today["away_team"] == mapped_away)]
+    return load_match_stats(matched.iloc[0]) if not matched.empty else None
+
+
 def prepare_lesson_batches(
     cache: RecommendationCache,
     store: RecommendationOutcomeStore,
-    client: FootballDataClient,
-    sweden_client: object | None = None,
+    duckdb_manager: DuckDBManager | None = None,
     llm_invoke: Callable[[str], str] | None = None,
 ) -> list[PreparedLessonBatch]:
-    """All the network/LLM-bound work (resolving outcomes, grouping,
-    enrichment, stats + reflection generation) -- deliberately does NOT
-    touch DuckDB at all, so it can run for as long as it needs (rate-limited
-    results lookups, an LLM call) without holding data/fpai_core.db's
-    exclusive file lock. Call commit_lesson_batches() with the result to
-    actually write.
+    """All the LLM-bound work (grouping, enrichment, reflection generation)
+    -- deliberately does NOT hold DuckDB open during any of it, so it can
+    run for as long as it needs (an LLM call per match) without holding
+    data/fpai_core.db's exclusive file lock. Call commit_lesson_batches()
+    with the result to actually write.
+
+    2026-09-12: no longer resolves outcomes itself (that moved to the
+    caller -- register_lessons_job's daily job, kept daily so anything
+    reading recommendation_outcomes stays fresh even though lesson
+    generation itself moved to weekly, see that function's docstring) --
+    this only ever batches whatever's already unbatched.
+
+    duckdb_manager (A109): optional -- when given, used for one brief
+    match_stats lookup against raw_matches before any LLM work starts (see
+    _match_stats_lookup); None skips it entirely (match_stats stays None
+    for every match), same degrade-gracefully contract generate_match_
+    reflection already has for a record with no match_stats at all.
 
     llm_invoke=None makes every per-match reflection fall back to the
     deterministic template (generate_match_reflection's own contract) --
     used by callers that can't or don't want to pay for the LLM call (e.g.
     a fast unit test), not a distinct product mode."""
-    resolve_pending_recommendations(cache, store, client, sweden_client)
-
     pending = store.list_unbatched_for_lessons()
     groups: dict[tuple[str, str], list[RecommendationOutcome]] = defaultdict(list)
     for outcome in pending:
@@ -137,8 +211,11 @@ def prepare_lesson_batches(
             continue
         groups[(outcome.competition_id, outcome.date)].append(outcome)
 
+    raw_by_group = _match_stats_lookup(duckdb_manager, groups)
+    mapper = TeamNameMapper()
+
     prepared: list[PreparedLessonBatch] = []
-    for (competition_id, _date), group in groups.items():
+    for (competition_id, date), group in groups.items():
         try:
             tier = get_competition_definition(competition_id).tier
         except (ValueError, FileNotFoundError):
@@ -151,12 +228,14 @@ def prepare_lesson_batches(
             LOGGER.warning("live_lessons: skipping batch for unrecognized competition_id=%s.", competition_id)
             continue
 
+        raw_today = raw_by_group.get((competition_id, date))
         records = [_to_lesson_record(outcome, cache) for outcome in group]
         reflections = []
         for outcome, record in zip(group, records):
             entry = cache.get_latest_any_config(outcome.match_id, outcome.date)
             reasoning_trace = entry.reasoning_trace if entry is not None else None
-            reflections.append(generate_match_reflection(record, reasoning_trace, llm_invoke))
+            match_stats = _match_stats_for_record(record, raw_today, mapper)
+            reflections.append(generate_match_reflection(record, reasoning_trace, llm_invoke, match_stats))
         lesson_text = f"{LIVE_SOURCE_NOTE}\n\n" + "\n\n".join(reflections)
 
         prepared.append(PreparedLessonBatch(
@@ -194,15 +273,22 @@ def generate_daily_lessons(
     duckdb_conn: duckdb.DuckDBPyConnection,
     sweden_client: object | None = None,
     llm_invoke: Callable[[str], str] | None = None,
+    duckdb_manager: DuckDBManager | None = None,
 ) -> list[int]:
-    """Thin orchestrator combining prepare_lesson_batches() +
-    commit_lesson_batches() -- kept for direct/test convenience where
-    lock-hold-duration doesn't matter (e.g. an in-memory DuckDB connection
-    in a test, or a one-off manual sanity check). The real daily job
-    (scheduler_wiring.py's register_lessons_job) calls the two phases
-    separately instead, opening the DuckDB connection only around the
-    commit step -- see that function's own docstring."""
-    batches = prepare_lesson_batches(cache, store, client, sweden_client, llm_invoke)
+    """Thin orchestrator combining resolve_pending_recommendations() +
+    prepare_lesson_batches() + commit_lesson_batches() -- kept for
+    direct/test convenience where lock-hold-duration doesn't matter (e.g.
+    an in-memory DuckDB connection in a test, or a one-off manual sanity
+    check). The real jobs (scheduler_wiring.py's register_lessons_job) call
+    resolution daily and generation+commit weekly instead, each opening its
+    own DuckDB connection only around its own brief step -- see that
+    function's own docstring.
+
+    duckdb_manager (A109): optional, threaded straight through to
+    prepare_lesson_batches for its match_stats lookup -- None (the default,
+    every pre-existing caller) skips that lookup entirely, unaffected."""
+    resolve_pending_recommendations(cache, store, client, sweden_client)
+    batches = prepare_lesson_batches(cache, store, duckdb_manager, llm_invoke)
     return commit_lesson_batches(duckdb_conn, store, batches)
 
 
