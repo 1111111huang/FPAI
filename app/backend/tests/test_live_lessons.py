@@ -209,8 +209,16 @@ def test_generate_daily_lessons_prepends_the_live_source_note_and_skips_reflecti
     assert "Reflection:" not in lesson_text
 
 
-def test_generate_daily_lessons_appends_reflection_when_llm_invoke_given(tmp_path: Path) -> None:
+def test_generate_daily_lessons_reflects_per_match_when_llm_invoke_and_trace_are_available(tmp_path: Path) -> None:
+    """A109: per-match reflection needs a recorded reasoning_trace (from the
+    cache entry, same shape train uses) to actually invoke the LLM -- a
+    cache hit with no reasoning_trace still falls back to the template
+    (covered by the unmodified test right above this one)."""
     cache = RecommendationCache(db_path=tmp_path / "cache.db")
+    cache.record_generation(
+        "m1", "2026-08-22", "hash1", {}, _rec(), "scheduled",
+        reasoning_trace=[{"role": "ai", "content": "Home side has won 4 of last 5, picked home."}],
+    )
     store = RecommendationOutcomeStore(db_path=tmp_path / "outcomes.db")
     store.insert(
         match_id="m1", date="2026-08-22", competition="Premier League", market="result_3way",
@@ -225,7 +233,7 @@ def test_generate_daily_lessons_appends_reflection_when_llm_invoke_given(tmp_pat
     generate_daily_lessons(cache, store, client, conn, llm_invoke=lambda prompt: "a real reflection")
 
     lesson_text = conn.execute("SELECT lesson_text FROM agent_lessons").fetchone()[0]
-    assert "Reflection: a real reflection" in lesson_text
+    assert lesson_text == "Live-sourced batch: reflects only the market actually recommended per match, not every market the agent evaluated.\n\na real reflection"
 
 
 def test_generate_daily_lessons_resolves_pending_recommendations_first(tmp_path: Path) -> None:

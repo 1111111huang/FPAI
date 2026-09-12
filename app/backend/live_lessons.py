@@ -30,8 +30,7 @@ from src.agent.backtest import BacktestRecord
 from src.agent.lessons import (
     approve_lesson,
     find_conflicting_rule,
-    generate_batch_lesson_text,
-    generate_batch_reflection,
+    generate_match_reflection,
     generate_rule_from_lesson,
     insert_lesson_candidate,
     judge_lesson_candidate,
@@ -120,9 +119,10 @@ def prepare_lesson_batches(
     exclusive file lock. Call commit_lesson_batches() with the result to
     actually write.
 
-    llm_invoke=None skips generate_batch_reflection entirely (a stats-only
-    candidate) -- used by callers that can't or don't want to pay for the
-    LLM call (e.g. a fast unit test), not a distinct product mode."""
+    llm_invoke=None makes every per-match reflection fall back to the
+    deterministic template (generate_match_reflection's own contract) --
+    used by callers that can't or don't want to pay for the LLM call (e.g.
+    a fast unit test), not a distinct product mode."""
     resolve_pending_recommendations(cache, store, client, sweden_client)
 
     pending = store.list_unbatched_for_lessons()
@@ -152,12 +152,12 @@ def prepare_lesson_batches(
             continue
 
         records = [_to_lesson_record(outcome, cache) for outcome in group]
-        stats_text = generate_batch_lesson_text(records)
-        lesson_text = f"{LIVE_SOURCE_NOTE} {stats_text}"
-        if llm_invoke is not None:
-            reflection = generate_batch_reflection(records, stats_text, llm_invoke)
-            if reflection:
-                lesson_text = f"{lesson_text}\n\nReflection: {reflection}"
+        reflections = []
+        for outcome, record in zip(group, records):
+            entry = cache.get_latest_any_config(outcome.match_id, outcome.date)
+            reasoning_trace = entry.reasoning_trace if entry is not None else None
+            reflections.append(generate_match_reflection(record, reasoning_trace, llm_invoke))
+        lesson_text = f"{LIVE_SOURCE_NOTE}\n\n" + "\n\n".join(reflections)
 
         prepared.append(PreparedLessonBatch(
             competition_id=competition_id,
