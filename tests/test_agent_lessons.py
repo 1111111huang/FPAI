@@ -450,12 +450,11 @@ def test_generate_match_reflection_includes_match_stats_in_the_prompt_when_given
     assert "away_shots=8" in seen_prompts[0]
 
 
-def test_generate_match_reflection_always_requires_a_leak_check_sentence():
-    """2026-09-11/12, direct user observation across real runs: a leak
-    check buried as one item in a list of asks got silently dropped by the
-    model even after widening the sentence budget alone. Pulled out into
-    its own separately-labeled, required sentence instead -- present with
-    or without match_stats."""
+def test_generate_match_reflection_no_longer_asks_about_leaks():
+    """2026-09-12, direct user instruction: the leak check (added, then
+    iterated on, in prior sessions) is no longer needed -- validated
+    enough across real runs that leaked content wasn't being used, and
+    isn't the point of this reflection. Must not appear at all."""
     record = _FakeRecord(
         league="E0", recommendation={"overall": "direct_bet", "confidence": "high", "prediction_basis": "x", "limitations": []},
         market_results=[], actual={"result": "home"},
@@ -469,14 +468,17 @@ def test_generate_match_reflection_always_requires_a_leak_check_sentence():
 
     generate_match_reflection(record, reasoning_trace=trace, llm_invoke=_invoke)
 
-    assert "LEAK CHECK (required" in seen_prompts[0]
-    assert "discard such content" in seen_prompts[0]
+    assert "LEAK" not in seen_prompts[0]
+    assert "leaked" not in seen_prompts[0]
 
 
-def test_generate_match_reflection_requires_a_stats_check_sentence_only_when_given():
-    """2026-09-12, direct user observation: same silent-drop problem as the
-    leak check -- pulled into its own required sentence, present only when
-    match_stats exists (train-only, see load_match_stats)."""
+def test_generate_match_reflection_centers_on_pre_match_vs_actual_match_comparison():
+    """2026-09-12, direct user redesign: the lesson must be built around
+    comparing the agent's own pre-match mental model of the match to what
+    actually happened, with match_stats feeding directly into that
+    comparison (not a disconnected closing sentence) when available, and
+    degrading to the result/market outcome when not (live, or a pre-A109
+    record)."""
     record = _FakeRecord(
         league="E0", recommendation={"overall": "direct_bet", "confidence": "high", "prediction_basis": "x", "limitations": []},
         market_results=[], actual={"result": "home"},
@@ -490,14 +492,15 @@ def test_generate_match_reflection_requires_a_stats_check_sentence_only_when_giv
         return "ok"
 
     generate_match_reflection(record, reasoning_trace=trace, llm_invoke=_invoke)
-    assert "STATS CHECK (required" not in seen_prompts[0]
+    assert "how the agent's own reasoning expected this match to play out pre-match" in seen_prompts[0]
+    assert "what the final result and market outcome show actually happened" in seen_prompts[0]
+    assert "match stats above" not in seen_prompts[0]
 
     generate_match_reflection(
         record, reasoning_trace=trace, llm_invoke=_invoke,
         match_stats={"home_shots": 14, "away_shots": 8},
     )
-    assert "STATS CHECK (required" in seen_prompts[1]
-    assert "pre-match read" in seen_prompts[1]
+    assert "what the match stats above (shots, shots on target, cards) show actually happened" in seen_prompts[1]
 
 
 def test_generate_batch_lesson_text_rejects_empty_batch():

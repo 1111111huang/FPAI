@@ -490,25 +490,21 @@ def generate_match_reflection(
         f" Post-match stats: {', '.join(f'{k}={v}' for k, v in match_stats.items())}."
         if match_stats else ""
     )
-    # 2026-09-11/12 (direct user observation on real runs): a vague "also
-    # cover X" item buried in a list of asks is exactly the kind of thing a
-    # model silently drops under a length budget -- confirmed live across 9
-    # real matches, even after widening the sentence budget alone did
-    # nothing (the model spent the extra room elsewhere, not on these two
-    # points). Pulled the leak check and the stats comparison out into their
-    # own separately-labeled, REQUIRED closing sentences instead of leaving
-    # them as list items competing with (a)/(b)/(c) for space.
-    leak_instruction = (
-        "\n\nLEAK CHECK (required, exactly one sentence): state whether any of the agent's own "
-        "search results above mention this match's final score or other post-match events, and "
-        "if so, whether the agent's final pick actually appears to have used it. The agent is "
-        "instructed to discard such content -- say so either way, don't skip this sentence."
-    )
-    stats_compare_instruction = (
-        "\n\nSTATS CHECK (required, exactly one sentence): state what the match stats above "
-        "(shots, shots on target, cards) show happened on the pitch, and whether that matches or "
-        "contradicts the agent's pre-match read -- independent of whether the bet itself won."
-        if match_stats else ""
+    # 2026-09-12 (direct user redesign): the lesson used to center on "was
+    # the betting decision good" (value edge / market correctness), with
+    # match_stats bolted on as a disconnected closing sentence -- confirmed
+    # live it never actually fed into the lesson's own conclusion. Restructured
+    # so the comparison between the agent's own pre-match mental model of
+    # the match and what actually happened IS the lesson, and the
+    # actionable takeaway is specifically what more to research pre-match,
+    # not a generic reasoning/evidence-gap label. The leak check (previous
+    # iteration) is dropped per direct instruction -- validated enough
+    # across real runs, no longer the point of this reflection.
+    actual_match_ask = (
+        "what the match stats above (shots, shots on target, cards) show actually happened on the "
+        "pitch, not just the final result"
+        if match_stats else
+        "what the final result and market outcome show actually happened"
     )
 
     prompt = (
@@ -518,12 +514,15 @@ def generate_match_reflection(
         f"(confidence={record.recommendation.get('confidence', 'unknown')}). "
         f"Markets: {markets_summary}. Actual result: {record.actual.get('result')}.{stats_line}\n\n"
         f"The agent's own reasoning and tool calls at the time:\n{trace_text}\n\n"
-        "First, write a short reflective lesson (3-5 sentences) covering: (a) whether the agent's "
-        "own investigation actually surfaced the information that would have led to the right call, "
-        "(b) if it missed, whether that's a reasoning gap or an evidence gap, (c) one concrete, "
-        "actionable adjustment for future recommendations in this competition. Do not invent facts "
-        "not present above, and do not use generic hedging language like 'more data would help'."
-        f"{leak_instruction}{stats_compare_instruction}"
+        "Write a reflective lesson (4-6 sentences) structured as: (1) one sentence on how the "
+        "agent's own reasoning expected this match to play out pre-match -- which side it favored, "
+        "by how much, and on what evidence; (2) one sentence on "
+        f"{actual_match_ask}; (3) identify the gap between the two, if any, and whether it traces to "
+        "a reasoning gap (the evidence was already there but wasn't weighed correctly) or an "
+        "evidence gap (something relevant was missing entirely); (4) name ONE specific, concrete "
+        "piece of additional information the agent should have gathered pre-match that would have "
+        "closed that gap -- a specific search query or a specific stat/data source, not a generic "
+        "'more data would help'. Do not invent facts not present above."
     )
     try:
         reflection = llm_invoke(prompt)
