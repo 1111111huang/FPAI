@@ -1297,7 +1297,7 @@ export function DashboardPage() {
         const to = addDays(asOf, 90, sandboxMode);
         const fixtures = await getFixtures(today, dateString(to, sandboxMode));
         if (cancelled) return;
-        const nearest = fixtures
+        const sorted = fixtures
           .map((f) => fixtureToMatch(f, asOf, sandboxMode))
           // Direct user request: a live match, or one completed earlier
           // today, stays in the same list as upcoming ones -- MatchCard
@@ -1315,8 +1315,15 @@ export function DashboardPage() {
           // API ordering isn't guaranteed -- sort so "next 10" is actually
           // nearest-first before trimming. ISO 8601 strings sort correctly
           // as strings.
-          .sort((a, b) => a.kickoffIso.localeCompare(b.kickoffIso))
-          .slice(0, 10);
+          .sort((a, b) => a.kickoffIso.localeCompare(b.kickoffIso));
+        // Direct user request: today's matches are never trimmed, even past
+        // 10 -- only matches from later days fill the remaining slots (if
+        // any) up to a total cap of 10. The forward-only window means
+        // today's matches already sort first, so this is a straight
+        // partition-and-concat, not a re-sort.
+        const todays = sorted.filter((m) => dayDiff(m.kickoffIso, asOf, sandboxMode) === 0);
+        const later = sorted.filter((m) => dayDiff(m.kickoffIso, asOf, sandboxMode) !== 0);
+        const nearest = [...todays, ...later.slice(0, Math.max(0, 10 - todays.length))];
         // W53: resolve the precomputed cache for the (already-capped-to-10)
         // list before rendering -- an additional await in this same guarded
         // run, so re-check `cancelled` again before touching state.

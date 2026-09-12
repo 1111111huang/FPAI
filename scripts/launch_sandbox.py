@@ -295,6 +295,18 @@ def launch_frontend(backend_port: int, frontend_port: int) -> subprocess.Popen:
 # generated" state.
 # ---------------------------------------------------------------------------
 
+def _todays_plus_capped_later(sorted_matches: list[NormalizedMatch], date_str: str) -> list[NormalizedMatch]:
+    """Mirrors MatchUI.tsx's todays/later partition: date_str's own matches
+    are never trimmed, only later days fill the remaining slots up to a
+    total of 10. `sorted_matches` must already be kickoff-ascending, so
+    date_str's matches (the earliest possible date in this forward-only
+    window) already come first -- a straight partition-and-concat, not a
+    re-sort."""
+    todays = [m for m in sorted_matches if m.utc_date[:10] == date_str]
+    later = [m for m in sorted_matches if m.utc_date[:10] != date_str]
+    return todays + later[: max(0, 10 - len(todays))]
+
+
 def fetch_sandbox_fixtures(
     fixtures_client: FootballDataClient, date_str: str, competition_code: str = "PL",
 ) -> tuple[list[NormalizedMatch], bool]:
@@ -314,16 +326,18 @@ def fetch_sandbox_fixtures(
     date_str..date_str+90d, sort by kickoff ascending (utc_date is already
     ISO 8601, so a plain string sort is correct -- same as the frontend's
     `.sort((a, b) => a.kickoffIso.localeCompare(b.kickoffIso))`), and cap at
-    the same 10 matches the Dashboard renders. **Found live** (direct user
-    report, 2026-08-08): this used to query the exact date first and only
-    widen the window when that came back completely empty -- W86 changed
-    DashboardPage to always query the wide window regardless of same-day
-    count, but this precompute-side copy was never updated to match, so any
-    league whose exact date had 1-9 real matches (not exactly 0) silently
-    left the Dashboard's later-dated cards uncovered, "not yet generated"
-    until clicked. Keep this in sync with DashboardPage's own query in
-    MatchUI.tsx if either changes -- a matching comment lives there pointing
-    back here.
+    the same 10 matches the Dashboard renders -- except date_str's own
+    matches, which (per W-next: direct user request) are never trimmed;
+    only later days fill the remaining slots up to a total of 10. **Found
+    live** (direct user report, 2026-08-08): this used to query the exact
+    date first and only widen the window when that came back completely
+    empty -- W86 changed DashboardPage to always query the wide window
+    regardless of same-day count, but this precompute-side copy was never
+    updated to match, so any league whose exact date had 1-9 real matches
+    (not exactly 0) silently left the Dashboard's later-dated cards
+    uncovered, "not yet generated" until clicked. Keep this in sync with
+    DashboardPage's own query in MatchUI.tsx if either changes -- a
+    matching comment lives there pointing back here.
 
     Returns `(fixtures, used_fallback)` for backward compatibility with
     _fetch_sandbox_fixtures_for_league's tuple contract; `used_fallback` is
@@ -331,7 +345,7 @@ def fetch_sandbox_fixtures(
     window is unconditional -- kept only so callers don't need updating."""
     to_date = (date_cls.fromisoformat(date_str) + datetime_mod.timedelta(days=90)).isoformat()
     upcoming = fixtures_client.get_results(competition_code=competition_code, date_from=date_str, date_to=to_date)
-    return sorted(upcoming, key=lambda m: m.utc_date)[:10], False
+    return _todays_plus_capped_later(sorted(upcoming, key=lambda m: m.utc_date), date_str), False
 
 
 def fetch_sandbox_fixtures_swe(date_str: str) -> tuple[list[NormalizedMatch], bool]:
@@ -346,7 +360,7 @@ def fetch_sandbox_fixtures_swe(date_str: str) -> tuple[list[NormalizedMatch], bo
 
     to_date = (date_cls.fromisoformat(date_str) + datetime_mod.timedelta(days=90)).isoformat()
     upcoming = historical_results_from_raw_matches(date_str, to_date)
-    return sorted(upcoming, key=lambda m: m.utc_date)[:10], False
+    return _todays_plus_capped_later(sorted(upcoming, key=lambda m: m.utc_date), date_str), False
 
 
 def _fetch_sandbox_fixtures_for_league(

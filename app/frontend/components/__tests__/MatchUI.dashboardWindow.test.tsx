@@ -120,12 +120,16 @@ describe("Dashboard always shows the next 10 matches (date-grouped, not today-on
   });
 
   it("shows up to 10 matches sorted nearest-first, even when today itself has none", async () => {
-    const today = new Date().toISOString().slice(0, 10);
+    const now = new Date();
 
-    // 12 fixtures, deliberately out of order and on many different days, so
-    // this must both trim to 10 and actually sort by kickoff.
+    // 12 fixtures, deliberately out of order and on many different days (all
+    // *future* days -- offsets 1..12, never 0 -- so today genuinely has none
+    // and doesn't absorb one of these via the today-is-never-trimmed rule),
+    // so this must both trim to 10 and actually sort by kickoff.
     const unordered = Array.from({ length: 12 }, (_, i) => i).reverse();
-    const fixtures = unordered.map((i) => fixture(`match-${i}`, `2026-09-${String(i + 1).padStart(2, "0")}T15:00:00Z`));
+    const fixtures = unordered.map((i) =>
+      fixture(`match-${i}`, new Date(now.getTime() + (i + 1) * 24 * 60 * 60 * 1000).toISOString())
+    );
     vi.mocked(getFixtures).mockResolvedValue(fixtures);
 
     render(<DashboardPage />);
@@ -134,6 +138,46 @@ describe("Dashboard always shows the next 10 matches (date-grouped, not today-on
     expect(screen.getByText("match-9")).toBeInTheDocument();
     expect(screen.queryByText("match-10")).not.toBeInTheDocument();
     expect(screen.queryByText("match-11")).not.toBeInTheDocument();
+  });
+
+  it("direct user request: shows ALL of today's matches even past 10, trimming only later days", async () => {
+    const now = new Date();
+    const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
+
+    // 12 matches today (over the old cap of 10) plus 2 tomorrow -- none of
+    // tomorrow's should render, since today alone already fills every slot.
+    const todays = Array.from({ length: 12 }, (_, i) => fixture(`today-${i}`, `${today}T${String(i).padStart(2, "0")}:00:00`));
+    const tomorrow = new Date(now.getTime() + 24 * 60 * 60 * 1000).toISOString();
+    const laterFixtures = [fixture("later-0", tomorrow), fixture("later-1", tomorrow)];
+    vi.mocked(getFixtures).mockResolvedValue([...todays, ...laterFixtures]);
+
+    render(<DashboardPage />);
+
+    await waitFor(() => expect(screen.getByText("today-11")).toBeInTheDocument());
+    for (const f of todays) expect(screen.getByText(f.match_id)).toBeInTheDocument();
+    expect(screen.queryByText("later-0")).not.toBeInTheDocument();
+    expect(screen.queryByText("later-1")).not.toBeInTheDocument();
+  });
+
+  it("direct user request: today's matches (under 10) leave the remaining slots for later days", async () => {
+    const now = new Date();
+    const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
+
+    const todays = Array.from({ length: 3 }, (_, i) => fixture(`today-${i}`, `${today}T${String(i).padStart(2, "0")}:00:00`));
+    // 9 later fixtures, only 7 of which should fit (10 - 3 today).
+    const laterFixtures = Array.from({ length: 9 }, (_, i) => {
+      const d = new Date(now.getTime() + (i + 1) * 24 * 60 * 60 * 1000);
+      return fixture(`later-${i}`, d.toISOString());
+    });
+    vi.mocked(getFixtures).mockResolvedValue([...todays, ...laterFixtures]);
+
+    render(<DashboardPage />);
+
+    await waitFor(() => expect(screen.getByText("today-2")).toBeInTheDocument());
+    for (const f of todays) expect(screen.getByText(f.match_id)).toBeInTheDocument();
+    for (let i = 0; i < 7; i++) expect(screen.getByText(`later-${i}`)).toBeInTheDocument();
+    expect(screen.queryByText("later-7")).not.toBeInTheDocument();
+    expect(screen.queryByText("later-8")).not.toBeInTheDocument();
   });
 
   it("labels asOf's own date 'Today' and shows a real calendar date for every other date row", async () => {

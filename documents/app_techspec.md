@@ -482,6 +482,12 @@ See Section 5.1 for `historical_results_from_raw_matches()` itself. **Critical b
 
 **Separately found in the same investigation, a data problem rather than a code one — see `agent_techspec.md` §25.2 / `documents/bugs.md` BUG-036**: `SnapshotStore` has no way to detect that a recorded tool response predates a later fix to the model/code it called into, so a stale snapshot keeps replaying its disproven content indefinitely even after the underlying bug is fixed. Found and purged 44 affected sandbox snapshot directories total (1 La Liga cold-start misfire + 43 pre-BUG-029 single-target E0 forecasts) as a one-off cleanup, not a systematic fix — the structural gap remains open.
 
+### 9.16 Today's own matches are never trimmed by the flat 10-match cap (W205)
+
+Direct user request (2026-09-12): W86's flat `.slice(0, 10)` (kickoff-ascending, whole 90-day window) meant a heavy fixture day — more than 10 real matches on `asOf`'s own date — silently dropped some of *today's* matches to make room in the cap, while every one of those dropped matches was still today, not some later day the cap is meant to reach toward. `DashboardPage`'s fetch effect (`MatchUI.tsx`) now partitions the already-sorted list by `dayDiff(...) === 0` before trimming: `asOf`'s own-date matches (`todays`) are concatenated in full, ahead of `later.slice(0, Math.max(0, 10 - todays.length))` — later days only fill whatever slots today's matches didn't use, and are trimmed exactly as before whenever today has room to spare. Order is unaffected (today's matches, by construction of the forward-only window, always sort first), so this is a straight partition-and-concat, not a re-sort.
+
+`scripts/launch_sandbox.py`'s `fetch_sandbox_fixtures()`/`fetch_sandbox_fixtures_swe()` mirror (W51/W89, Section 9.15) got the same treatment via a shared `_todays_plus_capped_later()` helper, keeping `--precompute`'s scope matching what the Dashboard actually renders on a heavy sandbox date. New tests: `MatchUI.dashboardWindow.test.tsx` (today over 10 keeps all of them and drops every later-day match; today under 10 leaves the correct number of later-day slots) and `scripts/test_launch_sandbox.py`'s `TestFetchSandboxFixturesWindow` (same two cases). The pre-existing "even when today itself has none" cap test had hardcoded September 2026 fixture dates that happened to collide with the real run date once wall-clock time reached 2026-09-12 — rewritten to use offsets from `now` (all future, never day-0) so it no longer depends on which real day it runs.
+
 ---
 
 ## 10. Data-Validation Layer (W02)
@@ -503,7 +509,7 @@ Next.js 14 App Router. Four routes, each a thin wrapper delegating to a componen
 
 | Route | Component | Purpose |
 |---|---|---|
-| `/` | `DashboardPage` | The next 10 upcoming fixtures from the sandbox `as_of` date (or real today) forward, as `MatchCard`s grouped into date rows. **W86:** always a single 90-day-forward window query, superseding W46's two-fetch "only widen when the same-day query is empty" behavior — see Section 9.10. |
+| `/` | `DashboardPage` | The next 10 upcoming fixtures from the sandbox `as_of` date (or real today) forward, as `MatchCard`s grouped into date rows — except today's own matches, which are never trimmed by that cap (W205, Section 9.16). **W86:** always a single 90-day-forward window query, superseding W46's two-fetch "only widen when the same-day query is empty" behavior — see Section 9.10. |
 | `/matches` | `MatchExplorerPage` | Search real fixtures across a rolling 90-day window. **W155 (2026-08-17):** results grouped into league section headers (`groupByLeague()`, Section 9.10 -- previously written for `DashboardPage`, unused since W86 moved that page to date grouping, now actually wired into a page for the first time), same wrapping-panel/wash treatment `DashboardPage`'s date groups already use. |
 | `/matches/[id]` | `MatchAnalysisPage` | Full recommendation detail for one fixture, auto-triggers generation on load. **W68:** accepts a real `league` (`?league=`, populated by `MatchCard`'s link and `AppShell`'s search results, default `"E0"`), used for both the recommendation request and the on-page display — previously hardcoded `"E0"` regardless of the fixture's actual competition. |
 | `/bets` | `BetTrackerPage` | Logged-bet list, `StatsBar`, manual-entry form, "Settle open bets" action. |

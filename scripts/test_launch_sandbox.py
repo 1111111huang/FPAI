@@ -279,6 +279,48 @@ class TestFetchSandboxFixtures:
             str(i) for i, day in enumerate(unordered_days) if day not in (28, 30)
         }
 
+    def test_date_str_own_matches_are_never_trimmed_even_past_10(self):
+        # Mirrors MatchUI.tsx's todays-plus-capped-later partition: 12
+        # matches on date_str itself, all 12 must survive even though that's
+        # over the old flat cap of 10.
+        fixtures_client = MagicMock()
+
+        def _make(n: int, day: int) -> NormalizedMatch:
+            return NormalizedMatch(
+                match_id=str(n), utc_date=f"2025-03-{day:02d}T15:00:00Z", status="FINISHED",
+                home_team=f"Home{n}", away_team=f"Away{n}", home_goals=1, away_goals=0,
+            )
+
+        todays = [_make(i, 8) for i in range(12)]
+        later = [_make(100, 9), _make(101, 10)]
+        fixtures_client.get_results.return_value = todays + later
+
+        result, used_fallback = fetch_sandbox_fixtures(fixtures_client, "2025-03-08")
+
+        assert used_fallback is False
+        assert {f.match_id for f in result} == {str(i) for i in range(12)}
+        assert "100" not in {f.match_id for f in result}
+        assert "101" not in {f.match_id for f in result}
+
+    def test_date_str_own_matches_under_10_leave_room_for_later_days(self):
+        fixtures_client = MagicMock()
+
+        def _make(n: int, day: int) -> NormalizedMatch:
+            return NormalizedMatch(
+                match_id=str(n), utc_date=f"2025-03-{day:02d}T15:00:00Z", status="FINISHED",
+                home_team=f"Home{n}", away_team=f"Away{n}", home_goals=1, away_goals=0,
+            )
+
+        todays = [_make(i, 8) for i in range(3)]
+        later = [_make(100 + i, 9 + i) for i in range(9)]  # 9 later matches, only 7 fit
+        fixtures_client.get_results.return_value = todays + later
+
+        result, used_fallback = fetch_sandbox_fixtures(fixtures_client, "2025-03-08")
+
+        assert used_fallback is False
+        assert len(result) == 10
+        assert {f.match_id for f in result} == {"0", "1", "2"} | {str(100 + i) for i in range(7)}
+
 
 class TestPrecomputeRecommendationsOrdering:
     """W50 code-quality review finding: precompute_recommendations()'s
