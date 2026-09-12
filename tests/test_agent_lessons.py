@@ -450,11 +450,12 @@ def test_generate_match_reflection_includes_match_stats_in_the_prompt_when_given
     assert "away_shots=8" in seen_prompts[0]
 
 
-def test_generate_match_reflection_always_asks_about_leaked_post_match_content():
-    """2026-09-11, direct user observation on a real run: a generic
-    'reasoning vs evidence gap' framing let an actual leak-guard failure
-    slip past un-flagged. The prompt must ask about it explicitly, with or
-    without match_stats."""
+def test_generate_match_reflection_always_requires_a_leak_check_sentence():
+    """2026-09-11/12, direct user observation across real runs: a leak
+    check buried as one item in a list of asks got silently dropped by the
+    model even after widening the sentence budget alone. Pulled out into
+    its own separately-labeled, required sentence instead -- present with
+    or without match_stats."""
     record = _FakeRecord(
         league="E0", recommendation={"overall": "direct_bet", "confidence": "high", "prediction_basis": "x", "limitations": []},
         market_results=[], actual={"result": "home"},
@@ -468,15 +469,14 @@ def test_generate_match_reflection_always_asks_about_leaked_post_match_content()
 
     generate_match_reflection(record, reasoning_trace=trace, llm_invoke=_invoke)
 
-    assert "leaked content" in seen_prompts[0]
-    assert "discard such leaked content" in seen_prompts[0]
+    assert "LEAK CHECK (required" in seen_prompts[0]
+    assert "discard such content" in seen_prompts[0]
 
 
-def test_generate_match_reflection_asks_to_compare_pre_match_read_to_stats_only_when_given():
-    """2026-09-11, direct user observation: the reflection should compare
-    the agent's pre-match understanding to what the in-game stats actually
-    show, not just the final score -- but only when match_stats exists
-    (train-only, see load_match_stats)."""
+def test_generate_match_reflection_requires_a_stats_check_sentence_only_when_given():
+    """2026-09-12, direct user observation: same silent-drop problem as the
+    leak check -- pulled into its own required sentence, present only when
+    match_stats exists (train-only, see load_match_stats)."""
     record = _FakeRecord(
         league="E0", recommendation={"overall": "direct_bet", "confidence": "high", "prediction_basis": "x", "limitations": []},
         market_results=[], actual={"result": "home"},
@@ -490,13 +490,14 @@ def test_generate_match_reflection_asks_to_compare_pre_match_read_to_stats_only_
         return "ok"
 
     generate_match_reflection(record, reasoning_trace=trace, llm_invoke=_invoke)
-    assert "pre-match understanding" not in seen_prompts[0]
+    assert "STATS CHECK (required" not in seen_prompts[0]
 
     generate_match_reflection(
         record, reasoning_trace=trace, llm_invoke=_invoke,
         match_stats={"home_shots": 14, "away_shots": 8},
     )
-    assert "pre-match understanding" in seen_prompts[1]
+    assert "STATS CHECK (required" in seen_prompts[1]
+    assert "pre-match read" in seen_prompts[1]
 
 
 def test_generate_batch_lesson_text_rejects_empty_batch():
