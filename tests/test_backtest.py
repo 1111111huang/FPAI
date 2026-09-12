@@ -371,6 +371,30 @@ def test_backtest_harness_load_matches_selects_total_goals_odds_columns():
     assert "under25_odds" in sql_used
 
 
+def test_backtest_harness_load_matches_selects_match_stats_columns():
+    """A109: confirmed live (a real agent-train run against real raw_matches
+    data, direct user verification) that match_stats was always None on
+    every real run despite the underlying columns being populated --
+    load_match_stats() itself was correct, but load_matches()'s own SQL
+    never selected hs/as/hst/ast/hy/ay/hr/ar at all, so `row.get("hs")`
+    always returned None regardless of real data. Exact same failure shape
+    as A69/A73 above (a downstream function's unit tests pass while the
+    real query path silently starves it) -- asserts the real query path,
+    not just load_match_stats() in isolation, so a future regression here
+    fails loudly instead of silently reproducing this."""
+    harness = BacktestHarness(config=_make_config())
+    fake_df = pd.DataFrame([_row(match_id="a", date=pd.Timestamp("2025-01-15"))])
+    mock_conn = MagicMock()
+    mock_conn.execute.return_value.fetchdf.return_value = fake_df
+    with patch.object(harness.db, "connection") as mock_connection:
+        mock_connection.return_value.__enter__.return_value = mock_conn
+        harness.load_matches("2025-01-01", "2025-03-01", league="E0")
+
+    sql_used = mock_conn.execute.call_args[0][0]
+    for column in ("hs", '"as"', "hst", "ast", "hy", "ay", "hr", "ar"):
+        assert column in sql_used
+
+
 def test_backtest_harness_stratified_sample_balances_result_categories():
     harness = BacktestHarness(config=_make_config())
     rows = (

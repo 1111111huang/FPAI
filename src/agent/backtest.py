@@ -323,7 +323,7 @@ class BacktestHarness:
             raise ValueError(f"split must be one of {_VALID_SPLITS}, got {split!r}")
         query = (
             "SELECT match_id, league, date, home_team, away_team, "
-            "odds_h, odds_d, odds_a, over25_odds, under25_odds, fthg, ftag, hc, ac "
+            'odds_h, odds_d, odds_a, over25_odds, under25_odds, fthg, ftag, hc, ac, hs, "as", hst, ast, hy, ay, hr, ar '
             "FROM raw_matches WHERE date >= ? AND date <= ? AND fthg IS NOT NULL AND ftag IS NOT NULL"
         )
         params: list[Any] = [from_date, to_date]
