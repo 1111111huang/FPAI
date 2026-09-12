@@ -450,6 +450,55 @@ def test_generate_match_reflection_includes_match_stats_in_the_prompt_when_given
     assert "away_shots=8" in seen_prompts[0]
 
 
+def test_generate_match_reflection_always_asks_about_leaked_post_match_content():
+    """2026-09-11, direct user observation on a real run: a generic
+    'reasoning vs evidence gap' framing let an actual leak-guard failure
+    slip past un-flagged. The prompt must ask about it explicitly, with or
+    without match_stats."""
+    record = _FakeRecord(
+        league="E0", recommendation={"overall": "direct_bet", "confidence": "high", "prediction_basis": "x", "limitations": []},
+        market_results=[], actual={"result": "home"},
+    )
+    trace = [{"role": "ai", "content": "Search result mentioned the final score."}]
+    seen_prompts = []
+
+    def _invoke(prompt: str) -> str:
+        seen_prompts.append(prompt)
+        return "ok"
+
+    generate_match_reflection(record, reasoning_trace=trace, llm_invoke=_invoke)
+
+    assert "leaked content" in seen_prompts[0]
+    assert "discard such leaked content" in seen_prompts[0]
+
+
+def test_generate_match_reflection_asks_to_compare_pre_match_read_to_stats_only_when_given():
+    """2026-09-11, direct user observation: the reflection should compare
+    the agent's pre-match understanding to what the in-game stats actually
+    show, not just the final score -- but only when match_stats exists
+    (train-only, see load_match_stats)."""
+    record = _FakeRecord(
+        league="E0", recommendation={"overall": "direct_bet", "confidence": "high", "prediction_basis": "x", "limitations": []},
+        market_results=[], actual={"result": "home"},
+    )
+    trace = [{"role": "ai", "content": "Picked home on recent form."}]
+
+    seen_prompts = []
+
+    def _invoke(prompt: str) -> str:
+        seen_prompts.append(prompt)
+        return "ok"
+
+    generate_match_reflection(record, reasoning_trace=trace, llm_invoke=_invoke)
+    assert "pre-match understanding" not in seen_prompts[0]
+
+    generate_match_reflection(
+        record, reasoning_trace=trace, llm_invoke=_invoke,
+        match_stats={"home_shots": 14, "away_shots": 8},
+    )
+    assert "pre-match understanding" in seen_prompts[1]
+
+
 def test_generate_batch_lesson_text_rejects_empty_batch():
     with pytest.raises(ValueError):
         generate_batch_lesson_text([])

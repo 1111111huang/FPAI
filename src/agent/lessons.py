@@ -490,6 +490,26 @@ def generate_match_reflection(
         f" Post-match stats: {', '.join(f'{k}={v}' for k, v in match_stats.items())}."
         if match_stats else ""
     )
+    # 2026-09-11 (direct user observation on a real run's output): the agent
+    # is instructed (LEAKAGE_GUARD_INSTRUCTIONS, src/agent/backtest.py) to
+    # discard any search result mentioning this match's own final score --
+    # whether it actually did so is exactly the kind of process failure a
+    # generic "reasoning vs evidence gap" framing can miss entirely, so ask
+    # for it explicitly rather than hoping the model volunteers it.
+    leak_note = (
+        " Separately: if any of the agent's own search results above mention this match's final "
+        "score or other post-match events, call that out explicitly -- the agent is instructed to "
+        "discard such leaked content, and whether it actually did so is worth flagging either way."
+    )
+    # Same request: compare the pre-match read to what actually happened on
+    # the pitch (shots, cards, not just the scoreline) -- only meaningful
+    # when match_stats is available (train only, see load_match_stats).
+    stats_compare_note = (
+        " Also compare the agent's pre-match understanding to what the match stats above actually "
+        "show (shots, shots on target, cards) -- not just the final result -- to judge whether its "
+        "read of how the game would unfold was sound, independent of whether the bet itself won."
+        if match_stats else ""
+    )
 
     prompt = (
         f"You are reviewing a betting recommendation an automated agent made for a "
@@ -498,11 +518,12 @@ def generate_match_reflection(
         f"(confidence={record.recommendation.get('confidence', 'unknown')}). "
         f"Markets: {markets_summary}. Actual result: {record.actual.get('result')}.{stats_line}\n\n"
         f"The agent's own reasoning and tool calls at the time:\n{trace_text}\n\n"
-        "Write a short reflective lesson (3-5 sentences) covering: (a) whether the agent's own "
+        "Write a short reflective lesson (3-6 sentences) covering: (a) whether the agent's own "
         "investigation actually surfaced the information that would have led to the right call, "
         "(b) if it missed, whether that's a reasoning gap or an evidence gap, (c) one concrete, "
-        "actionable adjustment for future recommendations in this competition. Do not invent facts "
-        "not present above, and do not use generic hedging language like 'more data would help'."
+        f"actionable adjustment for future recommendations in this competition.{leak_note}{stats_compare_note} "
+        "Do not invent facts not present above, and do not use generic hedging language like "
+        "'more data would help'."
     )
     try:
         reflection = llm_invoke(prompt)
