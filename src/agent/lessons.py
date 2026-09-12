@@ -473,8 +473,8 @@ def generate_match_reflection(
     load_match_stats) is extra grounding when available, never required.
 
     Falls back to generate_lesson_text(record) whenever there's nothing to
-    reflect on (no trace) or no LLM to do it with, and again if the LLM
-    call itself raises -- same 'never lose the lesson' contract
+    reflect on (no trace), no LLM to do it with, the LLM call raises, or the
+    response is empty/blank -- same 'never lose the lesson' contract
     generate_batch_reflection already uses for its own LLM call, just
     covering the input-missing case too, not only a provider failure."""
     if not reasoning_trace or llm_invoke is None:
