@@ -1620,7 +1620,7 @@ def _write_train_artifacts(
         create_lessons_tables,
         generate_batch_lesson_text,
         generate_batch_reflection,
-        generate_lesson_text,
+        generate_match_reflection,
         insert_lesson_candidate,
     )
 
@@ -1629,9 +1629,13 @@ def _write_train_artifacts(
     telemetry_written = len(scoped)
 
     if batch_size <= 1:
+        from src.agent.graph import serialize_agent_messages
+
+        llm_invoke = _build_llm_invoke(config) if config is not None else None
         lessons_written = 0
         for record, competition_id, tier in scoped:
-            lesson_text = generate_lesson_text(record)
+            reasoning_trace = serialize_agent_messages(record.full_state.get("messages", []))
+            lesson_text = generate_match_reflection(record, reasoning_trace, llm_invoke, record.match_stats)
             insert_lesson_candidate(conn, lesson_text, competition_id, tier, record.match_id)
             lessons_written += 1
         return lessons_written, telemetry_written

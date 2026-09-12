@@ -92,6 +92,52 @@ def test_write_train_artifacts_persists_reasoning_trace_from_full_state_messages
     ]
 
 
+def test_write_train_artifacts_uses_llm_reflection_for_batch_size_1_when_config_given():
+    """A109: batch_size<=1 now reflects via generate_match_reflection when a
+    config (and therefore an llm_invoke) is given -- previously config was
+    accepted but silently unused on this path."""
+    from src.agent.agent_config import AgentConfig
+
+    conn = duckdb.connect(":memory:")
+    record = _record(full_state={
+        "competition_resolution": {"competition": "E0", "tier": "competition_specific"},
+        "research_evidence": {"availability": "ok"},
+        "forecast_payload": {"result_3way": {}},
+        "messages": [AIMessage(content="Picked no_bet, no clear edge.")],
+    })
+    config = AgentConfig(
+        model="stub-model", provider="ollama", temperature=0.0, max_tool_calls=5,
+        min_odds_threshold=1.2, max_odds_threshold=11.0, min_conditional_odds_threshold=1.5,
+        min_value_edge=0.05, markets=["result_3way"], system_prompt_version="v1",
+    )
+
+    with patch("main._build_llm_invoke", return_value=lambda p: "The agent correctly found no edge and stood aside."):
+        _write_train_artifacts(conn, [record], run_id="run-7", batch_size=1, config=config)
+
+    lesson_text = conn.execute("SELECT lesson_text FROM agent_lessons").fetchone()[0]
+    assert lesson_text == "The agent correctly found no edge and stood aside."
+
+
+def test_write_train_artifacts_batch_size_1_falls_back_without_config():
+    """Unchanged-behavior guard: every pre-existing caller of this path
+    passes no config (the default), so it must keep producing exactly
+    generate_lesson_text's template, not attempt any LLM call."""
+    from src.agent.lessons import generate_lesson_text
+
+    conn = duckdb.connect(":memory:")
+    record = _record(full_state={
+        "competition_resolution": {"competition": "E0", "tier": "competition_specific"},
+        "research_evidence": {"availability": "ok"},
+        "forecast_payload": {"result_3way": {}},
+        "messages": [AIMessage(content="Picked no_bet, no clear edge.")],
+    })
+
+    _write_train_artifacts(conn, [record], run_id="run-8", batch_size=1)
+
+    lesson_text = conn.execute("SELECT lesson_text FROM agent_lessons").fetchone()[0]
+    assert lesson_text == generate_lesson_text(record)
+
+
 def test_write_train_artifacts_skips_records_without_full_state():
     conn = duckdb.connect(":memory:")
     record = _record(full_state=None)
