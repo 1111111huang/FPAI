@@ -421,31 +421,90 @@ def extract_competition_scope(full_state: dict[str, Any]) -> tuple[str | None, s
     return resolution.get("competition"), resolution.get("tier") or "general_purpose"
 
 
-def generate_lesson_text(record: Any) -> str:
-    """Deterministic lesson-candidate template from a BacktestRecord-shaped
-    object (duck-typed: .league, .recommendation, .market_results, .actual --
-    see src/agent/backtest.py). Not an attempt at insightful NLG -- the
-    reviewer judges usefulness at approval time; this just surfaces a
-    structured summary of what happened for them to judge."""
-    context_label = record.league or "an unlabeled competition"
-    overall = record.recommendation.get("overall", "unknown")
-    confidence = record.recommendation.get("confidence", "unknown")
-    basis = record.recommendation.get("prediction_basis", "unknown")
-    limitations = record.recommendation.get("limitations") or []
-
+def _market_and_limitations_summary(record: Any) -> tuple[str, str]:
+    """Shared grounding-fact formatting -- generate_lesson_text's template
+    and generate_match_reflection's prompt both need the same 'market=
+    selection (outcome)' / limitations-joined summary, computed once rather
+    than duplicated."""
     market_lines = []
     for market in record.market_results:
         correct = market.get("correct")
         outcome = "correct" if correct is True else "incorrect" if correct is False else "unresolved"
         market_lines.append(f"{market.get('market')}={market.get('selection')} ({outcome})")
     markets_summary = "; ".join(market_lines) if market_lines else "no markets recommended"
+    limitations = record.recommendation.get("limitations") or []
     limitations_summary = "; ".join(limitations) if limitations else "none noted"
+    return markets_summary, limitations_summary
+
+
+def generate_lesson_text(record: Any) -> str:
+    """Deterministic lesson-candidate template from a BacktestRecord-shaped
+    object (duck-typed: .league, .recommendation, .market_results, .actual --
+    see src/agent/backtest.py). Not an attempt at insightful NLG -- the
+    reviewer judges usefulness at approval time; this just surfaces a
+    structured summary of what happened for them to judge. Also
+    generate_match_reflection's fallback whenever there's no reasoning_trace
+    or no LLM to reflect with."""
+    context_label = record.league or "an unlabeled competition"
+    overall = record.recommendation.get("overall", "unknown")
+    confidence = record.recommendation.get("confidence", "unknown")
+    basis = record.recommendation.get("prediction_basis", "unknown")
+    markets_summary, limitations_summary = _market_and_limitations_summary(record)
 
     return (
         f"WHEN evaluating {context_label} matches: a recommendation of '{overall}' "
         f"(confidence={confidence}, basis={basis}) had actual result={record.actual.get('result')}. "
         f"Markets: {markets_summary}. Limitations noted at the time: {limitations_summary}."
     )
+
+
+def generate_match_reflection(
+    record: Any,
+    reasoning_trace: list[dict[str, Any]] | None,
+    llm_invoke: Callable[[str], str] | None,
+    match_stats: dict[str, Any] | None = None,
+) -> str:
+    """A109: reflects an LLM on one match's own recorded reasoning trace
+    (A106's reasoning_trace -- the agent's actual tool-call/investigation
+    trail, not just its final explanation) plus its outcome, replacing
+    generate_lesson_text's deterministic template -- the reviewer gets the
+    agent's own investigation and judgment, not a fill-in-the-blank
+    summary. match_stats (A109, train-only -- see src/agent/backtest.py's
+    load_match_stats) is extra grounding when available, never required.
+
+    Falls back to generate_lesson_text(record) whenever there's nothing to
+    reflect on (no trace) or no LLM to do it with, and again if the LLM
+    call itself raises -- same 'never lose the lesson' contract
+    generate_batch_reflection already uses for its own LLM call, just
+    covering the input-missing case too, not only a provider failure."""
+    if not reasoning_trace or llm_invoke is None:
+        return generate_lesson_text(record)
+
+    markets_summary, _ = _market_and_limitations_summary(record)
+    trace_text = "\n".join(f"[{m.get('role')}] {m.get('content')}" for m in reasoning_trace)
+    stats_line = (
+        f" Post-match stats: {', '.join(f'{k}={v}' for k, v in match_stats.items())}."
+        if match_stats else ""
+    )
+
+    prompt = (
+        f"You are reviewing a betting recommendation an automated agent made for a "
+        f"{record.league or 'an unlabeled competition'} match, now that the actual result is known.\n\n"
+        f"Recommendation: '{record.recommendation.get('overall', 'unknown')}' "
+        f"(confidence={record.recommendation.get('confidence', 'unknown')}). "
+        f"Markets: {markets_summary}. Actual result: {record.actual.get('result')}.{stats_line}\n\n"
+        f"The agent's own reasoning and tool calls at the time:\n{trace_text}\n\n"
+        "Write a short reflective lesson (3-5 sentences) covering: (a) whether the agent's own "
+        "investigation actually surfaced the information that would have led to the right call, "
+        "(b) if it missed, whether that's a reasoning gap or an evidence gap, (c) one concrete, "
+        "actionable adjustment for future recommendations in this competition. Do not invent facts "
+        "not present above, and do not use generic hedging language like 'more data would help'."
+    )
+    try:
+        reflection = llm_invoke(prompt)
+    except Exception:
+        return generate_lesson_text(record)
+    return reflection.strip() or generate_lesson_text(record)
 
 
 _LIMITATION_THEMES = {

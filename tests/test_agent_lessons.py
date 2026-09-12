@@ -16,6 +16,7 @@ from src.agent.lessons import (
     generate_batch_lesson_text,
     generate_batch_reflection,
     generate_lesson_text,
+    generate_match_reflection,
     generate_rule_from_lesson,
     insert_lesson_candidate,
     insert_telemetry,
@@ -370,6 +371,83 @@ def test_generate_lesson_text_handles_no_markets_and_limitations():
     assert "an unlabeled competition" in text
     assert "no markets recommended" in text
     assert "no odds available" in text
+
+
+def test_generate_match_reflection_falls_back_to_template_when_trace_missing():
+    record = _FakeRecord(
+        league="E0",
+        recommendation={"overall": "direct_bet", "confidence": "high", "prediction_basis": "x", "limitations": []},
+        market_results=[{"market": "result_3way", "selection": "home", "correct": True}],
+        actual={"result": "home"},
+    )
+    text = generate_match_reflection(record, reasoning_trace=None, llm_invoke=lambda p: "unused")
+    assert text == generate_lesson_text(record)
+
+
+def test_generate_match_reflection_falls_back_to_template_when_llm_invoke_missing():
+    record = _FakeRecord(
+        league="E0", recommendation={"overall": "direct_bet", "confidence": "high", "prediction_basis": "x", "limitations": []},
+        market_results=[], actual={"result": "home"},
+    )
+    trace = [{"role": "ai", "content": "Home side has won 4 of last 5."}]
+    text = generate_match_reflection(record, reasoning_trace=trace, llm_invoke=None)
+    assert text == generate_lesson_text(record)
+
+
+def test_generate_match_reflection_falls_back_to_template_when_llm_invoke_raises():
+    record = _FakeRecord(
+        league="E0", recommendation={"overall": "direct_bet", "confidence": "high", "prediction_basis": "x", "limitations": []},
+        market_results=[], actual={"result": "away"},
+    )
+    trace = [{"role": "ai", "content": "Home side has won 4 of last 5."}]
+
+    def _raise(prompt: str) -> str:
+        raise RuntimeError("provider down")
+
+    text = generate_match_reflection(record, reasoning_trace=trace, llm_invoke=_raise)
+    assert text == generate_lesson_text(record)
+
+
+def test_generate_match_reflection_returns_the_llm_narrative_on_the_happy_path():
+    record = _FakeRecord(
+        league="E0", recommendation={"overall": "direct_bet", "confidence": "high", "prediction_basis": "x", "limitations": []},
+        market_results=[{"market": "result_3way", "selection": "home", "correct": False}],
+        actual={"result": "away"},
+    )
+    trace = [{"role": "ai", "content": "Searched recent form, saw 4 home wins, picked home."}]
+    seen_prompts = []
+
+    def _invoke(prompt: str) -> str:
+        seen_prompts.append(prompt)
+        return "  The agent over-weighted stale form data and missed the away side's injury return.  "
+
+    text = generate_match_reflection(record, reasoning_trace=trace, llm_invoke=_invoke)
+
+    assert text == "The agent over-weighted stale form data and missed the away side's injury return."
+    assert "Searched recent form" in seen_prompts[0]
+    assert "result_3way=home (incorrect)" in seen_prompts[0]
+    assert "Post-match stats" not in seen_prompts[0]
+
+
+def test_generate_match_reflection_includes_match_stats_in_the_prompt_when_given():
+    record = _FakeRecord(
+        league="E0", recommendation={"overall": "no_bet", "confidence": "low", "prediction_basis": "x", "limitations": []},
+        market_results=[], actual={"result": "draw"},
+    )
+    trace = [{"role": "ai", "content": "No clear edge found."}]
+    seen_prompts = []
+
+    def _invoke(prompt: str) -> str:
+        seen_prompts.append(prompt)
+        return "ok"
+
+    generate_match_reflection(
+        record, reasoning_trace=trace, llm_invoke=_invoke,
+        match_stats={"home_shots": 14, "away_shots": 8},
+    )
+
+    assert "home_shots=14" in seen_prompts[0]
+    assert "away_shots=8" in seen_prompts[0]
 
 
 def test_generate_batch_lesson_text_rejects_empty_batch():
