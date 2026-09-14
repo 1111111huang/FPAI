@@ -40,6 +40,7 @@ class Bet:
     source: Source
     recommendation_snapshot: dict | None
     created_at: str
+    user_id: int | None
 
 
 class BetTracker:
@@ -69,10 +70,17 @@ class BetTracker:
                     profit_loss REAL,
                     source TEXT NOT NULL,
                     recommendation_snapshot_json TEXT,
-                    created_at TEXT NOT NULL
+                    created_at TEXT NOT NULL,
+                    user_id INTEGER
                 )
                 """
             )
+            # W210: additive migration for pre-existing DBs created before
+            # user_id existed -- CREATE TABLE IF NOT EXISTS is a no-op on an
+            # already-existing table, so the column must be added by hand.
+            existing_cols = {row[1] for row in conn.execute("PRAGMA table_info(user_bets)")}
+            if "user_id" not in existing_cols:
+                conn.execute("ALTER TABLE user_bets ADD COLUMN user_id INTEGER")
 
     def create_bet(
         self,
@@ -86,6 +94,7 @@ class BetTracker:
         stake: float,
         source: Source,
         recommendation_snapshot: dict | None,
+        user_id: int | None = None,
     ) -> Bet:
         created_at = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
         snapshot_json = json.dumps(recommendation_snapshot) if recommendation_snapshot is not None else None
@@ -94,11 +103,11 @@ class BetTracker:
                 """
                 INSERT INTO user_bets
                 (match_id, date, home_team, away_team, market, selection, odds, stake,
-                 outcome, profit_loss, source, recommendation_snapshot_json, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'open', NULL, ?, ?, ?)
+                 outcome, profit_loss, source, recommendation_snapshot_json, created_at, user_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'open', NULL, ?, ?, ?, ?)
                 """,
                 (match_id, date, home_team, away_team, market, selection, odds, stake,
-                 source, snapshot_json, created_at),
+                 source, snapshot_json, created_at, user_id),
             )
             bet_id = cursor.lastrowid
         return self.get_bet(bet_id)  # type: ignore[return-value]
@@ -110,16 +119,27 @@ class BetTracker:
             ).fetchone()
         return self._row_to_bet(row) if row else None
 
-    def list_bets(self) -> list[Bet]:
+    def list_bets(self, user_id: int | None = None) -> list[Bet]:
         with self._connect() as conn:
-            rows = conn.execute("SELECT * FROM user_bets ORDER BY id ASC").fetchall()
+            if user_id is None:
+                rows = conn.execute("SELECT * FROM user_bets ORDER BY id ASC").fetchall()
+            else:
+                rows = conn.execute(
+                    "SELECT * FROM user_bets WHERE user_id = ? ORDER BY id ASC", (user_id,)
+                ).fetchall()
         return [self._row_to_bet(row) for row in rows]
 
-    def list_open_bets(self) -> list[Bet]:
+    def list_open_bets(self, user_id: int | None = None) -> list[Bet]:
         with self._connect() as conn:
-            rows = conn.execute(
-                "SELECT * FROM user_bets WHERE outcome = 'open' ORDER BY id ASC"
-            ).fetchall()
+            if user_id is None:
+                rows = conn.execute(
+                    "SELECT * FROM user_bets WHERE outcome = 'open' ORDER BY id ASC"
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    "SELECT * FROM user_bets WHERE outcome = 'open' AND user_id = ? ORDER BY id ASC",
+                    (user_id,),
+                ).fetchall()
         return [self._row_to_bet(row) for row in rows]
 
     def settle_bet(self, bet_id: int, outcome: Literal["won", "lost"]) -> Bet:
@@ -137,11 +157,11 @@ class BetTracker:
     @staticmethod
     def _row_to_bet(row: tuple) -> Bet:
         (bet_id, match_id, date, home_team, away_team, market, selection, odds, stake,
-         outcome, profit_loss, source, snapshot_json, created_at) = row
+         outcome, profit_loss, source, snapshot_json, created_at, user_id) = row
         return Bet(
             id=bet_id, match_id=match_id, date=date, home_team=home_team, away_team=away_team,
             market=market, selection=selection, odds=odds, stake=stake, outcome=outcome,
             profit_loss=profit_loss, source=source,
             recommendation_snapshot=json.loads(snapshot_json) if snapshot_json else None,
-            created_at=created_at,
+            created_at=created_at, user_id=user_id,
         )

@@ -122,3 +122,21 @@ def test_open_bets_filter(tmp_path: Path) -> None:
     open_bets = tracker.list_open_bets()
     assert len(open_bets) == 1
     assert open_bets[0].match_id == "m2"
+
+
+def test_create_bet_stores_user_id_and_list_bets_filters_by_it(tmp_path):
+    tracker = BetTracker(db_path=tmp_path / "bets.db")
+    tracker.create_bet(
+        match_id="m1", date="2026-08-22", home_team="Arsenal", away_team="Everton",
+        market="result_3way", selection="home", odds=2.1, stake=10.0,
+        source="manual", recommendation_snapshot=None, user_id=1,
+    )
+    tracker.create_bet(
+        match_id="m2", date="2026-08-23", home_team="Chelsea", away_team="Fulham",
+        market="result_3way", selection="away", odds=3.0, stake=5.0,
+        source="manual", recommendation_snapshot=None, user_id=2,
+    )
+    user_1_bets = tracker.list_bets(user_id=1)
+    assert len(user_1_bets) == 1
+    assert user_1_bets[0].match_id == "m1"
+    assert user_1_bets[0].user_id == 1
