@@ -160,7 +160,13 @@ describe("BetTrackerPage decouples stats/bets loading and prompts re-auth on 401
     const user = userEvent.setup();
     render(<BetTrackerPage />);
 
-    await waitFor(() => expect(screen.getByRole("link", { name: /sign in/i })).toBeInTheDocument());
+    // Banner-specific wording, not the ambiguous /sign in/i -- AppShell's
+    // separate UserMenu always renders a plain "Sign in" link once
+    // next-auth's useSession() settles to unauthenticated, which would
+    // satisfy a bare /sign in/i query before load()'s promises even settle
+    // and make this assertion non-load-bearing.
+    await waitFor(() => expect(screen.getByText(/your session expired/i)).toBeInTheDocument());
+    expect(screen.getByRole("link", { name: /sign in again/i })).toBeInTheDocument();
 
     // Simulate the user having signed back in, then re-mock the fetches to
     // succeed and trigger a reload through "Settle open bets" -- the only

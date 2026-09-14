@@ -63,6 +63,10 @@ function ManualBetForm({ onLogged, onSessionExpired }: { onLogged: () => void; o
       .catch((err) => {
         if (cancelled) return;
         setFixtures([]);
+        if (err instanceof ApiError && err.status === 401) {
+          onSessionExpired();
+          return;
+        }
         setFixturesError(err instanceof ApiError ? err.message : "Could not load fixtures.");
       });
     return () => {
