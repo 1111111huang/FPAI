@@ -74,15 +74,28 @@ that's a genuine, useful comparison point, not duplication to clean up.
    print(con.execute(\"SELECT MIN(date), MAX(date), COUNT(*) FROM raw_matches WHERE league='<LEAGUE>' AND date >= '2025-08-01'\").fetchone())
    "
    ```
-2. **State the cost estimate before running** (sample_size × ~$0.015 CAD) so spend stays
-   visible against whatever budget is in play.
-3. **Run it**:
+2. **State the cost estimate before running.** Real calibrated rate (2026-09-13, DeepSeek
+   Cost(CNY) dashboard, not balance-delta arithmetic): **~$0.02/match** for a plain call,
+   roughly **2x that for `agent-train`** specifically (A109's per-match reflection call adds
+   a second LLM invocation on top of the recommendation call) — budget `sample_size × ~$0.04
+   USD` for `agent-train`, not the plain per-match rate. Re-check this figure periodically;
+   it drifts with prompt/pipeline changes (A109, W202), not just provider pricing.
+3. **Run it — full output to a real file, never piped straight through `tail`:**
    ```
    ./venv/bin/python -m main agent-train --league <LEAGUE> --split all \
      --from-date <SEASON_START> --to-date <SEASON_END> \
-     --sample <N> --batch-size <B> --config <CONFIG> 2>&1 | tail -40
+     --sample <N> --batch-size <B> --config <CONFIG> \
+     > reports/agent_experiments/<UTC timestamp>_<league>.raw.log 2>&1
    ```
-   Capture the printed `run_id=...` and the report path from stdout.
+   Then `tail -40 <that file>` to read the run_id/report path — but the full file stays on
+   disk, unlike piping through `tail` directly. **Do not `| tail -N` the live command.** A
+   `SKIP <match_id>: <exc>` line (`process_match_row`'s per-match try/except, printed to
+   stderr, never routed through the logger) can appear anywhere during a long run, not just
+   near the end — piping straight through `tail` silently discards it before Step 4 or Step 7
+   ever see it. This isn't hypothetical: A77 already lost 2 skips this way ("lost to my own
+   `tail -30` truncation, not investigated further"), and this exact skill's own prior Step 3
+   command reproduced it again on a real E0 run (2026-09-13, 3/9 matches skipped, cause
+   unrecoverable — had to re-run and pay for the same matches twice to see it).
 4. **Pull this run's rows.** `agent_telemetry` has `run_id` directly; `agent_lessons` does
    not (see the hard-learned discipline in `agent_user_stories.md`'s A71/calibration
    notes) — join by `source_match_id` against this run's telemetry match_ids, scoped by
@@ -121,7 +134,16 @@ that's a genuine, useful comparison point, not duplication to clean up.
    forecast flagged", "conflicting recent-form signals") and report the top themes ranked
    by frequency, with 1-2 representative quotes each — as prose in the response, not just
    left in the JSON file.
-7. **Stop-and-investigate gate.** Look at the top theme from Step 6. Is it a *data/plumbing*
+7. **Stop-and-investigate gate.** First, check for outright skips before looking at lesson
+   themes — a skip is a harder failure than anything Step 6 can surface, since a skipped
+   match never reaches lesson-writing at all: `grep -c "^SKIP " <the raw log from Step 3>`
+   against the number actually requested (`report_summary.matches_evaluated` short of the
+   resolved sample size, or a printed `Skipped N/M matches` line). Any skip at all: read the
+   actual `SKIP <match_id>: <exc>` lines (not just the count) from the raw log — the
+   exception text says exactly what broke. Apply the same stop-and-investigate rule as below
+   (documented/expected vs. a probable regression) before continuing.
+
+   Then look at the top theme from Step 6, among matches that *did* evaluate. Is it a *data/plumbing*
    complaint (missing/null odds, stale or absent search evidence, a schema/field gap,
    duplicate or contradictory recorded data) rather than a model-judgment theme (declined on
    uncertainty, conflicting news, a borderline edge)? If so, and it appears in a clear
@@ -149,6 +171,10 @@ that's a genuine, useful comparison point, not duplication to clean up.
 - Don't clean up this run's rows afterward (see Overview) — that discipline exists for
   *calibration test* runs specifically, not for real experiment/lesson-generation runs like
   this one.
+- **Never pipe the live run through `tail` directly** (`... | tail -N`) — it discards
+  `SKIP` lines (stderr, never logged) the moment they scroll past the window, and there is no
+  way to recover them afterward short of re-running (and re-paying for) the exact same
+  matches. Always redirect to a real file first (Step 3), then read from that file.
 - A popular-lessons theme that's a *data* complaint (not a model-judgment one) and shows up
   in most matches is a stop signal, not a reporting footnote (Step 7) — this is exactly what
   A73 got wrong the first time: a whole run's spend happened before the pattern got
