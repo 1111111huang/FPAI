@@ -13,7 +13,7 @@ import { ApiError, getBetStats, getBets, getFixtures, logBetManual, settleOpenBe
 import type { Bet, BetStats, Fixture } from "@/lib/types";
 import { useSandboxAsOf } from "@/lib/useSandboxAsOf";
 import { AppShell } from "./AppShell";
-import { ErrorState, TeamBadge } from "./MatchUI";
+import { ErrorState, TeamBadge, marketLabel } from "./MatchUI";
 
 function formatDate(iso: string): string {
   return iso.slice(0, 10);
@@ -42,12 +42,6 @@ const MARKET_SELECTIONS: Record<string, { value: string; label: string }[]> = {
     { value: "over_9.5", label: "Over 9.5" },
     { value: "under_9.5", label: "Under 9.5" },
   ],
-};
-const MARKET_LABELS: Record<string, string> = {
-  result_3way: "Result",
-  btts: "BTTS",
-  total_goals: "Total goals",
-  total_corners: "Total corners",
 };
 
 function ManualBetForm({ onLogged, onSessionExpired }: { onLogged: () => void; onSessionExpired: () => void }) {
@@ -209,7 +203,7 @@ function ManualBetForm({ onLogged, onSessionExpired }: { onLogged: () => void; o
                 className="w-full rounded border border-border bg-surface px-2 py-1.5 text-sm text-ink outline-none focus:border-accent"
               >
                 {Object.keys(MARKET_SELECTIONS).map((m) => (
-                  <option key={m} value={m}>{MARKET_LABELS[m]}</option>
+                  <option key={m} value={m}>{marketLabel(m).label}</option>
                 ))}
               </select>
             </div>
