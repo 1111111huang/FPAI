@@ -275,3 +275,82 @@ describe("ManualBetForm constrains market/selection to resolvable values (W210 f
     ).not.toContain("away");
   });
 });
+
+// W210 follow-up (Task 6): UI polish -- bet-list column headers, a stats
+// loading placeholder, and a "no matching fixtures" empty state. Reuses this
+// file's mock factory (ApiError-with-status, getStatus for AppShell) since
+// all three tests render the full BetTrackerPage. ManualBetForm itself isn't
+// exported (see the describe block above), so the plan's
+// `render(<ManualBetForm ... />)` sketch for the fixture-search test is
+// adapted to drive the same search box through BetTrackerPage, matching the
+// established pattern elsewhere in this file.
+describe("BetTracker UI polish: column headers, stats loading, fixture empty state (W210 follow-up)", () => {
+  beforeEach(() => {
+    vi.mocked(getFixtures).mockReset();
+    vi.mocked(getSandboxStatus).mockReset();
+    vi.mocked(getBets).mockReset();
+    vi.mocked(getBetStats).mockReset();
+    vi.mocked(getStatus).mockReset();
+    vi.mocked(getSandboxStatus).mockResolvedValue({ sandbox_mode: false, as_of: null });
+    vi.mocked(getStatus).mockRejectedValue(new Error("no backend"));
+    vi.mocked(getFixtures).mockResolvedValue([]);
+  });
+
+  it("shows column headers above the logged bets list", async () => {
+    vi.mocked(getBets).mockResolvedValue([
+      {
+        id: 1, match_id: "m1", date: "2026-08-22", home_team: "Arsenal", away_team: "Everton",
+        market: "result_3way", selection: "home", odds: 2.1, stake: 10, outcome: "open",
+        profit_loss: null, source: "from_recommendation", recommendation_snapshot: null, created_at: "now",
+      },
+    ]);
+    vi.mocked(getBetStats).mockResolvedValue({
+      bets_settled: 0, bets_open: 1, bets_won: 0, roi: 0, hit_rate: 0,
+      total_staked: 10, total_profit: 0, max_drawdown: 0,
+      starting_bankroll: 0, current_bankroll: 0,
+    });
+
+    render(<BetTrackerPage />);
+    await waitFor(() => expect(screen.getByText(/logged bets/i)).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText(/Arsenal v Everton/)).toBeInTheDocument());
+
+    expect(screen.getByText("Odds")).toBeInTheDocument();
+    expect(screen.getByText("Stake")).toBeInTheDocument();
+    expect(screen.getByText("P&L")).toBeInTheDocument();
+    expect(screen.getByText("Outcome")).toBeInTheDocument();
+  });
+
+  it("shows a loading placeholder for stats while they're in flight", () => {
+    vi.mocked(getBets).mockReturnValue(new Promise(() => {})); // never resolves
+    vi.mocked(getBetStats).mockReturnValue(new Promise(() => {}));
+
+    render(<BetTrackerPage />);
+
+    // Both the stats placeholder and the pre-existing bets-list placeholder
+    // read "Loading…" while getBets/getBetStats are both in flight --
+    // getAllByText instead of the plan's getByText, since two legitimate
+    // matches now exist rather than one.
+    expect(screen.getAllByText(/loading/i).length).toBeGreaterThan(0);
+  });
+
+  it("shows a 'no matches' message when a fixture search returns nothing", async () => {
+    vi.mocked(getBets).mockResolvedValue([]);
+    vi.mocked(getBetStats).mockResolvedValue({
+      bets_settled: 0, bets_open: 0, bets_won: 0, roi: 0, hit_rate: 0,
+      total_staked: 0, total_profit: 0, max_drawdown: 0,
+      starting_bankroll: 0, current_bankroll: 0,
+    });
+    vi.mocked(getFixtures).mockResolvedValue([]);
+
+    const user = userEvent.setup();
+    render(<BetTrackerPage />);
+
+    await waitFor(() => expect(getFixtures).toHaveBeenCalled());
+    await user.type(
+      screen.getByPlaceholderText(/search a real fixture/i),
+      "zzz-no-such-team"
+    );
+
+    await waitFor(() => expect(screen.getByText(/no matching fixtures/i)).toBeInTheDocument());
+  });
+});

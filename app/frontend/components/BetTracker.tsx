@@ -162,22 +162,26 @@ function ManualBetForm({ onLogged, onSessionExpired }: { onLogged: () => void; o
               <ErrorState message={fixturesError} onRetry={() => setRetryTick((t) => t + 1)} />
             </div>
           )}
-          {results.length > 0 && (
-            <div className="mt-2 flex flex-col gap-1.5">
-              {results.map((f) => (
-                <button
-                  key={f.match_id}
-                  type="button"
-                  onClick={() => setSelected(f)}
-                  className="flex items-center gap-2 rounded-lg border border-border p-2 text-left text-sm text-ink hover:border-border-strong"
-                >
-                  <TeamBadge name={f.home_team} />
-                  {f.home_team} v {f.away_team}
-                  <TeamBadge name={f.away_team} />
-                  <span className="ml-auto text-xs text-ink-secondary">{formatDate(f.utc_date)}</span>
-                </button>
-              ))}
-            </div>
+          {query.trim().length > 0 && !fixturesError && (
+            results.length > 0 ? (
+              <div className="mt-2 flex flex-col gap-1.5">
+                {results.map((f) => (
+                  <button
+                    key={f.match_id}
+                    type="button"
+                    onClick={() => setSelected(f)}
+                    className="flex items-center gap-2 rounded-lg border border-border p-2 text-left text-sm text-ink hover:border-border-strong"
+                  >
+                    <TeamBadge name={f.home_team} />
+                    {f.home_team} v {f.away_team}
+                    <TeamBadge name={f.away_team} />
+                    <span className="ml-auto text-xs text-ink-secondary">{formatDate(f.utc_date)}</span>
+                  </button>
+                ))}
+              </div>
+            ) : (
+              <p className="mt-2 text-sm text-ink-secondary">No matching fixtures.</p>
+            )
           )}
         </>
       ) : (
@@ -221,20 +225,28 @@ function ManualBetForm({ onLogged, onSessionExpired }: { onLogged: () => void; o
                 ))}
               </select>
             </div>
-            <input
-              value={odds}
-              onChange={(e) => setOdds(e.target.value)}
-              placeholder="Odds"
-              inputMode="decimal"
-              className="rounded border border-border bg-surface px-2 py-1.5 text-sm text-ink outline-none focus:border-accent"
-            />
-            <input
-              value={stake}
-              onChange={(e) => setStake(e.target.value)}
-              placeholder="Stake"
-              inputMode="decimal"
-              className="rounded border border-border bg-surface px-2 py-1.5 text-sm text-ink outline-none focus:border-accent"
-            />
+            <div>
+              <label htmlFor="manual-bet-odds" className="sr-only">Odds</label>
+              <input
+                id="manual-bet-odds"
+                value={odds}
+                onChange={(e) => setOdds(e.target.value)}
+                placeholder="Odds"
+                inputMode="decimal"
+                className="w-full rounded border border-border bg-surface px-2 py-1.5 text-sm text-ink outline-none focus:border-accent"
+              />
+            </div>
+            <div>
+              <label htmlFor="manual-bet-stake" className="sr-only">Stake</label>
+              <input
+                id="manual-bet-stake"
+                value={stake}
+                onChange={(e) => setStake(e.target.value)}
+                placeholder="Stake"
+                inputMode="decimal"
+                className="w-full rounded border border-border bg-surface px-2 py-1.5 text-sm text-ink outline-none focus:border-accent"
+              />
+            </div>
           </div>
           {status === "error" && (
             <p className="flex items-center gap-1.5 text-xs text-serious">
@@ -376,11 +388,9 @@ export function BetTrackerPage() {
         </p>
       )}
 
-      {stats && (
-        <div className="mt-6">
-          <StatsBar stats={stats} />
-        </div>
-      )}
+      <div className="mt-6">
+        {stats ? <StatsBar stats={stats} /> : !needsAuth && !error && <p className="text-sm text-ink-secondary">Loading…</p>}
+      </div>
 
       <div className="mt-6">
         <ManualBetForm onLogged={load} onSessionExpired={() => setNeedsAuth(true)} />
@@ -406,6 +416,13 @@ export function BetTrackerPage() {
         )}
         {!error && bets && bets.length > 0 && (
           <div className="mt-2">
+            <div className="grid grid-cols-[1fr_auto_auto_auto_auto] gap-4 border-b border-border pb-1.5 text-xs font-medium uppercase tracking-wide text-muted">
+              <span>Match</span>
+              <span className="text-right">Odds</span>
+              <span className="text-right">Stake</span>
+              <span className="text-right">P&amp;L</span>
+              <span className="text-right">Outcome</span>
+            </div>
             {bets.map((bet) => (
               <BetRow key={bet.id} bet={bet} />
             ))}
