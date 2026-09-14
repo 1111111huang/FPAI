@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect } from "react";
+import { Suspense, useEffect } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { signIn, useSession } from "next-auth/react";
 
@@ -8,7 +8,7 @@ const ERROR_MESSAGES: Record<string, string> = {
   AccessDenied: "That Google account is not authorized for this app. Ask the owner to add it to the allowlist.",
 };
 
-export default function LoginPage() {
+function LoginPageInner() {
   const { status } = useSession();
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -38,5 +38,13 @@ export default function LoginPage() {
         Sign in with Google
       </button>
     </div>
+  );
+}
+
+export default function LoginPage() {
+  return (
+    <Suspense fallback={null}>
+      <LoginPageInner />
+    </Suspense>
   );
 }
