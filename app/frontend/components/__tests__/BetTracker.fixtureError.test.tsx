@@ -212,6 +212,93 @@ describe("BetTrackerPage decouples stats/bets loading and prompts re-auth on 401
   });
 });
 
+// W214: direct user feedback -- settlement should be automatic on page
+// load, the same way a match's completed status just appears without a
+// manual action, not gated entirely behind the "Settle open bets" button.
+describe("BetTrackerPage settles open bets automatically on load (W214)", () => {
+  beforeEach(() => {
+    vi.mocked(getFixtures).mockReset();
+    vi.mocked(getSandboxStatus).mockReset();
+    vi.mocked(getBets).mockReset();
+    vi.mocked(getBetStats).mockReset();
+    vi.mocked(getStatus).mockReset();
+    vi.mocked(settleOpenBets).mockReset();
+    vi.mocked(getFixtures).mockResolvedValue([]);
+    vi.mocked(getSandboxStatus).mockResolvedValue({ sandbox_mode: false, as_of: null });
+    vi.mocked(getStatus).mockRejectedValue(new Error("no backend"));
+  });
+
+  it("calls settleOpenBets on mount, with no button click", async () => {
+    vi.mocked(getBets).mockResolvedValue([]);
+    vi.mocked(getBetStats).mockResolvedValue({
+      bets_settled: 0, bets_open: 0, bets_won: 0, roi: 0, hit_rate: 0,
+      total_staked: 0, total_profit: 0, max_drawdown: 0,
+      starting_bankroll: 0, current_bankroll: 0,
+    });
+    vi.mocked(settleOpenBets).mockResolvedValue([]);
+
+    render(<BetTrackerPage />);
+
+    await waitFor(() => expect(settleOpenBets).toHaveBeenCalledTimes(1));
+  });
+
+  it("settles before the bets list is fetched, so a newly-finished match's real outcome shows on first load", async () => {
+    vi.mocked(getBets).mockResolvedValue([
+      {
+        id: 1, match_id: "m1", date: "2026-08-22", home_team: "Arsenal", away_team: "Everton",
+        market: "result_3way", selection: "home", odds: 2.1, stake: 10, outcome: "won",
+        profit_loss: 12.1, source: "manual", recommendation_snapshot: null, created_at: "now",
+      },
+    ]);
+    vi.mocked(getBetStats).mockResolvedValue({
+      bets_settled: 1, bets_open: 0, bets_won: 1, roi: 1.21, hit_rate: 1,
+      total_staked: 10, total_profit: 12.1, max_drawdown: 0,
+      starting_bankroll: 1000, current_bankroll: 1012.1,
+    });
+    vi.mocked(settleOpenBets).mockResolvedValue([]);
+
+    render(<BetTrackerPage />);
+
+    expect(await screen.findByText(/Arsenal v Everton/)).toBeInTheDocument();
+    // "won" renders CSS-uppercased (BetRow's `uppercase` class) -- the
+    // actual text content stays lowercase, so match case-insensitively.
+    expect(screen.getByText(/^won$/i)).toBeInTheDocument();
+    // No "Checking results…" spinner text ever shown -- this is a silent,
+    // background check, distinct from the manual button's own visible state.
+    expect(screen.queryByText(/checking results/i)).not.toBeInTheDocument();
+  });
+
+  it("a 401 from the automatic settle attempt prompts re-auth, same as a 401 from load()", async () => {
+    vi.mocked(settleOpenBets).mockRejectedValue(new ApiError("Failed to settle bets (401)", 401));
+    vi.mocked(getBets).mockRejectedValue(new ApiError("Failed to load bets (401)", 401));
+    vi.mocked(getBetStats).mockRejectedValue(new ApiError("Failed to load bet stats (401)", 401));
+
+    render(<BetTrackerPage />);
+
+    await waitFor(() => expect(screen.getByText(/your session expired/i)).toBeInTheDocument());
+  });
+
+  it("a non-401 failure from the automatic settle attempt doesn't block the bets list from loading", async () => {
+    vi.mocked(settleOpenBets).mockRejectedValue(new Error("network blip"));
+    vi.mocked(getBets).mockResolvedValue([
+      {
+        id: 1, match_id: "m1", date: "2026-08-22", home_team: "Arsenal", away_team: "Everton",
+        market: "result_3way", selection: "home", odds: 2.1, stake: 10, outcome: "open",
+        profit_loss: null, source: "manual", recommendation_snapshot: null, created_at: "now",
+      },
+    ]);
+    vi.mocked(getBetStats).mockResolvedValue({
+      bets_settled: 0, bets_open: 1, bets_won: 0, roi: 0, hit_rate: 0,
+      total_staked: 10, total_profit: 0, max_drawdown: 0,
+      starting_bankroll: 1000, current_bankroll: 1000,
+    });
+
+    render(<BetTrackerPage />);
+
+    expect(await screen.findByText(/Arsenal v Everton/)).toBeInTheDocument();
+  });
+});
+
 // W210 follow-up (Critical): Market/Selection used to be freeform <input>
 // text fields with zero validation. Settlement only ever resolves bets
 // whose market/selection exactly match RESOLVABLE_MARKETS

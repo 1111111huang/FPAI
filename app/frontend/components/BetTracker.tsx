@@ -382,7 +382,24 @@ export function BetTrackerPage() {
   }
 
   useEffect(() => {
-    load();
+    // W214: direct user feedback -- settlement should be automatic, the
+    // same way a match's completed status just appears whenever the page
+    // is loaded, not behind a manual action. A best-effort settle attempt
+    // right before the normal load, silent unless it hits a 401 (load()
+    // below still runs either way and surfaces its own errors normally --
+    // this never blocks the page on a settlement failure). The manual
+    // "Settle open bets" button stays for a re-check without leaving the
+    // page (a match can finish while already viewing it, unlike this
+    // mount-time check).
+    async function settleThenLoad() {
+      try {
+        await settleOpenBets();
+      } catch (err) {
+        if (err instanceof ApiError && err.status === 401) setNeedsAuth(true);
+      }
+      await load();
+    }
+    settleThenLoad();
   }, []);
 
   return (
