@@ -9,6 +9,7 @@ import { House, List, ListBullets, MagnifyingGlass, X, type Icon } from "@phosph
 import { getFixtures } from "@/lib/api";
 import type { Fixture } from "@/lib/types";
 import { useSandboxAsOf } from "@/lib/useSandboxAsOf";
+import { UserMenu } from "@/components/UserMenu";
 
 function matchAnalysisHref(f: Fixture) {
   return `/matches/${f.match_id}?home=${encodeURIComponent(f.home_team)}&away=${encodeURIComponent(
@@ -161,6 +162,9 @@ export function AppShell({
             })}
           </nav>
         </div>
+        <div className="mt-auto pt-4">
+          <UserMenu />
+        </div>
       </aside>
 
       {/* Mobile-only compact header: hamburger trigger + a small logo,
@@ -198,6 +202,9 @@ export function AppShell({
               >
                 <X size={20} />
               </button>
+            </div>
+            <div className="mt-4">
+              <UserMenu />
             </div>
           </div>
         </>
