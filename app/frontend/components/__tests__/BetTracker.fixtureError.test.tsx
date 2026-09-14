@@ -104,6 +104,19 @@ describe("ManualBetForm surfaces a visible error when the fixture fetch fails (W
       expect(screen.queryByText(/Fixture data is temporarily unavailable/i)).not.toBeInTheDocument()
     );
   });
+
+  it("W211: searches 30 days back through 90 days forward, not forward-only -- a bet couldn't otherwise be logged against a match that already kicked off", async () => {
+    const now = new Date();
+    const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
+    vi.mocked(getFixtures).mockResolvedValue([]);
+
+    render(<BetTrackerPage />);
+
+    await waitFor(() => expect(getFixtures).toHaveBeenCalled());
+    const [from, to] = vi.mocked(getFixtures).mock.calls[0];
+    expect(from! < today).toBe(true);
+    expect(to! > today).toBe(true);
+  });
 });
 
 // W210 follow-up: getBets and getBetStats used to load via Promise.all,

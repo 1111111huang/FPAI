@@ -1164,4 +1164,17 @@ describe("MatchExplorerPage -- league section headers (direct user request)", ()
     expect(screen.getByText("Chelsea")).toBeInTheDocument();
     expect(screen.getAllByRole("heading", { name: "Premier League" })).toHaveLength(1);
   });
+
+  it("W211: queries 30 days back through 90 days forward, not forward-only -- a match that already kicked off must still be searchable", async () => {
+    const now = new Date();
+    const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
+    vi.mocked(getFixtures).mockResolvedValue([]);
+
+    render(<MatchExplorerPage />);
+
+    await waitFor(() => expect(getFixtures).toHaveBeenCalledTimes(1));
+    const [from, to] = vi.mocked(getFixtures).mock.calls[0];
+    expect(from! < today).toBe(true);
+    expect(to! > today).toBe(true);
+  });
 });

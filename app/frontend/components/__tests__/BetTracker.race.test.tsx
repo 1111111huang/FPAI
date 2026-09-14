@@ -52,8 +52,14 @@ describe("ManualBetForm fixture-search race guard (W42)", () => {
   });
 
   it("a stale real-clock fixture list landing after the correct sandbox one is not searchable", async () => {
-    const today = new Date().toISOString().slice(0, 10);
+    // W211: ManualBetForm's window now starts 30 days *before* asOf, not
+    // on asOf itself -- these are the actual `from` values getFixtures is
+    // called with, not asOf/as_of themselves.
+    const todayFrom = new Date();
+    todayFrom.setDate(todayFrom.getDate() - 30);
+    const today = todayFrom.toISOString().slice(0, 10);
     const sandboxDate = "2025-03-05";
+    const sandboxFrom = "2025-02-03"; // 2025-03-05 - 30 days
 
     const staleFixtures = [fixture("real-1", "StaleUnitedFC")];
     const correctFixtures: Fixture[] = [];
@@ -63,7 +69,7 @@ describe("ManualBetForm fixture-search race guard (W42)", () => {
 
     vi.mocked(getFixtures).mockImplementation((from) => {
       if (from === today) return stale.promise;
-      if (from === sandboxDate) return correct.promise;
+      if (from === sandboxFrom) return correct.promise;
       return Promise.resolve([]);
     });
     vi.mocked(getSandboxStatus).mockResolvedValue({ sandbox_mode: true, as_of: sandboxDate });
@@ -72,7 +78,7 @@ describe("ManualBetForm fixture-search race guard (W42)", () => {
     render(<BetTrackerPage />);
 
     await waitFor(() => expect(getFixtures).toHaveBeenCalledWith(today, expect.any(String)));
-    await waitFor(() => expect(getFixtures).toHaveBeenCalledWith(sandboxDate, expect.any(String)));
+    await waitFor(() => expect(getFixtures).toHaveBeenCalledWith(sandboxFrom, expect.any(String)));
 
     // Resolve out of order: correct (sandbox, fired second) resolves first,
     // stale (real-clock, fired first) resolves after it.

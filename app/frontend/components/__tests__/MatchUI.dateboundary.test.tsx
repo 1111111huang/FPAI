@@ -44,13 +44,13 @@ describe("date-boundary correctness via the sandbox clock (W38)", () => {
     await waitFor(() => expect(getFixtures).toHaveBeenCalledWith("2026-03-02", "2026-05-31"));
   });
 
-  it("Match Explorer's 90-day window is anchored to the sandbox as_of date, not the real browser date", async () => {
+  it("Match Explorer's 30-days-back/90-days-forward window is anchored to the sandbox as_of date, not the real browser date", async () => {
     vi.mocked(getSandboxStatus).mockResolvedValue({ sandbox_mode: true, as_of: "2026-03-01" });
 
     render(<MatchExplorerPage />);
 
-    // 2026-03-01 + 90 days = 2026-05-30
-    await waitFor(() => expect(getFixtures).toHaveBeenCalledWith("2026-03-01", "2026-05-30"));
+    // W211: 2026-03-01 - 30 days = 2026-01-30, + 90 days = 2026-05-30.
+    await waitFor(() => expect(getFixtures).toHaveBeenCalledWith("2026-01-30", "2026-05-30"));
   });
 });
 

@@ -104,9 +104,15 @@ describe("fixture-fetch race guard (W42)", () => {
     // Local date, not .toISOString() -- outside sandbox mode, asOf is a
     // real browser instant and "today" means the viewer's own local
     // calendar day (dayDiff's own established convention, MatchUI.tsx).
+    // W211: Match Explorer's window now starts 30 days *before* asOf, not
+    // on asOf itself -- these are the actual `from` values getFixtures is
+    // called with, not asOf/as_of themselves.
     const now = new Date();
-    const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
+    const todayFrom = new Date(now);
+    todayFrom.setDate(todayFrom.getDate() - 30);
+    const today = `${todayFrom.getFullYear()}-${String(todayFrom.getMonth() + 1).padStart(2, "0")}-${String(todayFrom.getDate()).padStart(2, "0")}`;
     const sandboxDate = "2025-03-05";
+    const sandboxFrom = "2025-02-03"; // 2025-03-05 - 30 days
     const sandboxWindowEnd = "2025-06-03"; // 2025-03-05 + 90 days
 
     const staleFixtures = [fixture("real-clock-fixture")];
@@ -117,7 +123,7 @@ describe("fixture-fetch race guard (W42)", () => {
 
     vi.mocked(getFixtures).mockImplementation((from) => {
       if (from === today) return stale.promise;
-      if (from === sandboxDate) return correct.promise;
+      if (from === sandboxFrom) return correct.promise;
       return Promise.resolve([]);
     });
     vi.mocked(getSandboxStatus).mockResolvedValue({ sandbox_mode: true, as_of: sandboxDate });
@@ -125,7 +131,7 @@ describe("fixture-fetch race guard (W42)", () => {
     render(<MatchExplorerPage />);
 
     await waitFor(() => expect(getFixtures).toHaveBeenCalledWith(today, expect.any(String)));
-    await waitFor(() => expect(getFixtures).toHaveBeenCalledWith(sandboxDate, sandboxWindowEnd));
+    await waitFor(() => expect(getFixtures).toHaveBeenCalledWith(sandboxFrom, sandboxWindowEnd));
 
     correct.resolve(correctFixtures);
     await waitFor(() => expect(screen.getByText("No matches found.")).toBeInTheDocument());

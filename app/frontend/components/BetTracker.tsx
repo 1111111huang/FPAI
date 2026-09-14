@@ -13,7 +13,7 @@ import { ApiError, getBetStats, getBets, getFixtures, logBetManual, settleOpenBe
 import type { Bet, BetStats, Fixture } from "@/lib/types";
 import { useSandboxAsOf } from "@/lib/useSandboxAsOf";
 import { AppShell } from "./AppShell";
-import { ErrorState, TeamBadge, marketLabel } from "./MatchUI";
+import { addDays, dateString, ErrorState, TeamBadge, marketLabel } from "./MatchUI";
 
 function formatDate(iso: string): string {
   return iso.slice(0, 10);
@@ -45,7 +45,7 @@ const MARKET_SELECTIONS: Record<string, { value: string; label: string }[]> = {
 };
 
 function ManualBetForm({ onLogged, onSessionExpired }: { onLogged: () => void; onSessionExpired: () => void }) {
-  const { asOf } = useSandboxAsOf();
+  const { asOf, sandboxMode } = useSandboxAsOf();
   const [query, setQuery] = useState("");
   const [fixtures, setFixtures] = useState<Fixture[] | null>(null);
   const [selected, setSelected] = useState<Fixture | null>(null);
@@ -73,15 +73,16 @@ function ManualBetForm({ onLogged, onSessionExpired }: { onLogged: () => void; o
 
   useEffect(() => {
     let cancelled = false;
-    const from = new Date(asOf);
-    const to = new Date(asOf);
-    // UTC methods, not local getDate/setDate: from/to are read back via
-    // toISOString() (always UTC) below, and asOf is UTC midnight (W30) --
-    // mixing local date arithmetic with a UTC value shifts the window by a
-    // day in negative-UTC-offset timezones.
-    to.setUTCDate(to.getUTCDate() + 90);
+    // W211: direct user feedback -- this search was forward-only, so a bet
+    // couldn't be manually logged against a match that already kicked off.
+    // Reuses MatchExplorerPage's exact window (30 days back, 90 forward)
+    // and its addDays/dateString helpers, which already branch correctly
+    // on sandboxMode -- the previous unconditional `setUTCDate` here was
+    // only correct in sandbox mode (see MatchExplorerPage's own comment).
+    const from = dateString(addDays(asOf, -30, sandboxMode), sandboxMode);
+    const to = dateString(addDays(asOf, 90, sandboxMode), sandboxMode);
     setFixturesError(null);
-    getFixtures(from.toISOString().slice(0, 10), to.toISOString().slice(0, 10))
+    getFixtures(from, to)
       .then((result) => {
         if (!cancelled) setFixtures(result);
       })
@@ -97,6 +98,7 @@ function ManualBetForm({ onLogged, onSessionExpired }: { onLogged: () => void; o
     return () => {
       cancelled = true;
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [asOf, retryTick]);
 
   const results = useMemo(() => {

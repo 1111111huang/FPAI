@@ -297,7 +297,12 @@ function formatDay(iso: string, asOf: Date, sandboxMode: boolean): string {
 // sandboxMode contract as dayDiff: local getters (no .toISOString() round
 // trip, which mis-renders for positive-offset zones too) outside sandbox
 // mode, UTC getters (the pre-existing, already-correct behavior) inside it.
-function dateString(d: Date, sandboxMode: boolean): string {
+// Exported for reuse by BetTracker.tsx's ManualBetForm (W211): its fixture
+// search previously did its own date-window arithmetic with unconditional
+// UTC setters, which is only correct in sandbox mode -- see this file's own
+// MatchExplorerPage comment on why that's wrong for a live (non-sandbox)
+// viewer in a positive-UTC-offset timezone.
+export function dateString(d: Date, sandboxMode: boolean): string {
   if (sandboxMode) return d.toISOString().slice(0, 10);
   const y = d.getFullYear();
   const m = String(d.getMonth() + 1).padStart(2, "0");
@@ -305,7 +310,7 @@ function dateString(d: Date, sandboxMode: boolean): string {
   return `${y}-${m}-${day}`;
 }
 
-function addDays(d: Date, days: number, sandboxMode: boolean): Date {
+export function addDays(d: Date, days: number, sandboxMode: boolean): Date {
   const copy = new Date(d);
   if (sandboxMode) copy.setUTCDate(copy.getUTCDate() + days);
   else copy.setDate(copy.getDate() + days);
@@ -1582,7 +1587,14 @@ export function MatchExplorerPage() {
         // which silently excluded today's own fixtures/results from the
         // window (confirmed live: a same-day finished match went missing
         // entirely).
-        const from = dateString(asOf, sandboxMode);
+        // W211: direct user feedback -- search was forward-only, so a match
+        // that already kicked off (including ones from earlier the same
+        // week) couldn't be found here or in ManualBetForm's fixture picker
+        // at all. 30 days back is plenty for realistic backfill without
+        // reintroducing the same "off-season gap" problem the 90-day
+        // forward window was widened to avoid (a gap that only grows
+        // looking forward, not back).
+        const from = dateString(addDays(asOf, -30, sandboxMode), sandboxMode);
         const to = dateString(addDays(asOf, 90, sandboxMode), sandboxMode);
         const fixtures = await getFixtures(from, to);
         if (cancelled) return;
