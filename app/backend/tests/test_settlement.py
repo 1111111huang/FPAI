@@ -17,8 +17,11 @@ from unittest.mock import MagicMock
 
 sys.path.append(str(Path(__file__).resolve().parents[3]))
 
+import requests
+
 from app.backend.bet_tracker import BetTracker
 from app.backend.football_data_client import NormalizedMatch
+from app.backend.football_data_competition_codes import FOOTBALL_DATA_CODE_BY_LEAGUE
 from app.backend.settlement import settle_open_bets
 
 
@@ -205,6 +208,9 @@ def test_groups_sweden_api_calls_by_date_not_per_bet(tmp_path: Path) -> None:
 
 
 def test_groups_api_calls_by_date_not_per_bet(tmp_path: Path) -> None:
+    """W213: one get_results() call per (date, football-data.org league) --
+    grouped by date, so 2 bets on the same date still only cost 5 calls
+    (one per FOOTBALL_DATA_CODE_BY_LEAGUE entry), not 10."""
     tracker = BetTracker(db_path=tmp_path / "bets.db")
     tracker.create_bet(
         match_id="m1", date="2026-08-22", home_team="Arsenal", away_team="Everton",
@@ -221,5 +227,64 @@ def test_groups_api_calls_by_date_not_per_bet(tmp_path: Path) -> None:
 
     settled = settle_open_bets(tracker, client)
 
-    assert client.get_results.call_count == 1
+    assert client.get_results.call_count == len(FOOTBALL_DATA_CODE_BY_LEAGUE)
     assert len(settled) == 2
+
+
+def test_settles_a_bet_from_a_non_epl_football_data_league(tmp_path: Path) -> None:
+    """W213: found live -- settlement was hardcoded to competition_code="PL"
+    since W13, predating La Liga/Serie A/Bundesliga/Ligue 1 (W76/W134). A
+    bet logged against any of those (fully loggable since W211) must settle
+    too, not just EPL/Sweden ones."""
+    tracker = BetTracker(db_path=tmp_path / "bets.db")
+    bet = tracker.create_bet(
+        match_id="i1", date="2026-09-14", home_team="Inter", away_team="Udinese",
+        market="result_3way", selection="home", odds=1.6, stake=10.0,
+        source="manual", recommendation_snapshot=None,
+    )
+
+    def fake_get_results(competition_code, date_from, date_to):
+        if competition_code == FOOTBALL_DATA_CODE_BY_LEAGUE["I1"]:
+            return [NormalizedMatch(
+                match_id="i1", utc_date="2026-09-14T19:45:00Z", status="FINISHED",
+                home_team="Inter", away_team="Udinese", home_goals=3, away_goals=0,
+            )]
+        return []
+
+    client = MagicMock()
+    client.get_results.side_effect = fake_get_results
+
+    settled = settle_open_bets(tracker, client)
+
+    assert len(settled) == 1
+    assert settled[0].outcome == "won"
+    assert tracker.get_bet(bet.id).outcome == "won"
+
+
+def test_one_leagues_api_failure_does_not_block_settling_another(tmp_path: Path) -> None:
+    """W213: mirrors recommendation_outcomes.py's own per-competition
+    fault-isolation precedent -- one league's transient RequestException
+    (e.g. a rate-limit 429) must not prevent a different league's bet from
+    settling on the same date."""
+    tracker = BetTracker(db_path=tmp_path / "bets.db")
+    bet = tracker.create_bet(
+        match_id="m1", date="2026-08-22", home_team="Arsenal", away_team="Everton",
+        market="result_3way", selection="home", odds=2.0, stake=10.0,
+        source="manual", recommendation_snapshot=None,
+    )
+
+    def fake_get_results(competition_code, date_from, date_to):
+        if competition_code == FOOTBALL_DATA_CODE_BY_LEAGUE["SP1"]:
+            raise requests.exceptions.ConnectionError("boom")
+        if competition_code == FOOTBALL_DATA_CODE_BY_LEAGUE["E0"]:
+            return [_match("m1", 2, 1)]
+        return []
+
+    client = MagicMock()
+    client.get_results.side_effect = fake_get_results
+
+    settled = settle_open_bets(tracker, client)
+
+    assert len(settled) == 1
+    assert settled[0].outcome == "won"
+    assert tracker.get_bet(bet.id).outcome == "won"

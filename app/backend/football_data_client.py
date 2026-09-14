@@ -9,9 +9,15 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import time
-from typing import Callable
+from typing import TYPE_CHECKING, Callable
 
 import requests
+
+if TYPE_CHECKING:
+    # W213: only needed for the type hint below -- results_cache.py imports
+    # NormalizedMatch from this module, so a real (non-guarded) import here
+    # would be circular.
+    from app.backend.results_cache import ResultsCache
 
 BASE_URL = "https://api.football-data.org/v4"
 
@@ -85,10 +91,15 @@ class FootballDataClient:
         api_key: str,
         session: requests.Session | None = None,
         rate_limiter: _RateLimiter | None = None,
+        results_cache: ResultsCache | None = None,
     ) -> None:
         self._api_key = api_key
         self._session = session or requests.Session()
         self._rate_limiter = rate_limiter or _RateLimiter()
+        # W213: optional -- every existing construction site (tests
+        # included) omits this and keeps calling the live API on every
+        # get_results(), completely unchanged.
+        self._results_cache = results_cache
 
     def get_fixtures(
         self, competition_code: str = "PL", date_from: str | None = None, date_to: str | None = None,
@@ -121,6 +132,18 @@ class FootballDataClient:
     def get_results(
         self, competition_code: str = "PL", date_from: str | None = None, date_to: str | None = None,
     ) -> list[NormalizedMatch]:
+        # W213: caching only applies to the single-exact-day shape every
+        # real caller actually uses (settlement.py/recommendation_outcomes.py
+        # both pass date_from == date_to) -- a genuine multi-day range
+        # bypasses the cache entirely rather than splitting it into daily
+        # entries, since no caller needs that.
+        if self._results_cache is not None and date_from is not None and date_from == date_to:
+            cached = self._results_cache.get(competition_code, date_from)
+            if cached is not None:
+                return cached
+            matches = self._get_matches(competition_code, "FINISHED", date_from, date_to)
+            self._results_cache.store(competition_code, date_from, matches)
+            return matches
         return self._get_matches(competition_code, "FINISHED", date_from, date_to)
 
     def _get_matches(

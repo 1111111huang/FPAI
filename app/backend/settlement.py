@@ -6,29 +6,42 @@ finished. Only src.agent.market_resolution's pure resolution logic is
 reused -- the 'actual' outcome dict is built directly from the live API
 result (NormalizedMatch), not a DataFrame row sourced from DuckDB.
 
-Every EPL bet the app tracks is for the E0/"PL" competition (see
-match_info.COMPETITION_ALLOWLIST) -- results are always fetched for that
-competition code. Requests are grouped by date to respect the client's
-~10-requests/minute budget: one get_results() call per distinct bet date,
-not one per bet.
+W213: results are fetched for *every* football-data.org-covered league
+(FOOTBALL_DATA_CODE_BY_LEAGUE -- E0/SP1/I1/D1/F1), not just EPL. Found live:
+this had been hardcoded to "PL" since W13, silently predating La
+Liga/Serie A/Bundesliga/Ligue 1 (W76/W134) -- a bet logged against any of
+those four leagues (fully loggable since W211 widened fixture search) could
+never auto-settle, cache or no cache, since results_by_id would simply never
+contain its match_id. No `Bet.league` column is needed to know which
+competition code a given bet's match_id belongs to: mirrors
+recommendation_outcomes.py's resolve_pending_recommendations, which already
+loops over this same mapping for the identical reason. One competition's
+transient failure (RequestException) doesn't block the others for the same
+date, same fault-isolation precedent as that function.
+
+Requests are grouped by date to respect the client's ~10-requests/minute
+budget: one get_results() call per distinct bet date per competition, not
+one per bet.
 
 W57: a second, optional `sweden_client` (SwedenFixturesClient, The Odds API
 -- W55 found football-data.org has no Allsvenskan coverage at all) is
-consulted for the same dates. No `Bet.league` column is needed to know
-which client a given bet's match_id belongs to -- football-data.org's
-match_ids (small numeric strings) and The Odds API's event ids (32-char hex
-strings) occupy disjoint id spaces in practice, so results from both
-sources are simply merged into one results_by_id dict per date and a bet
-resolves against whichever source actually has its match_id.
+consulted for the same dates. Results from every source are simply merged
+into one results_by_id dict per date and a bet resolves against whichever
+source actually has its match_id -- match_ids across providers occupy
+disjoint id spaces in practice (small numeric strings vs. 32-char hex).
 """
 
 from __future__ import annotations
 
+import requests
+
 from app.backend.bet_tracker import Bet, BetTracker
 from app.backend.football_data_client import FootballDataClient, NormalizedMatch
+from app.backend.football_data_competition_codes import FOOTBALL_DATA_CODE_BY_LEAGUE
 from src.agent.market_resolution import RESOLVABLE_MARKETS, build_actual_outcome, market_correct
+from src.utils.logger import get_logger
 
-COMPETITION_CODE = "PL"
+LOGGER = get_logger(__name__)
 
 
 def settle_open_bets(
@@ -53,9 +66,16 @@ def settle_open_bets(
 
     settled: list[Bet] = []
     for date, bets_on_date in bets_by_date.items():
-        results: list[NormalizedMatch] = list(
-            client.get_results(competition_code=COMPETITION_CODE, date_from=date, date_to=date)
-        )
+        results: list[NormalizedMatch] = []
+        for competition_code in FOOTBALL_DATA_CODE_BY_LEAGUE.values():
+            try:
+                results += client.get_results(competition_code=competition_code, date_from=date, date_to=date)
+            except requests.exceptions.RequestException:
+                LOGGER.warning(
+                    "settle_open_bets: get_results failed for competition_code=%s date=%s -- "
+                    "skipping, other competitions/dates unaffected.", competition_code, date, exc_info=True,
+                )
+                continue
         if sweden_client is not None:
             results += sweden_client.get_results(date_from=date, date_to=date)
         results_by_id = {match.match_id: match for match in results}

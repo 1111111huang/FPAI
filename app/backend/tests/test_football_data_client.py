@@ -14,6 +14,7 @@ import pytest
 sys.path.append(str(Path(__file__).resolve().parents[3]))
 
 from app.backend.football_data_client import FootballDataClient, NormalizedMatch, _RateLimiter
+from app.backend.results_cache import ResultsCache
 
 _SCHEDULED_MATCH = {
     "area": {"id": 2072, "name": "England", "code": "ENG"},
@@ -81,6 +82,39 @@ def test_get_results_normalizes_finished_match_with_scores() -> None:
             home_team="West Ham", away_team="Leeds United", home_goals=3, away_goals=0,
         )
     ]
+
+
+def test_get_results_uses_the_cache_on_a_repeat_call_for_the_same_day(tmp_path: Path) -> None:
+    """W213: a second get_results() call for the identical (competition_code,
+    date) hits the cache, not the network -- the common case, since
+    settlement re-checks the same recent dates repeatedly."""
+    session = _mock_session([_FINISHED_MATCH])
+    cache = ResultsCache(db_path=tmp_path / "results.db")
+    client = FootballDataClient(api_key="fake-key", session=session, results_cache=cache)
+
+    first = client.get_results(date_from="2026-08-22", date_to="2026-08-22")
+    second = client.get_results(date_from="2026-08-22", date_to="2026-08-22")
+
+    assert first == second == [
+        NormalizedMatch(
+            match_id="538164", utc_date="2026-05-24T15:00:00Z", status="FINISHED",
+            home_team="West Ham", away_team="Leeds United", home_goals=3, away_goals=0,
+        )
+    ]
+    assert session.get.call_count == 1
+
+
+def test_get_results_bypasses_the_cache_for_a_multi_day_range(tmp_path: Path) -> None:
+    """No real caller ever passes date_from != date_to, but this stays a
+    plain live call rather than caching under a made-up key."""
+    session = _mock_session([_FINISHED_MATCH])
+    cache = ResultsCache(db_path=tmp_path / "results.db")
+    client = FootballDataClient(api_key="fake-key", session=session, results_cache=cache)
+
+    client.get_results(date_from="2026-08-01", date_to="2026-08-31")
+    client.get_results(date_from="2026-08-01", date_to="2026-08-31")
+
+    assert session.get.call_count == 2
 
 
 def test_get_fixtures_sends_auth_header_and_status_filter() -> None:

@@ -42,6 +42,7 @@ from app.backend.sweden_fixtures_client import (
 )
 from app.backend.llm_check import check_llm_reachable
 from app.backend.recommendation_cache import DEFAULT_DB_PATH as RECOMMENDATION_CACHE_DB_PATH, RecommendationCache
+from app.backend.results_cache import ResultsCache
 from app.backend.recommendation_outcomes import (
     RecommendationOutcomeStore,
     get_recommendation_outcome_store,
@@ -73,7 +74,12 @@ def get_fixtures_client() -> FootballDataClient:
     """FastAPI dependency -- overridden in tests via patching this function."""
     global _fixtures_client
     if _fixtures_client is None:
-        _fixtures_client = FootballDataClient(api_key=os.environ.get("FOOTBALL_DATA_API_KEY", ""))
+        # W213: shared by every football-data.org-covered league (E0/SP1/
+        # I1/D1/F1 all reuse this same singleton, differentiated only by
+        # competition_code per call) -- one ResultsCache covers all of them.
+        _fixtures_client = FootballDataClient(
+            api_key=os.environ.get("FOOTBALL_DATA_API_KEY", ""), results_cache=ResultsCache(),
+        )
     return _fixtures_client
 
 
