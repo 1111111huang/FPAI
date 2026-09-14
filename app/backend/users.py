@@ -44,25 +44,28 @@ class UserStore:
                 """
             )
 
+    @staticmethod
+    def _find_by_email(conn: sqlite3.Connection, normalized: str) -> User | None:
+        row = conn.execute(
+            "SELECT id, email, created_at FROM users WHERE email = ?", (normalized,)
+        ).fetchone()
+        return User(id=row[0], email=row[1], created_at=row[2]) if row else None
+
     def get_or_create(self, email: str) -> User:
         normalized = email.strip().lower()
+        created_at = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
         with self._connect() as conn:
-            row = conn.execute(
-                "SELECT id, email, created_at FROM users WHERE email = ?", (normalized,)
-            ).fetchone()
-            if row:
-                return User(id=row[0], email=row[1], created_at=row[2])
-            created_at = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
-            cursor = conn.execute(
-                "INSERT INTO users (email, created_at) VALUES (?, ?)",
+            # INSERT OR IGNORE + re-SELECT (rather than SELECT-then-INSERT) so a
+            # concurrent insert of the same brand-new email can't raise
+            # IntegrityError on the UNIQUE constraint -- whichever insert wins,
+            # the SELECT reads back the row either way.
+            conn.execute(
+                "INSERT OR IGNORE INTO users (email, created_at) VALUES (?, ?)",
                 (normalized, created_at),
             )
-            return User(id=cursor.lastrowid, email=normalized, created_at=created_at)
+            return self._find_by_email(conn, normalized)  # type: ignore[return-value]
 
     def get_by_email(self, email: str) -> User | None:
         normalized = email.strip().lower()
         with self._connect() as conn:
-            row = conn.execute(
-                "SELECT id, email, created_at FROM users WHERE email = ?", (normalized,)
-            ).fetchone()
-        return User(id=row[0], email=row[1], created_at=row[2]) if row else None
+            return self._find_by_email(conn, normalized)
