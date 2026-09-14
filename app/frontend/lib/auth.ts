@@ -8,7 +8,7 @@
 import type { NextAuthOptions } from "next-auth";
 import GoogleProvider from "next-auth/providers/google";
 
-function getAllowedEmails(): string[] {
+export function getAllowedEmails(): string[] {
   return (process.env.ALLOWED_EMAILS ?? "")
     .split(",")
     .map((e) => e.trim().toLowerCase())
