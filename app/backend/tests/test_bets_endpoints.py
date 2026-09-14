@@ -4,14 +4,17 @@ from __future__ import annotations
 
 from pathlib import Path
 import sys
+from unittest.mock import patch
 
 sys.path.append(str(Path(__file__).resolve().parents[3]))
 
+import pytest
 from fastapi.testclient import TestClient
 
 from app.backend import bets
 from app.backend.auth_deps import get_current_user_email
 from app.backend.bet_tracker import BetTracker
+from app.backend.football_data_client import NormalizedMatch
 from app.backend.main import app, get_user_store
 from app.backend.users import User, UserStore
 
@@ -41,6 +44,20 @@ def _override_user(tmp_path: Path, email: str = "test-user@example.com") -> User
     app.dependency_overrides[get_current_user_email] = lambda: email
     app.dependency_overrides[get_user_store] = lambda: store
     return store.get_or_create(email)
+
+
+@pytest.fixture(autouse=True)
+def _no_real_settlement_network_calls():
+    """W212: both creation routes now auto-settle on log (via
+    settle_open_bets), which calls get_fixtures_client/
+    get_sweden_fixtures_client -- mocked here so these pre-existing tests
+    stay hermetic and their bets stay 'open' (no results returned),
+    matching test_settlement_endpoint.py's established pattern."""
+    with patch("app.backend.main.get_fixtures_client") as mock_fixtures, \
+         patch("app.backend.main.get_sweden_fixtures_client") as mock_sweden:
+        mock_fixtures.return_value.get_results.return_value = []
+        mock_sweden.return_value.get_results.return_value = []
+        yield mock_fixtures.return_value
 
 
 def test_from_recommendation_endpoint_creates_a_locked_bet(tmp_path: Path):
@@ -120,6 +137,36 @@ def test_manual_endpoint_creates_a_bet(tmp_path: Path):
         assert body["source"] == "manual"
         assert body["recommendation_snapshot"] is None
         assert len(tracker.list_bets()) == 1
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_manual_endpoint_auto_settles_a_bet_logged_against_an_already_finished_match(tmp_path: Path, _no_real_settlement_network_calls):
+    """W212: direct user feedback -- a bet backfilled against a match that
+    already finished (W211 made this searchable at all) should come back
+    already settled, not 'open' pending a separate Settle open bets click."""
+    tracker = _override_tracker(tmp_path)
+    _override_user(tmp_path)
+    _no_real_settlement_network_calls.get_results.return_value = [
+        NormalizedMatch(
+            match_id="m2", utc_date="2026-08-23T15:00:00Z", status="FINISHED",
+            home_team="Chelsea", away_team="Fulham", home_goals=2, away_goals=1,
+        ),
+    ]
+    try:
+        with TestClient(app) as client:
+            response = client.post(
+                "/api/bets/manual",
+                json={
+                    "match_id": "m2", "date": "2026-08-23", "home_team": "Chelsea", "away_team": "Fulham",
+                    "market": "btts", "selection": "yes", "odds": 1.9, "stake": 5.0,
+                },
+            )
+        assert response.status_code == 200
+        body = response.json()
+        assert body["outcome"] == "won"  # both teams scored -- btts/yes is correct
+        assert len(tracker.list_bets()) == 1
+        assert tracker.list_bets()[0].outcome == "won"
     finally:
         app.dependency_overrides.clear()
 

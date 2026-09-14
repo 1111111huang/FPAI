@@ -32,7 +32,7 @@ load_dotenv()
 from app.backend import bets, eod_batch, recommendations, sandbox_clock
 from app.backend.agent_config_hash import compute_agent_config_hash
 from app.backend.auth_deps import get_current_user_email
-from app.backend.bet_tracker import BetTracker
+from app.backend.bet_tracker import Bet, BetTracker
 from app.backend.bets import BetFromRecommendationRequest, BetManualRequest, BetOut
 from app.backend.football_data_client import FootballDataClient, NormalizedMatch
 from app.backend.odds_sport_keys import DEFAULT_SPORT_KEY, ODDS_SPORT_KEY_BY_COMPETITION
@@ -1336,6 +1336,27 @@ def get_user_store() -> UserStore:
     return _user_store_singleton
 
 
+async def _settle_if_already_decided(tracker: BetTracker, bet: Bet, user_id: int) -> Bet:
+    """W212: direct user feedback -- a bet logged against a match that
+    already finished (the normal case when backfilling, W211) should show
+    its real outcome immediately, not sit "open" until the user separately
+    clicks Settle open bets. Reuses settle_open_bets verbatim -- it already
+    restricts to resolvable markets and no-ops for a match with no result
+    yet, so calling it unconditionally on every log is safe, just scoped to
+    this user so one user's bet log can't trigger settlement work for
+    another user's open bets. Failures here (e.g. the results API being
+    down) never fail bet creation -- the bet is already saved open; it
+    settles later via the normal Settle open bets flow instead."""
+    try:
+        client = get_fixtures_client()
+        sweden_client = get_sweden_fixtures_client()
+        await run_in_threadpool(settle_open_bets, tracker, client, sweden_client, user_id=user_id)
+    except Exception:
+        LOGGER.warning("Auto-settle-on-log failed for bet %s -- left open.", bet.id, exc_info=True)
+        return bet
+    return tracker.get_bet(bet.id) or bet
+
+
 @app.post("/api/bets/from-recommendation")
 async def create_bet_from_recommendation(
     request: BetFromRecommendationRequest,
@@ -1359,6 +1380,7 @@ async def create_bet_from_recommendation(
         source="from_recommendation", recommendation_snapshot=request.recommendation,
         user_id=user.id,
     )
+    bet = await _settle_if_already_decided(tracker, bet, user.id)
     return BetOut.from_bet(bet)
 
 
@@ -1381,6 +1403,7 @@ async def create_bet_manual(
         source="manual", recommendation_snapshot=None,
         user_id=user.id,
     )
+    bet = await _settle_if_already_decided(tracker, bet, user.id)
     return BetOut.from_bet(bet)
 
 
