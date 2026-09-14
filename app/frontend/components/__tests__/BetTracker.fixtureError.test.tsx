@@ -353,4 +353,17 @@ describe("BetTracker UI polish: column headers, stats loading, fixture empty sta
 
     await waitFor(() => expect(screen.getByText(/no matching fixtures/i)).toBeInTheDocument());
   });
+
+  it("a non-401 stats failure retires the Loading placeholder instead of showing it forever", async () => {
+    vi.mocked(getBets).mockResolvedValue([]);
+    vi.mocked(getBetStats).mockRejectedValue(new ApiError("Failed to load bet stats (500)", 500));
+
+    render(<BetTrackerPage />);
+
+    // Bets resolves to an empty list ("No bets logged yet."), so the only
+    // "Loading…" text left standing once settled is the stats section's --
+    // no need to scope further than the plain query.
+    await waitFor(() => expect(screen.getByText(/no bets logged yet/i)).toBeInTheDocument());
+    expect(screen.queryByText(/loading/i)).not.toBeInTheDocument();
+  });
 });

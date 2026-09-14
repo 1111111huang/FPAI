@@ -321,10 +321,17 @@ export function BetTrackerPage() {
   const [settleMsg, setSettleMsg] = useState<string | null>(null);
 
   const [needsAuth, setNeedsAuth] = useState(false);
+  // W210 follow-up: a non-401 stats failure (e.g. a 500) previously tracked
+  // nothing -- stats stayed null forever with no signal it had failed, so
+  // the "Loading…" placeholder below showed forever too. A 401 already has
+  // its own signal (needsAuth, set via the bets side); this covers every
+  // other rejection.
+  const [statsFailed, setStatsFailed] = useState(false);
 
   async function load() {
     setNeedsAuth(false);
     setError(null);
+    setStatsFailed(false);
     const [betsResult, statsResult] = await Promise.allSettled([getBets(), getBetStats()]);
 
     if (betsResult.status === "fulfilled") {
@@ -340,11 +347,14 @@ export function BetTrackerPage() {
 
     if (statsResult.status === "fulfilled") {
       setStats(statsResult.value);
+    } else {
+      // A stats-only failure (401 included -- already surfaced above via
+      // betsResult/needsAuth) intentionally doesn't block the bets list from
+      // showing. statsFailed just retires the loading placeholder below;
+      // there's no separate error message for it, matching this section's
+      // existing "degrade quietly" behavior.
+      setStatsFailed(true);
     }
-    // A stats-only failure (including a 401 already surfaced above via
-    // betsResult) intentionally doesn't block the bets list from showing --
-    // stats just stays null, and StatsBar's existing `{stats && (...)}`
-    // guard already handles that by rendering nothing for that section.
   }
 
   async function handleSettle() {
@@ -389,7 +399,7 @@ export function BetTrackerPage() {
       )}
 
       <div className="mt-6">
-        {stats ? <StatsBar stats={stats} /> : !needsAuth && !error && <p className="text-sm text-ink-secondary">Loading…</p>}
+        {stats ? <StatsBar stats={stats} /> : !needsAuth && !error && !statsFailed && <p className="text-sm text-ink-secondary">Loading…</p>}
       </div>
 
       <div className="mt-6">
