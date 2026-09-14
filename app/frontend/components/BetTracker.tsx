@@ -19,7 +19,7 @@ function formatDate(iso: string): string {
   return iso.slice(0, 10);
 }
 
-function ManualBetForm({ onLogged }: { onLogged: () => void }) {
+function ManualBetForm({ onLogged, onSessionExpired }: { onLogged: () => void; onSessionExpired: () => void }) {
   const { asOf } = useSandboxAsOf();
   const [query, setQuery] = useState("");
   const [fixtures, setFixtures] = useState<Fixture[] | null>(null);
@@ -103,14 +103,13 @@ function ManualBetForm({ onLogged }: { onLogged: () => void }) {
       setStatus("idle");
       onLogged();
     } catch (err) {
+      if (err instanceof ApiError && err.status === 401) {
+        setStatus("idle");
+        onSessionExpired();
+        return;
+      }
       setStatus("error");
-      setErrorMsg(
-        err instanceof ApiError && err.status === 401
-          ? "Your session expired — sign in again"
-          : err instanceof ApiError
-            ? err.message
-            : "Could not log bet."
-      );
+      setErrorMsg(err instanceof ApiError ? err.message : "Could not log bet.");
     }
   }
 
@@ -272,6 +271,9 @@ export function BetTrackerPage() {
     if (betsResult.status === "fulfilled") {
       setBets(betsResult.value);
     } else if (betsResult.reason instanceof ApiError && betsResult.reason.status === 401) {
+      // Deliberately leaves a prior successful load's `bets` list in place --
+      // it reads as "last known good data" under the banner rather than
+      // flashing to empty, and a real reload after sign-in replaces it anyway.
       setNeedsAuth(true);
     } else {
       setError(betsResult.reason instanceof ApiError ? betsResult.reason.message : "Could not load bets.");
@@ -298,13 +300,11 @@ export function BetTrackerPage() {
       );
       await load();
     } catch (err) {
-      setSettleMsg(
-        err instanceof ApiError && err.status === 401
-          ? "Your session expired — sign in again"
-          : err instanceof ApiError
-            ? err.message
-            : "Could not settle open bets."
-      );
+      if (err instanceof ApiError && err.status === 401) {
+        setNeedsAuth(true);
+      } else {
+        setSettleMsg(err instanceof ApiError ? err.message : "Could not settle open bets.");
+      }
     } finally {
       setSettling(false);
     }
@@ -336,7 +336,7 @@ export function BetTrackerPage() {
       )}
 
       <div className="mt-6">
-        <ManualBetForm onLogged={load} />
+        <ManualBetForm onLogged={load} onSessionExpired={() => setNeedsAuth(true)} />
       </div>
 
       <div className="mt-8">

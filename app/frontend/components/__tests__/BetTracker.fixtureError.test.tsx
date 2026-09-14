@@ -43,7 +43,7 @@ vi.mock("@/lib/api", () => ({
   },
 }));
 
-import { ApiError, getBets, getBetStats, getFixtures, getSandboxStatus, getStatus } from "@/lib/api";
+import { ApiError, getBets, getBetStats, getFixtures, getSandboxStatus, getStatus, settleOpenBets } from "@/lib/api";
 
 describe("ManualBetForm surfaces a visible error when the fixture fetch fails (W52)", () => {
   beforeEach(() => {
@@ -120,6 +120,7 @@ describe("BetTrackerPage decouples stats/bets loading and prompts re-auth on 401
     vi.mocked(getBets).mockReset();
     vi.mocked(getBetStats).mockReset();
     vi.mocked(getStatus).mockReset();
+    vi.mocked(settleOpenBets).mockReset();
     vi.mocked(getFixtures).mockResolvedValue([]);
     vi.mocked(getSandboxStatus).mockResolvedValue({ sandbox_mode: false, as_of: null });
     vi.mocked(getStatus).mockRejectedValue(new Error("no backend"));
@@ -150,5 +151,44 @@ describe("BetTrackerPage decouples stats/bets loading and prompts re-auth on 401
 
     await waitFor(() => expect(screen.getByRole("link", { name: /sign in/i })).toBeInTheDocument());
     expect(screen.queryByText(/401/)).not.toBeInTheDocument();
+  });
+
+  it("recovers after re-login: a later successful load clears needsAuth and shows the real bets list", async () => {
+    vi.mocked(getBets).mockRejectedValue(new ApiError("Failed to load bets (401)", 401));
+    vi.mocked(getBetStats).mockRejectedValue(new ApiError("Failed to load bet stats (401)", 401));
+
+    const user = userEvent.setup();
+    render(<BetTrackerPage />);
+
+    await waitFor(() => expect(screen.getByRole("link", { name: /sign in/i })).toBeInTheDocument());
+
+    // Simulate the user having signed back in, then re-mock the fetches to
+    // succeed and trigger a reload through "Settle open bets" -- the only
+    // user-facing action (besides ManualBetForm's onLogged) that re-runs
+    // load().
+    vi.mocked(getBets).mockResolvedValue([
+      {
+        id: 2, match_id: "m2", date: "2026-08-23", home_team: "Chelsea", away_team: "Fulham",
+        market: "result_3way", selection: "away", odds: 3.2, stake: 5, outcome: "open",
+        profit_loss: null, source: "manual", recommendation_snapshot: null, created_at: "now",
+      },
+    ]);
+    vi.mocked(getBetStats).mockResolvedValue({
+      bets_settled: 0, bets_open: 1, bets_won: 0, roi: 0, hit_rate: 0,
+      total_staked: 5, total_profit: 0, max_drawdown: 0,
+      starting_bankroll: 0, current_bankroll: 0,
+    });
+    vi.mocked(settleOpenBets).mockResolvedValue([]);
+
+    await user.click(screen.getByRole("button", { name: /settle open bets/i }));
+
+    // Scoped to the banner's own wording ("sign in again") rather than a
+    // bare /sign in/i -- AppShell's separate UserMenu also renders a plain
+    // "Sign in" link once next-auth's useSession() settles to
+    // unauthenticated, which would otherwise still match after the banner
+    // itself is gone.
+    await waitFor(() => expect(screen.queryByText(/your session expired/i)).not.toBeInTheDocument());
+    expect(screen.queryByRole("link", { name: /sign in again/i })).not.toBeInTheDocument();
+    await waitFor(() => expect(screen.getByText(/Chelsea v Fulham/)).toBeInTheDocument());
   });
 });
