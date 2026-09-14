@@ -42,6 +42,16 @@ vi.mock("@/lib/api", () => ({
   ApiError: class ApiError extends Error {},
 }));
 
+// LogBetButton (below) now calls next-auth/react's useSession directly, so
+// this file needs its own mock -- the global default in vitest.setup.ts
+// (status: "unauthenticated") would otherwise hide the bet-logging control
+// these tests exercise. signOut is exported too since AppShell -> UserMenu
+// (rendered by the MatchAnalysisPage/MatchExplorerPage tests below) needs it.
+vi.mock("next-auth/react", () => ({
+  useSession: vi.fn(() => ({ data: null, status: "unauthenticated" })),
+  signOut: vi.fn(),
+}));
+
 import {
   generateRecommendation,
   getCachedRecommendation,
@@ -50,6 +60,7 @@ import {
   getStatus,
   logBetFromRecommendation,
 } from "@/lib/api";
+import { useSession } from "next-auth/react";
 import { LEAGUE_COUNTRY } from "@/lib/dashboardMetrics";
 
 const ALL_OVERALL_STATES: { overall: Overall; label: string }[] = [
@@ -1040,6 +1051,10 @@ describe("LogBetButton (bet-logging locked-except-stake behavior)", () => {
     feature_completeness: 0.9,
     unknown_team: false,
   };
+
+  beforeEach(() => {
+    vi.mocked(useSession).mockReturnValue({ data: { user: {} }, status: "authenticated" } as never);
+  });
 
   it("initially shows only a 'Log bet' trigger -- nothing editable yet", () => {
     render(<LogBetButton matchId="m1" recommendation={recommendation} market="result_3way" selection="home" />);

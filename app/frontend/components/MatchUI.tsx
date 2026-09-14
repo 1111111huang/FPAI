@@ -16,6 +16,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
+import { useSession } from "next-auth/react";
 import {
   ArrowDown,
   ArrowLeft,
@@ -1725,10 +1726,20 @@ export function LogBetButton({
   market: string;
   selection: string;
 }) {
+  const { status } = useSession();
   const [open, setOpen] = useState(false);
   const [stake, setStake] = useState("");
-  const [status, setStatus] = useState<"idle" | "saving" | "done" | "error">("idle");
+  const [status_, setStatus] = useState<"idle" | "saving" | "done" | "error">("idle");
   const [errorMsg, setErrorMsg] = useState("");
+
+  if (status === "unauthenticated") {
+    return (
+      <Link href={`/login?callbackUrl=${encodeURIComponent(`/matches/${matchId}`)}`} className="text-xs font-medium text-accent">
+        Sign in to log this bet
+      </Link>
+    );
+  }
+  if (status === "loading") return null;
 
   async function submit() {
     const parsedStake = parseFloat(stake);
@@ -1747,7 +1758,7 @@ export function LogBetButton({
     }
   }
 
-  if (status === "done") return <span className="text-xs text-good">Logged</span>;
+  if (status_ === "done") return <span className="text-xs text-good">Logged</span>;
 
   if (!open) {
     return (
@@ -1769,12 +1780,12 @@ export function LogBetButton({
       <button
         type="button"
         onClick={submit}
-        disabled={status === "saving"}
+        disabled={status_ === "saving"}
         className="text-xs font-medium text-accent disabled:opacity-50"
       >
-        {status === "saving" ? "…" : "Confirm"}
+        {status_ === "saving" ? "…" : "Confirm"}
       </button>
-      {status === "error" && <span className="text-xs text-serious">{errorMsg}</span>}
+      {status_ === "error" && <span className="text-xs text-serious">{errorMsg}</span>}
     </span>
   );
 }
