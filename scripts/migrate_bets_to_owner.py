@@ -8,8 +8,12 @@ from __future__ import annotations
 import argparse
 import sqlite3
 from pathlib import Path
+import sys
+
+sys.path.append(str(Path(__file__).resolve().parent.parent))
 
 from app.backend.bet_tracker import DEFAULT_DB_PATH as DEFAULT_BETS_DB_PATH
+from app.backend.bet_tracker import BetTracker
 from app.backend.users import DEFAULT_DB_PATH as DEFAULT_USERS_DB_PATH
 from app.backend.users import UserStore
 
@@ -21,6 +25,8 @@ def migrate_bets_to_owner(
 ) -> int:
     """Returns the number of rows migrated."""
     owner = UserStore(db_path=users_db_path).get_or_create(owner_email)
+    print(f"Assigning bets to {owner.email} (user_id={owner.id})...")
+    BetTracker(db_path=bets_db_path)  # ensures user_id column exists (runs _init_schema)
     conn = sqlite3.connect(bets_db_path)
     try:
         cursor = conn.execute(
