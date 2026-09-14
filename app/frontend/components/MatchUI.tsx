@@ -1729,7 +1729,7 @@ export function LogBetButton({
   const { status } = useSession();
   const [open, setOpen] = useState(false);
   const [stake, setStake] = useState("");
-  const [status_, setStatus] = useState<"idle" | "saving" | "done" | "error">("idle");
+  const [saveStatus, setSaveStatus] = useState<"idle" | "saving" | "done" | "error">("idle");
   const [errorMsg, setErrorMsg] = useState("");
 
   if (status === "unauthenticated") {
@@ -1744,21 +1744,21 @@ export function LogBetButton({
   async function submit() {
     const parsedStake = parseFloat(stake);
     if (!parsedStake || parsedStake <= 0) {
-      setStatus("error");
+      setSaveStatus("error");
       setErrorMsg("Enter a stake greater than 0.");
       return;
     }
-    setStatus("saving");
+    setSaveStatus("saving");
     try {
       await logBetFromRecommendation({ match_id: matchId, recommendation, market, selection, stake: parsedStake });
-      setStatus("done");
+      setSaveStatus("done");
     } catch (err) {
-      setStatus("error");
+      setSaveStatus("error");
       setErrorMsg(err instanceof ApiError ? err.message : "Could not log bet.");
     }
   }
 
-  if (status_ === "done") return <span className="text-xs text-good">Logged</span>;
+  if (saveStatus === "done") return <span className="text-xs text-good">Logged</span>;
 
   if (!open) {
     return (
@@ -1780,12 +1780,12 @@ export function LogBetButton({
       <button
         type="button"
         onClick={submit}
-        disabled={status_ === "saving"}
+        disabled={saveStatus === "saving"}
         className="text-xs font-medium text-accent disabled:opacity-50"
       >
-        {status_ === "saving" ? "…" : "Confirm"}
+        {saveStatus === "saving" ? "…" : "Confirm"}
       </button>
-      {status_ === "error" && <span className="text-xs text-serious">{errorMsg}</span>}
+      {saveStatus === "error" && <span className="text-xs text-serious">{errorMsg}</span>}
     </span>
   );
 }

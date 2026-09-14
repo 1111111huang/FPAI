@@ -17,8 +17,8 @@ function LoginPageInner() {
   const error = searchParams.get("error");
 
   useEffect(() => {
-    if (status === "authenticated") router.push("/bets");
-  }, [status, router]);
+    if (status === "authenticated") router.push(callbackUrl);
+  }, [status, router, callbackUrl]);
 
   if (status === "authenticated") return null;
 
