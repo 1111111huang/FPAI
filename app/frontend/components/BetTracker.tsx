@@ -266,6 +266,7 @@ export function BetTrackerPage() {
 
   async function load() {
     setNeedsAuth(false);
+    setError(null);
     const [betsResult, statsResult] = await Promise.allSettled([getBets(), getBetStats()]);
 
     if (betsResult.status === "fulfilled") {
