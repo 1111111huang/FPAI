@@ -19,6 +19,37 @@ function formatDate(iso: string): string {
   return iso.slice(0, 10);
 }
 
+// W210 follow-up: the only markets/selections settlement.py's market_correct()
+// can ever resolve (src/agent/market_resolution.py, RESOLVABLE_MARKETS).
+// A freeform text field let a user log a bet with a market/selection that
+// could never programmatically settle -- it would just sit "open" forever
+// with no error anywhere. Constraining to exactly these values closes that.
+const MARKET_SELECTIONS: Record<string, { value: string; label: string }[]> = {
+  result_3way: [
+    { value: "home", label: "Home" },
+    { value: "draw", label: "Draw" },
+    { value: "away", label: "Away" },
+  ],
+  btts: [
+    { value: "yes", label: "Yes" },
+    { value: "no", label: "No" },
+  ],
+  total_goals: [
+    { value: "over_2.5", label: "Over 2.5" },
+    { value: "under_2.5", label: "Under 2.5" },
+  ],
+  total_corners: [
+    { value: "over_9.5", label: "Over 9.5" },
+    { value: "under_9.5", label: "Under 9.5" },
+  ],
+};
+const MARKET_LABELS: Record<string, string> = {
+  result_3way: "Result",
+  btts: "BTTS",
+  total_goals: "Total goals",
+  total_corners: "Total corners",
+};
+
 function ManualBetForm({ onLogged, onSessionExpired }: { onLogged: () => void; onSessionExpired: () => void }) {
   const { asOf } = useSandboxAsOf();
   const [query, setQuery] = useState("");
@@ -166,18 +197,36 @@ function ManualBetForm({ onLogged, onSessionExpired }: { onLogged: () => void; o
             </button>
           </div>
           <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-            <input
-              value={market}
-              onChange={(e) => setMarket(e.target.value)}
-              placeholder="Market"
-              className="rounded border border-border bg-surface px-2 py-1.5 text-sm text-ink outline-none focus:border-accent"
-            />
-            <input
-              value={selection}
-              onChange={(e) => setSelection(e.target.value)}
-              placeholder="Selection"
-              className="rounded border border-border bg-surface px-2 py-1.5 text-sm text-ink outline-none focus:border-accent"
-            />
+            <div>
+              <label htmlFor="manual-bet-market" className="sr-only">Market</label>
+              <select
+                id="manual-bet-market"
+                value={market}
+                onChange={(e) => {
+                  setMarket(e.target.value);
+                  setSelection(""); // force a fresh, valid choice for the new market
+                }}
+                className="w-full rounded border border-border bg-surface px-2 py-1.5 text-sm text-ink outline-none focus:border-accent"
+              >
+                {Object.keys(MARKET_SELECTIONS).map((m) => (
+                  <option key={m} value={m}>{MARKET_LABELS[m]}</option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label htmlFor="manual-bet-selection" className="sr-only">Selection</label>
+              <select
+                id="manual-bet-selection"
+                value={selection}
+                onChange={(e) => setSelection(e.target.value)}
+                className="w-full rounded border border-border bg-surface px-2 py-1.5 text-sm text-ink outline-none focus:border-accent"
+              >
+                <option value="">Select…</option>
+                {MARKET_SELECTIONS[market]?.map((opt) => (
+                  <option key={opt.value} value={opt.value}>{opt.label}</option>
+                ))}
+              </select>
+            </div>
             <input
               value={odds}
               onChange={(e) => setOdds(e.target.value)}

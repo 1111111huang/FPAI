@@ -198,3 +198,80 @@ describe("BetTrackerPage decouples stats/bets loading and prompts re-auth on 401
     await waitFor(() => expect(screen.getByText(/Chelsea v Fulham/)).toBeInTheDocument());
   });
 });
+
+// W210 follow-up (Critical): Market/Selection used to be freeform <input>
+// text fields with zero validation. Settlement only ever resolves bets
+// whose market/selection exactly match RESOLVABLE_MARKETS
+// (src/agent/market_resolution.py) -- a typo or plausible-but-wrong string
+// left a bet permanently unsettleable, sitting "open" forever with no error
+// anywhere. Reuses this file's ApiError-with-status mock factory since it's
+// already wired for BetTrackerPage's full render (AppShell's getStatus
+// included) -- ManualBetForm itself isn't exported, so this drives it
+// through BetTrackerPage's real fixture-search-then-select flow rather than
+// rendering it standalone.
+describe("ManualBetForm constrains market/selection to resolvable values (W210 follow-up, Critical)", () => {
+  beforeEach(() => {
+    vi.mocked(getFixtures).mockReset();
+    vi.mocked(getSandboxStatus).mockReset();
+    vi.mocked(getBets).mockReset();
+    vi.mocked(getBetStats).mockReset();
+    vi.mocked(getStatus).mockReset();
+    vi.mocked(getBets).mockResolvedValue([]);
+    vi.mocked(getBetStats).mockResolvedValue({
+      bets_settled: 0, bets_open: 0, bets_won: 0, roi: 0, hit_rate: 0,
+      total_staked: 0, total_profit: 0, max_drawdown: 0,
+      starting_bankroll: 0, current_bankroll: 0,
+    });
+    vi.mocked(getSandboxStatus).mockResolvedValue({ sandbox_mode: false, as_of: null });
+    vi.mocked(getStatus).mockRejectedValue(new Error("no backend"));
+    vi.mocked(getFixtures).mockResolvedValue([
+      {
+        match_id: "m1", utc_date: "2026-08-22T15:00:00Z", status: "SCHEDULED",
+        home_team: "Arsenal", away_team: "Everton", home_goals: null, away_goals: null,
+      },
+    ]);
+  });
+
+  async function selectFixture(user: ReturnType<typeof userEvent.setup>) {
+    render(<BetTrackerPage />);
+    await user.type(
+      screen.getByPlaceholderText("Search a real fixture by team name…"),
+      "Arsenal"
+    );
+    await user.click(await screen.findByText(/Arsenal v Everton/));
+  }
+
+  it("only offers valid market/selection combinations, not freeform text", async () => {
+    const user = userEvent.setup();
+    await selectFixture(user);
+
+    const marketSelect = screen.getByLabelText(/market/i);
+    expect(marketSelect.tagName).toBe("SELECT");
+    await user.selectOptions(marketSelect, "btts");
+
+    const selectionSelect = screen.getByLabelText(/selection/i);
+    expect(selectionSelect.tagName).toBe("SELECT");
+    const options = Array.from(selectionSelect.querySelectorAll("option")).map((o) => o.textContent);
+    expect(options).toEqual(expect.arrayContaining(["Yes", "No"]));
+    expect(options).not.toEqual(expect.arrayContaining(["home", "draw", "away"]));
+  });
+
+  it("switching market resets a stale selection so an invalid combination can't be submitted", async () => {
+    const user = userEvent.setup();
+    await selectFixture(user);
+
+    const marketSelect = screen.getByLabelText(/market/i);
+    const selectionSelect = screen.getByLabelText<HTMLSelectElement>(/selection/i);
+    await user.selectOptions(marketSelect, "result_3way");
+    await user.selectOptions(selectionSelect, "away");
+    expect(selectionSelect.value).toBe("away");
+
+    await user.selectOptions(marketSelect, "btts");
+    // "away" isn't a valid btts option -- the field must reset, not keep
+    // pointing at a selection that no longer exists for this market.
+    expect(selectionSelect.value).toBe("");
+    expect(
+      Array.from(selectionSelect.querySelectorAll("option")).map((o) => o.value)
+    ).not.toContain("away");
+  });
+});
