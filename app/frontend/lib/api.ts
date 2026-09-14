@@ -95,7 +95,7 @@ export async function logBetFromRecommendation(body: {
   selection: string;
   stake: number;
 }): Promise<Bet> {
-  const response = await apiFetch(`/api/bets/from-recommendation`, {
+  const response = await fetch(`/api/bets/from-recommendation`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
@@ -117,7 +117,7 @@ export async function logBetManual(body: {
   odds: number;
   stake: number;
 }): Promise<Bet> {
-  const response = await apiFetch(`/api/bets/manual`, {
+  const response = await fetch(`/api/bets`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
@@ -129,7 +129,7 @@ export async function logBetManual(body: {
 }
 
 export async function getBets(): Promise<Bet[]> {
-  const response = await apiFetch(`/api/bets`);
+  const response = await fetch(`/api/bets`);
   if (!response.ok) {
     throw new ApiError(`Failed to load bets (${response.status})`, response.status);
   }
@@ -140,7 +140,7 @@ export async function getBets(): Promise<Bet[]> {
  * Returns the bets that were actually settled by this call (won/lost);
  * corners bets and not-yet-finished matches are never included. */
 export async function settleOpenBets(): Promise<Bet[]> {
-  const response = await apiFetch(`/api/bets/settle-open`, { method: "POST" });
+  const response = await fetch(`/api/bets/settle-open`, { method: "POST" });
   if (!response.ok) {
     throw new ApiError(`Failed to settle open bets (${response.status})`, response.status);
   }
@@ -149,7 +149,7 @@ export async function settleOpenBets(): Promise<Bet[]> {
 
 /** W14: ROI/hit-rate/bankroll summary, computed only over settled bets. */
 export async function getBetStats(): Promise<BetStats> {
-  const response = await apiFetch(`/api/bets/stats`);
+  const response = await fetch(`/api/bets/stats`);
   if (!response.ok) {
     throw new ApiError(`Failed to load bet stats (${response.status})`, response.status);
   }
