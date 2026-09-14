@@ -15,7 +15,7 @@ An individual bettor — the same user described in `agent_prd.md` Section 2.1 �
 This app is a consumer of the forecasting engine (`FPAI_PRD.md`) and betting agent (`agent_prd.md`). It does not change their product contracts.
 
 ### 2.3 Auth Model
-Single-user, no accounts, for the initial version. Revisit if/when multi-user support is needed.
+**Revised 2026-09-12**: real multi-user accounts, decided direction (see `documents/app_user_stories.md` PHASE 48 for the original decision). Each user gets their own login and their own bet-tracking data (bets, settlement, stats scoped by user, not global) — the shared recommendations dashboard itself stays unauthenticated. **Design locked in 2026-09-13 (PHASE 49, W210): Google OAuth only, invite-only via an email allowlist, not open signup.** Full implementation plan written (`docs/superpowers/plans/2026-09-13-multiuser-auth.md`); Google Cloud OAuth client created and local env configured; application code not yet written. Supersedes the original single-user/no-accounts decision below, kept for history: ~~Single-user, no accounts, for the initial version. Revisit if/when multi-user support is needed.~~
 
 ## 3. Core Capabilities
 
@@ -29,7 +29,6 @@ TBD.
 
 Provisional, subject to revision:
 
-- Multi-user accounts or authentication.
 - Payment processing.
 - Native mobile app.
 - Live odds feed beyond what the agent's existing web-search tool provides.
