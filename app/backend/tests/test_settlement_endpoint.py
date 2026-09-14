@@ -15,15 +15,27 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.backend import bets
+from app.backend.auth_deps import get_current_user_email
 from app.backend.bet_tracker import BetTracker
 from app.backend.football_data_client import NormalizedMatch
-from app.backend.main import app
+from app.backend.main import app, get_user_store
+from app.backend.users import User, UserStore
 
 
 def _override_tracker(tmp_path: Path) -> BetTracker:
     tracker = BetTracker(db_path=tmp_path / "bets.db")
     app.dependency_overrides[bets.get_bet_tracker] = lambda: tracker
     return tracker
+
+
+def _override_user(tmp_path: Path, email: str = "test-user@example.com") -> User:
+    """W210: /api/bets/settle-open now requires get_current_user_email + a
+    UserStore lookup -- overrides both with a tmp_path-scoped store so
+    existing tests don't 401 and don't touch the real data/users.db."""
+    store = UserStore(db_path=tmp_path / "users.db")
+    app.dependency_overrides[get_current_user_email] = lambda: email
+    app.dependency_overrides[get_user_store] = lambda: store
+    return store.get_or_create(email)
 
 
 @pytest.fixture(autouse=True)
@@ -39,10 +51,11 @@ def sweden_client_mock():
 
 def test_settle_open_endpoint_settles_a_finished_match_bet(tmp_path: Path):
     tracker = _override_tracker(tmp_path)
+    user = _override_user(tmp_path)
     bet = tracker.create_bet(
         match_id="m1", date="2026-08-22", home_team="Arsenal", away_team="Everton",
         market="result_3way", selection="home", odds=2.0, stake=10.0,
-        source="manual", recommendation_snapshot=None,
+        source="manual", recommendation_snapshot=None, user_id=user.id,
     )
     try:
         with patch("app.backend.main.get_fixtures_client") as mock_get_client:
@@ -70,10 +83,11 @@ def test_settle_open_endpoint_settles_a_swedish_bet(tmp_path: Path, sweden_clien
     get_sweden_fixtures_client() through, not just the settlement module's
     own optional-param support (already covered in test_settlement.py)."""
     tracker = _override_tracker(tmp_path)
+    user = _override_user(tmp_path)
     bet = tracker.create_bet(
         match_id="sw1", date="2026-08-22", home_team="Malmo FF", away_team="AIK",
         market="result_3way", selection="home", odds=2.0, stake=10.0,
-        source="manual", recommendation_snapshot=None,
+        source="manual", recommendation_snapshot=None, user_id=user.id,
     )
     sweden_client_mock.get_results.return_value = [
         NormalizedMatch(
@@ -97,6 +111,7 @@ def test_settle_open_endpoint_settles_a_swedish_bet(tmp_path: Path, sweden_clien
 
 def test_settle_open_endpoint_returns_empty_list_when_nothing_settles(tmp_path: Path):
     _override_tracker(tmp_path)
+    _override_user(tmp_path)
     try:
         with patch("app.backend.main.get_fixtures_client") as mock_get_client:
             mock_get_client.return_value.get_results.return_value = []

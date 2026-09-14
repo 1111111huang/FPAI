@@ -1,8 +1,15 @@
-"""W97: gates every request behind a shared-secret header once the app is
-reachable from the public internet -- see RequireAppTokenMiddleware's own
-docstring (app/backend/main.py) for the CORS-ordering rationale. Off by
-default (APP_ACCESS_TOKEN unset), matching every other opt-in-only
-production-readiness flag in this app (ENABLE_SCHEDULER)."""
+"""W97/W210: gates `/api/admin/*` routes behind a shared-secret header once
+the app is reachable from the public internet -- see
+RequireAppTokenMiddleware's own docstring (app/backend/main.py) for the
+CORS-ordering rationale. Off by default (APP_ACCESS_TOKEN unset), matching
+every other opt-in-only production-readiness flag in this app
+(ENABLE_SCHEDULER).
+
+W210: narrowed from "every request" to admin-only -- per-user auth
+(get_current_user_email/INTERNAL_API_SECRET, see test_auth_deps.py) now
+covers the bet routes instead. GET /api/admin/lessons (read-only, no side
+effects) stands in for "some protected admin route" below, replacing the
+old /api/status probe."""
 
 from __future__ import annotations
 
@@ -28,21 +35,31 @@ def test_no_token_configured_leaves_every_request_unaffected(monkeypatch):
 def test_a_protected_request_with_no_header_is_rejected_once_a_token_is_configured(monkeypatch):
     monkeypatch.setenv("APP_ACCESS_TOKEN", "secret-123")
     with TestClient(app) as client:
-        response = client.get("/api/status")
+        response = client.get("/api/admin/lessons")
     assert response.status_code == 401
 
 
 def test_a_protected_request_with_the_wrong_header_is_rejected(monkeypatch):
     monkeypatch.setenv("APP_ACCESS_TOKEN", "secret-123")
     with TestClient(app) as client:
-        response = client.get("/api/status", headers={"X-App-Token": "wrong-guess"})
+        response = client.get("/api/admin/lessons", headers={"X-App-Token": "wrong-guess"})
     assert response.status_code == 401
 
 
 def test_a_protected_request_with_the_correct_header_succeeds(monkeypatch):
     monkeypatch.setenv("APP_ACCESS_TOKEN", "secret-123")
     with TestClient(app) as client:
-        response = client.get("/api/status", headers={"X-App-Token": "secret-123"})
+        response = client.get("/api/admin/lessons", headers={"X-App-Token": "secret-123"})
+    assert response.status_code != 401
+
+
+def test_a_non_admin_route_is_unaffected_even_when_a_token_is_configured(monkeypatch):
+    """W210: the middleware now only gates /api/admin/* -- /api/status (and
+    every other non-admin route) must go through untouched regardless of
+    APP_ACCESS_TOKEN, even with no header sent at all."""
+    monkeypatch.setenv("APP_ACCESS_TOKEN", "secret-123")
+    with TestClient(app) as client:
+        response = client.get("/api/status")
     assert response.status_code != 401
 
 
@@ -67,7 +84,7 @@ def test_a_401_response_still_carries_cors_headers(monkeypatch):
     monkeypatch.setenv("APP_ACCESS_TOKEN", "secret-123")
     configured_origin = app.user_middleware[0].kwargs["allow_origins"][0]
     with TestClient(app) as client:
-        response = client.get("/api/status", headers={"Origin": configured_origin})
+        response = client.get("/api/admin/lessons", headers={"Origin": configured_origin})
     assert response.status_code == 401
     assert response.headers.get("access-control-allow-origin") == configured_origin
 

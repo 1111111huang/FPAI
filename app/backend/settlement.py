@@ -35,13 +35,17 @@ def settle_open_bets(
     tracker: BetTracker,
     client: FootballDataClient,
     sweden_client: object | None = None,
+    user_id: int | None = None,
 ) -> list[Bet]:
     """Attempt to settle every open, scorable-market bet against live
     results. Returns the bets actually settled (won/lost) this call --
     corners bets and not-yet-finished matches are left open, untouched.
     `sweden_client`, when supplied, must expose `get_results(date_from,
-    date_to) -> list[NormalizedMatch]` (SwedenFixturesClient satisfies this)."""
-    resolvable_bets = [b for b in tracker.list_open_bets() if b.market in RESOLVABLE_MARKETS]
+    date_to) -> list[NormalizedMatch]` (SwedenFixturesClient satisfies this).
+    `user_id` (W210), when supplied, scopes settlement to just that user's
+    open bets -- omitted (None) settles every open bet regardless of owner,
+    unchanged pre-W210 behavior."""
+    resolvable_bets = [b for b in tracker.list_open_bets(user_id=user_id) if b.market in RESOLVABLE_MARKETS]
 
     bets_by_date: dict[str, list[Bet]] = {}
     for bet in resolvable_bets:

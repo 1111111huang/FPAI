@@ -31,6 +31,7 @@ load_dotenv()
 
 from app.backend import bets, eod_batch, recommendations, sandbox_clock
 from app.backend.agent_config_hash import compute_agent_config_hash
+from app.backend.auth_deps import get_current_user_email
 from app.backend.bet_tracker import BetTracker
 from app.backend.bets import BetFromRecommendationRequest, BetManualRequest, BetOut
 from app.backend.football_data_client import FootballDataClient, NormalizedMatch
@@ -53,6 +54,7 @@ from app.backend.recommendations import MatchRecommendationOut, RecommendationRe
 from app.backend.scheduler import JobRunLog, RecoverableScheduler
 from app.backend.scheduler_wiring import build_odds_client, build_schedule_t30, register_eod_job, register_lessons_job
 from app.backend.settlement import settle_open_bets
+from app.backend.users import UserStore
 from src.agent.agent_config import AgentConfig
 from src.logic.competition_registry import list_display_enabled_competition_ids
 from src.tools.data_tools import get_data_freshness
@@ -497,9 +499,9 @@ app = FastAPI(title="FPAI Web App Backend", lifespan=lifespan)
 
 
 class RequireAppTokenMiddleware(BaseHTTPMiddleware):
-    """W97: gates every request behind a shared-secret header once the app
-    is reachable from the public internet, not just localhost. Off by
-    default (APP_ACCESS_TOKEN unset) so every existing test and local-dev
+    """W97: gates `/api/admin/*` routes behind a shared-secret header once
+    the app is reachable from the public internet, not just localhost. Off
+    by default (APP_ACCESS_TOKEN unset) so every existing test and local-dev
     run is completely unaffected -- same "off unless explicitly opted in"
     pattern already used for ENABLE_SCHEDULER. /api/health is exempt so a
     hosting platform's own health check (which never sends this header)
@@ -518,7 +520,9 @@ class RequireAppTokenMiddleware(BaseHTTPMiddleware):
 
     async def dispatch(self, request, call_next):
         token = os.environ.get("APP_ACCESS_TOKEN")
-        if not token or request.method == "OPTIONS" or request.url.path == "/api/health":
+        is_exempt = request.method == "OPTIONS" or request.url.path == "/api/health"
+        is_admin_route = request.url.path.startswith("/api/admin/")
+        if not token or is_exempt or not is_admin_route:
             return await call_next(request)
         if request.headers.get("x-app-token") != token:
             return JSONResponse({"detail": "Unauthorized"}, status_code=401)
@@ -1320,10 +1324,16 @@ async def get_cached_recommendation(
     return validate_and_degrade(entry.recommendation)
 
 
+def get_user_store() -> UserStore:
+    return UserStore()
+
+
 @app.post("/api/bets/from-recommendation")
 async def create_bet_from_recommendation(
     request: BetFromRecommendationRequest,
     tracker: BetTracker = Depends(bets.get_bet_tracker),
+    user_email: str = Depends(get_current_user_email),
+    user_store: UserStore = Depends(get_user_store),
 ) -> BetOut:
     """Every field but stake is locked -- derived from the recommendation
     snapshot itself, which is also stored verbatim (recommendations aren't
@@ -1332,12 +1342,14 @@ async def create_bet_from_recommendation(
         resolved = bets.resolve_from_recommendation(request)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
+    user = user_store.get_or_create(user_email)
     bet = tracker.create_bet(
         match_id=resolved["match_id"], date=resolved["date"],
         home_team=resolved["home_team"], away_team=resolved["away_team"],
         market=resolved["market"], selection=resolved["selection"],
         odds=resolved["odds"], stake=resolved["stake"],
         source="from_recommendation", recommendation_snapshot=request.recommendation,
+        user_id=user.id,
     )
     return BetOut.from_bet(bet)
 
@@ -1346,41 +1358,60 @@ async def create_bet_from_recommendation(
 async def create_bet_manual(
     request: BetManualRequest,
     tracker: BetTracker = Depends(bets.get_bet_tracker),
+    user_email: str = Depends(get_current_user_email),
+    user_store: UserStore = Depends(get_user_store),
 ) -> BetOut:
     """User-provided fields, but match_id must be a resolved fixture reference
     (enforced by the frontend's Match Explorer search, not free-typed team
     names) -- Pydantic requires it non-empty at minimum."""
+    user = user_store.get_or_create(user_email)
     bet = tracker.create_bet(
         match_id=request.match_id, date=request.date,
         home_team=request.home_team, away_team=request.away_team,
         market=request.market, selection=request.selection,
         odds=request.odds, stake=request.stake,
         source="manual", recommendation_snapshot=None,
+        user_id=user.id,
     )
     return BetOut.from_bet(bet)
 
 
 @app.get("/api/bets")
-async def list_bets(tracker: BetTracker = Depends(bets.get_bet_tracker)) -> list[BetOut]:
-    return [BetOut.from_bet(bet) for bet in tracker.list_bets()]
+async def list_bets(
+    tracker: BetTracker = Depends(bets.get_bet_tracker),
+    user_email: str = Depends(get_current_user_email),
+    user_store: UserStore = Depends(get_user_store),
+) -> list[BetOut]:
+    user = user_store.get_or_create(user_email)
+    return [BetOut.from_bet(bet) for bet in tracker.list_bets(user_id=user.id)]
 
 
 @app.get("/api/bets/stats")
-async def get_bet_stats(tracker: BetTracker = Depends(bets.get_bet_tracker)) -> dict:
+async def get_bet_stats(
+    tracker: BetTracker = Depends(bets.get_bet_tracker),
+    user_email: str = Depends(get_current_user_email),
+    user_store: UserStore = Depends(get_user_store),
+) -> dict:
     """W14: ROI/hit-rate/bankroll summary, computed fresh over settled bets
     on every call -- no persisted running total."""
-    return compute_bet_stats(tracker.list_bets())
+    user = user_store.get_or_create(user_email)
+    return compute_bet_stats(tracker.list_bets(user_id=user.id))
 
 
 @app.post("/api/bets/settle-open")
-async def settle_open(tracker: BetTracker = Depends(bets.get_bet_tracker)) -> list[BetOut]:
+async def settle_open(
+    tracker: BetTracker = Depends(bets.get_bet_tracker),
+    user_email: str = Depends(get_current_user_email),
+    user_store: UserStore = Depends(get_user_store),
+) -> list[BetOut]:
     """On-demand settlement trigger (W13) -- intentionally not folded into
     W08's scheduler; bet settlement isn't tied to recommendation-generation
     timing the way W09/W10 are. Reuses get_fixtures_client (W05's
     FootballDataClient) since results/fixtures share the same API and rate
     limit budget. W57: also consults get_sweden_fixtures_client so a
     Swedish bet's match_id (unknown to football-data.org) can settle too."""
+    user = user_store.get_or_create(user_email)
     client = get_fixtures_client()
     sweden_client = get_sweden_fixtures_client()
-    settled = await run_in_threadpool(settle_open_bets, tracker, client, sweden_client)
+    settled = await run_in_threadpool(settle_open_bets, tracker, client, sweden_client, user_id=user.id)
     return [BetOut.from_bet(bet) for bet in settled]
