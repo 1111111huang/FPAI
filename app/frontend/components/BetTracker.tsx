@@ -6,6 +6,7 @@
  * (W13) can still find the real fixture later. */
 
 import { useEffect, useMemo, useState } from "react";
+import Link from "next/link";
 import { MagnifyingGlass, WarningCircle } from "@phosphor-icons/react";
 
 import { ApiError, getBetStats, getBets, getFixtures, logBetManual, settleOpenBets } from "@/lib/api";
@@ -103,7 +104,13 @@ function ManualBetForm({ onLogged }: { onLogged: () => void }) {
       onLogged();
     } catch (err) {
       setStatus("error");
-      setErrorMsg(err instanceof ApiError ? err.message : "Could not log bet.");
+      setErrorMsg(
+        err instanceof ApiError && err.status === 401
+          ? "Your session expired — sign in again"
+          : err instanceof ApiError
+            ? err.message
+            : "Could not log bet."
+      );
     }
   }
 
@@ -255,14 +262,27 @@ export function BetTrackerPage() {
   const [settling, setSettling] = useState(false);
   const [settleMsg, setSettleMsg] = useState<string | null>(null);
 
+  const [needsAuth, setNeedsAuth] = useState(false);
+
   async function load() {
-    try {
-      const [betList, betStats] = await Promise.all([getBets(), getBetStats()]);
-      setBets(betList);
-      setStats(betStats);
-    } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Could not load bets.");
+    setNeedsAuth(false);
+    const [betsResult, statsResult] = await Promise.allSettled([getBets(), getBetStats()]);
+
+    if (betsResult.status === "fulfilled") {
+      setBets(betsResult.value);
+    } else if (betsResult.reason instanceof ApiError && betsResult.reason.status === 401) {
+      setNeedsAuth(true);
+    } else {
+      setError(betsResult.reason instanceof ApiError ? betsResult.reason.message : "Could not load bets.");
     }
+
+    if (statsResult.status === "fulfilled") {
+      setStats(statsResult.value);
+    }
+    // A stats-only failure (including a 401 already surfaced above via
+    // betsResult) intentionally doesn't block the bets list from showing --
+    // stats just stays null, and StatsBar's existing `{stats && (...)}`
+    // guard already handles that by rendering nothing for that section.
   }
 
   async function handleSettle() {
@@ -277,7 +297,13 @@ export function BetTrackerPage() {
       );
       await load();
     } catch (err) {
-      setSettleMsg(err instanceof ApiError ? err.message : "Could not settle open bets.");
+      setSettleMsg(
+        err instanceof ApiError && err.status === 401
+          ? "Your session expired — sign in again"
+          : err instanceof ApiError
+            ? err.message
+            : "Could not settle open bets."
+      );
     } finally {
       setSettling(false);
     }
@@ -291,6 +317,16 @@ export function BetTrackerPage() {
     <AppShell active="bets">
       <h1 className="text-xl font-semibold tracking-tight text-ink">Bet Tracker</h1>
       <p className="mt-1 text-sm text-ink-secondary">Bets you've actually placed -- not automatic hypothetical tracking.</p>
+
+      {needsAuth && (
+        <p className="mt-4 text-sm text-ink-secondary">
+          Your session expired.{" "}
+          <Link href="/login?callbackUrl=%2Fbets" className="font-medium text-accent">
+            Sign in again
+          </Link>{" "}
+          to see your bets.
+        </p>
+      )}
 
       {stats && (
         <div className="mt-6">
@@ -316,7 +352,7 @@ export function BetTrackerPage() {
         </div>
         {settleMsg && <p className="mt-2 text-xs text-ink-secondary">{settleMsg}</p>}
         {error && <p className="mt-2 text-sm text-serious">{error}</p>}
-        {!error && bets === null && <p className="mt-2 text-sm text-ink-secondary">Loading…</p>}
+        {!error && !needsAuth && bets === null && <p className="mt-2 text-sm text-ink-secondary">Loading…</p>}
         {!error && bets && bets.length === 0 && (
           <p className="mt-2 text-sm text-ink-secondary">No bets logged yet.</p>
         )}

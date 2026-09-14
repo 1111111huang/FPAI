@@ -105,3 +105,50 @@ describe("ManualBetForm surfaces a visible error when the fixture fetch fails (W
     );
   });
 });
+
+// W210 follow-up: getBets and getBetStats used to load via Promise.all,
+// so a single failed request (stats included) blocked the whole bets list
+// from rendering, and a 401 from an expired session showed a raw
+// "Failed to load bets (401)" string instead of prompting the user to sign
+// in again. Reuses this file's ApiError-with-status mock factory (see the
+// W52 comment above) since these tests depend on `err.status === 401`
+// actually being readable on the caught error.
+describe("BetTrackerPage decouples stats/bets loading and prompts re-auth on 401 (W210 follow-up)", () => {
+  beforeEach(() => {
+    vi.mocked(getFixtures).mockReset();
+    vi.mocked(getSandboxStatus).mockReset();
+    vi.mocked(getBets).mockReset();
+    vi.mocked(getBetStats).mockReset();
+    vi.mocked(getStatus).mockReset();
+    vi.mocked(getFixtures).mockResolvedValue([]);
+    vi.mocked(getSandboxStatus).mockResolvedValue({ sandbox_mode: false, as_of: null });
+    vi.mocked(getStatus).mockRejectedValue(new Error("no backend"));
+  });
+
+  it("still shows the bets list when only getBetStats fails", async () => {
+    vi.mocked(getBets).mockResolvedValue([
+      {
+        id: 1, match_id: "m1", date: "2026-08-22", home_team: "Arsenal", away_team: "Everton",
+        market: "result_3way", selection: "home", odds: 2.1, stake: 10, outcome: "open",
+        profit_loss: null, source: "from_recommendation", recommendation_snapshot: null, created_at: "now",
+      },
+    ]);
+    vi.mocked(getBetStats).mockRejectedValue(new ApiError("Failed to load bet stats (500)", 500));
+
+    render(<BetTrackerPage />);
+
+    await waitFor(() => expect(screen.getByText(/logged bets/i)).toBeInTheDocument());
+    // the bets list itself rendered even though stats failed
+    await waitFor(() => expect(screen.getByText(/Arsenal v Everton/)).toBeInTheDocument());
+  });
+
+  it("shows a re-authenticate prompt on a 401, not a raw status-code message", async () => {
+    vi.mocked(getBets).mockRejectedValue(new ApiError("Failed to load bets (401)", 401));
+    vi.mocked(getBetStats).mockRejectedValue(new ApiError("Failed to load bet stats (401)", 401));
+
+    render(<BetTrackerPage />);
+
+    await waitFor(() => expect(screen.getByRole("link", { name: /sign in/i })).toBeInTheDocument());
+    expect(screen.queryByText(/401/)).not.toBeInTheDocument();
+  });
+});
