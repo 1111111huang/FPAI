@@ -22,7 +22,7 @@ export function UserMenu() {
 
   return (
     <div className="flex items-center gap-2 text-xs">
-      <span className="truncate text-ink-secondary" title={session.user.email}>
+      <span className="min-w-0 flex-1 truncate text-ink-secondary" title={session.user.email}>
         {session.user.email}
       </span>
       <button
