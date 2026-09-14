@@ -1820,14 +1820,11 @@ function ProbabilityRow({
             Needs {m.targetOdds.toFixed(2)}+ to clear edge
           </span>
         )}
-        {/* Log-bet UI hidden (2026-08-13, W115) -- bet tracking isn't built
-            out enough to surface yet, same call as W106 hiding the Bets nav
-            tab. LogBetButton itself and its backend path are untouched;
-            uncomment below to re-enable once ready.
+        {/* W210 follow-up (2026-09-14): re-enabled -- see Task 3's
+            auth-aware LogBetButton and AppShell's Task 1 sign-in UI. */}
         {matchId && recommendation && !anomalous && (
           <LogBetButton matchId={matchId} recommendation={recommendation} market={m.market} selection={m.selection} />
         )}
-        */}
       </span>
       <span className="text-right font-mono text-ink">{formatPct(m.mlProbability)}</span>
       <span className={`text-right font-mono ${anomalous ? "text-serious" : "text-ink-secondary"}`}>

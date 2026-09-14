@@ -1010,7 +1010,11 @@ describe("MatchAnalysisPage -- cache-first load (W47)", () => {
     expect(screen.queryByText(/to clear edge/)).not.toBeInTheDocument();
   });
 
-  it("W115: does not render a Log bet control -- bet tracking hidden for now", async () => {
+  it("W210 follow-up (W115 re-enable): renders a Log bet control for a direct_bet, non-anomalous market", async () => {
+    // Default the session to authenticated so the real "Log bet" trigger
+    // renders (not LogBetButton's unauthenticated "Sign in to log this
+    // bet" prompt).
+    vi.mocked(useSession).mockReturnValue({ data: { user: {} }, status: "authenticated" } as never);
     vi.mocked(getCachedRecommendation).mockResolvedValue(
       makeRecommendation({
         overall: "direct_bet",
@@ -1030,7 +1034,7 @@ describe("MatchAnalysisPage -- cache-first load (W47)", () => {
     // plain-language summary sentence also mentions the market name -- so
     // wait on the ProbabilityRow's own unique combined text instead.
     await screen.findByText("result_3way · home");
-    expect(screen.queryByText("Log bet")).not.toBeInTheDocument();
+    expect(screen.getByText("Log bet")).toBeInTheDocument();
   });
 });
 

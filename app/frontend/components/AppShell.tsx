@@ -4,7 +4,7 @@ import Image from "next/image";
 import Link from "next/link";
 import { Montserrat } from "next/font/google";
 import { useState, useEffect } from "react";
-import { House, List, ListBullets, MagnifyingGlass, X, type Icon } from "@phosphor-icons/react";
+import { House, List, ListBullets, MagnifyingGlass, Ticket, X, type Icon } from "@phosphor-icons/react";
 
 import { getFixtures } from "@/lib/api";
 import type { Fixture } from "@/lib/types";
@@ -17,10 +17,9 @@ function matchAnalysisHref(f: Fixture) {
   )}&date=${f.utc_date.slice(0, 10)}&league=${encodeURIComponent(f.competition ?? "E0")}`;
 }
 
-// Bets tab hidden from nav (2026-08-13) -- feature not ready yet. The route
-// (/bets, BetTracker.tsx) and its active="bets" AppShell state are left
-// intact, just unlinked -- flip this back to re-surface it, no other change
-// needed.
+// W210 follow-up (2026-09-14): re-enabled -- real per-user auth, a visible
+// signed-in/sign-out UI (Task 1), and auth-aware failure states (Tasks 2-6)
+// close the gaps that motivated hiding this on 2026-08-13 (W106).
 const NAV_ITEMS: {
   href: string;
   label: string;
@@ -29,6 +28,7 @@ const NAV_ITEMS: {
 }[] = [
   { href: "/", label: "Daily Edges", key: "dashboard", icon: House },
   { href: "/matches", label: "All Matches", key: "matches", icon: ListBullets },
+  { href: "/bets", label: "Bets", key: "bets", icon: Ticket },
 ];
 
 /** Rebrand (2026-08-13): FPAI -> Oddsey. Was a hand-recreated inline SVG

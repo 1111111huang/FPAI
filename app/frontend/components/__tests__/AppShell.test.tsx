@@ -136,16 +136,19 @@ describe("AppShell", () => {
     // before this change and isn't inside an <aside> -- scope the query so
     // this doesn't pass by accident.
     const desktopNav = container.querySelector("aside nav");
-    expect(desktopNav?.querySelectorAll("svg").length).toBe(2);
+    // W210 follow-up: NAV_ITEMS grew to 3 (Bets re-added).
+    expect(desktopNav?.querySelectorAll("svg").length).toBe(3);
   });
 
-  it("does not render a Bets nav link -- feature not ready yet (hidden 2026-08-13)", () => {
+  it("W210 follow-up: renders a Bets nav link -- re-enabled now that auth UX gaps are closed", () => {
     render(
       <AppShell active="dashboard">
         <p>page content</p>
       </AppShell>
     );
-    expect(screen.queryByText("Bets")).not.toBeInTheDocument();
+    // Same double-render pattern as the other nav labels (desktop sidebar +
+    // mobile bottom tab bar).
+    expect(screen.getAllByText("Bets")).toHaveLength(2);
   });
 
   it("W114: renders a bottom tab bar with the same nav items, for small screens", () => {
@@ -156,7 +159,8 @@ describe("AppShell", () => {
     );
     const bottomNav = container.querySelector("nav.fixed");
     expect(bottomNav).not.toBeNull();
-    expect(bottomNav?.querySelectorAll("a")).toHaveLength(2);
+    // W210 follow-up: NAV_ITEMS grew to 3 (Bets re-added).
+    expect(bottomNav?.querySelectorAll("a")).toHaveLength(3);
   });
 
   it("does not fetch fixtures on mount -- only once the search input is focused", async () => {
