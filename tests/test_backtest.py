@@ -416,6 +416,29 @@ def test_backtest_harness_stratified_sample_balances_result_categories():
     assert counts.to_dict() == {"home": 3, "draw": 3, "away": 3}
 
 
+def test_backtest_harness_stratified_sample_balances_season_tertile_within_result():
+    """A110: stratification must also balance season phase within a result
+    category -- early-season cold-start rows (newly-promoted teams, no
+    current-season rolling history) and late-season dead-rubber/motivation
+    effects behave differently from mid-season form. Pre-A110 (outcome-only
+    stratification), a same-result sample could cluster entirely in one part
+    of the season by chance; assert it can't."""
+    harness = BacktestHarness(config=_make_config())
+    rows = (
+        [_row(match_id=f"early{i}", fthg=2, ftag=0, date=pd.Timestamp("2025-08-01") + pd.Timedelta(days=i)) for i in range(6)]
+        + [_row(match_id=f"mid{i}", fthg=2, ftag=0, date=pd.Timestamp("2025-12-01") + pd.Timedelta(days=i)) for i in range(6)]
+        + [_row(match_id=f"late{i}", fthg=2, ftag=0, date=pd.Timestamp("2026-04-01") + pd.Timedelta(days=i)) for i in range(6)]
+    )
+    df = pd.DataFrame(rows)
+    sampled = harness._stratified_sample(df, sample=9)
+    assert len(sampled) <= 9
+
+    phase = sampled["match_id"].str.extract(r"^([a-z]+)\d")[0]
+    counts = phase.value_counts()
+    assert set(counts.index) == {"early", "mid", "late"}
+    assert counts.to_dict() == {"early": 3, "mid": 3, "late": 3}
+
+
 def test_match_in_test_split_is_deterministic():
     match_id = "78da66d1356eb6254a5015ec90ffb819a5bd751ca41ba411cf0f6a618663932d"
     assert match_in_test_split(match_id, 0.2) == match_in_test_split(match_id, 0.2)

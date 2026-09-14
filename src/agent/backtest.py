@@ -344,11 +344,22 @@ class BacktestHarness:
 
     @staticmethod
     def _stratified_sample(matches: pd.DataFrame, sample: int) -> pd.DataFrame:
-        """Stratify by actual result (home/draw/away) — the only outcome dimension
-        known before running the agent. ('bet/no-bet' is the agent's own output,
-        so it can't be used to pre-stratify the input sample.) Seeded for
-        reproducibility so agent-compare (A16) can re-run different configs over
-        the identical sample.
+        """Stratify by (actual result x season tertile) — the only outcome
+        dimension known before running the agent ('bet/no-bet' is the agent's
+        own output, so it can't be used to pre-stratify the input sample),
+        crossed with early/mid/late season thirds of the matched date range.
+
+        A110: season phase matters and isn't otherwise modeled at the sample
+        level — early-season rows include newly-promoted teams with no
+        current-season rolling history (genuine cold-start), and late-season
+        rows include dead rubbers/differential motivation once teams are safe
+        or eliminated. Per-match fatigue itself is already a real feature
+        (CTX_*_REST_DAYS, src/features/feature_factory.py) fed to the ML
+        layer — this stratification is only about not letting a small
+        --sample cluster entirely in one part of the season by hash/sample
+        luck, same motivation as the pre-existing result stratification.
+        Seeded for reproducibility so agent-compare (A16) can re-run different
+        configs over the identical sample.
         """
 
         def _result(row: pd.Series) -> str:
@@ -358,8 +369,18 @@ class BacktestHarness:
                 return "away"
             return "draw"
 
+        def _season_tertile(dates: pd.Series) -> pd.Series:
+            min_date, max_date = dates.min(), dates.max()
+            span = (max_date - min_date).total_seconds()
+            if span <= 0:
+                return pd.Series(0, index=dates.index)
+            frac = (dates - min_date).dt.total_seconds() / span
+            return (frac * 3).clip(upper=2.999).astype(int)
+
         matches = matches.copy()
-        matches["_stratum"] = matches.apply(_result, axis=1)
+        result = matches.apply(_result, axis=1)
+        tertile = _season_tertile(matches["date"])
+        matches["_stratum"] = result.astype(str) + "_" + tertile.astype(str)
         n_strata = matches["_stratum"].nunique()
         per_stratum = max(1, sample // n_strata)
         sampled = (
