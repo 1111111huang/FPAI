@@ -14,6 +14,7 @@ from unittest.mock import MagicMock, patch
 import pandas as pd
 
 from main import run_agent_snapshot
+from src.agent.backtest import match_in_test_split
 from src.agent.snapshot_store import league_base_dir
 
 
@@ -129,3 +130,71 @@ def test_default_refresh_model_false_still_skips_and_uses_full_record():
     caller's behavior (record mode, skip-if-complete) is unchanged."""
     import inspect
     assert inspect.signature(run_agent_snapshot).parameters["refresh_model"].default is False
+
+
+# ---------------------------------------------------------------------------
+# A111: --split lets recording target only the agent's own train or test
+# partition (BacktestHarness's match_in_test_split, A40) instead of always
+# recording every match in the date range -- needed so a snapshot-recording
+# pass can be scoped to (and its Tavily-call cost budgeted for) just the
+# held-out test split, without also touching the much larger train split.
+# ---------------------------------------------------------------------------
+
+def test_split_test_only_processes_test_split_matches(tmp_path):
+    # Two match_ids that are known (via match_in_test_split's stable hash) to
+    # land on opposite sides of the default 0.2 test_fraction.
+    ids = [f"m{i}" for i in range(20)]
+    test_ids = [m for m in ids if match_in_test_split(m, 0.2)]
+    train_ids = [m for m in ids if not match_in_test_split(m, 0.2)]
+    assert test_ids and train_ids  # sanity: fixture actually covers both sides
+
+    fake_df = pd.DataFrame({
+        "match_id": ids, "league": ["SWE"] * len(ids),
+        "date": [pd.Timestamp("2026-07-01")] * len(ids),
+        "home_team": ["AIK"] * len(ids), "away_team": ["GAIS"] * len(ids),
+        "odds_h": [2.0] * len(ids), "odds_d": [3.2] * len(ids), "odds_a": [3.5] * len(ids),
+    })
+    mock_conn = MagicMock()
+    mock_conn.execute.return_value.fetchdf.return_value = fake_df
+    processed = []
+
+    with patch("src.utils.db_manager.DuckDBManager") as MockDB, \
+         patch("src.agent.graph.run_deterministic_pipeline", side_effect=lambda info: processed.append(info) or {}), \
+         patch("src.agent.tools.configure_snapshot_store"), \
+         patch("main.DEFAULT_BASE_DIR", tmp_path):
+        MockDB.return_value.connection.return_value.__enter__.return_value = mock_conn
+
+        run_agent_snapshot(
+            from_date="2026-07-01", to_date="2026-07-02", league="SWE",
+            config_path=None, dry_run=False, split="test",
+        )
+
+    processed_ids = {p["match_id"] for p in processed} if processed and "match_id" in processed[0] else None
+    # match_info doesn't carry match_id today -- assert via count instead,
+    # which is still a real, meaningful regression guard on the filter.
+    assert len(processed) == len(test_ids)
+
+
+def test_split_all_is_the_default_and_processes_every_match(tmp_path):
+    import inspect
+    assert inspect.signature(run_agent_snapshot).parameters["split"].default == "all"
+
+    ids = [f"m{i}" for i in range(10)]
+    fake_df = pd.DataFrame({
+        "match_id": ids, "league": ["SWE"] * len(ids),
+        "date": [pd.Timestamp("2026-07-01")] * len(ids),
+        "home_team": ["AIK"] * len(ids), "away_team": ["GAIS"] * len(ids),
+        "odds_h": [2.0] * len(ids), "odds_d": [3.2] * len(ids), "odds_a": [3.5] * len(ids),
+    })
+    mock_conn = MagicMock()
+    mock_conn.execute.return_value.fetchdf.return_value = fake_df
+
+    with patch("src.utils.db_manager.DuckDBManager") as MockDB, \
+         patch("src.agent.graph.run_deterministic_pipeline", return_value={}) as mock_run, \
+         patch("src.agent.tools.configure_snapshot_store"), \
+         patch("main.DEFAULT_BASE_DIR", tmp_path):
+        MockDB.return_value.connection.return_value.__enter__.return_value = mock_conn
+
+        run_agent_snapshot(from_date="2026-07-01", to_date="2026-07-02", league="SWE", config_path=None, dry_run=False)
+
+    assert mock_run.call_count == len(ids)

@@ -349,6 +349,8 @@ def _build_parser() -> argparse.ArgumentParser:
              "forecast_international live. Use after retraining a model to refresh a snapshot corpus's "
              "forecasts without re-spending Tavily quota on unchanged historical research.",
     )
+    agent_snapshot_parser.add_argument("--split", choices=["all", "train", "test"], default="all", help="Restrict recording to the agent's own stable train/test partition (A40) instead of every match in range.")
+    agent_snapshot_parser.add_argument("--test-fraction", type=float, default=0.2, help="Fraction of matches (by match_id hash) treated as the 'test' split. Only used when --split != all.")
 
     # agent-backtest
     agent_backtest_parser = subparsers.add_parser(
@@ -1331,6 +1333,8 @@ def run_agent_snapshot(
     config_path: str | None,
     dry_run: bool,
     refresh_model: bool = False,
+    split: str = "all",
+    test_fraction: float = 0.2,
 ) -> None:
     """Drive the deterministic pipeline (resolve_competition/research/forecast,
     no LLM) over historical matches to build a snapshot corpus (A11).
@@ -1375,6 +1379,11 @@ def run_agent_snapshot(
     query += " ORDER BY date"
     with db.connection() as conn:
         matches = conn.execute(query, params).fetchdf()
+
+    if split != "all":
+        from src.agent.backtest import match_in_test_split
+        is_test = matches["match_id"].apply(lambda m: match_in_test_split(m, test_fraction))
+        matches = matches[is_test if split == "test" else ~is_test].reset_index(drop=True)
 
     base_dir = DEFAULT_BASE_DIR
     to_process = []
@@ -2102,6 +2111,8 @@ def main() -> None:
             config_path=args.config,
             dry_run=args.dry_run,
             refresh_model=args.refresh_model,
+            split=args.split,
+            test_fraction=args.test_fraction,
         )
     elif args.command == "agent-backtest":
         run_agent_backtest(
