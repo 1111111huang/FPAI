@@ -1324,8 +1324,16 @@ async def get_cached_recommendation(
     return validate_and_degrade(entry.recommendation)
 
 
+_user_store_singleton: UserStore | None = None
+
+
 def get_user_store() -> UserStore:
-    return UserStore()
+    """FastAPI dependency -- overridden in tests via app.dependency_overrides.
+    Module-level singleton, matching bets.get_bet_tracker's own pattern."""
+    global _user_store_singleton
+    if _user_store_singleton is None:
+        _user_store_singleton = UserStore()
+    return _user_store_singleton
 
 
 @app.post("/api/bets/from-recommendation")

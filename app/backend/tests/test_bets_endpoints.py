@@ -171,6 +171,10 @@ def test_list_bets_requires_user_auth_and_filters_by_user(tmp_path: Path):
         source="manual", recommendation_snapshot=None, user_id=2,
     )
     app.dependency_overrides[get_current_user_email] = lambda: "user1@gmail.com"
+    # Code review follow-up: also override get_user_store -- otherwise this
+    # falls through to a real UserStore() and writes into the repo-root
+    # data/users.db on every test run.
+    app.dependency_overrides[get_user_store] = lambda: UserStore(db_path=tmp_path / "users.db")
     try:
         with TestClient(app) as client:
             response = client.get("/api/bets")
@@ -181,6 +185,7 @@ def test_list_bets_requires_user_auth_and_filters_by_user(tmp_path: Path):
         # next test.
     finally:
         app.dependency_overrides.pop(get_current_user_email, None)
+        app.dependency_overrides.pop(get_user_store, None)
 
 
 def test_list_bets_401s_without_the_internal_secret(tmp_path: Path):
