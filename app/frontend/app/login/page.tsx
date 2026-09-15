@@ -1,12 +1,26 @@
 "use client";
 
 import { Suspense, useEffect } from "react";
+import Image from "next/image";
 import { useRouter, useSearchParams } from "next/navigation";
 import { signIn, useSession } from "next-auth/react";
 
 const ERROR_MESSAGES: Record<string, string> = {
   AccessDenied: "That Google account is not authorized for this app. Ask the owner to add it to the allowlist.",
 };
+
+// Standard 4-color Google "G" mark -- inlined rather than fetched (no
+// external-image dependency for a single small icon).
+function GoogleIcon() {
+  return (
+    <svg viewBox="0 0 48 48" width="20" height="20" aria-hidden="true">
+      <path fill="#FFC107" d="M43.611,20.083H42V20H24v8h11.303c-1.649,4.657-6.08,8-11.303,8c-6.627,0-12-5.373-12-12c0-6.627,5.373-12,12-12c3.059,0,5.842,1.154,7.961,3.039l5.657-5.657C34.046,6.053,29.268,4,24,4C12.955,4,4,12.955,4,24c0,11.045,8.955,20,20,20c11.045,0,20-8.955,20-20C44,22.659,43.862,21.35,43.611,20.083z" />
+      <path fill="#FF3D00" d="M6.306,14.691l6.571,4.819C14.655,15.108,18.961,12,24,12c3.059,0,5.842,1.154,7.961,3.039l5.657-5.657C34.046,6.053,29.268,4,24,4C16.318,4,9.656,8.337,6.306,14.691z" />
+      <path fill="#4CAF50" d="M24,44c5.166,0,9.86-1.977,13.409-5.192l-6.19-5.238C29.211,35.091,26.715,36,24,36c-5.202,0-9.619-3.317-11.283-7.946l-6.522,5.025C9.505,39.556,16.227,44,24,44z" />
+      <path fill="#1976D2" d="M43.611,20.083H42V20H24v8h11.303c-0.792,2.237-2.231,4.166-4.087,5.571c0.001-0.001,0.002-0.001,0.003-0.002l6.19,5.238C36.971,39.205,44,34,44,24C44,22.659,43.862,21.35,43.611,20.083z" />
+    </svg>
+  );
+}
 
 function LoginPageInner() {
   const { status } = useSession();
@@ -23,20 +37,37 @@ function LoginPageInner() {
   if (status === "authenticated") return null;
 
   return (
-    <div className="flex flex-col items-center mt-16 gap-4">
-      <h1 className="text-lg font-medium text-ink">Sign in</h1>
-      {error && (
-        <p className="max-w-sm text-center text-sm text-serious">
-          {ERROR_MESSAGES[error] ?? "Sign-in failed. Please try again."}
+    <div className="flex min-h-[calc(100vh-4rem)] items-center justify-center px-4">
+      {/* W217: redesigned as a self-contained centered card, matching direct
+          user feedback ("a focused window ... not a bare page") -- there's
+          no live page left to blur behind it by the time this route
+          renders (a real modal-over-the-app would mean replacing the
+          middleware page-redirect with a client-side dialog, a bigger
+          architecture change than asked for here), so this is the page
+          itself redesigned to read as that focused window on its own. */}
+      <div className="w-full max-w-sm rounded-2xl border border-border bg-surface p-8 text-center shadow-[0_0_60px_-15px_var(--accent)]">
+        <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-full border-2 border-accent">
+          <Image src="/oddsey-logo.png" width={40} height={40} alt="" priority />
+        </div>
+        <h1 className="mt-5 text-xl font-semibold text-ink">Sign in to Oddsey</h1>
+        <p className="mt-2 text-sm text-ink-secondary">Track your edges and log your bets across sessions.</p>
+        {error && (
+          <p className="mt-4 text-sm text-serious">
+            {ERROR_MESSAGES[error] ?? "Sign-in failed. Please try again."}
+          </p>
+        )}
+        <button
+          type="button"
+          onClick={() => signIn("google", { callbackUrl })}
+          className="mt-6 flex w-full items-center justify-center gap-3 rounded-full bg-white px-4 py-3 text-sm font-semibold text-black shadow-lg transition hover:bg-white/90"
+        >
+          <GoogleIcon />
+          Continue with Google
+        </button>
+        <p className="mt-4 text-xs text-ink-secondary">
+          By continuing you agree to Oddsey&apos;s <span className="font-medium text-ink">Terms</span>
         </p>
-      )}
-      <button
-        type="button"
-        onClick={() => signIn("google", { callbackUrl })}
-        className="rounded-md border border-accent px-4 py-2 text-sm font-medium text-accent hover:bg-accent/10"
-      >
-        Sign in with Google
-      </button>
+      </div>
     </div>
   );
 }

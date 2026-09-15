@@ -29,13 +29,13 @@ describe("LoginPage", () => {
   it("passes the callbackUrl query param through to signIn instead of a hardcoded path", async () => {
     mockUseSearchParams.mockReturnValue(new URLSearchParams("callbackUrl=%2Fbets%2Fsomething"));
     render(<LoginPage />);
-    screen.getByRole("button", { name: /sign in with google/i }).click();
+    screen.getByRole("button", { name: /continue with google/i }).click();
     expect(mockSignIn).toHaveBeenCalledWith("google", { callbackUrl: "/bets/something" });
   });
 
   it("falls back to /bets when there is no callbackUrl param", () => {
     render(<LoginPage />);
-    screen.getByRole("button", { name: /sign in with google/i }).click();
+    screen.getByRole("button", { name: /continue with google/i }).click();
     expect(mockSignIn).toHaveBeenCalledWith("google", { callbackUrl: "/bets" });
   });
 
