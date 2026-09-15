@@ -7,64 +7,27 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
-import { CaretDown, MagnifyingGlass, Plus, WarningCircle } from "@phosphor-icons/react";
+import { MagnifyingGlass, WarningCircle } from "@phosphor-icons/react";
 
 import { ApiError, deleteBet, getBetStats, getBets, getFixtures, logBetManual, settleOpenBets, updateBet } from "@/lib/api";
 import type { Bet, BetStats, Fixture } from "@/lib/types";
 import { useSandboxAsOf } from "@/lib/useSandboxAsOf";
 import { AppShell } from "./AppShell";
 import { LEAGUE_LABEL } from "@/lib/dashboardMetrics";
-import { addDays, dateString, ErrorState, TeamBadge, marketLabel } from "./MatchUI";
+import { addDays, dateString, ErrorState, TeamBadge, marketLabel, matchStatusLabel } from "./MatchUI";
+import { LogBetModal, MARKET_SELECTIONS } from "./LogBetModal";
 
 function formatDate(iso: string): string {
   return iso.slice(0, 10);
 }
-
-// W217: a readable "Sat, 22 Aug 2026" for the selected-fixture header --
-// formatDate()'s plain "2026-08-22" is fine for the compact search-result
-// rows but reads as an ID, not a date, in the more prominent header card.
-function formatDateLong(iso: string): string {
-  return new Date(iso).toLocaleDateString(undefined, { weekday: "short", day: "numeric", month: "short", year: "numeric" });
-}
-
-// W210 follow-up: the only markets/selections settlement.py's market_correct()
-// can ever resolve (src/agent/market_resolution.py, RESOLVABLE_MARKETS).
-// A freeform text field let a user log a bet with a market/selection that
-// could never programmatically settle -- it would just sit "open" forever
-// with no error anywhere. Constraining to exactly these values closes that.
-const MARKET_SELECTIONS: Record<string, { value: string; label: string }[]> = {
-  result_3way: [
-    { value: "home", label: "Home" },
-    { value: "draw", label: "Draw" },
-    { value: "away", label: "Away" },
-  ],
-  btts: [
-    { value: "yes", label: "Yes" },
-    { value: "no", label: "No" },
-  ],
-  total_goals: [
-    { value: "over_2.5", label: "Over 2.5" },
-    { value: "under_2.5", label: "Under 2.5" },
-  ],
-  total_corners: [
-    { value: "over_9.5", label: "Over 9.5" },
-    { value: "under_9.5", label: "Under 9.5" },
-  ],
-};
 
 function ManualBetForm({ onLogged, onSessionExpired }: { onLogged: () => void; onSessionExpired: () => void }) {
   const { asOf, sandboxMode } = useSandboxAsOf();
   const [query, setQuery] = useState("");
   const [fixtures, setFixtures] = useState<Fixture[] | null>(null);
   const [selected, setSelected] = useState<Fixture | null>(null);
-  const [market, setMarket] = useState("result_3way");
-  const [selection, setSelection] = useState("");
-  const [odds, setOdds] = useState("");
-  const [stake, setStake] = useState("");
-  const [status, setStatus] = useState<"idle" | "saving" | "error">("idle");
-  const [errorMsg, setErrorMsg] = useState("");
-  // W52: distinct from `errorMsg` (submit-path errors) -- this tracks the
-  // fixture *search* fetch itself failing (e.g. the football-data.org
+  // W52: distinct from a submit-path error (now owned by LogBetModal itself)
+  // -- this tracks the fixture *search* fetch itself failing (e.g. the football-data.org
   // rate-limit degrading to a backend 503). Previously
   // `.catch(() => setFixtures([]))` silently swallowed this into a plain
   // empty fixture list, indistinguishable from a genuine "no matches"
@@ -118,50 +81,6 @@ function ManualBetForm({ onLogged, onSessionExpired }: { onLogged: () => void; o
       .slice(0, 8);
   }, [fixtures, query]);
 
-  // W217: stake * odds -- total return if the bet wins (stake included, not
-  // just profit), matching a bettor's usual mental model of "what do I get
-  // back." "—" until both fields parse to a real positive number.
-  const parsedOddsPreview = parseFloat(odds);
-  const parsedStakePreview = parseFloat(stake);
-  const potentialReturn =
-    parsedOddsPreview > 0 && parsedStakePreview > 0
-      ? (parsedOddsPreview * parsedStakePreview).toFixed(2)
-      : null;
-
-  async function submit() {
-    if (!selected) return;
-    const parsedOdds = parseFloat(odds);
-    const parsedStake = parseFloat(stake);
-    if (!selection.trim() || !parsedOdds || parsedOdds <= 1 || !parsedStake || parsedStake <= 0) {
-      setStatus("error");
-      setErrorMsg("Fill in selection, a valid odds (>1), and a stake (>0).");
-      return;
-    }
-    setStatus("saving");
-    try {
-      await logBetManual({
-        match_id: selected.match_id, date: formatDate(selected.utc_date),
-        home_team: selected.home_team, away_team: selected.away_team,
-        market, selection, odds: parsedOdds, stake: parsedStake,
-      });
-      setSelected(null);
-      setQuery("");
-      setSelection("");
-      setOdds("");
-      setStake("");
-      setStatus("idle");
-      onLogged();
-    } catch (err) {
-      if (err instanceof ApiError && err.status === 401) {
-        setStatus("idle");
-        onSessionExpired();
-        return;
-      }
-      setStatus("error");
-      setErrorMsg(err instanceof ApiError ? err.message : "Could not log bet.");
-    }
-  }
-
   return (
     <div className="rounded-lg border border-border p-4">
       <h2 className="text-sm font-semibold uppercase tracking-wide text-muted">Log a bet manually</h2>
@@ -210,111 +129,35 @@ function ManualBetForm({ onLogged, onSessionExpired }: { onLogged: () => void; o
           )}
         </>
       ) : (
-        <div className="mt-3 flex flex-col gap-4">
-          {/* W217: direct user feedback -- a nicer-looking, more legible
-              selected-fixture header (team badges + real weekday/date,
-              boxed) instead of one plain text line, matching ManualBetForm's
-              search-result rows (which already show TeamBadge circles) --
-              the confirmed fixture deserves at least as much visual weight
-              as an unpicked search row did. */}
-          <div className="flex items-center justify-between gap-3 rounded-xl border border-border bg-page/60 p-3">
-            <div className="flex items-center gap-3">
-              <span className="flex -space-x-2">
-                <TeamBadge name={selected.home_team} size="lg" />
-                <TeamBadge name={selected.away_team} size="lg" />
-              </span>
-              <div>
-                <div className="text-base font-semibold text-ink">
-                  {selected.home_team} v {selected.away_team}
-                </div>
-                <div className="text-xs text-ink-secondary">{formatDateLong(selected.utc_date)}</div>
-              </div>
-            </div>
-            <button type="button" onClick={() => setSelected(null)} className="shrink-0 text-xs font-medium text-accent">
-              Change fixture
-            </button>
-          </div>
-          <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-            <div>
-              <label htmlFor="manual-bet-market" className="mb-1 block text-xs text-ink-secondary">Market</label>
-              <div className="relative">
-                <select
-                  id="manual-bet-market"
-                  value={market}
-                  onChange={(e) => {
-                    setMarket(e.target.value);
-                    setSelection(""); // force a fresh, valid choice for the new market
-                  }}
-                  className="w-full appearance-none rounded-lg border border-border bg-surface px-3 py-2 pr-8 text-sm text-ink outline-none focus:border-accent"
-                >
-                  {Object.keys(MARKET_SELECTIONS).map((m) => (
-                    <option key={m} value={m}>{marketLabel(m).label}</option>
-                  ))}
-                </select>
-                <CaretDown size={13} className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-muted" />
-              </div>
-            </div>
-            <div>
-              <label htmlFor="manual-bet-selection" className="mb-1 block text-xs text-ink-secondary">Outcome</label>
-              <div className="relative">
-                <select
-                  id="manual-bet-selection"
-                  value={selection}
-                  onChange={(e) => setSelection(e.target.value)}
-                  className="w-full appearance-none rounded-lg border border-border bg-surface px-3 py-2 pr-8 text-sm text-ink outline-none focus:border-accent"
-                >
-                  <option value="">Select outcome…</option>
-                  {MARKET_SELECTIONS[market]?.map((opt) => (
-                    <option key={opt.value} value={opt.value}>{opt.label}</option>
-                  ))}
-                </select>
-                <CaretDown size={13} className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-muted" />
-              </div>
-            </div>
-            <div>
-              <label htmlFor="manual-bet-odds" className="mb-1 block text-xs text-ink-secondary">Odds</label>
-              <input
-                id="manual-bet-odds"
-                value={odds}
-                onChange={(e) => setOdds(e.target.value)}
-                placeholder="0.00"
-                inputMode="decimal"
-                className="w-full rounded-lg border border-border bg-surface px-3 py-2 text-sm text-ink outline-none focus:border-accent"
-              />
-            </div>
-            <div>
-              <label htmlFor="manual-bet-stake" className="mb-1 block text-xs text-ink-secondary">Stake</label>
-              <input
-                id="manual-bet-stake"
-                value={stake}
-                onChange={(e) => setStake(e.target.value)}
-                placeholder="0.00"
-                inputMode="decimal"
-                className="w-full rounded-lg border border-border bg-surface px-3 py-2 text-sm text-ink outline-none focus:border-accent"
-              />
-            </div>
-          </div>
-          {status === "error" && (
-            <p className="flex items-center gap-1.5 text-xs text-serious">
-              <WarningCircle weight="fill" size={13} />
-              {errorMsg}
-            </p>
-          )}
-          <div className="flex items-center justify-between">
-            <span className="text-sm text-ink-secondary">
-              Potential return <span className="font-mono text-ink">{potentialReturn ?? "—"}</span>
-            </span>
-            <button
-              type="button"
-              onClick={submit}
-              disabled={status === "saving"}
-              className="flex items-center gap-1.5 rounded-full bg-accent px-4 py-2 text-sm font-semibold text-white transition hover:bg-accent/90 disabled:opacity-50"
-            >
-              <Plus size={14} weight="bold" />
-              {status === "saving" ? "Logging…" : "Log bet"}
-            </button>
-          </div>
-        </div>
+        <LogBetModal
+          open
+          onClose={() => setSelected(null)}
+          homeTeam={selected.home_team}
+          awayTeam={selected.away_team}
+          statusLabel={matchStatusLabel(selected.utc_date, selected.status === "FINISHED", asOf, sandboxMode)}
+          locked={false}
+          market="result_3way"
+          selection=""
+          odds={null}
+          onSubmit={async ({ market, selection, odds, stake }) => {
+            try {
+              await logBetManual({
+                match_id: selected.match_id, date: formatDate(selected.utc_date),
+                home_team: selected.home_team, away_team: selected.away_team,
+                market, selection, odds, stake,
+              });
+              setSelected(null);
+              setQuery("");
+              onLogged();
+            } catch (err) {
+              if (err instanceof ApiError && err.status === 401) {
+                onSessionExpired();
+                return;
+              }
+              throw err; // LogBetModal's own catch shows this inline
+            }
+          }}
+        />
       )}
     </div>
   );

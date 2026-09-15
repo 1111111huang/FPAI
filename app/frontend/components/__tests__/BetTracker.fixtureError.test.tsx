@@ -347,11 +347,15 @@ describe("ManualBetForm constrains market/selection to resolvable values (W210 f
     const user = userEvent.setup();
     await selectFixture(user);
 
-    const marketSelect = screen.getByLabelText(/market/i);
+    // Anchored (^market$/^pick$) rather than a loose /market/i -- BetRow's
+    // own edit form (W216, unrelated) has its own "Edit market: ..." labels
+    // that a loose match could ambiguously pick up if a bet row were also
+    // rendered, matching MatchUI.test.tsx's established pattern.
+    const marketSelect = screen.getByLabelText(/^market$/i);
     expect(marketSelect.tagName).toBe("SELECT");
     await user.selectOptions(marketSelect, "btts");
 
-    const selectionSelect = screen.getByLabelText(/outcome/i);
+    const selectionSelect = screen.getByLabelText(/^pick$/i);
     expect(selectionSelect.tagName).toBe("SELECT");
     const options = Array.from(selectionSelect.querySelectorAll("option")).map((o) => o.textContent);
     expect(options).toEqual(expect.arrayContaining(["Yes", "No"]));
@@ -362,8 +366,8 @@ describe("ManualBetForm constrains market/selection to resolvable values (W210 f
     const user = userEvent.setup();
     await selectFixture(user);
 
-    const marketSelect = screen.getByLabelText(/market/i);
-    const selectionSelect = screen.getByLabelText<HTMLSelectElement>(/outcome/i);
+    const marketSelect = screen.getByLabelText(/^market$/i);
+    const selectionSelect = screen.getByLabelText<HTMLSelectElement>(/^pick$/i);
     await user.selectOptions(marketSelect, "result_3way");
     await user.selectOptions(selectionSelect, "away");
     expect(selectionSelect.value).toBe("away");
