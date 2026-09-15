@@ -40,6 +40,7 @@ import {
 import {
   ApiError,
   generateRecommendation,
+  getBets,
   getCachedRecommendation,
   getFixtures,
   logBetFromRecommendation,
@@ -1873,10 +1874,12 @@ function ProbabilityRow({
   m,
   matchId,
   recommendation,
+  alreadyLogged = false,
 }: {
   m: MarketRec;
   matchId?: string;
   recommendation?: MatchRecommendationOut;
+  alreadyLogged?: boolean;
 }) {
   const anomalous = isAnomalousDirectBet(m);
   const s = STATUS_META[m.recommendationType];
@@ -1902,7 +1905,13 @@ function ProbabilityRow({
         {/* W210 follow-up (2026-09-14): re-enabled -- see Task 3's
             auth-aware LogBetButton and AppShell's Task 1 sign-in UI. */}
         {matchId && recommendation && !anomalous && (
-          <LogBetButton matchId={matchId} recommendation={recommendation} market={m.market} selection={m.selection} />
+          <span className="flex items-center gap-1.5">
+            <LogBetButton matchId={matchId} recommendation={recommendation} market={m.market} selection={m.selection} />
+            {/* W215: a warning, not a block -- a genuinely different
+                real-world wager on the same market is still plausible, so
+                LogBetButton stays fully enabled either way. */}
+            {alreadyLogged && <span className="text-[10px] text-muted">(already logged)</span>}
+          </span>
         )}
       </span>
       <span className="text-right font-mono text-ink">{formatPct(m.mlProbability)}</span>
@@ -2037,6 +2046,34 @@ export function MatchAnalysisPage({
   const [rawRecommendation, setRawRecommendation] = useState<MatchRecommendationOut | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const { status } = useSession();
+  const [loggedKeys, setLoggedKeys] = useState<Set<string>>(new Set());
+
+  // W215: best-effort duplicate-bet warning -- fetch the signed-in user's
+  // bets once and flag any market/selection on this match that already has
+  // a logged bet. Unauthenticated visitors never see this fetch attempted
+  // (matches LogBetButton's own auth-gating), and a failure here just means
+  // no "already logged" note shows -- it never blocks the page or logging a
+  // new bet.
+  useEffect(() => {
+    if (status !== "authenticated") {
+      setLoggedKeys(new Set());
+      return;
+    }
+    let cancelled = false;
+    getBets()
+      .then((allBets) => {
+        if (cancelled) return;
+        const keys = allBets.filter((b) => b.match_id === id).map((b) => `${b.market}::${b.selection}`);
+        setLoggedKeys(new Set(keys));
+      })
+      .catch(() => {
+        // Best-effort -- see comment above.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [id, status]);
 
   async function load() {
     setLoading(true);
@@ -2193,6 +2230,7 @@ export function MatchAnalysisPage({
                   m={m}
                   matchId={id}
                   recommendation={rawRecommendation ?? undefined}
+                  alreadyLogged={loggedKeys.has(`${m.market}::${m.selection}`)}
                 />
               ))
             )}

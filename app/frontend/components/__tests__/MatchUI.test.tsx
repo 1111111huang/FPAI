@@ -5,9 +5,9 @@
  * the bet-logging modal's locked-except-stake behavior. Runs headless via
  * Vitest + React Testing Library -- no live backend; @/lib/api is mocked.
  */
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it, test, vi, beforeEach } from "vitest";
+import { afterEach, describe, expect, it, test, vi, beforeEach } from "vitest";
 
 import {
   applyRecommendation,
@@ -40,6 +40,11 @@ vi.mock("@/lib/api", () => ({
   // fixed the same way (see AppShell.test.tsx, MatchUI.race.test.tsx, etc).
   getStatus: vi.fn(),
   getSandboxStatus: vi.fn(),
+  // W215: MatchAnalysisPage now calls getBets() (see risk note in the plan)
+  // once per mount when authenticated, to compute the "already logged"
+  // note. Unmocked, this is a vi.fn() returning undefined -- .then() on
+  // that throws in any authenticated test that renders MatchAnalysisPage.
+  getBets: vi.fn(),
   ApiError: class ApiError extends Error {},
 }));
 
@@ -53,8 +58,25 @@ vi.mock("next-auth/react", () => ({
   signOut: vi.fn(),
 }));
 
+// W215 code review follow-up: a describe block that calls
+// `vi.mocked(useSession).mockReturnValue(...)` (several do, to render the
+// authenticated path) previously left that override in place for every
+// later describe block in this file, in file order -- found live when
+// Task 7's MatchAnalysisPage change started calling getBets() and 10
+// unrelated tests broke, because "MatchCard quick-log control (W215)"'s
+// authenticated override had silently leaked forward to them. Restoring
+// the file's own documented default after every test closes that landmine
+// for every describe block, not just the one that happened to break this
+// time. `mockReturnValue` (not `mockReset()`) -- reset also wipes the
+// factory's default implementation, breaking every test that never
+// overrides `useSession` at all.
+afterEach(() => {
+  vi.mocked(useSession).mockReturnValue({ data: null, status: "unauthenticated" } as never);
+});
+
 import {
   generateRecommendation,
+  getBets,
   getCachedRecommendation,
   getFixtures,
   getSandboxStatus,
@@ -906,6 +928,12 @@ describe("MatchAnalysisPage -- cache-first load (W47)", () => {
     // catches the rejection and just shows "--" in its sidebar footer).
     vi.mocked(getStatus).mockReset().mockRejectedValue(new Error("no backend"));
     vi.mocked(getSandboxStatus).mockReset().mockResolvedValue({ sandbox_mode: false, as_of: null });
+    // W215: useSession's mock return value leaks forward from the earlier
+    // "MatchCard quick-log control (W215)" describe block (never reset
+    // between describes), so every test in this block actually runs with
+    // status "authenticated", not just the ones that explicitly set it --
+    // MatchAnalysisPage's own getBets() effect fires for all of them.
+    vi.mocked(getBets).mockReset().mockResolvedValue([]);
   });
 
   it("on a cache hit, renders the cached recommendation and never calls generateRecommendation", async () => {
@@ -1095,6 +1123,35 @@ describe("MatchAnalysisPage -- cache-first load (W47)", () => {
     // wait on the ProbabilityRow's own unique combined text instead.
     await screen.findByText("result_3way · home");
     expect(screen.getByText("Log bet")).toBeInTheDocument();
+  });
+
+  it("W215: shows an 'Already logged' note next to a market/selection the user already has a bet on", async () => {
+    vi.mocked(useSession).mockReturnValue({ data: { user: {} }, status: "authenticated" } as never);
+    vi.mocked(getBets).mockResolvedValue([
+      {
+        id: 1, match_id: "m1", date: "2026-08-22", home_team: "Arsenal", away_team: "Everton",
+        market: "result_3way", selection: "home", odds: 2.1, stake: 10, outcome: "open",
+        profit_loss: null, source: "manual", recommendation_snapshot: null, created_at: "now",
+      },
+    ]);
+    vi.mocked(getCachedRecommendation).mockResolvedValue(
+      makeRecommendation({
+        overall: "direct_bet",
+        candidates: [
+          { market: "result_3way", selection: "home", recommendation_type: "direct_bet", current_odds: 2.1, min_odds: 0, ml_probability: 0.6, implied_probability: 0.48, value_edge: 0.12 },
+          { market: "result_3way", selection: "draw", recommendation_type: "no_bet", current_odds: 3.2, min_odds: 0, ml_probability: 0.25, implied_probability: 0.31, value_edge: -0.06 },
+        ],
+        recommendation_pick: { market: "result_3way", selection: "home" },
+      })
+    );
+
+    render(<MatchAnalysisPage id="m1" home="Arsenal" away="Everton" date="2026-08-22" />);
+
+    const homeRow = (await screen.findByText("result_3way · home")).closest("div")!;
+    expect(within(homeRow).getByText(/already logged/i)).toBeInTheDocument();
+    // A different market/selection on the same match is unaffected.
+    const drawRow = screen.getByText("result_3way · draw").closest("div")!;
+    expect(within(drawRow).queryByText(/already logged/i)).not.toBeInTheDocument();
   });
 });
 
