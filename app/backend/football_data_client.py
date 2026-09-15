@@ -8,6 +8,7 @@ own field names, respecting the free tier's ~10-requests/minute rate limit.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime, timezone
 import time
 from typing import TYPE_CHECKING, Callable
 
@@ -20,6 +21,16 @@ if TYPE_CHECKING:
     from app.backend.results_cache import ResultsCache
 
 BASE_URL = "https://api.football-data.org/v4"
+
+
+def _utc_today_isoformat() -> str:
+    """Genuine wall-clock UTC 'today' -- split out (not inlined in
+    get_results() below) so tests can monkeypatch it, mirroring main.py's
+    own _current_real_date()/_fixture_cache_now() pattern for exactly the
+    same reason: exercising "is this date today" deterministically without
+    the test's pass/fail depending on which real calendar day it happens to
+    run on."""
+    return datetime.now(timezone.utc).date().isoformat()
 
 
 @dataclass(frozen=True)
@@ -137,7 +148,21 @@ class FootballDataClient:
         # both pass date_from == date_to) -- a genuine multi-day range
         # bypasses the cache entirely rather than splitting it into daily
         # entries, since no caller needs that.
-        if self._results_cache is not None and date_from is not None and date_from == date_to:
+        #
+        # BUG (found live, 2026-09-15): the cache's whole premise --
+        # ResultsCache's own module docstring -- is that a FINISHED result
+        # is immutable once set, so caching forever (no TTL) is safe. True
+        # for a genuinely past day; false for *today*, which keeps
+        # producing newly-finished matches as the day goes on. The first
+        # same-day call (e.g. GET /api/fixtures?date_from=date_to=today,
+        # or a same-day settlement check, W212's auto-settle-on-log
+        # included) permanently cached whatever had finished *so far* --
+        # every match that finished after that first call became invisible
+        # to every later same-day caller, forever, since this cache never
+        # expires anything. Today is the one date that must always bypass
+        # the persistent cache and ask the live API fresh.
+        is_today = date_from is not None and date_from == date_to and date_from == _utc_today_isoformat()
+        if self._results_cache is not None and date_from is not None and date_from == date_to and not is_today:
             cached = self._results_cache.get(competition_code, date_from)
             if cached is not None:
                 return cached

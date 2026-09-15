@@ -117,6 +117,33 @@ def test_get_results_bypasses_the_cache_for_a_multi_day_range(tmp_path: Path) ->
     assert session.get.call_count == 2
 
 
+def test_get_results_bypasses_the_cache_for_today_even_on_a_repeat_call(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Found live, 2026-09-15: a same-day query cached whatever had
+    finished *so far* on the first call and then returned that same stale
+    snapshot forever (this cache has no TTL/expiry at all) -- a match that
+    finished later the same day became permanently invisible to every
+    subsequent same-day caller, both GET /api/fixtures' "Today" section
+    and any same-day settlement check (W212's auto-settle-on-log
+    included). Unlike a genuinely past day (the case the cache's whole
+    "immutable once set" premise actually holds for), today must always
+    hit the live API fresh, repeat call or not."""
+    import app.backend.football_data_client as fdc_module
+
+    monkeypatch.setattr(fdc_module, "_utc_today_isoformat", lambda: "2026-09-15")
+    session = _mock_session([_FINISHED_MATCH])
+    cache = ResultsCache(db_path=tmp_path / "results.db")
+    client = FootballDataClient(api_key="fake-key", session=session, results_cache=cache)
+
+    client.get_results(date_from="2026-09-15", date_to="2026-09-15")
+    client.get_results(date_from="2026-09-15", date_to="2026-09-15")
+
+    assert session.get.call_count == 2
+    # Nothing about "today" is written into the permanent cache either --
+    # a later call for the same date, once it's genuinely yesterday, must
+    # not find a leftover stale entry from when it was still "today".
+    assert cache.get("PL", "2026-09-15") is None
+
+
 def test_get_fixtures_sends_auth_header_and_status_filter() -> None:
     session = _mock_session([])
     client = FootballDataClient(api_key="my-secret-key", session=session)
