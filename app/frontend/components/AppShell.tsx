@@ -151,6 +151,15 @@ export function AppShell({
                 <Link
                   key={item.key}
                   href={item.href}
+                  // Production bug (2026-09-15): Next.js auto-prefetches a
+                  // visible Link on mount -- for "/bets" (middleware-gated,
+                  // W210) that prefetch can fire before the session cookie
+                  // exists (e.g. right after landing on "/" pre-login) and
+                  // cache a "redirect to /login" result client-side, which
+                  // a later real click then replays even once truly signed
+                  // in. Only "/bets" needs this; "/" and "/matches" aren't
+                  // middleware-gated, so nothing to poison there.
+                  prefetch={item.key === "bets" ? false : undefined}
                   className={`flex items-center gap-2 rounded-md px-2 py-1.5 transition-colors duration-150 ${
                     active === item.key ? "bg-surface text-ink" : "text-ink-secondary hover:text-ink"
                   }`}
@@ -272,6 +281,9 @@ export function AppShell({
             <Link
               key={item.key}
               href={item.href}
+              // See the sidebar nav's own Link above -- same pre-login
+              // stale-prefetch-redirect issue applies to this mobile tab.
+              prefetch={item.key === "bets" ? false : undefined}
               className={`flex flex-col items-center gap-0.5 rounded-md px-4 py-1.5 text-[11px] font-medium transition-colors duration-150 ${
                 isActive ? "text-ink" : "text-ink-secondary"
               }`}

@@ -2,7 +2,7 @@
 
 import { Suspense, useEffect } from "react";
 import Image from "next/image";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useSearchParams } from "next/navigation";
 import { signIn, useSession } from "next-auth/react";
 
 const ERROR_MESSAGES: Record<string, string> = {
@@ -24,15 +24,25 @@ function GoogleIcon() {
 
 function LoginPageInner() {
   const { status } = useSession();
-  const router = useRouter();
   const searchParams = useSearchParams();
 
   const callbackUrl = searchParams.get("callbackUrl") ?? "/bets";
   const error = searchParams.get("error");
 
   useEffect(() => {
-    if (status === "authenticated") router.push(callbackUrl);
-  }, [status, router, callbackUrl]);
+    // Production bug (2026-09-15): a plain router.push() here is a soft
+    // client-side navigation, which can replay a *stale* middleware
+    // redirect that Next.js's router cache captured from before sign-in
+    // (e.g. an auto-prefetch of this same callbackUrl fired the moment
+    // AppShell mounted, pre-login, with no session cookie yet) -- the user
+    // is stuck bouncing back to /login forever even though they're really
+    // signed in, confirmed live via a temp middleware debug log showing
+    // req.cookies missing the session cookie entirely on that soft nav. A
+    // hard navigation bypasses the router cache and asks the server fresh,
+    // matching the one thing that reliably worked: manually re-entering
+    // the URL.
+    if (status === "authenticated") window.location.href = callbackUrl;
+  }, [status, callbackUrl]);
 
   if (status === "authenticated") return null;
 
