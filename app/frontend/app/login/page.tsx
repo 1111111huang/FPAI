@@ -1,6 +1,6 @@
 "use client";
 
-import { Suspense, useEffect } from "react";
+import { Suspense, useEffect, useState } from "react";
 import Image from "next/image";
 import { useSearchParams } from "next/navigation";
 import { signIn, useSession } from "next-auth/react";
@@ -8,6 +8,34 @@ import { signIn, useSession } from "next-auth/react";
 const ERROR_MESSAGES: Record<string, string> = {
   AccessDenied: "That Google account is not authorized for this app. Ask the owner to add it to the allowlist.",
 };
+
+// Loop guard (2026-09-15): if the client believes it's signed in but
+// middleware keeps disagreeing (found live -- a real, if now-fixed,
+// production bug), the hard-navigation redirect below would otherwise
+// bounce here, redirect, land back here, forever -- a fast, blinking
+// full-page-reload loop with no visible error, the worst version of this
+// failure. sessionStorage (not state -- must survive the hard reload
+// itself) counts attempts within a short window; past the limit, stop
+// redirecting and show a real message instead of blinking silently.
+const LOOP_GUARD_KEY = "login-redirect-attempts";
+const LOOP_GUARD_MAX_ATTEMPTS = 3;
+const LOOP_GUARD_WINDOW_MS = 10_000;
+
+function recordRedirectAttempt(): boolean {
+  try {
+    const raw = sessionStorage.getItem(LOOP_GUARD_KEY);
+    const now = Date.now();
+    const prev = raw ? (JSON.parse(raw) as { count: number; firstAt: number }) : null;
+    const fresh = !prev || now - prev.firstAt > LOOP_GUARD_WINDOW_MS;
+    const next = fresh ? { count: 1, firstAt: now } : { count: prev.count + 1, firstAt: prev.firstAt };
+    sessionStorage.setItem(LOOP_GUARD_KEY, JSON.stringify(next));
+    return next.count <= LOOP_GUARD_MAX_ATTEMPTS;
+  } catch {
+    // Storage unavailable (private-mode edge case) -- fail open rather than
+    // ever blocking a legitimate sign-in over this.
+    return true;
+  }
+}
 
 // Standard 4-color Google "G" mark -- inlined rather than fetched (no
 // external-image dependency for a single small icon).
@@ -25,11 +53,13 @@ function GoogleIcon() {
 function LoginPageInner() {
   const { status } = useSession();
   const searchParams = useSearchParams();
+  const [loopDetected, setLoopDetected] = useState(false);
 
   const callbackUrl = searchParams.get("callbackUrl") ?? "/bets";
   const error = searchParams.get("error");
 
   useEffect(() => {
+    if (status !== "authenticated") return;
     // Production bug (2026-09-15): a plain router.push() here is a soft
     // client-side navigation, which can replay a *stale* middleware
     // redirect that Next.js's router cache captured from before sign-in
@@ -41,8 +71,26 @@ function LoginPageInner() {
     // hard navigation bypasses the router cache and asks the server fresh,
     // matching the one thing that reliably worked: manually re-entering
     // the URL.
-    if (status === "authenticated") window.location.href = callbackUrl;
+    if (recordRedirectAttempt()) {
+      window.location.href = callbackUrl;
+    } else {
+      setLoopDetected(true);
+    }
   }, [status, callbackUrl]);
+
+  if (loopDetected) {
+    return (
+      <div className="flex min-h-[calc(100vh-4rem)] items-center justify-center px-4">
+        <div className="w-full max-w-sm rounded-2xl border border-border bg-surface p-8 text-center shadow-[0_0_60px_-15px_var(--accent)]">
+          <h1 className="text-xl font-semibold text-ink">Having trouble signing in</h1>
+          <p className="mt-2 text-sm text-ink-secondary">
+            You're signed in, but this page couldn't get you to {callbackUrl}. Try a full page reload, or come back
+            in a moment.
+          </p>
+        </div>
+      </div>
+    );
+  }
 
   if (status === "authenticated") return null;
 

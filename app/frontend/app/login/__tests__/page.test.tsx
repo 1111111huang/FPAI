@@ -21,6 +21,11 @@ describe("LoginPage", () => {
     mockUseSearchParams.mockReset();
     mockUseSearchParams.mockReturnValue(new URLSearchParams());
     mockUseSession.mockReturnValue({ status: "unauthenticated" });
+    // The redirect-loop guard's counter lives in sessionStorage (must
+    // survive a hard reload, so it can't be component state) -- reset
+    // between tests so one test's redirect attempt can't count toward
+    // another's loop-guard threshold.
+    sessionStorage.clear();
   });
 
   it("passes the callbackUrl query param through to signIn instead of a hardcoded path", async () => {
@@ -60,6 +65,27 @@ describe("LoginPage", () => {
     mockUseSession.mockReturnValue({ status: "authenticated" });
     render(<LoginPage />);
     expect(window.location.href).toBe("/bets");
+
+    window.location = originalLocation;
+  });
+
+  it("stops redirecting and shows a message after repeated redirect attempts in a short window", () => {
+    // Simulates arriving here already having bounced past the loop-guard
+    // threshold (e.g. middleware keeps disagreeing with the client's own
+    // session state) -- a real prior incident (2026-09-15) hit exactly
+    // this as a fast, silent, infinite reload loop before this guard
+    // existed.
+    sessionStorage.setItem("login-redirect-attempts", JSON.stringify({ count: 3, firstAt: Date.now() }));
+    const originalLocation = window.location;
+    // @ts-expect-error -- see the test above.
+    delete window.location;
+    window.location = { href: "" } as Location;
+
+    mockUseSession.mockReturnValue({ status: "authenticated" });
+    render(<LoginPage />);
+
+    expect(window.location.href).toBe(""); // never redirected
+    expect(screen.getByText(/having trouble signing in/i)).toBeInTheDocument();
 
     window.location = originalLocation;
   });
