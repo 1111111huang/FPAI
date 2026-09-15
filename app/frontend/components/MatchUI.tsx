@@ -1848,8 +1848,18 @@ export function LogBetButton({
     );
   }
 
+  // W215: restate exactly what's about to be logged -- the odds column is
+  // several cells away in ProbabilityRow's grid (or absent entirely on
+  // MatchCard's quick-log path, Task 6), so nothing here previously
+  // confirmed the actual terms at the point of commitment.
+  const matchedCandidate = recommendation.candidates.find((c) => c.market === market && c.selection === selection);
+  const oddsLabel = matchedCandidate?.current_odds != null ? ` @ ${matchedCandidate.current_odds.toFixed(2)}` : "";
+
   return (
     <span className="flex flex-wrap items-center gap-1.5">
+      <span className="text-xs text-ink-secondary">
+        {selection}{oddsLabel}
+      </span>
       <input
         value={stake}
         onChange={(e) => setStake(e.target.value)}
@@ -1864,6 +1874,20 @@ export function LogBetButton({
         className="text-xs font-medium text-accent disabled:opacity-50"
       >
         {saveStatus === "saving" ? "…" : "Confirm"}
+      </button>
+      <button
+        type="button"
+        onClick={() => {
+          setOpen(false);
+          // A stale error from a previous attempt (bad stake, failed
+          // submit) must not resurface next time this expands -- reopening
+          // should always start from a clean slate.
+          setSaveStatus("idle");
+        }}
+        disabled={saveStatus === "saving"}
+        className="text-xs text-ink-secondary disabled:opacity-50"
+      >
+        Cancel
       </button>
       {saveStatus === "error" && <span className="text-xs text-serious">{errorMsg}</span>}
     </span>

@@ -2,7 +2,7 @@ import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { LogBetButton } from "../MatchUI";
-import { logBetFromRecommendation } from "@/lib/api";
+import { ApiError, logBetFromRecommendation } from "@/lib/api";
 
 const mockUseSession = vi.fn();
 vi.mock("next-auth/react", () => ({
@@ -129,5 +129,51 @@ describe("LogBetButton auth-awareness", () => {
 
     expect(await screen.findByText("Logged")).toBeInTheDocument();
     expect(screen.getByRole("link", { name: /view in bet tracker/i })).toBeInTheDocument();
+  });
+
+  it("shows a Cancel control that collapses back to the plain Log bet link without submitting", async () => {
+    mockUseSession.mockReturnValue({ status: "authenticated", data: { user: { email: "a@b.com" } } });
+    const user = userEvent.setup();
+    render(<LogBetButton matchId="m1" recommendation={recommendation} market="result_3way" selection="home" />);
+
+    await user.click(screen.getByRole("button", { name: "Log bet" }));
+    expect(screen.getByPlaceholderText("Stake")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Cancel" }));
+
+    expect(screen.queryByPlaceholderText("Stake")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Log bet" })).toBeInTheDocument();
+    expect(logBetFromRecommendation).not.toHaveBeenCalled();
+  });
+
+  it("Cancel clears a stale error -- reopening after a failed attempt starts from a clean slate", async () => {
+    mockUseSession.mockReturnValue({ status: "authenticated", data: { user: { email: "a@b.com" } } });
+    vi.mocked(logBetFromRecommendation).mockRejectedValue(new ApiError("Could not log bet.", 500));
+    const user = userEvent.setup();
+    render(<LogBetButton matchId="m1" recommendation={recommendation} market="result_3way" selection="home" />);
+
+    await user.click(screen.getByRole("button", { name: "Log bet" }));
+    await user.type(screen.getByPlaceholderText("Stake"), "10");
+    await user.click(screen.getByRole("button", { name: "Confirm" }));
+    expect(await screen.findByText("Could not log bet.")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Cancel" }));
+    await user.click(screen.getByRole("button", { name: "Log bet" }));
+
+    expect(screen.queryByText("Could not log bet.")).not.toBeInTheDocument();
+  });
+
+  it("restates the market/selection/odds being logged next to the stake input", async () => {
+    mockUseSession.mockReturnValue({ status: "authenticated", data: { user: { email: "a@b.com" } } });
+    const recommendationWithOdds = {
+      ...(recommendation as Record<string, unknown>),
+      candidates: [{ market: "result_3way", selection: "home", recommendation_type: "direct_bet", current_odds: 2.35 }],
+    } as never;
+    const user = userEvent.setup();
+    render(<LogBetButton matchId="m1" recommendation={recommendationWithOdds} market="result_3way" selection="home" />);
+
+    await user.click(screen.getByRole("button", { name: "Log bet" }));
+
+    expect(screen.getByText(/home @ 2\.35/i)).toBeInTheDocument();
   });
 });
