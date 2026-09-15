@@ -16,6 +16,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
+import { usePathname, useSearchParams } from "next/navigation";
 import { useSession } from "next-auth/react";
 import {
   ArrowDown,
@@ -1739,14 +1740,28 @@ export function LogBetButton({
   selection: string;
 }) {
   const { status } = useSession();
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
   const [open, setOpen] = useState(false);
   const [stake, setStake] = useState("");
   const [saveStatus, setSaveStatus] = useState<"idle" | "saving" | "done" | "error">("idle");
   const [errorMsg, setErrorMsg] = useState("");
 
   if (status === "unauthenticated") {
+    // W215: the whole current URL (query params included), not a bare
+    // `/matches/${matchId}` -- MatchAnalysisPage requires home/away/date to
+    // render at all (see its own "Missing match details" guard), so a
+    // truncated callbackUrl stranded a signed-in user on a dead page with
+    // no way back to the bet they were trying to log. Both hooks are
+    // nullable outside a real router context (confirmed empirically: they
+    // don't throw, they return null) -- the `?? `/matches/${matchId}`` /
+    // `searchParams?.toString()` guards keep this correct in that case
+    // rather than only in the browser.
+    const base = pathname ?? `/matches/${matchId}`;
+    const query = searchParams?.toString();
+    const currentUrl = query ? `${base}?${query}` : base;
     return (
-      <Link href={`/login?callbackUrl=${encodeURIComponent(`/matches/${matchId}`)}`} className="text-xs font-medium text-accent">
+      <Link href={`/login?callbackUrl=${encodeURIComponent(currentUrl)}`} className="text-xs font-medium text-accent">
         Sign in to log this bet
       </Link>
     );
