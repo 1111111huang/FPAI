@@ -84,7 +84,7 @@ describe("Dashboard initial-list precompute visibility (W53)", () => {
     // this test. Scoped to the card's own <button> (not just screen-wide)
     // since DashboardRail's legend independently renders "Direct Bet" too --
     // this keeps the assertion specific to the card's own status badge.
-    const card = (await screen.findByText("Arsenal")).closest("button");
+    const card = (await screen.findByText("Arsenal")).closest('[role="button"]') as HTMLElement | null;
     expect(card).not.toBeNull();
     expect(within(card!).getByText("Direct Bet")).toBeInTheDocument();
     expect(screen.queryByText("Not yet generated")).not.toBeInTheDocument();
@@ -131,7 +131,7 @@ describe("Dashboard initial-list precompute visibility (W53)", () => {
     }));
     // Scoped to the card's own <button>, not screen-wide -- see the previous
     // test's comment on why (DashboardRail's legend also renders this text).
-    const card = (await screen.findByText("Arsenal")).closest("button");
+    const card = (await screen.findByText("Arsenal")).closest('[role="button"]') as HTMLElement | null;
     expect(card).not.toBeNull();
     expect(within(card!).getByText("Direct Bet")).toBeInTheDocument();
   });

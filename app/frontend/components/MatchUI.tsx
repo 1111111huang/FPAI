@@ -30,6 +30,7 @@ import {
   Clock,
   MagnifyingGlass,
   MinusCircle,
+  Plus,
   Question,
   Trophy,
   WarningCircle,
@@ -948,7 +949,25 @@ export function MatchCard({
     // to read as its own distinct surface against the date panel's colored
     // gradient wash behind it, not blend into it.
     <div className="rounded-xl border border-border bg-page/80 transition-all duration-150 hover:-translate-y-px hover:border-border-strong">
-      <button type="button" onClick={handleExpand} className="w-full p-4 text-left">
+      {/* W217: was a plain <button onClick={handleExpand}> -- direct user
+          request put a real, always-visible "Log bet" trigger directly on
+          this face (below), and a <button> nested inside another <button>
+          is invalid HTML/inaccessible, so the whole-card expand toggle
+          moved to a role="button" div with matching keyboard handling
+          (Enter/Space) instead. LogBetButton's own onClick handlers call
+          stopPropagation() so tapping it doesn't also toggle expand. */}
+      <div
+        role="button"
+        tabIndex={0}
+        onClick={handleExpand}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            handleExpand();
+          }
+        }}
+        className="w-full cursor-pointer p-4 text-left"
+      >
         {/* Direct user request: identify which league/country a card belongs
             to at a glance -- full-bleed via negative margins (undoing the
             button's own p-4) rather than restructuring around the button, so
@@ -1198,6 +1217,27 @@ export function MatchCard({
                 )}
               </div>
             )}
+            {/* W217: direct user request -- log the card's own resolved
+                pick right here on the always-visible face, no expand
+                needed. direct_bet only -- a conditional/no_bet pick isn't
+                something the agent is actually recommending you act on
+                yet; the full multi-market picker on the detail page
+                (ProbabilityRow's own LogBetButton) is unaffected and still
+                covers every market/recommendation type. Kept even once
+                the match is completed -- logging a bet against a match
+                that's already finished is the normal case this whole
+                feature area (W211-W215) was built for. */}
+            {shown?.recommendationType === "direct_bet" && match.rawRecommendation && (
+              <div className="shrink-0 self-center">
+                <LogBetButton
+                  matchId={match.id}
+                  recommendation={match.rawRecommendation}
+                  market={shown.market}
+                  selection={shown.selection}
+                  variant="pill"
+                />
+              </div>
+            )}
           </div>
         </div>
 
@@ -1247,7 +1287,7 @@ export function MatchCard({
             />
           </span>
         </div>
-      </button>
+      </div>
 
       <div className={`expand-rows ${open ? "is-open" : ""}`}>
         <div>
@@ -1270,30 +1310,6 @@ export function MatchCard({
                     {match.invalidMarketCount} market{match.invalidMarketCount > 1 ? "s" : ""} omitted --
                     malformed data.
                   </p>
-                )}
-                {/* W215: quick-log the card's own resolved pick, direct_bet
-                    only -- a conditional/no_bet pick isn't something the
-                    agent is actually recommending you act on yet, and this
-                    is a one-click shortcut, not the full multi-market
-                    picker ProbabilityRow's per-row LogBetButton already
-                    provides on the detail page. Reuses LogBetButton as-is.
-                    Lives here (in the expanded section) rather than up in
-                    the card header because the whole card face above is
-                    already one <button onClick={handleExpand}> -- a nested
-                    interactive control inside it would be invalid HTML and
-                    inaccessible, plus it would double as an expand/collapse
-                    trigger. This sits in the sibling expand-rows area
-                    instead, which only exists once that button is
-                    clicked. */}
-                {shown?.recommendationType === "direct_bet" && match.rawRecommendation && (
-                  <div className="mt-3">
-                    <LogBetButton
-                      matchId={match.id}
-                      recommendation={match.rawRecommendation}
-                      market={shown.market}
-                      selection={shown.selection}
-                    />
-                  </div>
                 )}
                 <Link
                   href={`/matches/${match.id}?home=${encodeURIComponent(match.home)}&away=${encodeURIComponent(
@@ -1769,11 +1785,19 @@ export function LogBetButton({
   recommendation,
   market,
   selection,
+  variant = "link",
 }: {
   matchId: string;
   recommendation: MatchRecommendationOut;
   market: string;
   selection: string;
+  // W217: "pill" is MatchCard's always-visible, filled-accent trigger
+  // (direct user request: log a bet without expanding the card first) --
+  // "link" (default) is ProbabilityRow's existing plain-text style,
+  // unchanged. Only the closed-state trigger differs; the expanded
+  // stake-input/Confirm/Cancel row and the settled/"done" state look the
+  // same regardless, since neither was asked to change.
+  variant?: "link" | "pill";
 }) {
   const { status } = useSession();
   const pathname = usePathname();
@@ -1798,7 +1822,11 @@ export function LogBetButton({
     const query = searchParams?.toString();
     const currentUrl = query ? `${base}?${query}` : base;
     return (
-      <Link href={`/login?callbackUrl=${encodeURIComponent(currentUrl)}`} className="text-xs font-medium text-accent">
+      <Link
+        href={`/login?callbackUrl=${encodeURIComponent(currentUrl)}`}
+        onClick={(e) => e.stopPropagation()}
+        className="text-xs font-medium text-accent"
+      >
         Sign in to log this bet
       </Link>
     );
@@ -1829,7 +1857,7 @@ export function LogBetButton({
     // flat "Logged" that hides real information already in hand, and give
     // a way to see it in context instead of a dead end.
     return (
-      <span className="flex items-center gap-2 text-xs">
+      <span className="flex items-center gap-2 text-xs" onClick={(e) => e.stopPropagation()}>
         <span className={loggedBet?.outcome === "lost" ? "text-serious" : "text-good"}>
           {loggedBet && loggedBet.outcome !== "open" ? `Logged -- ${loggedBet.outcome}` : "Logged"}
         </span>
@@ -1842,7 +1870,19 @@ export function LogBetButton({
 
   if (!open) {
     return (
-      <button type="button" onClick={() => setOpen(true)} className="text-xs font-medium text-accent">
+      <button
+        type="button"
+        onClick={(e) => {
+          e.stopPropagation();
+          setOpen(true);
+        }}
+        className={
+          variant === "pill"
+            ? "flex shrink-0 items-center gap-1 rounded-full bg-accent px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-accent/90"
+            : "text-xs font-medium text-accent"
+        }
+      >
+        {variant === "pill" && <Plus size={13} weight="bold" />}
         Log bet
       </button>
     );
@@ -1856,7 +1896,7 @@ export function LogBetButton({
   const oddsLabel = matchedCandidate?.current_odds != null ? ` @ ${matchedCandidate.current_odds.toFixed(2)}` : "";
 
   return (
-    <span className="flex flex-wrap items-center gap-1.5">
+    <span className="flex flex-wrap items-center gap-1.5" onClick={(e) => e.stopPropagation()}>
       <span className="text-xs text-ink-secondary">
         {selection}{oddsLabel}
       </span>

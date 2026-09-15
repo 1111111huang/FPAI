@@ -704,12 +704,30 @@ describe("MatchCard -- resolveRecommendation prefers the resolved pick over a hi
   });
 });
 
-describe("MatchCard quick-log control (W215)", () => {
+describe("MatchCard quick-log control (W215/W217)", () => {
   beforeEach(() => {
     vi.mocked(useSession).mockReturnValue({ data: { user: {} }, status: "authenticated" } as never);
   });
 
-  it("shows a Log bet control for a direct_bet recommendation once expanded", async () => {
+  it("W217: shows a Log bet control for a direct_bet recommendation WITHOUT expanding the card first", () => {
+    const match = applyRecommendation(baseMatch(), {
+      match: {}, overall: "direct_bet", confidence: "high", explanation: ["test"], limitations: [],
+      prediction_basis: "team_history_and_market", invalid_market_count: 0, cold_start_risk: false,
+      feature_completeness: 0.9, unknown_team: false,
+      recommendation_pick: { market: "result_3way", selection: "home" },
+      candidates: [{
+        market: "result_3way", selection: "home", recommendation_type: "direct_bet",
+        current_odds: 2.1, min_odds: 1.5, ml_probability: 0.55, implied_probability: 0.48, value_edge: 0.07,
+      }],
+    });
+    render(<MatchCard match={match} onUpdate={() => {}} />);
+
+    // No click/expand at all -- direct user request: the button must be on
+    // the card's always-visible face, not gated behind expanding it.
+    expect(screen.getByRole("button", { name: "Log bet" })).toBeInTheDocument();
+  });
+
+  it("W217: clicking Log bet does not also toggle the card's own expand/collapse", async () => {
     const match = applyRecommendation(baseMatch(), {
       match: {}, overall: "direct_bet", confidence: "high", explanation: ["test"], limitations: [],
       prediction_basis: "team_history_and_market", invalid_market_count: 0, cold_start_risk: false,
@@ -721,14 +739,21 @@ describe("MatchCard quick-log control (W215)", () => {
       }],
     });
     const user = userEvent.setup();
-    render(<MatchCard match={match} onUpdate={() => {}} />);
+    const { container } = render(<MatchCard match={match} onUpdate={() => {}} />);
 
-    await user.click(screen.getByRole("button", { name: /arsenal.*everton/i }));
+    await user.click(screen.getByRole("button", { name: "Log bet" }));
 
-    expect(screen.getByRole("button", { name: "Log bet" })).toBeInTheDocument();
+    // expand-rows is a CSS-only collapse (its content is always in the DOM,
+    // just visually hidden without the "is-open" class) -- checking the
+    // class directly, not text presence, is the only real signal of
+    // whether the card itself expanded.
+    expect(container.querySelector(".expand-rows")).not.toHaveClass("is-open");
+    // The stake-entry row opened instead, confirming the click was handled
+    // by LogBetButton itself, not swallowed.
+    expect(screen.getByPlaceholderText("Stake")).toBeInTheDocument();
   });
 
-  it("shows no quick-log control for a conditional recommendation", async () => {
+  it("shows no quick-log control for a conditional recommendation, expanded or not", async () => {
     const match = applyRecommendation(baseMatch(), {
       match: {}, overall: "conditional", confidence: "high", explanation: ["test"], limitations: [],
       prediction_basis: "team_history_and_market", invalid_market_count: 0, cold_start_risk: false,
@@ -743,12 +768,29 @@ describe("MatchCard quick-log control (W215)", () => {
     const user = userEvent.setup();
     render(<MatchCard match={match} onUpdate={() => {}} />);
 
+    expect(screen.queryByRole("button", { name: "Log bet" })).not.toBeInTheDocument();
+
     await user.click(screen.getByRole("button", { name: /arsenal.*everton/i }));
 
     // Proves the card actually expanded (not that the click silently
     // failed to open it) before asserting the quick-log button's absence.
     expect(screen.getByText("test")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Log bet" })).not.toBeInTheDocument();
+  });
+
+  it("W217: the card's own expand/collapse is still keyboard-operable (Enter/Space) now that it's a role=button div, not a real <button>", async () => {
+    const match = applyRecommendation(baseMatch(), {
+      match: {}, overall: "no_bet", confidence: "high", explanation: ["test"], limitations: [],
+      prediction_basis: "team_history_and_market", invalid_market_count: 0, cold_start_risk: false,
+      feature_completeness: 0.9, unknown_team: false, recommendation_pick: null, candidates: [],
+    });
+    const user = userEvent.setup();
+    const { container } = render(<MatchCard match={match} onUpdate={() => {}} />);
+
+    screen.getByRole("button", { name: /arsenal.*everton/i }).focus();
+    await user.keyboard("{Enter}");
+
+    expect(container.querySelector(".expand-rows")).toHaveClass("is-open");
   });
 });
 
