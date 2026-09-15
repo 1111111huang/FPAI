@@ -51,6 +51,7 @@ import { useSandboxAsOf } from "@/lib/useSandboxAsOf";
 import { groupByDate, groupByLeague, sortMatches, LEAGUE_COUNTRY, LEAGUE_LABEL, type MatchSort } from "@/lib/dashboardMetrics";
 import { AppShell } from "./AppShell";
 import { DashboardRail } from "./DashboardRail";
+import { LogBetModal } from "./LogBetModal";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -1244,6 +1245,9 @@ export function MatchCard({
                   market={shown.market}
                   selection={shown.selection}
                   variant="pill"
+                  homeTeam={match.home}
+                  awayTeam={match.away}
+                  statusLabel={matchStatusLabel(match.kickoffIso, isCompleted, asOf, sandboxMode)}
                 />
               </div>
             )}
@@ -1795,6 +1799,9 @@ export function LogBetButton({
   market,
   selection,
   variant = "link",
+  statusLabel,
+  homeTeam,
+  awayTeam,
 }: {
   matchId: string;
   recommendation: MatchRecommendationOut;
@@ -1807,14 +1814,19 @@ export function LogBetButton({
   // stake-input/Confirm/Cancel row and the settled/"done" state look the
   // same regardless, since neither was asked to change.
   variant?: "link" | "pill";
+  // W218: LogBetModal's fixture header needs these -- pulled from the
+  // caller's own already-typed home/away strings, NOT recommendation.match
+  // (that field is `Record<string, unknown>`-typed in lib/types.ts, so
+  // `.home`/`.away` on it doesn't type-check).
+  statusLabel: string;
+  homeTeam: string;
+  awayTeam: string;
 }) {
   const { status } = useSession();
   const pathname = usePathname();
   const searchParams = useSearchParams();
   const [open, setOpen] = useState(false);
-  const [stake, setStake] = useState("");
   const [saveStatus, setSaveStatus] = useState<"idle" | "saving" | "done" | "error">("idle");
-  const [errorMsg, setErrorMsg] = useState("");
   const [loggedBet, setLoggedBet] = useState<Bet | null>(null);
 
   if (status === "unauthenticated") {
@@ -1841,24 +1853,6 @@ export function LogBetButton({
     );
   }
   if (status === "loading") return null;
-
-  async function submit() {
-    const parsedStake = parseFloat(stake);
-    if (!parsedStake || parsedStake <= 0) {
-      setSaveStatus("error");
-      setErrorMsg("Enter a stake greater than 0.");
-      return;
-    }
-    setSaveStatus("saving");
-    try {
-      const bet = await logBetFromRecommendation({ match_id: matchId, recommendation, market, selection, stake: parsedStake });
-      setLoggedBet(bet);
-      setSaveStatus("done");
-    } catch (err) {
-      setSaveStatus("error");
-      setErrorMsg(err instanceof ApiError ? err.message : "Could not log bet.");
-    }
-  }
 
   if (saveStatus === "done") {
     // W215: logBetFromRecommendation() already returns the settled outcome
@@ -1897,49 +1891,26 @@ export function LogBetButton({
     );
   }
 
-  // W215: restate exactly what's about to be logged -- the odds column is
-  // several cells away in ProbabilityRow's grid (or absent entirely on
-  // MatchCard's quick-log path, Task 6), so nothing here previously
-  // confirmed the actual terms at the point of commitment.
   const matchedCandidate = recommendation.candidates.find((c) => c.market === market && c.selection === selection);
-  const oddsLabel = matchedCandidate?.current_odds != null ? ` @ ${matchedCandidate.current_odds.toFixed(2)}` : "";
 
   return (
-    <span className="flex flex-wrap items-center gap-1.5" onClick={(e) => e.stopPropagation()}>
-      <span className="text-xs text-ink-secondary">
-        {selection}{oddsLabel}
-      </span>
-      <input
-        value={stake}
-        onChange={(e) => setStake(e.target.value)}
-        placeholder="Stake"
-        inputMode="decimal"
-        className="w-16 rounded border border-border bg-surface px-1.5 py-0.5 text-xs text-ink outline-none focus:border-accent"
-      />
-      <button
-        type="button"
-        onClick={submit}
-        disabled={saveStatus === "saving"}
-        className="text-xs font-medium text-accent disabled:opacity-50"
-      >
-        {saveStatus === "saving" ? "…" : "Confirm"}
-      </button>
-      <button
-        type="button"
-        onClick={() => {
-          setOpen(false);
-          // A stale error from a previous attempt (bad stake, failed
-          // submit) must not resurface next time this expands -- reopening
-          // should always start from a clean slate.
-          setSaveStatus("idle");
-        }}
-        disabled={saveStatus === "saving"}
-        className="text-xs text-ink-secondary disabled:opacity-50"
-      >
-        Cancel
-      </button>
-      {saveStatus === "error" && <span className="text-xs text-serious">{errorMsg}</span>}
-    </span>
+    <LogBetModal
+      open
+      onClose={() => setOpen(false)}
+      homeTeam={homeTeam}
+      awayTeam={awayTeam}
+      statusLabel={statusLabel}
+      locked
+      market={market}
+      selection={selection}
+      odds={matchedCandidate?.current_odds ?? null}
+      onSubmit={async ({ stake }) => {
+        const bet = await logBetFromRecommendation({ match_id: matchId, recommendation, market, selection, stake });
+        setLoggedBet(bet);
+        setSaveStatus("done");
+        setOpen(false);
+      }}
+    />
   );
 }
 
@@ -1948,11 +1919,19 @@ function ProbabilityRow({
   matchId,
   recommendation,
   alreadyLogged = false,
+  statusLabel,
+  homeTeam,
+  awayTeam,
 }: {
   m: MarketRec;
   matchId?: string;
   recommendation?: MatchRecommendationOut;
   alreadyLogged?: boolean;
+  // W218: threaded straight through to LogBetButton's own LogBetModal --
+  // see its prop comment for why these aren't pulled from recommendation.
+  statusLabel: string;
+  homeTeam: string;
+  awayTeam: string;
 }) {
   const anomalous = isAnomalousDirectBet(m);
   const s = STATUS_META[m.recommendationType];
@@ -1979,7 +1958,15 @@ function ProbabilityRow({
             auth-aware LogBetButton and AppShell's Task 1 sign-in UI. */}
         {matchId && recommendation && !anomalous && (
           <span className="flex items-center gap-1.5">
-            <LogBetButton matchId={matchId} recommendation={recommendation} market={m.market} selection={m.selection} />
+            <LogBetButton
+              matchId={matchId}
+              recommendation={recommendation}
+              market={m.market}
+              selection={m.selection}
+              statusLabel={statusLabel}
+              homeTeam={homeTeam}
+              awayTeam={awayTeam}
+            />
             {/* W215: a warning, not a block -- a genuinely different
                 real-world wager on the same market is still plausible, so
                 LogBetButton stays fully enabled either way. */}
@@ -2121,6 +2108,10 @@ export function MatchAnalysisPage({
   const [error, setError] = useState<string | null>(null);
   const { status } = useSession();
   const [loggedKeys, setLoggedKeys] = useState<Set<string>>(new Set());
+  // W218: needed to compute the same "Today · Full Time"-style statusLabel
+  // MatchCard's own quick-log button already computes, for ProbabilityRow's
+  // LogBetButton (this page had no reason to call it before).
+  const { asOf, sandboxMode } = useSandboxAsOf();
 
   // W215: best-effort duplicate-bet warning -- fetch the signed-in user's
   // bets once and flag any market/selection on this match that already has
@@ -2304,6 +2295,9 @@ export function MatchAnalysisPage({
                   matchId={id}
                   recommendation={rawRecommendation ?? undefined}
                   alreadyLogged={loggedKeys.has(`${m.market}::${m.selection}`)}
+                  homeTeam={home}
+                  awayTeam={away}
+                  statusLabel={matchStatusLabel(match.kickoffIso, match.status === "completed", asOf, sandboxMode)}
                 />
               ))
             )}

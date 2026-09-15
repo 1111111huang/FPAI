@@ -39,6 +39,8 @@ const recommendation = {
   prediction_basis: "team_history_and_market",
 } as never;
 
+const commonProps = { homeTeam: "Arsenal", awayTeam: "Everton", statusLabel: "Today · Full Time" };
+
 describe("LogBetButton auth-awareness", () => {
   beforeEach(() => {
     mockUseSession.mockReset();
@@ -51,14 +53,14 @@ describe("LogBetButton auth-awareness", () => {
 
   it("shows a Sign in prompt instead of the log-bet control when unauthenticated", () => {
     mockUseSession.mockReturnValue({ status: "unauthenticated" });
-    render(<LogBetButton matchId="m1" recommendation={recommendation} market="result_3way" selection="home" />);
+    render(<LogBetButton matchId="m1" recommendation={recommendation} market="result_3way" selection="home" {...commonProps} />);
     expect(screen.getByRole("link", { name: /sign in/i })).toHaveAttribute("href", "/login?callbackUrl=%2Fmatches%2Fm1");
     expect(screen.queryByRole("button", { name: /log bet/i })).not.toBeInTheDocument();
   });
 
   it("shows the real Log bet control when authenticated", () => {
     mockUseSession.mockReturnValue({ status: "authenticated" });
-    render(<LogBetButton matchId="m1" recommendation={recommendation} market="result_3way" selection="home" />);
+    render(<LogBetButton matchId="m1" recommendation={recommendation} market="result_3way" selection="home" {...commonProps} />);
     expect(screen.getByRole("button", { name: /log bet/i })).toBeInTheDocument();
   });
 
@@ -69,7 +71,7 @@ describe("LogBetButton auth-awareness", () => {
       new URLSearchParams("home=Crystal+Palace&away=Ipswich+Town&date=2026-09-12&league=E0")
     );
 
-    render(<LogBetButton matchId="560572" recommendation={recommendation} market="result_3way" selection="home" />);
+    render(<LogBetButton matchId="560572" recommendation={recommendation} market="result_3way" selection="home" {...commonProps} />);
 
     const link = screen.getByRole("link", { name: /sign in to log this bet/i });
     const callbackUrl = new URL(link.getAttribute("href")!, "http://localhost").searchParams.get("callbackUrl")!;
@@ -84,11 +86,11 @@ describe("LogBetButton auth-awareness", () => {
       profit_loss: 12.1, source: "from_recommendation", recommendation_snapshot: null, created_at: "now",
     });
     const user = userEvent.setup();
-    render(<LogBetButton matchId="m1" recommendation={recommendation} market="result_3way" selection="home" />);
+    render(<LogBetButton matchId="m1" recommendation={recommendation} market="result_3way" selection="home" {...commonProps} />);
 
     await user.click(screen.getByRole("button", { name: "Log bet" }));
-    await user.type(screen.getByPlaceholderText("Stake"), "10");
-    await user.click(screen.getByRole("button", { name: "Confirm" }));
+    await user.type(screen.getByLabelText(/^stake$/i), "10");
+    await user.click(screen.getByRole("button", { name: /confirm bet/i }));
 
     expect(await screen.findByText(/won/i)).toBeInTheDocument();
     expect(screen.getByRole("link", { name: /view in bet tracker/i })).toHaveAttribute("href", "/bets");
@@ -102,11 +104,11 @@ describe("LogBetButton auth-awareness", () => {
       profit_loss: -10, source: "from_recommendation", recommendation_snapshot: null, created_at: "now",
     });
     const user = userEvent.setup();
-    render(<LogBetButton matchId="m1" recommendation={recommendation} market="result_3way" selection="home" />);
+    render(<LogBetButton matchId="m1" recommendation={recommendation} market="result_3way" selection="home" {...commonProps} />);
 
     await user.click(screen.getByRole("button", { name: "Log bet" }));
-    await user.type(screen.getByPlaceholderText("Stake"), "10");
-    await user.click(screen.getByRole("button", { name: "Confirm" }));
+    await user.type(screen.getByLabelText(/^stake$/i), "10");
+    await user.click(screen.getByRole("button", { name: /confirm bet/i }));
 
     const outcomeText = await screen.findByText(/lost/i);
     expect(outcomeText).toHaveClass("text-serious");
@@ -121,11 +123,11 @@ describe("LogBetButton auth-awareness", () => {
       profit_loss: null, source: "from_recommendation", recommendation_snapshot: null, created_at: "now",
     });
     const user = userEvent.setup();
-    render(<LogBetButton matchId="m1" recommendation={recommendation} market="result_3way" selection="home" />);
+    render(<LogBetButton matchId="m1" recommendation={recommendation} market="result_3way" selection="home" {...commonProps} />);
 
     await user.click(screen.getByRole("button", { name: "Log bet" }));
-    await user.type(screen.getByPlaceholderText("Stake"), "10");
-    await user.click(screen.getByRole("button", { name: "Confirm" }));
+    await user.type(screen.getByLabelText(/^stake$/i), "10");
+    await user.click(screen.getByRole("button", { name: /confirm bet/i }));
 
     expect(await screen.findByText("Logged")).toBeInTheDocument();
     expect(screen.getByRole("link", { name: /view in bet tracker/i })).toBeInTheDocument();
@@ -134,27 +136,32 @@ describe("LogBetButton auth-awareness", () => {
   it("shows a Cancel control that collapses back to the plain Log bet link without submitting", async () => {
     mockUseSession.mockReturnValue({ status: "authenticated", data: { user: { email: "a@b.com" } } });
     const user = userEvent.setup();
-    render(<LogBetButton matchId="m1" recommendation={recommendation} market="result_3way" selection="home" />);
+    render(<LogBetButton matchId="m1" recommendation={recommendation} market="result_3way" selection="home" {...commonProps} />);
 
     await user.click(screen.getByRole("button", { name: "Log bet" }));
-    expect(screen.getByPlaceholderText("Stake")).toBeInTheDocument();
+    expect(screen.getByLabelText(/^stake$/i)).toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "Cancel" }));
 
-    expect(screen.queryByPlaceholderText("Stake")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText(/^stake$/i)).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Log bet" })).toBeInTheDocument();
     expect(logBetFromRecommendation).not.toHaveBeenCalled();
   });
 
   it("Cancel clears a stale error -- reopening after a failed attempt starts from a clean slate", async () => {
+    // LogBetButton renders `<LogBetModal open .../>` only while its own
+    // `open` state is true -- closing and reopening unmounts/remounts a
+    // fresh LogBetModal instance each time, which naturally resets its
+    // internal errorMsg state (no explicit reset needed here, unlike the
+    // old inline-expand single-component version this replaced).
     mockUseSession.mockReturnValue({ status: "authenticated", data: { user: { email: "a@b.com" } } });
     vi.mocked(logBetFromRecommendation).mockRejectedValue(new ApiError("Could not log bet.", 500));
     const user = userEvent.setup();
-    render(<LogBetButton matchId="m1" recommendation={recommendation} market="result_3way" selection="home" />);
+    render(<LogBetButton matchId="m1" recommendation={recommendation} market="result_3way" selection="home" {...commonProps} />);
 
     await user.click(screen.getByRole("button", { name: "Log bet" }));
-    await user.type(screen.getByPlaceholderText("Stake"), "10");
-    await user.click(screen.getByRole("button", { name: "Confirm" }));
+    await user.type(screen.getByLabelText(/^stake$/i), "10");
+    await user.click(screen.getByRole("button", { name: /confirm bet/i }));
     expect(await screen.findByText("Could not log bet.")).toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "Cancel" }));
@@ -163,17 +170,18 @@ describe("LogBetButton auth-awareness", () => {
     expect(screen.queryByText("Could not log bet.")).not.toBeInTheDocument();
   });
 
-  it("restates the market/selection/odds being logged next to the stake input", async () => {
+  it("shows the locked market/pick/odds being logged in the modal", async () => {
     mockUseSession.mockReturnValue({ status: "authenticated", data: { user: { email: "a@b.com" } } });
     const recommendationWithOdds = {
       ...(recommendation as Record<string, unknown>),
       candidates: [{ market: "result_3way", selection: "home", recommendation_type: "direct_bet", current_odds: 2.35 }],
     } as never;
     const user = userEvent.setup();
-    render(<LogBetButton matchId="m1" recommendation={recommendationWithOdds} market="result_3way" selection="home" />);
+    render(<LogBetButton matchId="m1" recommendation={recommendationWithOdds} market="result_3way" selection="home" {...commonProps} />);
 
     await user.click(screen.getByRole("button", { name: "Log bet" }));
 
-    expect(screen.getByText(/home @ 2\.35/i)).toBeInTheDocument();
+    expect(screen.getByText("2.35")).toBeInTheDocument();
+    expect(screen.getByText("Home")).toBeInTheDocument();
   });
 });

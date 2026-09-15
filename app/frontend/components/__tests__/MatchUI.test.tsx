@@ -748,9 +748,9 @@ describe("MatchCard quick-log control (W215/W217)", () => {
     // class directly, not text presence, is the only real signal of
     // whether the card itself expanded.
     expect(container.querySelector(".expand-rows")).not.toHaveClass("is-open");
-    // The stake-entry row opened instead, confirming the click was handled
-    // by LogBetButton itself, not swallowed.
-    expect(screen.getByPlaceholderText("Stake")).toBeInTheDocument();
+    // The modal opened instead, confirming the click was handled by
+    // LogBetButton itself, not swallowed.
+    expect(screen.getByLabelText(/^stake$/i)).toBeInTheDocument();
   });
 
   it("shows no quick-log control for a conditional recommendation, expanded or not", async () => {
@@ -1219,30 +1219,39 @@ describe("LogBetButton (bet-logging locked-except-stake behavior)", () => {
     vi.mocked(useSession).mockReturnValue({ data: { user: {} }, status: "authenticated" } as never);
   });
 
+  const modalProps = { homeTeam: "Arsenal", awayTeam: "Everton", statusLabel: "Today · Full Time" };
+
   it("initially shows only a 'Log bet' trigger -- nothing editable yet", () => {
-    render(<LogBetButton matchId="m1" recommendation={recommendation} market="result_3way" selection="home" />);
+    render(<LogBetButton matchId="m1" recommendation={recommendation} market="result_3way" selection="home" {...modalProps} />);
     expect(screen.getByText("Log bet")).toBeInTheDocument();
-    expect(screen.queryByPlaceholderText("Stake")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText(/^stake$/i)).not.toBeInTheDocument();
   });
 
-  it("opening it reveals only a stake input -- no home/away/odds/market/selection fields", async () => {
+  it("opening it reveals only a stake input -- no editable home/away/odds/market/selection controls", async () => {
     const user = userEvent.setup();
-    render(<LogBetButton matchId="m1" recommendation={recommendation} market="result_3way" selection="home" />);
+    render(<LogBetButton matchId="m1" recommendation={recommendation} market="result_3way" selection="home" {...modalProps} />);
 
     await user.click(screen.getByText("Log bet"));
 
-    expect(screen.getByPlaceholderText("Stake")).toBeInTheDocument();
-    // The only text input rendered is the stake field -- confirms nothing
-    // else (home/away/odds/market/selection) is exposed as editable.
-    expect(screen.getAllByRole("textbox")).toHaveLength(1);
+    expect(screen.getByLabelText(/^stake$/i)).toBeInTheDocument();
+    // Locked mode: Market/Pick/Odds render as fixed text, not real
+    // controls -- confirms nothing else is exposed as editable.
+    expect(screen.queryAllByRole("combobox")).toHaveLength(0);
+    expect(screen.queryByLabelText(/^market$/i)).not.toBeInTheDocument();
+    expect(screen.queryByLabelText(/^pick$/i)).not.toBeInTheDocument();
+    expect(screen.queryByLabelText(/^odds$/i)).not.toBeInTheDocument();
   });
 
   it("rejects a zero/invalid stake without calling the API", async () => {
+    // This exact string is LogBetModal's own locked-mode-specific error
+    // branch (added during its own code review, W218) -- LogBetButton
+    // always renders the modal in locked mode, so this integration test's
+    // continued match on this string is by design, not a coincidence.
     const user = userEvent.setup();
-    render(<LogBetButton matchId="m1" recommendation={recommendation} market="result_3way" selection="home" />);
+    render(<LogBetButton matchId="m1" recommendation={recommendation} market="result_3way" selection="home" {...modalProps} />);
 
     await user.click(screen.getByText("Log bet"));
-    await user.click(screen.getByText("Confirm"));
+    await user.click(screen.getByRole("button", { name: /confirm bet/i }));
 
     expect(screen.getByText("Enter a stake greater than 0.")).toBeInTheDocument();
     expect(logBetFromRecommendation).not.toHaveBeenCalled();
@@ -1255,11 +1264,11 @@ describe("LogBetButton (bet-logging locked-except-stake behavior)", () => {
       profit_loss: null, source: "from_recommendation", recommendation_snapshot: null, created_at: "now",
     });
     const user = userEvent.setup();
-    render(<LogBetButton matchId="m1" recommendation={recommendation} market="result_3way" selection="home" />);
+    render(<LogBetButton matchId="m1" recommendation={recommendation} market="result_3way" selection="home" {...modalProps} />);
 
     await user.click(screen.getByText("Log bet"));
-    await user.type(screen.getByPlaceholderText("Stake"), "10");
-    await user.click(screen.getByText("Confirm"));
+    await user.type(screen.getByLabelText(/^stake$/i), "10");
+    await user.click(screen.getByRole("button", { name: /confirm bet/i }));
 
     expect(logBetFromRecommendation).toHaveBeenCalledWith({
       match_id: "m1", recommendation, market: "result_3way", selection: "home", stake: 10,
