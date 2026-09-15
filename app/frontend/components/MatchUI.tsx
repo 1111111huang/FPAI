@@ -1826,7 +1826,10 @@ export function LogBetButton({
   const pathname = usePathname();
   const searchParams = useSearchParams();
   const [open, setOpen] = useState(false);
-  const [saveStatus, setSaveStatus] = useState<"idle" | "saving" | "done" | "error">("idle");
+  // W218 final-review cleanup: was a 4-state union ("idle"|"saving"|"done"|
+  // "error"), but LogBetModal now owns saving/error state itself -- this
+  // component only ever needs to know whether a bet was just logged.
+  const [done, setDone] = useState(false);
   const [loggedBet, setLoggedBet] = useState<Bet | null>(null);
 
   if (status === "unauthenticated") {
@@ -1854,7 +1857,7 @@ export function LogBetButton({
   }
   if (status === "loading") return null;
 
-  if (saveStatus === "done") {
+  if (done) {
     // W215: logBetFromRecommendation() already returns the settled outcome
     // (W212 may have auto-settled it immediately) -- show it instead of a
     // flat "Logged" that hides real information already in hand, and give
@@ -1907,7 +1910,7 @@ export function LogBetButton({
       onSubmit={async ({ stake }) => {
         const bet = await logBetFromRecommendation({ match_id: matchId, recommendation, market, selection, stake });
         setLoggedBet(bet);
-        setSaveStatus("done");
+        setDone(true);
         setOpen(false);
       }}
     />
