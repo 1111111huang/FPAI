@@ -10,6 +10,7 @@ import userEvent from "@testing-library/user-event";
 import { describe, expect, it, test, vi, beforeEach } from "vitest";
 
 import {
+  applyRecommendation,
   fixtureToMatch,
   LeagueBadge,
   LogBetButton,
@@ -768,6 +769,17 @@ describe("fixtureToMatch -- live status (a match currently being played)", () =>
   it("a genuinely SCHEDULED fixture (unchanged) still maps to 'upcoming', not 'live'", () => {
     const fixture = baseFixture({ status: "SCHEDULED" });
     expect(fixtureToMatch(fixture).status).toBe("upcoming");
+  });
+});
+
+describe("applyRecommendation -- W215 raw recommendation snapshot", () => {
+  it("carries the raw recommendation through on Match.rawRecommendation", () => {
+    const rec = makeRecommendation();
+    const base = fixtureToMatch(baseFixture());
+
+    const result = applyRecommendation(base, rec);
+
+    expect(result.rawRecommendation).toBe(rec);
   });
 });
 

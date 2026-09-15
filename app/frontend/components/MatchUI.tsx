@@ -88,6 +88,15 @@ export type Match = {
   confidence: Confidence;
   candidates: MarketRec[];
   recommendationPick: RecommendationPick | null;
+  // W215: the untouched recommendation snapshot -- needed to log a bet
+  // directly from a MatchCard/LogBetButton without re-fetching it. Set to
+  // `null` by fixtureToMatch()/applyRecommendation() (both cover it
+  // explicitly), but kept optional (not just nullable) because at least
+  // one inline Match literal -- MatchAnalysisPage's load()'s pending-match
+  // object, further down this file -- omits it entirely and relies on
+  // applyRecommendation()'s spread to backfill it, same as every other
+  // recommendation-derived field there.
+  rawRecommendation?: MatchRecommendationOut | null;
   // One bullet per aspect, mirroring lib/types.ts's MatchRecommendationOut.
   explanation: string[];
   limitations: string[];
@@ -164,6 +173,7 @@ export function fixtureToMatch(fixture: Fixture, asOf?: Date, sandboxMode = fals
     confidence: "low",
     candidates: [],
     recommendationPick: null,
+    rawRecommendation: null,
     explanation: [],
     limitations: [],
     predictionBasis: "",
@@ -174,7 +184,7 @@ export function fixtureToMatch(fixture: Fixture, asOf?: Date, sandboxMode = fals
   };
 }
 
-function applyRecommendation(match: Match, rec: MatchRecommendationOut): Match {
+export function applyRecommendation(match: Match, rec: MatchRecommendationOut): Match {
   return {
     ...match,
     hasRecommendation: true,
@@ -189,6 +199,7 @@ function applyRecommendation(match: Match, rec: MatchRecommendationOut): Match {
     unitBetMultiplier: rec.unit_bet_multiplier ?? null,
     invalidMarketCount: rec.invalid_market_count,
     recommendationPick: rec.recommendation_pick,
+    rawRecommendation: rec,
     candidates: rec.candidates.map((c) => ({
       market: c.market,
       selection: c.selection,
