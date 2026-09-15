@@ -724,7 +724,7 @@ describe("MatchCard quick-log control (W215/W217)", () => {
 
     // No click/expand at all -- direct user request: the button must be on
     // the card's always-visible face, not gated behind expanding it.
-    expect(screen.getByRole("button", { name: "Log bet" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Log Bet" })).toBeInTheDocument();
   });
 
   it("W217: clicking Log bet does not also toggle the card's own expand/collapse", async () => {
@@ -741,7 +741,7 @@ describe("MatchCard quick-log control (W215/W217)", () => {
     const user = userEvent.setup();
     const { container } = render(<MatchCard match={match} onUpdate={() => {}} />);
 
-    await user.click(screen.getByRole("button", { name: "Log bet" }));
+    await user.click(screen.getByRole("button", { name: "Log Bet" }));
 
     // expand-rows is a CSS-only collapse (its content is always in the DOM,
     // just visually hidden without the "is-open" class) -- checking the

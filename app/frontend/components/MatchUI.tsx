@@ -1059,199 +1059,205 @@ export function MatchCard({
           </div>
         )}
 
-        {/* MODELED tag + MARKET/PICK/ODDS/EDGE as one full-width row below
-            the team row (direct mockup correction: W120 boxed the grid as a
-            narrower side panel next to the team block instead). */}
-        <div className="mt-3 flex flex-wrap items-start justify-between gap-4">
-          <TierTag tier={match.tier} tintIndex={tintIndex} />
-
-          <div className="flex min-w-0 flex-1 flex-wrap items-start justify-between gap-x-4 gap-y-3">
-            <div className="min-w-0">
-              <div className="text-[10px] uppercase tracking-wide text-muted">Market</div>
-              <div className="truncate text-sm font-semibold text-ink">{market ? market.label : "—"}</div>
-              {market?.subtitle && <div className="text-[10px] text-muted">{market.subtitle}</div>}
-            </div>
-
-            <div className="min-w-0">
-              <div className="text-[10px] uppercase tracking-wide text-muted">Pick</div>
-              <div className="flex items-center gap-1 text-sm font-semibold text-ink">
-                {shown ? (
+        {/* W219: direct user mockup -- MODELED tag + MARKET/PICK/ODDS/EDGE
+            and the Log Bet/Logged status now share one bordered box
+            (previously an unboxed flex row, with LogBetButton mixed in as
+            just another column) -- matches ManualBetForm's own boxed
+            fixture-header convention (bg-page/60, W217) rather than
+            inventing a new nesting style. */}
+        <div className="mt-3 rounded-xl border border-border bg-page/60 p-3.5">
+          <div className="flex flex-wrap items-start justify-between gap-4">
+            <TierTag tier={match.tier} tintIndex={tintIndex} />
+  
+            <div className="flex min-w-0 flex-1 flex-wrap items-start justify-between gap-x-4 gap-y-3">
+              <div className="min-w-0">
+                <div className="text-[10px] uppercase tracking-wide text-muted">Market</div>
+                <div className="truncate text-sm font-semibold text-ink">{market ? market.label : "—"}</div>
+                {market?.subtitle && <div className="text-[10px] text-muted">{market.subtitle}</div>}
+              </div>
+  
+              <div className="min-w-0">
+                <div className="text-[10px] uppercase tracking-wide text-muted">Pick</div>
+                <div className="flex items-center gap-1 text-sm font-semibold text-ink">
+                  {shown ? (
+                    <>
+                      {pickCaption(shown.selection) &&
+                        (shown.selection.startsWith("under") ? (
+                          <ArrowDown size={11} weight="bold" className="shrink-0 text-good" />
+                        ) : (
+                          <ArrowUp size={11} weight="bold" className="shrink-0 text-good" />
+                        ))}
+                      <span className={`truncate ${hit === false ? "line-through" : ""}`}>
+                        {pickLabel(match, shown.selection)}
+                      </span>
+                      {pickCaption(shown.selection) && (
+                        <span className="shrink-0 text-xs font-normal text-ink-secondary">
+                          {pickCaption(shown.selection)}
+                        </span>
+                      )}
+                    </>
+                  ) : (
+                    "—"
+                  )}
+                </div>
+                {/* Inline echo of the same top-right HitBadge, right under the
+                    specific pick it's about -- readable at a glance without
+                    looking away from the Pick column. hit === null (no
+                    recommendation, or an unresolvable market) renders nothing,
+                    same contract as the top-right badge. */}
+                {hit !== null && (
+                  <div className={`flex items-center gap-1 text-xs font-medium ${hit ? "text-good" : "text-serious"}`}>
+                    {hit ? <CheckCircle weight="fill" size={11} /> : <XCircle weight="fill" size={11} />}
+                    {hit ? "Hit" : "Not Hit"}
+                  </div>
+                )}
+              </div>
+  
+              <div className="shrink-0 text-right">
+                {/* W84/A52: for a conditional market with a real targetOdds
+                    (code-computed, src/agent/schema.py _compute_target_odds --
+                    the price this market needs to reach to clear
+                    min_value_edge), that's the number worth surfacing here,
+                    not the current price the card already told the user isn't
+                    good enough -- shown in the same warning color as the
+                    Conditional badge. null covers "not applicable" and "no
+                    such target exists" (e.g. A29's ceiling-downgrade case)
+                    identically -- both fall back to the plain current-odds
+                    display. */}
+                {!isCompleted && shown?.recommendationType === "conditional" && shown.targetOdds != null ? (
                   <>
-                    {pickCaption(shown.selection) &&
-                      (shown.selection.startsWith("under") ? (
-                        <ArrowDown size={11} weight="bold" className="shrink-0 text-good" />
-                      ) : (
-                        <ArrowUp size={11} weight="bold" className="shrink-0 text-good" />
-                      ))}
-                    <span className={`truncate ${hit === false ? "line-through" : ""}`}>
-                      {pickLabel(match, shown.selection)}
-                    </span>
-                    {pickCaption(shown.selection) && (
-                      <span className="shrink-0 text-xs font-normal text-ink-secondary">
-                        {pickCaption(shown.selection)}
+                    <div className="text-[10px] uppercase tracking-wide text-warning">Wait ≥</div>
+                    <div className="font-mono text-base font-bold text-warning">{shown.targetOdds.toFixed(2)}</div>
+                    {/* Direct user feedback: the target alone doesn't say how
+                        far off the current price is -- pairing it with the
+                        live current_odds lets a reader gauge roughly how long
+                        this might take to clear, the same way ProbabilityRow's
+                        Model Probabilities table already shows both side by
+                        side (further down this file). `> 0`, not `!= null` --
+                        decimal odds are never <= 0 in reality; A66
+                        (agent_user_stories.md) now code-enforces that
+                        server-side going forward, but this guard also covers
+                        an already-cached row from before that fix shipped
+                        (confirmed live: a 0.0 current_odds rendered as a
+                        literal "now 0.00"). */}
+                    {shown.currentOdds != null && shown.currentOdds > 0 && (
+                      <div className="font-mono text-[10px] text-ink-secondary">now {shown.currentOdds.toFixed(2)}</div>
+                    )}
+                  </>
+                ) : isCompleted ? (
+                  // Direct user request: the final score moved up next to the
+                  // team names (isLive already showed it there; this box now
+                  // shows money won/lost on the pick instead) -- "—" for
+                  // anything that was never an actual bet (conditional/no_bet)
+                  // or an unresolvable market (hit === null, e.g. corners),
+                  // same null-propagation contract HitBadge already uses.
+                  <>
+                    <div className="text-[10px] uppercase tracking-wide text-muted">Money Won</div>
+                    <div
+                      className={`font-mono text-base font-bold ${
+                        moneyWon == null ? "text-muted" : moneyWon > 0 ? "text-good" : moneyWon < 0 ? "text-serious" : "text-ink"
+                      }`}
+                    >
+                      {moneyWon != null ? formatMoneyWon(moneyWon) : "—"}
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <div className="text-[10px] uppercase tracking-wide text-muted">Odds</div>
+                    <div className="font-mono text-base font-bold text-ink">
+                      {shown?.currentOdds ? shown.currentOdds.toFixed(2) : "—"}
+                    </div>
+                    {shown?.currentOdds != null && (
+                      <span className="mt-1 inline-block rounded border border-border px-1.5 py-0.5 text-[10px] text-ink-secondary">
+                        Decimal
                       </span>
                     )}
                   </>
-                ) : (
-                  "—"
                 )}
               </div>
-              {/* Inline echo of the same top-right HitBadge, right under the
-                  specific pick it's about -- readable at a glance without
-                  looking away from the Pick column. hit === null (no
-                  recommendation, or an unresolvable market) renders nothing,
-                  same contract as the top-right badge. */}
-              {hit !== null && (
-                <div className={`flex items-center gap-1 text-xs font-medium ${hit ? "text-good" : "text-serious"}`}>
-                  {hit ? <CheckCircle weight="fill" size={11} /> : <XCircle weight="fill" size={11} />}
-                  {hit ? "Hit" : "Not Hit"}
+  
+              <div className="shrink-0 text-right">
+                <div title={EDGE_EXPLAIN} className="text-[10px] uppercase tracking-wide text-muted">Edge</div>
+                <div
+                  className={`font-mono text-base font-bold ${
+                    isCompleted
+                      ? // Plain, not green -- "positive edge" reads as "this is
+                        // still worth acting on", which is nonsensical once
+                        // the match is decided. This is a historical fact now.
+                        "text-ink"
+                      : shown?.currentOdds
+                      ? shown.recommendationType !== "no_bet" && shown.valueEdge >= 0
+                        ? "text-good"
+                        : "text-ink-secondary"
+                      : "text-muted"
+                  }`}
+                >
+                  {shown?.currentOdds ? formatEdge(shown.valueEdge) : "—"}
                 </div>
-              )}
-            </div>
-
-            <div className="shrink-0 text-right">
-              {/* W84/A52: for a conditional market with a real targetOdds
-                  (code-computed, src/agent/schema.py _compute_target_odds --
-                  the price this market needs to reach to clear
-                  min_value_edge), that's the number worth surfacing here,
-                  not the current price the card already told the user isn't
-                  good enough -- shown in the same warning color as the
-                  Conditional badge. null covers "not applicable" and "no
-                  such target exists" (e.g. A29's ceiling-downgrade case)
-                  identically -- both fall back to the plain current-odds
-                  display. */}
-              {!isCompleted && shown?.recommendationType === "conditional" && shown.targetOdds != null ? (
-                <>
-                  <div className="text-[10px] uppercase tracking-wide text-warning">Wait ≥</div>
-                  <div className="font-mono text-base font-bold text-warning">{shown.targetOdds.toFixed(2)}</div>
-                  {/* Direct user feedback: the target alone doesn't say how
-                      far off the current price is -- pairing it with the
-                      live current_odds lets a reader gauge roughly how long
-                      this might take to clear, the same way ProbabilityRow's
-                      Model Probabilities table already shows both side by
-                      side (further down this file). `> 0`, not `!= null` --
-                      decimal odds are never <= 0 in reality; A66
-                      (agent_user_stories.md) now code-enforces that
-                      server-side going forward, but this guard also covers
-                      an already-cached row from before that fix shipped
-                      (confirmed live: a 0.0 current_odds rendered as a
-                      literal "now 0.00"). */}
-                  {shown.currentOdds != null && shown.currentOdds > 0 && (
-                    <div className="font-mono text-[10px] text-ink-secondary">now {shown.currentOdds.toFixed(2)}</div>
-                  )}
-                </>
-              ) : isCompleted ? (
-                // Direct user request: the final score moved up next to the
-                // team names (isLive already showed it there; this box now
-                // shows money won/lost on the pick instead) -- "—" for
-                // anything that was never an actual bet (conditional/no_bet)
-                // or an unresolvable market (hit === null, e.g. corners),
-                // same null-propagation contract HitBadge already uses.
-                <>
-                  <div className="text-[10px] uppercase tracking-wide text-muted">Money Won</div>
-                  <div
-                    className={`font-mono text-base font-bold ${
-                      moneyWon == null ? "text-muted" : moneyWon > 0 ? "text-good" : moneyWon < 0 ? "text-serious" : "text-ink"
-                    }`}
-                  >
-                    {moneyWon != null ? formatMoneyWon(moneyWon) : "—"}
-                  </div>
-                </>
-              ) : (
-                <>
-                  <div className="text-[10px] uppercase tracking-wide text-muted">Odds</div>
+                {isCompleted ? (
+                  shown?.currentOdds != null && (
+                    <span className="mt-1 inline-block rounded-full border border-border-strong bg-surface px-1.5 py-0.5 text-[10px] text-muted">
+                      Pre-match edge
+                    </span>
+                  )
+                ) : (
+                  shown?.currentOdds != null && shown.recommendationType !== "no_bet" && shown.valueEdge >= 0 && (
+                    <span className="mt-1 inline-block rounded-full border border-good/40 bg-good/10 px-1.5 py-0.5 text-[10px] text-good">
+                      Positive Edge
+                    </span>
+                  )
+                )}
+              </div>
+  
+              {/* A82/W169: Kelly-derived suggested stake for the actual pick,
+                  in UB (an abstract unit -- see the Daily Edges header
+                  explainer, not a dollar figure). Its own column, same
+                  weight as Market/Pick/Odds/Edge -- direct user feedback
+                  that a small aside line under Pick undersold it.
+                  BUG-053: previously hidden once completed ("nothing left to
+                  size a stake for") -- kept visible instead, mirroring the
+                  Edge column's own precedent for the identical case (plain
+                  value, a "Pre-match stake" badge instead of disappearing). */}
+              {match.unitBetMultiplier != null && (
+                <div className="shrink-0 text-right">
+                  <div className="text-[10px] uppercase tracking-wide text-muted">Stake</div>
                   <div className="font-mono text-base font-bold text-ink">
-                    {shown?.currentOdds ? shown.currentOdds.toFixed(2) : "—"}
+                    {match.unitBetMultiplier.toFixed(1)} UB
                   </div>
-                  {shown?.currentOdds != null && (
-                    <span className="mt-1 inline-block rounded border border-border px-1.5 py-0.5 text-[10px] text-ink-secondary">
-                      Decimal
+                  {isCompleted && (
+                    <span className="mt-1 inline-block rounded-full border border-border-strong bg-surface px-1.5 py-0.5 text-[10px] text-muted">
+                      Pre-match stake
                     </span>
                   )}
-                </>
-              )}
-            </div>
-
-            <div className="shrink-0 text-right">
-              <div title={EDGE_EXPLAIN} className="text-[10px] uppercase tracking-wide text-muted">Edge</div>
-              <div
-                className={`font-mono text-base font-bold ${
-                  isCompleted
-                    ? // Plain, not green -- "positive edge" reads as "this is
-                      // still worth acting on", which is nonsensical once
-                      // the match is decided. This is a historical fact now.
-                      "text-ink"
-                    : shown?.currentOdds
-                    ? shown.recommendationType !== "no_bet" && shown.valueEdge >= 0
-                      ? "text-good"
-                      : "text-ink-secondary"
-                    : "text-muted"
-                }`}
-              >
-                {shown?.currentOdds ? formatEdge(shown.valueEdge) : "—"}
-              </div>
-              {isCompleted ? (
-                shown?.currentOdds != null && (
-                  <span className="mt-1 inline-block rounded-full border border-border-strong bg-surface px-1.5 py-0.5 text-[10px] text-muted">
-                    Pre-match edge
-                  </span>
-                )
-              ) : (
-                shown?.currentOdds != null && shown.recommendationType !== "no_bet" && shown.valueEdge >= 0 && (
-                  <span className="mt-1 inline-block rounded-full border border-good/40 bg-good/10 px-1.5 py-0.5 text-[10px] text-good">
-                    Positive Edge
-                  </span>
-                )
-              )}
-            </div>
-
-            {/* A82/W169: Kelly-derived suggested stake for the actual pick,
-                in UB (an abstract unit -- see the Daily Edges header
-                explainer, not a dollar figure). Its own column, same
-                weight as Market/Pick/Odds/Edge -- direct user feedback
-                that a small aside line under Pick undersold it.
-                BUG-053: previously hidden once completed ("nothing left to
-                size a stake for") -- kept visible instead, mirroring the
-                Edge column's own precedent for the identical case (plain
-                value, a "Pre-match stake" badge instead of disappearing). */}
-            {match.unitBetMultiplier != null && (
-              <div className="shrink-0 text-right">
-                <div className="text-[10px] uppercase tracking-wide text-muted">Stake</div>
-                <div className="font-mono text-base font-bold text-ink">
-                  {match.unitBetMultiplier.toFixed(1)} UB
                 </div>
-                {isCompleted && (
-                  <span className="mt-1 inline-block rounded-full border border-border-strong bg-surface px-1.5 py-0.5 text-[10px] text-muted">
-                    Pre-match stake
-                  </span>
-                )}
-              </div>
-            )}
-            {/* W217: direct user request -- log the card's own resolved
-                pick right here on the always-visible face, no expand
-                needed. direct_bet only -- a conditional/no_bet pick isn't
-                something the agent is actually recommending you act on
-                yet; the full multi-market picker on the detail page
-                (ProbabilityRow's own LogBetButton) is unaffected and still
-                covers every market/recommendation type. Kept even once
-                the match is completed -- logging a bet against a match
-                that's already finished is the normal case this whole
-                feature area (W211-W215) was built for. */}
-            {shown?.recommendationType === "direct_bet" && match.rawRecommendation && (
-              <div className="shrink-0 self-center">
-                <LogBetButton
-                  matchId={match.id}
-                  recommendation={match.rawRecommendation}
-                  market={shown.market}
-                  selection={shown.selection}
-                  variant="pill"
-                  homeTeam={match.home}
-                  awayTeam={match.away}
-                  statusLabel={matchStatusLabel(match.kickoffIso, isCompleted, asOf, sandboxMode)}
-                />
-              </div>
-            )}
+              )}
+            </div>
           </div>
+          {/* W217/W219: log the card's own resolved pick right here on the
+              always-visible face, no expand needed -- direct_bet only, a
+              conditional/no_bet pick isn't something the agent is actually
+              recommending you act on yet; the full multi-market picker on
+              the detail page (ProbabilityRow's own LogBetButton) is
+              unaffected and still covers every market/recommendation type.
+              Kept even once the match is completed -- logging a bet against
+              a match that's already finished is the normal case this whole
+              feature area (W211-W215) was built for. Its own row inside the
+              box, below a divider, per the mockup -- previously just another
+              column mixed into the data grid above. */}
+          {shown?.recommendationType === "direct_bet" && match.rawRecommendation && (
+            <div className="mt-3 flex justify-end border-t border-border pt-3">
+              <LogBetButton
+                matchId={match.id}
+                recommendation={match.rawRecommendation}
+                market={shown.market}
+                selection={shown.selection}
+                variant="pill"
+                homeTeam={match.home}
+                awayTeam={match.away}
+                statusLabel={matchStatusLabel(match.kickoffIso, isCompleted, asOf, sandboxMode)}
+              />
+            </div>
+          )}
         </div>
 
         {/* Closing row: day/time (icon + bullet-separated, mockup point 4 --
@@ -1862,10 +1868,40 @@ export function LogBetButton({
     // (W212 may have auto-settled it immediately) -- show it instead of a
     // flat "Logged" that hides real information already in hand, and give
     // a way to see it in context instead of a dead end.
+    const outcome = loggedBet?.outcome;
+    if (variant === "pill") {
+      // W219: direct user mockup -- a bordered pill badge (matching this
+      // card's own "Not Hit"/"Positive Edge" badge language, not the plain
+      // colored text the "link" variant below still uses) with an icon,
+      // "Logged · Won"/"Logged · Lost" title-cased, still-open bets shown
+      // as a neutral "Logged" with no icon/color (no outcome to react to
+      // yet).
+      return (
+        <span className="flex items-center gap-2 text-xs" onClick={(e) => e.stopPropagation()}>
+          <span
+            className={`inline-flex items-center gap-1 rounded-full border px-2 py-1 font-medium ${
+              outcome === "won"
+                ? "border-good/40 bg-good/10 text-good"
+                : outcome === "lost"
+                ? "border-serious/40 bg-serious/10 text-serious"
+                : "border-border-strong bg-surface text-muted"
+            }`}
+          >
+            {outcome === "won" && <CheckCircle weight="fill" size={12} />}
+            {outcome === "lost" && <XCircle weight="fill" size={12} />}
+            {outcome && outcome !== "open" ? `Logged · ${outcome === "won" ? "Won" : "Lost"}` : "Logged"}
+          </span>
+          <Link href="/bets" className="flex items-center gap-0.5 font-medium text-accent">
+            View in Bet Tracker
+            <CaretRight size={11} />
+          </Link>
+        </span>
+      );
+    }
     return (
       <span className="flex items-center gap-2 text-xs" onClick={(e) => e.stopPropagation()}>
-        <span className={loggedBet?.outcome === "lost" ? "text-serious" : "text-good"}>
-          {loggedBet && loggedBet.outcome !== "open" ? `Logged -- ${loggedBet.outcome}` : "Logged"}
+        <span className={outcome === "lost" ? "text-serious" : "text-good"}>
+          {outcome && outcome !== "open" ? `Logged -- ${outcome}` : "Logged"}
         </span>
         <Link href="/bets" className="font-medium text-accent">
           View in Bet Tracker
@@ -1889,7 +1925,7 @@ export function LogBetButton({
         }
       >
         {variant === "pill" && <Plus size={13} weight="bold" />}
-        Log bet
+        {variant === "pill" ? "Log Bet" : "Log bet"}
       </button>
     );
   }
