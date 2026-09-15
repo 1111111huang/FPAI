@@ -571,3 +571,68 @@ describe("BetTrackerPage lets a user delete their own logged bet (W215)", () => 
     expect(screen.queryByText(/failed to delete bet/i)).not.toBeInTheDocument();
   });
 });
+
+describe("ManualBetForm search results show a league tag (W215)", () => {
+  beforeEach(() => {
+    vi.mocked(getFixtures).mockReset();
+    vi.mocked(getSandboxStatus).mockReset();
+    vi.mocked(getBets).mockReset();
+    vi.mocked(getBetStats).mockReset();
+    vi.mocked(getStatus).mockReset();
+    vi.mocked(getBets).mockResolvedValue([]);
+    vi.mocked(getBetStats).mockResolvedValue({
+      bets_settled: 0, bets_open: 0, bets_won: 0, roi: 0, hit_rate: 0,
+      total_staked: 0, total_profit: 0, max_drawdown: 0, starting_bankroll: 0, current_bankroll: 0,
+    });
+    vi.mocked(getSandboxStatus).mockResolvedValue({ sandbox_mode: false, as_of: null });
+    vi.mocked(getStatus).mockRejectedValue(new Error("no backend"));
+  });
+
+  it("W215: each search result shows its league name, not the raw competition code", async () => {
+    vi.mocked(getFixtures).mockResolvedValue([
+      {
+        match_id: "1", utc_date: "2026-08-22T15:00:00Z", status: "SCHEDULED",
+        home_team: "Arsenal", away_team: "Everton", home_goals: null, away_goals: null, competition: "E0",
+      },
+    ]);
+    const user = userEvent.setup();
+    render(<BetTrackerPage />);
+
+    await user.type(screen.getByPlaceholderText("Search a real fixture by team name…"), "Arsenal");
+
+    // LEAGUE_LABEL["E0"] -- reused from dashboardMetrics.ts, not a raw code.
+    expect(await screen.findByText("Premier League")).toBeInTheDocument();
+    expect(screen.queryByText("E0")).not.toBeInTheDocument();
+  });
+
+  it("falls back to the raw competition code for an unmapped league", async () => {
+    vi.mocked(getFixtures).mockResolvedValue([
+      {
+        match_id: "2", utc_date: "2026-08-23T15:00:00Z", status: "SCHEDULED",
+        home_team: "Malmo FF", away_team: "AIK", home_goals: null, away_goals: null, competition: "XYZ",
+      },
+    ]);
+    const user = userEvent.setup();
+    render(<BetTrackerPage />);
+
+    await user.type(screen.getByPlaceholderText("Search a real fixture by team name…"), "Malmo");
+
+    expect(await screen.findByText("XYZ")).toBeInTheDocument();
+  });
+
+  it("shows no league tag when a fixture has no competition", async () => {
+    vi.mocked(getFixtures).mockResolvedValue([
+      {
+        match_id: "3", utc_date: "2026-08-24T15:00:00Z", status: "SCHEDULED",
+        home_team: "Chelsea", away_team: "Fulham", home_goals: null, away_goals: null,
+      },
+    ]);
+    const user = userEvent.setup();
+    render(<BetTrackerPage />);
+
+    await user.type(screen.getByPlaceholderText("Search a real fixture by team name…"), "Chelsea");
+
+    await screen.findByText(/Chelsea v Fulham/);
+    expect(screen.queryByText("undefined")).not.toBeInTheDocument();
+  });
+});

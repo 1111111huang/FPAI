@@ -13,6 +13,7 @@ import { ApiError, deleteBet, getBetStats, getBets, getFixtures, logBetManual, s
 import type { Bet, BetStats, Fixture } from "@/lib/types";
 import { useSandboxAsOf } from "@/lib/useSandboxAsOf";
 import { AppShell } from "./AppShell";
+import { LEAGUE_LABEL } from "@/lib/dashboardMetrics";
 import { addDays, dateString, ErrorState, TeamBadge, marketLabel } from "./MatchUI";
 
 function formatDate(iso: string): string {
@@ -177,6 +178,11 @@ function ManualBetForm({ onLogged, onSessionExpired }: { onLogged: () => void; o
                     <TeamBadge name={f.home_team} />
                     {f.home_team} v {f.away_team}
                     <TeamBadge name={f.away_team} />
+                    {f.competition && (
+                      <span className="rounded border border-border px-1.5 py-0.5 text-[10px] uppercase text-ink-secondary">
+                        {LEAGUE_LABEL[f.competition] ?? f.competition}
+                      </span>
+                    )}
                     <span className="ml-auto text-xs text-ink-secondary">{formatDate(f.utc_date)}</span>
                   </button>
                 ))}
