@@ -44,7 +44,7 @@ import {
   getFixtures,
   logBetFromRecommendation,
 } from "@/lib/api";
-import type { Fixture, MatchRecommendationOut } from "@/lib/types";
+import type { Bet, Fixture, MatchRecommendationOut } from "@/lib/types";
 import { useSandboxAsOf } from "@/lib/useSandboxAsOf";
 import { groupByDate, groupByLeague, sortMatches, LEAGUE_COUNTRY, LEAGUE_LABEL, type MatchSort } from "@/lib/dashboardMetrics";
 import { AppShell } from "./AppShell";
@@ -1746,6 +1746,7 @@ export function LogBetButton({
   const [stake, setStake] = useState("");
   const [saveStatus, setSaveStatus] = useState<"idle" | "saving" | "done" | "error">("idle");
   const [errorMsg, setErrorMsg] = useState("");
+  const [loggedBet, setLoggedBet] = useState<Bet | null>(null);
 
   if (status === "unauthenticated") {
     // W215: the whole current URL (query params included), not a bare
@@ -1777,7 +1778,8 @@ export function LogBetButton({
     }
     setSaveStatus("saving");
     try {
-      await logBetFromRecommendation({ match_id: matchId, recommendation, market, selection, stake: parsedStake });
+      const bet = await logBetFromRecommendation({ match_id: matchId, recommendation, market, selection, stake: parsedStake });
+      setLoggedBet(bet);
       setSaveStatus("done");
     } catch (err) {
       setSaveStatus("error");
@@ -1785,7 +1787,22 @@ export function LogBetButton({
     }
   }
 
-  if (saveStatus === "done") return <span className="text-xs text-good">Logged</span>;
+  if (saveStatus === "done") {
+    // W215: logBetFromRecommendation() already returns the settled outcome
+    // (W212 may have auto-settled it immediately) -- show it instead of a
+    // flat "Logged" that hides real information already in hand, and give
+    // a way to see it in context instead of a dead end.
+    return (
+      <span className="flex items-center gap-2 text-xs">
+        <span className={loggedBet?.outcome === "lost" ? "text-serious" : "text-good"}>
+          {loggedBet && loggedBet.outcome !== "open" ? `Logged -- ${loggedBet.outcome}` : "Logged"}
+        </span>
+        <Link href="/bets" className="font-medium text-accent">
+          View in Bet Tracker
+        </Link>
+      </span>
+    );
+  }
 
   if (!open) {
     return (
