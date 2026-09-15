@@ -33,6 +33,7 @@ vi.mock("@/lib/api", () => ({
   // rejected in beforeEach below (AppShell.test.tsx's own precedent),
   // rather than left unresolved.
   getStatus: vi.fn(),
+  deleteBet: vi.fn(),
   ApiError: class ApiError extends Error {
     status?: number;
     constructor(message: string, status?: number) {
@@ -43,7 +44,7 @@ vi.mock("@/lib/api", () => ({
   },
 }));
 
-import { ApiError, getBets, getBetStats, getFixtures, getSandboxStatus, getStatus, settleOpenBets } from "@/lib/api";
+import { ApiError, deleteBet, getBets, getBetStats, getFixtures, getSandboxStatus, getStatus, settleOpenBets } from "@/lib/api";
 
 describe("ManualBetForm surfaces a visible error when the fixture fetch fails (W52)", () => {
   beforeEach(() => {
@@ -465,5 +466,108 @@ describe("BetTracker UI polish: column headers, stats loading, fixture empty sta
     // no need to scope further than the plain query.
     await waitFor(() => expect(screen.getByText(/no bets logged yet/i)).toBeInTheDocument());
     expect(screen.queryByText(/loading/i)).not.toBeInTheDocument();
+  });
+});
+
+describe("BetTrackerPage lets a user delete their own logged bet (W215)", () => {
+  beforeEach(() => {
+    vi.mocked(getFixtures).mockReset();
+    vi.mocked(getSandboxStatus).mockReset();
+    vi.mocked(getBets).mockReset();
+    vi.mocked(getBetStats).mockReset();
+    vi.mocked(getStatus).mockReset();
+    vi.mocked(settleOpenBets).mockReset();
+    vi.mocked(deleteBet).mockReset();
+    vi.mocked(getFixtures).mockResolvedValue([]);
+    vi.mocked(getSandboxStatus).mockResolvedValue({ sandbox_mode: false, as_of: null });
+    vi.mocked(getStatus).mockRejectedValue(new Error("no backend"));
+    vi.mocked(settleOpenBets).mockResolvedValue([]);
+  });
+
+  const bet = {
+    id: 1, match_id: "m1", date: "2026-08-22", home_team: "Arsenal", away_team: "Everton",
+    market: "result_3way", selection: "home", odds: 2.1, stake: 10, outcome: "open" as const,
+    profit_loss: null, source: "manual" as const, recommendation_snapshot: null, created_at: "now",
+  };
+
+  it("shows a two-step confirm, and removes the row on confirm", async () => {
+    vi.mocked(getBets).mockResolvedValueOnce([bet]).mockResolvedValueOnce([]);
+    vi.mocked(getBetStats).mockResolvedValue({
+      bets_settled: 0, bets_open: 0, bets_won: 0, roi: 0, hit_rate: 0,
+      total_staked: 0, total_profit: 0, max_drawdown: 0, starting_bankroll: 0, current_bankroll: 0,
+    });
+    vi.mocked(deleteBet).mockResolvedValue(undefined);
+    const user = userEvent.setup();
+
+    render(<BetTrackerPage />);
+    await screen.findByText(/Arsenal v Everton/);
+
+    await user.click(screen.getByRole("button", { name: /delete/i }));
+    expect(screen.getByText(/delete this bet\?/i)).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: /confirm delete/i }));
+
+    expect(deleteBet).toHaveBeenCalledWith(1);
+    await waitFor(() => expect(screen.queryByText(/Arsenal v Everton/)).not.toBeInTheDocument());
+  });
+
+  it("clicking Cancel on the confirm step leaves the bet in place", async () => {
+    vi.mocked(getBets).mockResolvedValue([bet]);
+    vi.mocked(getBetStats).mockResolvedValue({
+      bets_settled: 0, bets_open: 0, bets_won: 0, roi: 0, hit_rate: 0,
+      total_staked: 0, total_profit: 0, max_drawdown: 0, starting_bankroll: 0, current_bankroll: 0,
+    });
+    const user = userEvent.setup();
+
+    render(<BetTrackerPage />);
+    await screen.findByText(/Arsenal v Everton/);
+
+    await user.click(screen.getByRole("button", { name: /delete/i }));
+    await user.click(screen.getByRole("button", { name: /cancel delete/i }));
+
+    expect(deleteBet).not.toHaveBeenCalled();
+    expect(screen.getByText(/Arsenal v Everton/)).toBeInTheDocument();
+  });
+
+  it("shows an inline error and leaves the bet in place when delete fails (not a 401)", async () => {
+    vi.mocked(getBets).mockResolvedValue([bet]);
+    vi.mocked(getBetStats).mockResolvedValue({
+      bets_settled: 0, bets_open: 0, bets_won: 0, roi: 0, hit_rate: 0,
+      total_staked: 0, total_profit: 0, max_drawdown: 0, starting_bankroll: 0, current_bankroll: 0,
+    });
+    vi.mocked(deleteBet).mockRejectedValue(new ApiError("Failed to delete bet (500)", 500));
+    const user = userEvent.setup();
+
+    render(<BetTrackerPage />);
+    await screen.findByText(/Arsenal v Everton/);
+
+    await user.click(screen.getByRole("button", { name: /delete/i }));
+    await user.click(screen.getByRole("button", { name: /confirm delete/i }));
+
+    expect(await screen.findByText(/Failed to delete bet/i)).toBeInTheDocument();
+    // Row wasn't removed, and Yes/Cancel are still there so the user can
+    // retry or back out.
+    expect(screen.getByText(/Arsenal v Everton/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /confirm delete/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /cancel delete/i })).toBeInTheDocument();
+  });
+
+  it("prompts re-auth (not an inline error) when delete fails with a 401", async () => {
+    vi.mocked(getBets).mockResolvedValue([bet]);
+    vi.mocked(getBetStats).mockResolvedValue({
+      bets_settled: 0, bets_open: 0, bets_won: 0, roi: 0, hit_rate: 0,
+      total_staked: 0, total_profit: 0, max_drawdown: 0, starting_bankroll: 0, current_bankroll: 0,
+    });
+    vi.mocked(deleteBet).mockRejectedValue(new ApiError("Failed to delete bet (401)", 401));
+    const user = userEvent.setup();
+
+    render(<BetTrackerPage />);
+    await screen.findByText(/Arsenal v Everton/);
+
+    await user.click(screen.getByRole("button", { name: /delete/i }));
+    await user.click(screen.getByRole("button", { name: /confirm delete/i }));
+
+    await waitFor(() => expect(screen.getByText(/your session expired/i)).toBeInTheDocument());
+    expect(screen.queryByText(/failed to delete bet/i)).not.toBeInTheDocument();
   });
 });

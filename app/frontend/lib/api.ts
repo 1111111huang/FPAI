@@ -136,6 +136,15 @@ export async function getBets(): Promise<Bet[]> {
   return response.json();
 }
 
+/** W215: removes a logged bet -- 404s (via ApiError) if it isn't the
+ * caller's own bet or doesn't exist. */
+export async function deleteBet(id: number): Promise<void> {
+  const response = await fetch(`/api/bets/${id}`, { method: "DELETE" });
+  if (!response.ok) {
+    throw new ApiError(`Failed to delete bet (${response.status})`, response.status);
+  }
+}
+
 /** W13: on-demand settlement trigger -- no scheduler (W08/W09 deferred).
  * Returns the bets that were actually settled by this call (won/lost);
  * corners bets and not-yet-finished matches are never included. */

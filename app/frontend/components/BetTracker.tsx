@@ -5,11 +5,11 @@
  * search results below, never free-typed team names, so auto-settlement
  * (W13) can still find the real fixture later. */
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { MagnifyingGlass, WarningCircle } from "@phosphor-icons/react";
 
-import { ApiError, getBetStats, getBets, getFixtures, logBetManual, settleOpenBets } from "@/lib/api";
+import { ApiError, deleteBet, getBetStats, getBets, getFixtures, logBetManual, settleOpenBets } from "@/lib/api";
 import type { Bet, BetStats, Fixture } from "@/lib/types";
 import { useSandboxAsOf } from "@/lib/useSandboxAsOf";
 import { AppShell } from "./AppShell";
@@ -270,10 +270,51 @@ function ManualBetForm({ onLogged, onSessionExpired }: { onLogged: () => void; o
   );
 }
 
-function BetRow({ bet }: { bet: Bet }) {
+function BetRow({
+  bet,
+  onDeleted,
+  onSessionExpired,
+}: {
+  bet: Bet;
+  onDeleted: () => void;
+  onSessionExpired: () => void;
+}) {
   const outcomeColor = bet.outcome === "won" ? "text-good" : bet.outcome === "lost" ? "text-serious" : "text-muted";
+  const [confirming, setConfirming] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+  // Matches ManualBetForm's `cancelled` convention -- this row can be
+  // removed from the list (a delete elsewhere, a reload) while its own
+  // delete is still in flight; a ref (not state) survives the finally
+  // block running after unmount without itself triggering a re-render.
+  const mountedRef = useRef(true);
+  useEffect(() => {
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
+
+  const label = `${bet.home_team} v ${bet.away_team}`;
+
+  async function confirmDelete() {
+    setDeleting(true);
+    setDeleteError(null);
+    try {
+      await deleteBet(bet.id);
+      onDeleted();
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 401) {
+        onSessionExpired();
+      } else {
+        setDeleteError(err instanceof ApiError ? err.message : "Could not delete bet.");
+      }
+    } finally {
+      if (mountedRef.current) setDeleting(false);
+    }
+  }
+
   return (
-    <div className="grid grid-cols-[1fr_auto_auto_auto_auto] items-center gap-4 border-b border-border py-3 text-sm last:border-b-0">
+    <div className="grid grid-cols-[1fr_auto_auto_auto_auto_auto] items-center gap-4 border-b border-border py-3 text-sm last:border-b-0">
       <span className="truncate text-ink">
         {bet.home_team} v {bet.away_team}
         <span className="ml-2 text-xs text-ink-secondary">
@@ -286,6 +327,44 @@ function BetRow({ bet }: { bet: Bet }) {
         {bet.profit_loss !== null ? bet.profit_loss.toFixed(2) : "—"}
       </span>
       <span className={`justify-self-end uppercase text-xs font-medium ${outcomeColor}`}>{bet.outcome}</span>
+      <span className="justify-self-end text-xs">
+        {confirming ? (
+          <span className="flex items-center gap-1.5">
+            <span className="text-ink-secondary">Delete this bet?</span>
+            <button
+              type="button"
+              onClick={confirmDelete}
+              disabled={deleting}
+              aria-label={`Confirm delete: ${label}`}
+              className="font-medium text-serious disabled:opacity-50"
+            >
+              {deleting ? "…" : "Yes"}
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setConfirming(false);
+                setDeleteError(null);
+              }}
+              disabled={deleting}
+              aria-label={`Cancel delete: ${label}`}
+              className="text-ink-secondary disabled:opacity-50"
+            >
+              Cancel
+            </button>
+            {deleteError && <span className="text-serious">{deleteError}</span>}
+          </span>
+        ) : (
+          <button
+            type="button"
+            onClick={() => setConfirming(true)}
+            aria-label={`Delete bet: ${label}`}
+            className="text-ink-secondary hover:text-serious"
+          >
+            Delete
+          </button>
+        )}
+      </span>
     </div>
   );
 }
@@ -445,15 +524,16 @@ export function BetTrackerPage() {
         )}
         {!error && bets && bets.length > 0 && (
           <div className="mt-2">
-            <div className="grid grid-cols-[1fr_auto_auto_auto_auto] gap-4 border-b border-border pb-1.5 text-xs font-medium uppercase tracking-wide text-muted">
+            <div className="grid grid-cols-[1fr_auto_auto_auto_auto_auto] gap-4 border-b border-border pb-1.5 text-xs font-medium uppercase tracking-wide text-muted">
               <span>Match</span>
               <span className="text-right">Odds</span>
               <span className="text-right">Stake</span>
               <span className="text-right">P&amp;L</span>
               <span className="text-right">Outcome</span>
+              <span />
             </div>
             {bets.map((bet) => (
-              <BetRow key={bet.id} bet={bet} />
+              <BetRow key={bet.id} bet={bet} onDeleted={load} onSessionExpired={() => setNeedsAuth(true)} />
             ))}
           </div>
         )}
