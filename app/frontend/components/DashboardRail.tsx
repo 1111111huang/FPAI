@@ -15,23 +15,22 @@ import { computeHit, formatEdge, formatMoneyWon, type Match, type Overall } from
 // "completed_*" (direct user request) aren't Overall values -- they're
 // match-status facts tracked separately by countByOverall -- so the slice
 // key type widens to include them here rather than in the Overall union
-// itself. Direct user follow-up request: split the single "completed"
-// bucket into hit/not-hit -- reuses direct_bet's green for a hit and
-// insufficient_data's red-orange for a miss (same HitBadge convention
-// MatchCard's own card view already uses, `text-good`/`text-serious`) so
-// the meaning ("good outcome" / "bad outcome") is consistent across the
-// app, not a new color pick; completed_unresolved (no determinable hit --
-// no actual pick was made, or an unresolvable market) keeps the original
-// --accent blue, a "done, no verdict" color still otherwise unused here.
-// DONUT_ORDER is arranged so no two color-sharing slices ever sit next to
-// each other in the ring (direct_bet green -> ... -> insufficient_data red
-// -> completed_hit green -> completed_miss red -> completed_unresolved
-// blue -> wraps back to direct_bet green): every adjacent pair differs.
+// itself.
+//
+// Direct user request (2026-09-15): the pending (not-yet-completed) and
+// completed categories used to share one donut/legend -- direct_bet's
+// green and completed_hit's green sat right next to each other with no
+// visual distinction beyond the text label, and likewise for
+// insufficient_data/completed_miss's red -- confusing exactly because both
+// pairs are real, deliberate color reuse (completed_hit/completed_miss
+// intentionally mirror HitBadge's own good/serious convention, not a new
+// pick), just never meant to be read side by side in the same ring. Now
+// two separate donuts, each with its own legend -- a color only ever needs
+// to disambiguate against its own chart's other slices, not the other
+// chart's too, so the same palette works unchanged, no new colors needed.
 type SliceKey = Overall | "completed_hit" | "completed_miss" | "completed_unresolved";
-const DONUT_ORDER: SliceKey[] = [
-  "direct_bet", "conditional", "no_bet", "insufficient_data",
-  "completed_hit", "completed_miss", "completed_unresolved",
-];
+const PENDING_ORDER: SliceKey[] = ["direct_bet", "conditional", "no_bet", "insufficient_data"];
+const COMPLETED_ORDER: SliceKey[] = ["completed_hit", "completed_miss", "completed_unresolved"];
 const DONUT_COLOR: Record<SliceKey, string> = {
   direct_bet: "var(--status-good)",
   conditional: "var(--status-warning)",
@@ -61,20 +60,76 @@ function matchHref(m: Match) {
   )}&date=${m.kickoffIso.slice(0, 10)}&league=${encodeURIComponent(m.league)}`;
 }
 
-export function DashboardRail({ matches }: { matches: Match[] }) {
-  const counts = useMemo(() => countByOverall(matches), [matches]);
-  const topEdges = useMemo(() => rankTopEdges(matches, 5), [matches]);
-  const staking = useMemo(() => computeStakingSummary(matches), [matches]);
-  const total = DONUT_ORDER.reduce((sum, key) => sum + counts[key], 0);
+/** One donut + legend, scoped to just `order`'s slices out of `counts` --
+ * shared by both the pending-recommendation and completed-outcome charts
+ * below so the arc math/SVG markup exists once, not twice. */
+function EdgeDonut({
+  order, counts, emptyMessage,
+}: {
+  order: SliceKey[];
+  counts: Record<SliceKey, number>;
+  emptyMessage: string;
+}) {
+  const total = order.reduce((sum, key) => sum + counts[key], 0);
+  if (total === 0) return <p className="mt-3 text-sm text-ink-secondary">{emptyMessage}</p>;
 
   let cumulative = 0;
-  const arcs = DONUT_ORDER.filter((key) => counts[key] > 0).map((key) => {
+  const arcs = order.filter((key) => counts[key] > 0).map((key) => {
     const frac = counts[key] / total;
     const rawDash = frac * CIRCUMFERENCE;
     const arc = { key, dash: Math.max(rawDash - SEGMENT_GAP, 0), offset: cumulative };
     cumulative += rawDash;
     return arc;
   });
+
+  return (
+    <div className="mt-3 flex items-center gap-4">
+      <svg viewBox="0 0 100 100" width={88} height={88} className="shrink-0 -rotate-90" aria-hidden="true">
+        <circle cx="50" cy="50" r={RADIUS} fill="none" stroke="var(--gridline)" strokeWidth={14} />
+        {arcs.map((arc) => (
+          <circle
+            key={arc.key}
+            cx="50"
+            cy="50"
+            r={RADIUS}
+            fill="none"
+            stroke={DONUT_COLOR[arc.key]}
+            strokeWidth={14}
+            strokeDasharray={`${arc.dash} ${CIRCUMFERENCE - arc.dash}`}
+            strokeDashoffset={-arc.offset}
+          />
+        ))}
+        <text
+          x="50"
+          y="50"
+          textAnchor="middle"
+          dominantBaseline="central"
+          className="fill-ink text-[22px] font-semibold"
+          style={{ transform: "rotate(90deg)", transformOrigin: "50px 50px" }}
+        >
+          {total}
+        </text>
+      </svg>
+      <ul className="flex flex-1 flex-col gap-1.5 text-xs">
+        {order.filter((key) => counts[key] > 0).map((key) => (
+          <li key={key} className="flex items-center justify-between gap-2">
+            <span className="flex items-center gap-1.5 text-ink-secondary">
+              <span className="h-2 w-2 shrink-0 rounded-full" style={{ background: DONUT_COLOR[key] }} />
+              {DONUT_LABEL[key]}
+            </span>
+            <span className="font-mono text-ink">{counts[key]}</span>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+export function DashboardRail({ matches }: { matches: Match[] }) {
+  const counts = useMemo(() => countByOverall(matches), [matches]);
+  const topEdges = useMemo(() => rankTopEdges(matches, 5), [matches]);
+  const staking = useMemo(() => computeStakingSummary(matches), [matches]);
+  const hasCompleted = COMPLETED_ORDER.some((key) => counts[key] > 0);
 
   return (
     <aside className="flex w-full flex-col gap-6 lg:w-72">
@@ -85,50 +140,30 @@ export function DashboardRail({ matches }: { matches: Match[] }) {
           low opacity rather than a flat neutral fill. */}
       <section className="rounded-lg border border-accent/25 bg-accent/10 p-4">
         <h2 className="text-xs font-bold uppercase tracking-wide text-muted">Edge Distribution</h2>
-        {total === 0 ? (
-          <p className="mt-3 text-sm text-ink-secondary">No matches loaded yet.</p>
-        ) : (
-          <div className="mt-3 flex items-center gap-4">
-            <svg viewBox="0 0 100 100" width={88} height={88} className="shrink-0 -rotate-90" aria-hidden="true">
-              <circle cx="50" cy="50" r={RADIUS} fill="none" stroke="var(--gridline)" strokeWidth={14} />
-              {arcs.map((arc) => (
-                <circle
-                  key={arc.key}
-                  cx="50"
-                  cy="50"
-                  r={RADIUS}
-                  fill="none"
-                  stroke={DONUT_COLOR[arc.key]}
-                  strokeWidth={14}
-                  strokeDasharray={`${arc.dash} ${CIRCUMFERENCE - arc.dash}`}
-                  strokeDashoffset={-arc.offset}
-                />
-              ))}
-              <text
-                x="50"
-                y="50"
-                textAnchor="middle"
-                dominantBaseline="central"
-                className="fill-ink text-[22px] font-semibold"
-                style={{ transform: "rotate(90deg)", transformOrigin: "50px 50px" }}
-              >
-                {total}
-              </text>
-            </svg>
-            <ul className="flex flex-1 flex-col gap-1.5 text-xs">
-              {DONUT_ORDER.filter((key) => counts[key] > 0).map((key) => (
-                <li key={key} className="flex items-center justify-between gap-2">
-                  <span className="flex items-center gap-1.5 text-ink-secondary">
-                    <span className="h-2 w-2 shrink-0 rounded-full" style={{ background: DONUT_COLOR[key] }} />
-                    {DONUT_LABEL[key]}
-                  </span>
-                  <span className="font-mono text-ink">{counts[key]}</span>
-                </li>
-              ))}
-            </ul>
-          </div>
-        )}
+        <EdgeDonut
+          order={PENDING_ORDER}
+          counts={counts}
+          // Distinct from "no pending matches" (matches exist, all of them
+          // already completed -- a real, plausible state once this split
+          // in two) -- "No matches loaded yet." is reserved for the
+          // genuinely-empty case this exact string is tested against.
+          emptyMessage={matches.length === 0 ? "No matches loaded yet." : "No pending matches."}
+        />
       </section>
+
+      {/* Direct user request (2026-09-15): a second, separate donut for
+          completed-match outcomes -- was one combined chart with
+          Edge Distribution above, whose color reuse (green/red meaning
+          "good/bad outcome" here vs. "recommendation type" there) was only
+          confusing when both showed in the same ring/legend at once.
+          Hidden entirely (like every other zero-count category already)
+          until at least one match has actually finished. */}
+      {hasCompleted && (
+        <section className="rounded-lg border border-accent/25 bg-accent/10 p-4">
+          <h2 className="text-xs font-bold uppercase tracking-wide text-muted">Completed Outcomes</h2>
+          <EdgeDonut order={COMPLETED_ORDER} counts={counts} emptyMessage="No completed matches yet." />
+        </section>
+      )}
 
       {/* Mockup correction: the rail's own panels carry a distinct accent
           tint (were plain border-border, no fill) -- direct feedback that

@@ -79,6 +79,40 @@ describe("DashboardRail", () => {
     expect(screen.queryByText("Completed (Not Hit)")).not.toBeInTheDocument();
   });
 
+  it("direct user request (2026-09-15): splits pending and completed into two separate donuts, not one combined chart", () => {
+    // Before this split, Direct Bet (green) and Completed (Hit) (also
+    // green, a deliberate but confusing reuse -- HitBadge's own good/
+    // serious convention) sat in the same ring/legend with no way to tell
+    // them apart at a glance.
+    const matches = [
+      match({ id: "1", overall: "direct_bet" }),
+      match({ id: "2", status: "completed", result: { home: 2, away: 0 } }),
+    ];
+    render(<DashboardRail matches={matches} />);
+    expect(screen.getByText("Edge Distribution")).toBeInTheDocument();
+    expect(screen.getByText("Completed Outcomes")).toBeInTheDocument();
+    expect(screen.getByText("Direct Bet")).toBeInTheDocument();
+    expect(screen.getByText("Completed (Hit)")).toBeInTheDocument();
+  });
+
+  it("hides the Completed Outcomes section entirely when nothing has finished yet", () => {
+    const matches = [match({ id: "1", overall: "direct_bet" })];
+    render(<DashboardRail matches={matches} />);
+    expect(screen.getByText("Edge Distribution")).toBeInTheDocument();
+    expect(screen.queryByText("Completed Outcomes")).not.toBeInTheDocument();
+  });
+
+  it("distinguishes 'no matches at all' from 'matches exist, none pending' in the Edge Distribution empty state", () => {
+    // Every match already completed is a real, reachable state now that
+    // the two donuts are independent -- "No matches loaded yet." would be
+    // misleading here (matches did load, they're just all in the other
+    // chart).
+    const matches = [match({ id: "1", status: "completed", result: { home: 2, away: 0 } })];
+    render(<DashboardRail matches={matches} />);
+    expect(screen.getByText("No pending matches.")).toBeInTheDocument();
+    expect(screen.queryByText("No matches loaded yet.")).not.toBeInTheDocument();
+  });
+
   it("renders Top Edges ranked by value_edge descending, as links to Match Analysis", () => {
     const matches = [
       match({ id: "low", home: "LowEdgeTeam", candidates: [{ ...match().candidates[0], valueEdge: 0.01 }] }),
