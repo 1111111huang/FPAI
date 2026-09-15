@@ -5,6 +5,24 @@ import { withAuth } from "next-auth/middleware";
 
 export default withAuth({
   pages: { signIn: "/login" },
+  callbacks: {
+    // TEMP DIAGNOSTIC (2026-09-15) -- middleware's own getToken() rejects a
+    // session cookie that /api/auth/session (a separate, Node runtime)
+    // accepts as valid, in production, consistently. Logging what
+    // middleware's Edge runtime actually sees for the raw cookie vs what
+    // decoding it produces, to tell a genuinely-missing/differently-scoped
+    // cookie apart from a decode-only failure. Remove once root-caused.
+    authorized({ req, token }) {
+      const raw = req.cookies.get("__Secure-next-auth.session-token");
+      console.log("[middleware-debug]", {
+        hasCookie: !!raw,
+        cookieLen: raw?.value?.length ?? 0,
+        tokenPresent: !!token,
+        tokenEmail: token?.email,
+      });
+      return !!token;
+    },
+  },
 });
 
 export const config = {
