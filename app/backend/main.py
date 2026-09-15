@@ -33,7 +33,7 @@ from app.backend import bets, eod_batch, recommendations, sandbox_clock
 from app.backend.agent_config_hash import compute_agent_config_hash
 from app.backend.auth_deps import get_current_user_email
 from app.backend.bet_tracker import Bet, BetTracker
-from app.backend.bets import BetFromRecommendationRequest, BetManualRequest, BetOut
+from app.backend.bets import BetFromRecommendationRequest, BetManualRequest, BetOut, BetUpdateRequest
 from app.backend.football_data_client import FootballDataClient, NormalizedMatch
 from app.backend.odds_sport_keys import DEFAULT_SPORT_KEY, ODDS_SPORT_KEY_BY_COMPETITION
 from app.backend.sweden_fixtures_client import (
@@ -1471,3 +1471,28 @@ async def delete_bet(
     if bet is None or bet.user_id != user.id:
         raise HTTPException(status_code=404, detail="Bet not found.")
     tracker.delete_bet(bet_id)
+
+
+@app.patch("/api/bets/{bet_id}")
+async def update_bet(
+    bet_id: int,
+    request: BetUpdateRequest,
+    tracker: BetTracker = Depends(bets.get_bet_tracker),
+    user_email: str = Depends(get_current_user_email),
+    user_store: UserStore = Depends(get_user_store),
+) -> BetOut:
+    """W216: direct user feedback -- a typo'd stake/odds, or the wrong
+    market/selection, had no correction path short of delete-and-relog
+    (which also loses the bet's id/created_at/history). Every field is
+    optional (BetUpdateRequest) -- a partial edit leaves the rest
+    untouched. Same 404-not-403 ownership check as DELETE, checked before
+    calling update_bet."""
+    user = user_store.get_or_create(user_email)
+    bet = tracker.get_bet(bet_id)
+    if bet is None or bet.user_id != user.id:
+        raise HTTPException(status_code=404, detail="Bet not found.")
+    updated = tracker.update_bet(
+        bet_id, market=request.market, selection=request.selection,
+        odds=request.odds, stake=request.stake,
+    )
+    return BetOut.from_bet(updated)  # type: ignore[arg-type]

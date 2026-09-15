@@ -59,6 +59,92 @@ def test_delete_bet_returns_false_for_a_nonexistent_id(tmp_path: Path) -> None:
     assert tracker.delete_bet(999) is False
 
 
+def test_update_bet_changes_only_the_given_fields(tmp_path: Path) -> None:
+    """W216: a typo'd stake/odds (or a wrong market/selection) previously
+    had no correction path short of delete-and-relog. A partial update --
+    only the fields actually provided -- leaves everything else untouched."""
+    tracker = BetTracker(db_path=tmp_path / "bets.db")
+    bet = tracker.create_bet(
+        match_id="m1", date="2026-08-22", home_team="Arsenal", away_team="Everton",
+        market="result_3way", selection="home", odds=2.0, stake=10.0,
+        source="manual", recommendation_snapshot=None,
+    )
+
+    updated = tracker.update_bet(bet.id, stake=25.0)
+
+    assert updated.stake == 25.0
+    assert updated.odds == 2.0  # untouched
+    assert updated.market == "result_3way"  # untouched
+    assert updated.selection == "home"  # untouched
+
+
+def test_update_bet_can_change_market_and_selection(tmp_path: Path) -> None:
+    tracker = BetTracker(db_path=tmp_path / "bets.db")
+    bet = tracker.create_bet(
+        match_id="m1", date="2026-08-22", home_team="Arsenal", away_team="Everton",
+        market="result_3way", selection="home", odds=2.0, stake=10.0,
+        source="manual", recommendation_snapshot=None,
+    )
+
+    updated = tracker.update_bet(bet.id, market="btts", selection="yes", odds=1.8)
+
+    assert updated.market == "btts"
+    assert updated.selection == "yes"
+    assert updated.odds == 1.8
+
+
+def test_update_bet_returns_none_for_a_nonexistent_id(tmp_path: Path) -> None:
+    tracker = BetTracker(db_path=tmp_path / "bets.db")
+    assert tracker.update_bet(999, stake=10.0) is None
+
+
+def test_update_bet_recomputes_profit_loss_for_an_already_won_bet(tmp_path: Path) -> None:
+    """Editing odds/stake on a bet that already settled must keep
+    profit_loss consistent with its (unchanged) outcome -- not leave a
+    stale figure computed against the old terms."""
+    tracker = BetTracker(db_path=tmp_path / "bets.db")
+    bet = tracker.create_bet(
+        match_id="m1", date="2026-08-22", home_team="Arsenal", away_team="Everton",
+        market="result_3way", selection="home", odds=2.0, stake=10.0,
+        source="manual", recommendation_snapshot=None,
+    )
+    tracker.settle_bet(bet.id, outcome="won")
+
+    updated = tracker.update_bet(bet.id, stake=20.0)
+
+    assert updated.outcome == "won"
+    assert updated.profit_loss == 20.0  # 20 * (2.0 - 1)
+
+
+def test_update_bet_recomputes_profit_loss_for_an_already_lost_bet(tmp_path: Path) -> None:
+    tracker = BetTracker(db_path=tmp_path / "bets.db")
+    bet = tracker.create_bet(
+        match_id="m1", date="2026-08-22", home_team="Arsenal", away_team="Everton",
+        market="result_3way", selection="home", odds=2.0, stake=10.0,
+        source="manual", recommendation_snapshot=None,
+    )
+    tracker.settle_bet(bet.id, outcome="lost")
+
+    updated = tracker.update_bet(bet.id, odds=3.0, stake=15.0)
+
+    assert updated.outcome == "lost"
+    assert updated.profit_loss == -15.0
+
+
+def test_update_bet_leaves_an_open_bets_profit_loss_as_none(tmp_path: Path) -> None:
+    tracker = BetTracker(db_path=tmp_path / "bets.db")
+    bet = tracker.create_bet(
+        match_id="m1", date="2026-08-22", home_team="Arsenal", away_team="Everton",
+        market="result_3way", selection="home", odds=2.0, stake=10.0,
+        source="manual", recommendation_snapshot=None,
+    )
+
+    updated = tracker.update_bet(bet.id, stake=20.0)
+
+    assert updated.outcome == "open"
+    assert updated.profit_loss is None
+
+
 def test_list_bets_returns_all_created_bets(tmp_path: Path) -> None:
     tracker = BetTracker(db_path=tmp_path / "bets.db")
     tracker.create_bet(

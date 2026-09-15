@@ -154,6 +154,42 @@ class BetTracker:
             )
         return self.get_bet(bet_id)  # type: ignore[return-value]
 
+    def update_bet(
+        self,
+        bet_id: int,
+        market: str | None = None,
+        selection: str | None = None,
+        odds: float | None = None,
+        stake: float | None = None,
+    ) -> Bet | None:
+        """W216: partial update -- a field left as None keeps its existing
+        value. Returns None (not a raise) for a nonexistent bet_id, matching
+        `delete_bet`'s own not-found contract; the caller (main.py's route)
+        is responsible for the 404. If the bet already settled (outcome is
+        'won'/'lost'), profit_loss is recomputed against the new odds/stake
+        so it never goes stale relative to the terms actually stored --
+        outcome itself is untouched by this method (settling is
+        settle_bet's job, not this one's)."""
+        bet = self.get_bet(bet_id)
+        if bet is None:
+            return None
+        new_market = market if market is not None else bet.market
+        new_selection = selection if selection is not None else bet.selection
+        new_odds = odds if odds is not None else bet.odds
+        new_stake = stake if stake is not None else bet.stake
+        if bet.outcome == "won":
+            profit_loss = new_stake * (new_odds - 1)
+        elif bet.outcome == "lost":
+            profit_loss = -new_stake
+        else:
+            profit_loss = None
+        with self._connect() as conn:
+            conn.execute(
+                "UPDATE user_bets SET market = ?, selection = ?, odds = ?, stake = ?, profit_loss = ? WHERE id = ?",
+                (new_market, new_selection, new_odds, new_stake, profit_loss, bet_id),
+            )
+        return self.get_bet(bet_id)
+
     def delete_bet(self, bet_id: int) -> bool:
         """Returns True if a row was actually deleted, False if bet_id
         didn't exist. Ownership is the caller's responsibility (main.py's

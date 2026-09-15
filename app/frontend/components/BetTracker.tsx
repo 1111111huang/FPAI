@@ -9,7 +9,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { MagnifyingGlass, WarningCircle } from "@phosphor-icons/react";
 
-import { ApiError, deleteBet, getBetStats, getBets, getFixtures, logBetManual, settleOpenBets } from "@/lib/api";
+import { ApiError, deleteBet, getBetStats, getBets, getFixtures, logBetManual, settleOpenBets, updateBet } from "@/lib/api";
 import type { Bet, BetStats, Fixture } from "@/lib/types";
 import { useSandboxAsOf } from "@/lib/useSandboxAsOf";
 import { AppShell } from "./AppShell";
@@ -279,19 +279,31 @@ function ManualBetForm({ onLogged, onSessionExpired }: { onLogged: () => void; o
 function BetRow({
   bet,
   onDeleted,
+  onUpdated,
   onSessionExpired,
 }: {
   bet: Bet;
   onDeleted: () => void;
+  onUpdated: () => void;
   onSessionExpired: () => void;
 }) {
   const outcomeColor = bet.outcome === "won" ? "text-good" : bet.outcome === "lost" ? "text-serious" : "text-muted";
   const [confirming, setConfirming] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
+  // W216: a mis-logged bet (typo'd stake/odds, wrong market/selection) had
+  // no correction path except delete-and-relog. Mutually exclusive with
+  // `confirming` above -- only one inline form shows at a time.
+  const [editing, setEditing] = useState(false);
+  const [editMarket, setEditMarket] = useState(bet.market);
+  const [editSelection, setEditSelection] = useState(bet.selection);
+  const [editOdds, setEditOdds] = useState(String(bet.odds));
+  const [editStake, setEditStake] = useState(String(bet.stake));
+  const [saving, setSaving] = useState(false);
+  const [editError, setEditError] = useState<string | null>(null);
   // Matches ManualBetForm's `cancelled` convention -- this row can be
   // removed from the list (a delete elsewhere, a reload) while its own
-  // delete is still in flight; a ref (not state) survives the finally
+  // delete/edit is still in flight; a ref (not state) survives the finally
   // block running after unmount without itself triggering a re-render.
   const mountedRef = useRef(true);
   useEffect(() => {
@@ -319,6 +331,127 @@ function BetRow({
     }
   }
 
+  function startEditing() {
+    setEditMarket(bet.market);
+    setEditSelection(bet.selection);
+    setEditOdds(String(bet.odds));
+    setEditStake(String(bet.stake));
+    setEditError(null);
+    setEditing(true);
+  }
+
+  async function saveEdit() {
+    const parsedOdds = parseFloat(editOdds);
+    const parsedStake = parseFloat(editStake);
+    if (!editSelection.trim() || !parsedOdds || parsedOdds <= 1 || !parsedStake || parsedStake <= 0) {
+      setEditError("Fill in selection, a valid odds (>1), and a stake (>0).");
+      return;
+    }
+    setSaving(true);
+    setEditError(null);
+    try {
+      await updateBet(bet.id, { market: editMarket, selection: editSelection, odds: parsedOdds, stake: parsedStake });
+      if (mountedRef.current) setEditing(false);
+      onUpdated();
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 401) {
+        onSessionExpired();
+      } else {
+        setEditError(err instanceof ApiError ? err.message : "Could not update bet.");
+      }
+    } finally {
+      if (mountedRef.current) setSaving(false);
+    }
+  }
+
+  if (editing) {
+    return (
+      <div className="border-b border-border py-3 text-sm last:border-b-0">
+        <div className="flex items-center justify-between text-ink">
+          <span className="truncate">{label}</span>
+          <button
+            type="button"
+            onClick={() => setEditing(false)}
+            disabled={saving}
+            aria-label={`Cancel bet edit: ${label}`}
+            className="text-xs text-ink-secondary disabled:opacity-50"
+          >
+            Cancel
+          </button>
+        </div>
+        <div className="mt-2 grid grid-cols-2 gap-3 sm:grid-cols-4">
+          <div>
+            <label htmlFor={`edit-market-${bet.id}`} className="sr-only">{`Edit market: ${label}`}</label>
+            <select
+              id={`edit-market-${bet.id}`}
+              value={editMarket}
+              onChange={(e) => {
+                setEditMarket(e.target.value);
+                setEditSelection(""); // force a fresh, valid choice for the new market
+              }}
+              className="w-full rounded border border-border bg-surface px-2 py-1.5 text-sm text-ink outline-none focus:border-accent"
+            >
+              {Object.keys(MARKET_SELECTIONS).map((m) => (
+                <option key={m} value={m}>{marketLabel(m).label}</option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <label htmlFor={`edit-selection-${bet.id}`} className="sr-only">{`Edit selection: ${label}`}</label>
+            <select
+              id={`edit-selection-${bet.id}`}
+              value={editSelection}
+              onChange={(e) => setEditSelection(e.target.value)}
+              className="w-full rounded border border-border bg-surface px-2 py-1.5 text-sm text-ink outline-none focus:border-accent"
+            >
+              <option value="">Select…</option>
+              {MARKET_SELECTIONS[editMarket]?.map((opt) => (
+                <option key={opt.value} value={opt.value}>{opt.label}</option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <label htmlFor={`edit-odds-${bet.id}`} className="sr-only">{`Edit odds: ${label}`}</label>
+            <input
+              id={`edit-odds-${bet.id}`}
+              value={editOdds}
+              onChange={(e) => setEditOdds(e.target.value)}
+              placeholder="Odds"
+              inputMode="decimal"
+              className="w-full rounded border border-border bg-surface px-2 py-1.5 text-sm text-ink outline-none focus:border-accent"
+            />
+          </div>
+          <div>
+            <label htmlFor={`edit-stake-${bet.id}`} className="sr-only">{`Edit stake: ${label}`}</label>
+            <input
+              id={`edit-stake-${bet.id}`}
+              value={editStake}
+              onChange={(e) => setEditStake(e.target.value)}
+              placeholder="Stake"
+              inputMode="decimal"
+              className="w-full rounded border border-border bg-surface px-2 py-1.5 text-sm text-ink outline-none focus:border-accent"
+            />
+          </div>
+        </div>
+        {editError && (
+          <p className="mt-2 flex items-center gap-1.5 text-xs text-serious">
+            <WarningCircle weight="fill" size={13} />
+            {editError}
+          </p>
+        )}
+        <button
+          type="button"
+          onClick={saveEdit}
+          disabled={saving}
+          aria-label={`Save bet edit: ${label}`}
+          className="mt-2 self-start rounded-md border border-accent px-3 py-1.5 text-xs font-medium text-accent disabled:opacity-50"
+        >
+          {saving ? "Saving…" : "Save"}
+        </button>
+      </div>
+    );
+  }
+
   return (
     <div className="grid grid-cols-[1fr_auto_auto_auto_auto_auto] items-center gap-4 border-b border-border py-3 text-sm last:border-b-0">
       <span className="truncate text-ink">
@@ -333,7 +466,7 @@ function BetRow({
         {bet.profit_loss !== null ? bet.profit_loss.toFixed(2) : "—"}
       </span>
       <span className={`justify-self-end uppercase text-xs font-medium ${outcomeColor}`}>{bet.outcome}</span>
-      <span className="justify-self-end text-xs">
+      <span className="justify-self-end flex items-center gap-2 text-xs">
         {confirming ? (
           <span className="flex items-center gap-1.5">
             <span className="text-ink-secondary">Delete this bet?</span>
@@ -361,14 +494,24 @@ function BetRow({
             {deleteError && <span className="text-serious">{deleteError}</span>}
           </span>
         ) : (
-          <button
-            type="button"
-            onClick={() => setConfirming(true)}
-            aria-label={`Delete bet: ${label}`}
-            className="text-ink-secondary hover:text-serious"
-          >
-            Delete
-          </button>
+          <>
+            <button
+              type="button"
+              onClick={startEditing}
+              aria-label={`Edit bet: ${label}`}
+              className="text-ink-secondary hover:text-accent"
+            >
+              Edit
+            </button>
+            <button
+              type="button"
+              onClick={() => setConfirming(true)}
+              aria-label={`Delete bet: ${label}`}
+              className="text-ink-secondary hover:text-serious"
+            >
+              Delete
+            </button>
+          </>
         )}
       </span>
     </div>
@@ -539,7 +682,7 @@ export function BetTrackerPage() {
               <span />
             </div>
             {bets.map((bet) => (
-              <BetRow key={bet.id} bet={bet} onDeleted={load} onSessionExpired={() => setNeedsAuth(true)} />
+              <BetRow key={bet.id} bet={bet} onDeleted={load} onUpdated={load} onSessionExpired={() => setNeedsAuth(true)} />
             ))}
           </div>
         )}

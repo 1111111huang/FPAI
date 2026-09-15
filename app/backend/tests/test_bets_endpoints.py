@@ -293,3 +293,77 @@ def test_delete_bet_endpoint_401s_without_the_internal_secret(tmp_path: Path):
     with TestClient(app) as client:
         response = client.delete("/api/bets/1")
     assert response.status_code == 401
+
+
+def test_update_bet_endpoint_edits_the_callers_own_bet(tmp_path: Path):
+    tracker = _override_tracker(tmp_path)
+    user = _override_user(tmp_path)
+    bet = tracker.create_bet(
+        match_id="m1", date="2026-08-22", home_team="Arsenal", away_team="Everton",
+        market="result_3way", selection="home", odds=2.0, stake=10.0,
+        source="manual", recommendation_snapshot=None, user_id=user.id,
+    )
+    try:
+        with TestClient(app) as client:
+            response = client.patch(f"/api/bets/{bet.id}", json={"stake": 25.0})
+        assert response.status_code == 200
+        body = response.json()
+        assert body["stake"] == 25.0
+        assert body["odds"] == 2.0  # untouched
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_update_bet_endpoint_recomputes_profit_loss_for_a_settled_bet(tmp_path: Path):
+    tracker = _override_tracker(tmp_path)
+    user = _override_user(tmp_path)
+    bet = tracker.create_bet(
+        match_id="m1", date="2026-08-22", home_team="Arsenal", away_team="Everton",
+        market="result_3way", selection="home", odds=2.0, stake=10.0,
+        source="manual", recommendation_snapshot=None, user_id=user.id,
+    )
+    tracker.settle_bet(bet.id, outcome="won")
+    try:
+        with TestClient(app) as client:
+            response = client.patch(f"/api/bets/{bet.id}", json={"stake": 20.0})
+        assert response.status_code == 200
+        body = response.json()
+        assert body["outcome"] == "won"
+        assert body["profit_loss"] == 20.0
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_update_bet_endpoint_404s_for_a_bet_owned_by_someone_else(tmp_path: Path):
+    tracker = _override_tracker(tmp_path)
+    _override_user(tmp_path)
+    other_users_bet = tracker.create_bet(
+        match_id="m2", date="2026-08-23", home_team="Chelsea", away_team="Fulham",
+        market="btts", selection="yes", odds=1.9, stake=5.0,
+        source="manual", recommendation_snapshot=None, user_id=999,
+    )
+    try:
+        with TestClient(app) as client:
+            response = client.patch(f"/api/bets/{other_users_bet.id}", json={"stake": 50.0})
+        assert response.status_code == 404
+        assert tracker.get_bet(other_users_bet.id).stake == 5.0  # unchanged
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_update_bet_endpoint_404s_for_a_nonexistent_id(tmp_path: Path):
+    _override_tracker(tmp_path)
+    _override_user(tmp_path)
+    try:
+        with TestClient(app) as client:
+            response = client.patch("/api/bets/999999", json={"stake": 10.0})
+        assert response.status_code == 404
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_update_bet_endpoint_401s_without_the_internal_secret(tmp_path: Path):
+    _override_tracker(tmp_path)
+    with TestClient(app) as client:
+        response = client.patch("/api/bets/1", json={"stake": 10.0})
+    assert response.status_code == 401

@@ -34,6 +34,7 @@ vi.mock("@/lib/api", () => ({
   // rather than left unresolved.
   getStatus: vi.fn(),
   deleteBet: vi.fn(),
+  updateBet: vi.fn(),
   ApiError: class ApiError extends Error {
     status?: number;
     constructor(message: string, status?: number) {
@@ -44,7 +45,7 @@ vi.mock("@/lib/api", () => ({
   },
 }));
 
-import { ApiError, deleteBet, getBets, getBetStats, getFixtures, getSandboxStatus, getStatus, settleOpenBets } from "@/lib/api";
+import { ApiError, deleteBet, getBets, getBetStats, getFixtures, getSandboxStatus, getStatus, settleOpenBets, updateBet } from "@/lib/api";
 
 describe("ManualBetForm surfaces a visible error when the fixture fetch fails (W52)", () => {
   beforeEach(() => {
@@ -569,6 +570,130 @@ describe("BetTrackerPage lets a user delete their own logged bet (W215)", () => 
 
     await waitFor(() => expect(screen.getByText(/your session expired/i)).toBeInTheDocument());
     expect(screen.queryByText(/failed to delete bet/i)).not.toBeInTheDocument();
+  });
+});
+
+describe("BetTrackerPage lets a user edit their own logged bet (W216)", () => {
+  beforeEach(() => {
+    vi.mocked(getFixtures).mockReset();
+    vi.mocked(getSandboxStatus).mockReset();
+    vi.mocked(getBets).mockReset();
+    vi.mocked(getBetStats).mockReset();
+    vi.mocked(getStatus).mockReset();
+    vi.mocked(settleOpenBets).mockReset();
+    vi.mocked(updateBet).mockReset();
+    vi.mocked(getFixtures).mockResolvedValue([]);
+    vi.mocked(getSandboxStatus).mockResolvedValue({ sandbox_mode: false, as_of: null });
+    vi.mocked(getStatus).mockRejectedValue(new Error("no backend"));
+    vi.mocked(settleOpenBets).mockResolvedValue([]);
+  });
+
+  const bet = {
+    id: 1, match_id: "m1", date: "2026-08-22", home_team: "Arsenal", away_team: "Everton",
+    market: "result_3way", selection: "home", odds: 2.1, stake: 10, outcome: "open" as const,
+    profit_loss: null, source: "manual" as const, recommendation_snapshot: null, created_at: "now",
+  };
+
+  it("shows an edit form pre-filled with the bet's current values, and saves via updateBet", async () => {
+    const updated = { ...bet, stake: 25 };
+    vi.mocked(getBets).mockResolvedValueOnce([bet]).mockResolvedValueOnce([updated]);
+    vi.mocked(getBetStats).mockResolvedValue({
+      bets_settled: 0, bets_open: 1, bets_won: 0, roi: 0, hit_rate: 0,
+      total_staked: 25, total_profit: 0, max_drawdown: 0, starting_bankroll: 0, current_bankroll: 0,
+    });
+    vi.mocked(updateBet).mockResolvedValue(updated);
+    const user = userEvent.setup();
+
+    render(<BetTrackerPage />);
+    await screen.findByText(/Arsenal v Everton/);
+
+    await user.click(screen.getByRole("button", { name: /^edit bet/i }));
+
+    const stakeInput = screen.getByLabelText(/edit stake/i) as HTMLInputElement;
+    expect(stakeInput.value).toBe("10");
+    await user.clear(stakeInput);
+    await user.type(stakeInput, "25");
+    await user.click(screen.getByRole("button", { name: /save bet edit/i }));
+
+    expect(updateBet).toHaveBeenCalledWith(1, { market: "result_3way", selection: "home", odds: 2.1, stake: 25 });
+    await waitFor(() => expect(screen.getByText("25.00")).toBeInTheDocument());
+  });
+
+  it("clicking Cancel on the edit form discards changes and leaves the bet unchanged", async () => {
+    vi.mocked(getBets).mockResolvedValue([bet]);
+    vi.mocked(getBetStats).mockResolvedValue({
+      bets_settled: 0, bets_open: 1, bets_won: 0, roi: 0, hit_rate: 0,
+      total_staked: 10, total_profit: 0, max_drawdown: 0, starting_bankroll: 0, current_bankroll: 0,
+    });
+    const user = userEvent.setup();
+
+    render(<BetTrackerPage />);
+    await screen.findByText(/Arsenal v Everton/);
+
+    await user.click(screen.getByRole("button", { name: /^edit bet/i }));
+    const stakeInput = screen.getByLabelText(/edit stake/i);
+    await user.clear(stakeInput);
+    await user.type(stakeInput, "999");
+    await user.click(screen.getByRole("button", { name: /cancel bet edit/i }));
+
+    expect(updateBet).not.toHaveBeenCalled();
+    expect(screen.getByText("10.00")).toBeInTheDocument();
+    expect(screen.queryByLabelText(/edit stake/i)).not.toBeInTheDocument();
+  });
+
+  it("shows an inline error and keeps the form open when the update fails (not a 401)", async () => {
+    vi.mocked(getBets).mockResolvedValue([bet]);
+    vi.mocked(getBetStats).mockResolvedValue({
+      bets_settled: 0, bets_open: 1, bets_won: 0, roi: 0, hit_rate: 0,
+      total_staked: 10, total_profit: 0, max_drawdown: 0, starting_bankroll: 0, current_bankroll: 0,
+    });
+    vi.mocked(updateBet).mockRejectedValue(new ApiError("Failed to update bet (500)", 500));
+    const user = userEvent.setup();
+
+    render(<BetTrackerPage />);
+    await screen.findByText(/Arsenal v Everton/);
+
+    await user.click(screen.getByRole("button", { name: /^edit bet/i }));
+    await user.click(screen.getByRole("button", { name: /save bet edit/i }));
+
+    expect(await screen.findByText(/Failed to update bet/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/edit stake/i)).toBeInTheDocument();
+  });
+
+  it("prompts re-auth (not an inline error) when the update fails with a 401", async () => {
+    vi.mocked(getBets).mockResolvedValue([bet]);
+    vi.mocked(getBetStats).mockResolvedValue({
+      bets_settled: 0, bets_open: 1, bets_won: 0, roi: 0, hit_rate: 0,
+      total_staked: 10, total_profit: 0, max_drawdown: 0, starting_bankroll: 0, current_bankroll: 0,
+    });
+    vi.mocked(updateBet).mockRejectedValue(new ApiError("Failed to update bet (401)", 401));
+    const user = userEvent.setup();
+
+    render(<BetTrackerPage />);
+    await screen.findByText(/Arsenal v Everton/);
+
+    await user.click(screen.getByRole("button", { name: /^edit bet/i }));
+    await user.click(screen.getByRole("button", { name: /save bet edit/i }));
+
+    await waitFor(() => expect(screen.getByText(/your session expired/i)).toBeInTheDocument());
+    expect(screen.queryByText(/failed to update bet/i)).not.toBeInTheDocument();
+  });
+
+  it("changing the market resets the selection to force a fresh, valid choice", async () => {
+    vi.mocked(getBets).mockResolvedValue([bet]);
+    vi.mocked(getBetStats).mockResolvedValue({
+      bets_settled: 0, bets_open: 1, bets_won: 0, roi: 0, hit_rate: 0,
+      total_staked: 10, total_profit: 0, max_drawdown: 0, starting_bankroll: 0, current_bankroll: 0,
+    });
+    const user = userEvent.setup();
+
+    render(<BetTrackerPage />);
+    await screen.findByText(/Arsenal v Everton/);
+
+    await user.click(screen.getByRole("button", { name: /^edit bet/i }));
+    await user.selectOptions(screen.getByLabelText(/edit market/i), "btts");
+
+    expect((screen.getByLabelText(/edit selection/i) as HTMLSelectElement).value).toBe("");
   });
 });
 

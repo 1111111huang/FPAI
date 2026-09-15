@@ -60,6 +60,17 @@ class BetManualRequest(BaseModel):
     stake: float
 
 
+class BetUpdateRequest(BaseModel):
+    """W216: every field optional -- a partial edit (e.g. just the stake)
+    leaves the rest of the bet untouched. match_id/date/home_team/away_team
+    aren't editable here: those identify which match the bet is on, and
+    changing them is a delete-and-relog, not an edit."""
+    market: str | None = None
+    selection: str | None = None
+    odds: float | None = None
+    stake: float | None = None
+
+
 def resolve_from_recommendation(request: BetFromRecommendationRequest) -> dict:
     """Derive home_team/away_team/date/odds from the recommendation snapshot
     itself -- raises if the chosen market/selection isn't actually in it, or

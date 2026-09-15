@@ -145,6 +145,24 @@ export async function deleteBet(id: number): Promise<void> {
   }
 }
 
+/** W216: partial edit -- only the fields provided are changed, the rest of
+ * the bet (including its outcome/profit_loss recomputation if already
+ * settled) is handled server-side. */
+export async function updateBet(
+  id: number,
+  fields: { market?: string; selection?: string; odds?: number; stake?: number }
+): Promise<Bet> {
+  const response = await fetch(`/api/bets/${id}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(fields),
+  });
+  if (!response.ok) {
+    throw new ApiError(`Failed to update bet (${response.status})`, response.status);
+  }
+  return response.json();
+}
+
 /** W13: on-demand settlement trigger -- no scheduler (W08/W09 deferred).
  * Returns the bets that were actually settled by this call (won/lost);
  * corners bets and not-yet-finished matches are never included. */
