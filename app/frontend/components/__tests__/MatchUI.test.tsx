@@ -682,6 +682,54 @@ describe("MatchCard -- resolveRecommendation prefers the resolved pick over a hi
   });
 });
 
+describe("MatchCard quick-log control (W215)", () => {
+  beforeEach(() => {
+    vi.mocked(useSession).mockReturnValue({ data: { user: {} }, status: "authenticated" } as never);
+  });
+
+  it("shows a Log bet control for a direct_bet recommendation once expanded", async () => {
+    const match = applyRecommendation(baseMatch(), {
+      match: {}, overall: "direct_bet", confidence: "high", explanation: ["test"], limitations: [],
+      prediction_basis: "team_history_and_market", invalid_market_count: 0, cold_start_risk: false,
+      feature_completeness: 0.9, unknown_team: false,
+      recommendation_pick: { market: "result_3way", selection: "home" },
+      candidates: [{
+        market: "result_3way", selection: "home", recommendation_type: "direct_bet",
+        current_odds: 2.1, min_odds: 1.5, ml_probability: 0.55, implied_probability: 0.48, value_edge: 0.07,
+      }],
+    });
+    const user = userEvent.setup();
+    render(<MatchCard match={match} onUpdate={() => {}} />);
+
+    await user.click(screen.getByRole("button", { name: /arsenal.*everton/i }));
+
+    expect(screen.getByRole("button", { name: "Log bet" })).toBeInTheDocument();
+  });
+
+  it("shows no quick-log control for a conditional recommendation", async () => {
+    const match = applyRecommendation(baseMatch(), {
+      match: {}, overall: "conditional", confidence: "high", explanation: ["test"], limitations: [],
+      prediction_basis: "team_history_and_market", invalid_market_count: 0, cold_start_risk: false,
+      feature_completeness: 0.9, unknown_team: false,
+      recommendation_pick: { market: "result_3way", selection: "home" },
+      candidates: [{
+        market: "result_3way", selection: "home", recommendation_type: "conditional",
+        current_odds: 1.8, min_odds: 2.0, ml_probability: 0.55, implied_probability: 0.55, value_edge: -0.02,
+        target_odds: 2.05,
+      }],
+    });
+    const user = userEvent.setup();
+    render(<MatchCard match={match} onUpdate={() => {}} />);
+
+    await user.click(screen.getByRole("button", { name: /arsenal.*everton/i }));
+
+    // Proves the card actually expanded (not that the click silently
+    // failed to open it) before asserting the quick-log button's absence.
+    expect(screen.getByText("test")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Log bet" })).not.toBeInTheDocument();
+  });
+});
+
 // ---------------------------------------------------------------------------
 // W47: MatchCard.handleExpand / MatchAnalysisPage.load must check the
 // precomputed cache (getCachedRecommendation) before falling back to the

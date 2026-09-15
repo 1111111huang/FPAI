@@ -1270,6 +1270,30 @@ export function MatchCard({
                     malformed data.
                   </p>
                 )}
+                {/* W215: quick-log the card's own resolved pick, direct_bet
+                    only -- a conditional/no_bet pick isn't something the
+                    agent is actually recommending you act on yet, and this
+                    is a one-click shortcut, not the full multi-market
+                    picker ProbabilityRow's per-row LogBetButton already
+                    provides on the detail page. Reuses LogBetButton as-is.
+                    Lives here (in the expanded section) rather than up in
+                    the card header because the whole card face above is
+                    already one <button onClick={handleExpand}> -- a nested
+                    interactive control inside it would be invalid HTML and
+                    inaccessible, plus it would double as an expand/collapse
+                    trigger. This sits in the sibling expand-rows area
+                    instead, which only exists once that button is
+                    clicked. */}
+                {shown?.recommendationType === "direct_bet" && match.rawRecommendation && (
+                  <div className="mt-3">
+                    <LogBetButton
+                      matchId={match.id}
+                      recommendation={match.rawRecommendation}
+                      market={shown.market}
+                      selection={shown.selection}
+                    />
+                  </div>
+                )}
                 <Link
                   href={`/matches/${match.id}?home=${encodeURIComponent(match.home)}&away=${encodeURIComponent(
                     match.away
