@@ -351,7 +351,7 @@ describe("ManualBetForm constrains market/selection to resolvable values (W210 f
     expect(marketSelect.tagName).toBe("SELECT");
     await user.selectOptions(marketSelect, "btts");
 
-    const selectionSelect = screen.getByLabelText(/selection/i);
+    const selectionSelect = screen.getByLabelText(/outcome/i);
     expect(selectionSelect.tagName).toBe("SELECT");
     const options = Array.from(selectionSelect.querySelectorAll("option")).map((o) => o.textContent);
     expect(options).toEqual(expect.arrayContaining(["Yes", "No"]));
@@ -363,7 +363,7 @@ describe("ManualBetForm constrains market/selection to resolvable values (W210 f
     await selectFixture(user);
 
     const marketSelect = screen.getByLabelText(/market/i);
-    const selectionSelect = screen.getByLabelText<HTMLSelectElement>(/selection/i);
+    const selectionSelect = screen.getByLabelText<HTMLSelectElement>(/outcome/i);
     await user.selectOptions(marketSelect, "result_3way");
     await user.selectOptions(selectionSelect, "away");
     expect(selectionSelect.value).toBe("away");

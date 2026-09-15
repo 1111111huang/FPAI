@@ -7,7 +7,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
-import { MagnifyingGlass, WarningCircle } from "@phosphor-icons/react";
+import { CaretDown, MagnifyingGlass, Plus, WarningCircle } from "@phosphor-icons/react";
 
 import { ApiError, deleteBet, getBetStats, getBets, getFixtures, logBetManual, settleOpenBets, updateBet } from "@/lib/api";
 import type { Bet, BetStats, Fixture } from "@/lib/types";
@@ -18,6 +18,13 @@ import { addDays, dateString, ErrorState, TeamBadge, marketLabel } from "./Match
 
 function formatDate(iso: string): string {
   return iso.slice(0, 10);
+}
+
+// W217: a readable "Sat, 22 Aug 2026" for the selected-fixture header --
+// formatDate()'s plain "2026-08-22" is fine for the compact search-result
+// rows but reads as an ID, not a date, in the more prominent header card.
+function formatDateLong(iso: string): string {
+  return new Date(iso).toLocaleDateString(undefined, { weekday: "short", day: "numeric", month: "short", year: "numeric" });
 }
 
 // W210 follow-up: the only markets/selections settlement.py's market_correct()
@@ -111,6 +118,16 @@ function ManualBetForm({ onLogged, onSessionExpired }: { onLogged: () => void; o
       .slice(0, 8);
   }, [fixtures, query]);
 
+  // W217: stake * odds -- total return if the bet wins (stake included, not
+  // just profit), matching a bettor's usual mental model of "what do I get
+  // back." "—" until both fields parse to a real positive number.
+  const parsedOddsPreview = parseFloat(odds);
+  const parsedStakePreview = parseFloat(stake);
+  const potentialReturn =
+    parsedOddsPreview > 0 && parsedStakePreview > 0
+      ? (parsedOddsPreview * parsedStakePreview).toFixed(2)
+      : null;
+
   async function submit() {
     if (!selected) return;
     const parsedOdds = parseFloat(odds);
@@ -193,66 +210,87 @@ function ManualBetForm({ onLogged, onSessionExpired }: { onLogged: () => void; o
           )}
         </>
       ) : (
-        <div className="mt-3 flex flex-col gap-3">
-          <div className="flex items-center justify-between text-sm text-ink">
-            <span>
-              {selected.home_team} v {selected.away_team} · {formatDate(selected.utc_date)}
-            </span>
-            <button type="button" onClick={() => setSelected(null)} className="text-xs text-accent">
+        <div className="mt-3 flex flex-col gap-4">
+          {/* W217: direct user feedback -- a nicer-looking, more legible
+              selected-fixture header (team badges + real weekday/date,
+              boxed) instead of one plain text line, matching ManualBetForm's
+              search-result rows (which already show TeamBadge circles) --
+              the confirmed fixture deserves at least as much visual weight
+              as an unpicked search row did. */}
+          <div className="flex items-center justify-between gap-3 rounded-xl border border-border bg-page/60 p-3">
+            <div className="flex items-center gap-3">
+              <span className="flex -space-x-2">
+                <TeamBadge name={selected.home_team} size="lg" />
+                <TeamBadge name={selected.away_team} size="lg" />
+              </span>
+              <div>
+                <div className="text-base font-semibold text-ink">
+                  {selected.home_team} v {selected.away_team}
+                </div>
+                <div className="text-xs text-ink-secondary">{formatDateLong(selected.utc_date)}</div>
+              </div>
+            </div>
+            <button type="button" onClick={() => setSelected(null)} className="shrink-0 text-xs font-medium text-accent">
               Change fixture
             </button>
           </div>
           <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
             <div>
-              <label htmlFor="manual-bet-market" className="sr-only">Market</label>
-              <select
-                id="manual-bet-market"
-                value={market}
-                onChange={(e) => {
-                  setMarket(e.target.value);
-                  setSelection(""); // force a fresh, valid choice for the new market
-                }}
-                className="w-full rounded border border-border bg-surface px-2 py-1.5 text-sm text-ink outline-none focus:border-accent"
-              >
-                {Object.keys(MARKET_SELECTIONS).map((m) => (
-                  <option key={m} value={m}>{marketLabel(m).label}</option>
-                ))}
-              </select>
+              <label htmlFor="manual-bet-market" className="mb-1 block text-xs text-ink-secondary">Market</label>
+              <div className="relative">
+                <select
+                  id="manual-bet-market"
+                  value={market}
+                  onChange={(e) => {
+                    setMarket(e.target.value);
+                    setSelection(""); // force a fresh, valid choice for the new market
+                  }}
+                  className="w-full appearance-none rounded-lg border border-border bg-surface px-3 py-2 pr-8 text-sm text-ink outline-none focus:border-accent"
+                >
+                  {Object.keys(MARKET_SELECTIONS).map((m) => (
+                    <option key={m} value={m}>{marketLabel(m).label}</option>
+                  ))}
+                </select>
+                <CaretDown size={13} className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-muted" />
+              </div>
             </div>
             <div>
-              <label htmlFor="manual-bet-selection" className="sr-only">Selection</label>
-              <select
-                id="manual-bet-selection"
-                value={selection}
-                onChange={(e) => setSelection(e.target.value)}
-                className="w-full rounded border border-border bg-surface px-2 py-1.5 text-sm text-ink outline-none focus:border-accent"
-              >
-                <option value="">Select…</option>
-                {MARKET_SELECTIONS[market]?.map((opt) => (
-                  <option key={opt.value} value={opt.value}>{opt.label}</option>
-                ))}
-              </select>
+              <label htmlFor="manual-bet-selection" className="mb-1 block text-xs text-ink-secondary">Outcome</label>
+              <div className="relative">
+                <select
+                  id="manual-bet-selection"
+                  value={selection}
+                  onChange={(e) => setSelection(e.target.value)}
+                  className="w-full appearance-none rounded-lg border border-border bg-surface px-3 py-2 pr-8 text-sm text-ink outline-none focus:border-accent"
+                >
+                  <option value="">Select outcome…</option>
+                  {MARKET_SELECTIONS[market]?.map((opt) => (
+                    <option key={opt.value} value={opt.value}>{opt.label}</option>
+                  ))}
+                </select>
+                <CaretDown size={13} className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-muted" />
+              </div>
             </div>
             <div>
-              <label htmlFor="manual-bet-odds" className="sr-only">Odds</label>
+              <label htmlFor="manual-bet-odds" className="mb-1 block text-xs text-ink-secondary">Odds</label>
               <input
                 id="manual-bet-odds"
                 value={odds}
                 onChange={(e) => setOdds(e.target.value)}
-                placeholder="Odds"
+                placeholder="0.00"
                 inputMode="decimal"
-                className="w-full rounded border border-border bg-surface px-2 py-1.5 text-sm text-ink outline-none focus:border-accent"
+                className="w-full rounded-lg border border-border bg-surface px-3 py-2 text-sm text-ink outline-none focus:border-accent"
               />
             </div>
             <div>
-              <label htmlFor="manual-bet-stake" className="sr-only">Stake</label>
+              <label htmlFor="manual-bet-stake" className="mb-1 block text-xs text-ink-secondary">Stake</label>
               <input
                 id="manual-bet-stake"
                 value={stake}
                 onChange={(e) => setStake(e.target.value)}
-                placeholder="Stake"
+                placeholder="0.00"
                 inputMode="decimal"
-                className="w-full rounded border border-border bg-surface px-2 py-1.5 text-sm text-ink outline-none focus:border-accent"
+                className="w-full rounded-lg border border-border bg-surface px-3 py-2 text-sm text-ink outline-none focus:border-accent"
               />
             </div>
           </div>
@@ -262,14 +300,20 @@ function ManualBetForm({ onLogged, onSessionExpired }: { onLogged: () => void; o
               {errorMsg}
             </p>
           )}
-          <button
-            type="button"
-            onClick={submit}
-            disabled={status === "saving"}
-            className="self-start rounded-md border border-accent px-3 py-1.5 text-sm font-medium text-accent disabled:opacity-50"
-          >
-            {status === "saving" ? "Logging…" : "Log bet"}
-          </button>
+          <div className="flex items-center justify-between">
+            <span className="text-sm text-ink-secondary">
+              Potential return <span className="font-mono text-ink">{potentialReturn ?? "—"}</span>
+            </span>
+            <button
+              type="button"
+              onClick={submit}
+              disabled={status === "saving"}
+              className="flex items-center gap-1.5 rounded-full bg-accent px-4 py-2 text-sm font-semibold text-white transition hover:bg-accent/90 disabled:opacity-50"
+            >
+              <Plus size={14} weight="bold" />
+              {status === "saving" ? "Logging…" : "Log bet"}
+            </button>
+          </div>
         </div>
       )}
     </div>
