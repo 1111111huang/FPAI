@@ -242,6 +242,13 @@ describe("BetTrackerPage settles open bets automatically on load (W214)", () => 
     render(<BetTrackerPage />);
 
     await waitFor(() => expect(settleOpenBets).toHaveBeenCalledTimes(1));
+    // Found live, 2026-09-15: this automatic on-mount settle attempt used
+    // to be fast regardless (same-day results were cached, if stale/
+    // wrong) -- once W213's ResultsCache fix made same-day results always
+    // hit the live API, this call could otherwise block the whole page
+    // behind "Loading…" for up to a minute whenever football-data.org's
+    // rate limit was tight. blocking: false skips instead of waiting.
+    expect(settleOpenBets).toHaveBeenCalledWith({ blocking: false });
   });
 
   it("settles before the bets list is fetched, so a newly-finished match's real outcome shows on first load", async () => {

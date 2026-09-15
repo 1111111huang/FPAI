@@ -506,9 +506,19 @@ export function BetTrackerPage() {
     // "Settle open bets" button stays for a re-check without leaving the
     // page (a match can finish while already viewing it, unlike this
     // mount-time check).
+    //
+    // blocking: false (found live, 2026-09-15): this call used to be fast
+    // regardless -- same-day results were cached (if stale/wrong). Once
+    // W213's ResultsCache fix made same-day results always hit the live
+    // API, this automatic pre-load settle attempt could block the whole
+    // page behind "Loading…" for up to a minute if football-data.org's
+    // rate limit was tight -- exactly what "never blocks the page" above
+    // already promised, just not yet true for *slowness*, only for
+    // failure. The explicit button below keeps the default (a real
+    // user-triggered wait is fine there).
     async function settleThenLoad() {
       try {
-        await settleOpenBets();
+        await settleOpenBets({ blocking: false });
       } catch (err) {
         if (err instanceof ApiError && err.status === 401) setNeedsAuth(true);
       }

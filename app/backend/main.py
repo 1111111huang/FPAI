@@ -1450,6 +1450,7 @@ async def get_bet_stats(
 
 @app.post("/api/bets/settle-open")
 async def settle_open(
+    blocking: bool = True,
     tracker: BetTracker = Depends(bets.get_bet_tracker),
     user_email: str = Depends(get_current_user_email),
     user_store: UserStore = Depends(get_user_store),
@@ -1459,11 +1460,23 @@ async def settle_open(
     timing the way W09/W10 are. Reuses get_fixtures_client (W05's
     FootballDataClient) since results/fixtures share the same API and rate
     limit budget. W57: also consults get_sweden_fixtures_client so a
-    Swedish bet's match_id (unknown to football-data.org) can settle too."""
+    Swedish bet's match_id (unknown to football-data.org) can settle too.
+
+    `blocking` (query param, default True -- matches every caller before
+    this param existed): the frontend's own explicit "Settle open bets"
+    button leaves it at the default, a real user-triggered wait. False --
+    used only by BetTracker.tsx's automatic settle-on-page-load (W214) --
+    threads straight through to settle_open_bets()/get_results(): skip any
+    competition/date whose rate-limit budget is exhausted right now rather
+    than blocking this response for up to a minute (found live,
+    2026-09-15, same root cause and fix shape as _settle_if_already_decided
+    above)."""
     user = user_store.get_or_create(user_email)
     client = get_fixtures_client()
     sweden_client = get_sweden_fixtures_client()
-    settled = await run_in_threadpool(settle_open_bets, tracker, client, sweden_client, user_id=user.id)
+    settled = await run_in_threadpool(
+        settle_open_bets, tracker, client, sweden_client, user_id=user.id, blocking=blocking
+    )
     return [BetOut.from_bet(bet) for bet in settled]
 
 

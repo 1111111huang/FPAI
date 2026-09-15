@@ -121,3 +121,25 @@ def test_settle_open_endpoint_returns_empty_list_when_nothing_settles(tmp_path: 
         assert response.json() == []
     finally:
         app.dependency_overrides.clear()
+
+
+def test_settle_open_endpoint_threads_blocking_query_param_through(tmp_path: Path):
+    """Found live, 2026-09-15: BetTracker.tsx's automatic settle-on-page-
+    load passes ?blocking=false specifically so it can't hang the whole
+    Bets page behind "Loading…" for up to a minute -- the explicit
+    "Settle open bets" button omits it, keeping the endpoint's own default
+    True. Verifying the query param actually reaches settle_open_bets() in
+    both directions, not just that the endpoint accepts it without
+    error."""
+    _override_tracker(tmp_path)
+    _override_user(tmp_path)
+    try:
+        with patch("app.backend.main.settle_open_bets") as mock_settle:
+            mock_settle.return_value = []
+            with TestClient(app) as client:
+                client.post("/api/bets/settle-open?blocking=false")
+                client.post("/api/bets/settle-open")  # default, unchanged
+        assert mock_settle.call_args_list[0].kwargs["blocking"] is False
+        assert mock_settle.call_args_list[1].kwargs["blocking"] is True
+    finally:
+        app.dependency_overrides.clear()

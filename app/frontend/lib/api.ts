@@ -165,9 +165,20 @@ export async function updateBet(
 
 /** W13: on-demand settlement trigger -- no scheduler (W08/W09 deferred).
  * Returns the bets that were actually settled by this call (won/lost);
- * corners bets and not-yet-finished matches are never included. */
-export async function settleOpenBets(): Promise<Bet[]> {
-  const response = await fetch(`/api/bets/settle-open`, { method: "POST" });
+ * corners bets and not-yet-finished matches are never included.
+ *
+ * `blocking` (default true, matching every prior caller unchanged): false
+ * -- used only by BetTracker.tsx's automatic settle-on-page-load (W214) --
+ * tells the backend to skip (not wait through) any competition/date whose
+ * football-data.org rate-limit budget is exhausted right now, rather than
+ * blocking this call for up to a minute. Found live, 2026-09-15: the
+ * automatic on-load settle attempt was blocking the whole Bets page behind
+ * "Loading…" for that long once W213's ResultsCache fix made same-day
+ * results always hit the live API. The explicit "Settle open bets" button
+ * keeps the default -- a real user-triggered wait is fine there. */
+export async function settleOpenBets(options?: { blocking?: boolean }): Promise<Bet[]> {
+  const query = options?.blocking === false ? "?blocking=false" : "";
+  const response = await fetch(`/api/bets/settle-open${query}`, { method: "POST" });
   if (!response.ok) {
     throw new ApiError(`Failed to settle open bets (${response.status})`, response.status);
   }
