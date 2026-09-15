@@ -154,6 +154,15 @@ class BetTracker:
             )
         return self.get_bet(bet_id)  # type: ignore[return-value]
 
+    def delete_bet(self, bet_id: int) -> bool:
+        """Returns True if a row was actually deleted, False if bet_id
+        didn't exist. Ownership is the caller's responsibility (main.py's
+        route checks bet.user_id before calling this) -- this method itself
+        has no notion of "whose" bet it is."""
+        with self._connect() as conn:
+            cursor = conn.execute("DELETE FROM user_bets WHERE id = ?", (bet_id,))
+        return cursor.rowcount > 0
+
     @staticmethod
     def _row_to_bet(row: tuple) -> Bet:
         (bet_id, match_id, date, home_team, away_team, market, selection, odds, stake,

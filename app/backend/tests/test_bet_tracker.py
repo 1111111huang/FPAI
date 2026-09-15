@@ -40,6 +40,25 @@ def test_create_bet_from_recommendation_stores_the_snapshot(tmp_path: Path) -> N
     assert bet.recommendation_snapshot == snapshot
 
 
+def test_delete_bet_removes_it(tmp_path: Path) -> None:
+    tracker = BetTracker(db_path=tmp_path / "bets.db")
+    bet = tracker.create_bet(
+        match_id="m1", date="2026-08-22", home_team="Arsenal", away_team="Everton",
+        market="result_3way", selection="home", odds=2.0, stake=10.0,
+        source="manual", recommendation_snapshot=None,
+    )
+
+    deleted = tracker.delete_bet(bet.id)
+
+    assert deleted is True
+    assert tracker.get_bet(bet.id) is None
+
+
+def test_delete_bet_returns_false_for_a_nonexistent_id(tmp_path: Path) -> None:
+    tracker = BetTracker(db_path=tmp_path / "bets.db")
+    assert tracker.delete_bet(999) is False
+
+
 def test_list_bets_returns_all_created_bets(tmp_path: Path) -> None:
     tracker = BetTracker(db_path=tmp_path / "bets.db")
     tracker.create_bet(

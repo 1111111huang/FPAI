@@ -1452,3 +1452,22 @@ async def settle_open(
     sweden_client = get_sweden_fixtures_client()
     settled = await run_in_threadpool(settle_open_bets, tracker, client, sweden_client, user_id=user.id)
     return [BetOut.from_bet(bet) for bet in settled]
+
+
+@app.delete("/api/bets/{bet_id}", status_code=204)
+async def delete_bet(
+    bet_id: int,
+    tracker: BetTracker = Depends(bets.get_bet_tracker),
+    user_email: str = Depends(get_current_user_email),
+    user_store: UserStore = Depends(get_user_store),
+) -> None:
+    """W215: direct user feedback -- a mis-logged bet (typo'd stake,
+    accidental duplicate) had no way to be corrected except a direct
+    database edit. 404s (not 403) for a bet owned by someone else, same as
+    a nonexistent id -- doesn't confirm to a caller that a given bet_id
+    exists at all if it isn't theirs."""
+    user = user_store.get_or_create(user_email)
+    bet = tracker.get_bet(bet_id)
+    if bet is None or bet.user_id != user.id:
+        raise HTTPException(status_code=404, detail="Bet not found.")
+    tracker.delete_bet(bet_id)

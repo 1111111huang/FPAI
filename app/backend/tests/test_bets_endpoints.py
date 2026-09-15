@@ -240,3 +240,56 @@ def test_list_bets_401s_without_the_internal_secret(tmp_path: Path):
     with TestClient(app) as client:
         response = client.get("/api/bets")
     assert response.status_code == 401
+
+
+def test_delete_bet_endpoint_removes_the_callers_own_bet(tmp_path: Path):
+    tracker = _override_tracker(tmp_path)
+    user = _override_user(tmp_path)
+    bet = tracker.create_bet(
+        match_id="m1", date="2026-08-22", home_team="Arsenal", away_team="Everton",
+        market="result_3way", selection="home", odds=2.0, stake=10.0,
+        source="manual", recommendation_snapshot=None, user_id=user.id,
+    )
+    try:
+        with TestClient(app) as client:
+            response = client.delete(f"/api/bets/{bet.id}")
+        assert response.status_code == 204
+        assert tracker.get_bet(bet.id) is None
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_delete_bet_endpoint_404s_for_a_bet_owned_by_someone_else(tmp_path: Path):
+    tracker = _override_tracker(tmp_path)
+    _override_user(tmp_path)  # authenticates as this user
+    other_users_bet = tracker.create_bet(
+        match_id="m2", date="2026-08-23", home_team="Chelsea", away_team="Fulham",
+        market="btts", selection="yes", odds=1.9, stake=5.0,
+        source="manual", recommendation_snapshot=None, user_id=999,  # a different user
+    )
+    try:
+        with TestClient(app) as client:
+            response = client.delete(f"/api/bets/{other_users_bet.id}")
+        assert response.status_code == 404
+        # Not actually deleted -- confirms this 404s before ever calling delete_bet.
+        assert tracker.get_bet(other_users_bet.id) is not None
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_delete_bet_endpoint_404s_for_a_nonexistent_id(tmp_path: Path):
+    _override_tracker(tmp_path)
+    _override_user(tmp_path)
+    try:
+        with TestClient(app) as client:
+            response = client.delete("/api/bets/999999")
+        assert response.status_code == 404
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_delete_bet_endpoint_401s_without_the_internal_secret(tmp_path: Path):
+    _override_tracker(tmp_path)
+    with TestClient(app) as client:
+        response = client.delete("/api/bets/1")
+    assert response.status_code == 401
