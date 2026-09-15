@@ -66,6 +66,18 @@ export function LogBetModal({
   const [saving, setSaving] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const dialogRef = useRef<HTMLDivElement>(null);
+  // W218 code review follow-up: the Escape handler lives inside a
+  // useEffect keyed on [open, onClose] (see below) -- it must NOT also key
+  // on `saving`, since that would tear down and rebuild the whole effect
+  // (including the body-scroll-lock and focus-trigger-capture logic) every
+  // time `saving` toggles, incorrectly re-capturing document.activeElement
+  // as something inside the dialog instead of the original trigger. A ref,
+  // kept in sync separately, lets the handler read the live value without
+  // that effect re-running.
+  const savingRef = useRef(saving);
+  useEffect(() => {
+    savingRef.current = saving;
+  }, [saving]);
 
   // W218 code review follow-up: this is the app's first true centered
   // dialog (role="dialog" aria-modal="true", not a side-drawer like
@@ -81,7 +93,12 @@ export function LogBetModal({
 
     function handleKeyDown(e: KeyboardEvent) {
       if (e.key === "Escape") {
-        onClose();
+        // W218 code review follow-up: don't let Escape (or the backdrop
+        // click below) close the modal mid-submit -- the in-flight
+        // onSubmit() would then land in an unmounted component, silently
+        // dropping a real success confirmation or a real error. Matches
+        // the Cancel button's own `disabled={saving}` guard.
+        if (!savingRef.current) onClose();
         return;
       }
       if (e.key !== "Tab" || !dialogRef.current) return;
@@ -144,7 +161,13 @@ export function LogBetModal({
 
   return (
     <>
-      <div className="fixed inset-0 z-40 bg-page/70 backdrop-blur-sm" onClick={onClose} aria-hidden="true" />
+      <div
+        className="fixed inset-0 z-40 bg-page/70 backdrop-blur-sm"
+        onClick={() => {
+          if (!saving) onClose();
+        }}
+        aria-hidden="true"
+      />
       <div
         ref={dialogRef}
         role="dialog"

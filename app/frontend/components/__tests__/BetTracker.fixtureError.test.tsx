@@ -45,7 +45,7 @@ vi.mock("@/lib/api", () => ({
   },
 }));
 
-import { ApiError, deleteBet, getBets, getBetStats, getFixtures, getSandboxStatus, getStatus, settleOpenBets, updateBet } from "@/lib/api";
+import { ApiError, deleteBet, getBets, getBetStats, getFixtures, getSandboxStatus, getStatus, logBetManual, settleOpenBets, updateBet } from "@/lib/api";
 
 describe("ManualBetForm surfaces a visible error when the fixture fetch fails (W52)", () => {
   beforeEach(() => {
@@ -379,6 +379,39 @@ describe("ManualBetForm constrains market/selection to resolvable values (W210 f
     expect(
       Array.from(selectionSelect.querySelectorAll("option")).map((o) => o.value)
     ).not.toContain("away");
+  });
+
+  // W218 code review follow-up: logBetManual's own 401 handling is glue
+  // specific to ManualBetForm (LogBetModal itself has no ApiError/401
+  // awareness by design, per its onSubmit contract) and had no direct
+  // test -- only the analogous getBets/settleOpenBets/deleteBet/updateBet
+  // 401 paths were covered.
+  it("prompts re-auth (not an inline error) when logBetManual fails with a 401", async () => {
+    vi.mocked(logBetManual).mockRejectedValue(new ApiError("Failed to log bet (401)", 401));
+    const user = userEvent.setup();
+    await selectFixture(user);
+
+    await user.selectOptions(screen.getByLabelText(/^pick$/i), "home");
+    await user.type(screen.getByLabelText(/^odds$/i), "2.1");
+    await user.type(screen.getByLabelText(/^stake$/i), "10");
+    await user.click(screen.getByRole("button", { name: /confirm bet/i }));
+
+    await waitFor(() => expect(screen.getByText(/your session expired/i)).toBeInTheDocument());
+    expect(screen.queryByText(/failed to log bet/i)).not.toBeInTheDocument();
+  });
+
+  it("shows an inline error and keeps the modal open when logBetManual fails with a non-401", async () => {
+    vi.mocked(logBetManual).mockRejectedValue(new ApiError("Failed to log bet (500)", 500));
+    const user = userEvent.setup();
+    await selectFixture(user);
+
+    await user.selectOptions(screen.getByLabelText(/^pick$/i), "home");
+    await user.type(screen.getByLabelText(/^odds$/i), "2.1");
+    await user.type(screen.getByLabelText(/^stake$/i), "10");
+    await user.click(screen.getByRole("button", { name: /confirm bet/i }));
+
+    expect(await screen.findByText("Failed to log bet (500)")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /confirm bet/i })).toBeInTheDocument();
   });
 });
 

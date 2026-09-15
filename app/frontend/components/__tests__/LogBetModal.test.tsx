@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { act, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { LogBetModal } from "../LogBetModal";
@@ -117,6 +117,31 @@ describe("LogBetModal", () => {
     await user.keyboard("{Escape}");
 
     expect(onClose).toHaveBeenCalled();
+  });
+
+  it("backdrop click and Escape are both no-ops while a submit is in flight -- closing mid-submit would silently drop the eventual success/error", async () => {
+    const onClose = vi.fn();
+    let resolveSubmit!: () => void;
+    const onSubmit = vi.fn(() => new Promise<void>((resolve) => { resolveSubmit = resolve; }));
+    const user = userEvent.setup();
+    const { container } = render(
+      <LogBetModal {...baseProps} locked market="result_3way" selection="draw" odds={4.0} onClose={onClose} onSubmit={onSubmit} />
+    );
+
+    await user.type(screen.getByLabelText(/^stake$/i), "10");
+    await user.click(screen.getByRole("button", { name: /confirm bet/i }));
+    expect(onSubmit).toHaveBeenCalled(); // now "saving"
+
+    await user.click(container.querySelector('[aria-hidden="true"]')!);
+    await user.keyboard("{Escape}");
+    expect(onClose).not.toHaveBeenCalled();
+
+    // Flush the pending state update from resolving mid-test, so this
+    // test doesn't leak an unwrapped act() warning into the next one.
+    await act(async () => {
+      resolveSubmit();
+      await Promise.resolve();
+    });
   });
 
   it("locks body scroll while open and restores it once closed", () => {
