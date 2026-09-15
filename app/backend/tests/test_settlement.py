@@ -243,7 +243,7 @@ def test_settles_a_bet_from_a_non_epl_football_data_league(tmp_path: Path) -> No
         source="manual", recommendation_snapshot=None,
     )
 
-    def fake_get_results(competition_code, date_from, date_to):
+    def fake_get_results(competition_code, date_from, date_to, blocking=True):
         if competition_code == FOOTBALL_DATA_CODE_BY_LEAGUE["I1"]:
             return [NormalizedMatch(
                 match_id="i1", utc_date="2026-09-14T19:45:00Z", status="FINISHED",
@@ -273,7 +273,7 @@ def test_one_leagues_api_failure_does_not_block_settling_another(tmp_path: Path)
         source="manual", recommendation_snapshot=None,
     )
 
-    def fake_get_results(competition_code, date_from, date_to):
+    def fake_get_results(competition_code, date_from, date_to, blocking=True):
         if competition_code == FOOTBALL_DATA_CODE_BY_LEAGUE["SP1"]:
             raise requests.exceptions.ConnectionError("boom")
         if competition_code == FOOTBALL_DATA_CODE_BY_LEAGUE["E0"]:
@@ -287,4 +287,65 @@ def test_one_leagues_api_failure_does_not_block_settling_another(tmp_path: Path)
 
     assert len(settled) == 1
     assert settled[0].outcome == "won"
+    assert tracker.get_bet(bet.id).outcome == "won"
+
+
+def test_blocking_param_defaults_true_and_is_passed_through_to_get_results(tmp_path: Path) -> None:
+    """Found live, 2026-09-15: W213's ResultsCache fix (get_results() now
+    always hits the live API for today, no more stale-forever caching)
+    means an auto-settle-on-log call -- which runs synchronously inside a
+    user-facing POST /api/bets/* response -- can now block for up to a
+    minute per competition if football-data.org's rate limit is tight.
+    main.py's auto-settle-on-log path passes blocking=False specifically
+    to avoid that; every other caller (the explicit Settle open bets
+    button included) keeps the default True, unchanged."""
+    tracker = BetTracker(db_path=tmp_path / "bets.db")
+    tracker.create_bet(
+        match_id="m1", date="2026-08-22", home_team="Arsenal", away_team="Everton",
+        market="result_3way", selection="home", odds=2.0, stake=10.0,
+        source="manual", recommendation_snapshot=None,
+    )
+    client = MagicMock()
+    client.get_results.return_value = [_match("m1", 2, 1)]
+
+    settle_open_bets(tracker, client, blocking=False)
+
+    for call in client.get_results.call_args_list:
+        assert call.kwargs["blocking"] is False
+
+    client.get_results.reset_mock()
+    settle_open_bets(tracker, client)  # default, unchanged
+
+    for call in client.get_results.call_args_list:
+        assert call.kwargs["blocking"] is True
+
+
+def test_a_rate_limit_skip_on_one_league_still_lets_another_settle(tmp_path: Path) -> None:
+    """RateLimitWouldBlock (football_data_client.py) subclasses
+    RequestException specifically so it needs no separate except clause
+    here -- this is the same fault-isolation behavior as a genuine
+    connection failure (the test above), just for a different underlying
+    cause."""
+    from app.backend.football_data_client import RateLimitWouldBlock
+
+    tracker = BetTracker(db_path=tmp_path / "bets.db")
+    bet = tracker.create_bet(
+        match_id="m1", date="2026-08-22", home_team="Arsenal", away_team="Everton",
+        market="result_3way", selection="home", odds=2.0, stake=10.0,
+        source="manual", recommendation_snapshot=None,
+    )
+
+    def fake_get_results(competition_code, date_from, date_to, blocking=True):
+        if competition_code == FOOTBALL_DATA_CODE_BY_LEAGUE["SP1"]:
+            raise RateLimitWouldBlock("rate limit exhausted")
+        if competition_code == FOOTBALL_DATA_CODE_BY_LEAGUE["E0"]:
+            return [_match("m1", 2, 1)]
+        return []
+
+    client = MagicMock()
+    client.get_results.side_effect = fake_get_results
+
+    settled = settle_open_bets(tracker, client, blocking=False)
+
+    assert len(settled) == 1
     assert tracker.get_bet(bet.id).outcome == "won"

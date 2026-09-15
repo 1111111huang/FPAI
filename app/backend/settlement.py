@@ -49,6 +49,7 @@ def settle_open_bets(
     client: FootballDataClient,
     sweden_client: object | None = None,
     user_id: int | None = None,
+    blocking: bool = True,
 ) -> list[Bet]:
     """Attempt to settle every open, scorable-market bet against live
     results. Returns the bets actually settled (won/lost) this call --
@@ -57,7 +58,13 @@ def settle_open_bets(
     date_to) -> list[NormalizedMatch]` (SwedenFixturesClient satisfies this).
     `user_id` (W210), when supplied, scopes settlement to just that user's
     open bets -- omitted (None) settles every open bet regardless of owner,
-    unchanged pre-W210 behavior."""
+    unchanged pre-W210 behavior. `blocking` (default True, matching every
+    prior caller unchanged) is threaded straight to each football-data.org
+    get_results() call -- False (used by main.py's auto-settle-on-log path
+    only) skips a competition/date whose rate-limit budget is exhausted
+    instead of blocking for up to a minute; RateLimitWouldBlock subclasses
+    RequestException, so the existing except clause below already covers
+    it, no separate branch needed."""
     resolvable_bets = [b for b in tracker.list_open_bets(user_id=user_id) if b.market in RESOLVABLE_MARKETS]
 
     bets_by_date: dict[str, list[Bet]] = {}
@@ -69,7 +76,9 @@ def settle_open_bets(
         results: list[NormalizedMatch] = []
         for competition_code in FOOTBALL_DATA_CODE_BY_LEAGUE.values():
             try:
-                results += client.get_results(competition_code=competition_code, date_from=date, date_to=date)
+                results += client.get_results(
+                    competition_code=competition_code, date_from=date, date_to=date, blocking=blocking
+                )
             except requests.exceptions.RequestException:
                 LOGGER.warning(
                     "settle_open_bets: get_results failed for competition_code=%s date=%s -- "

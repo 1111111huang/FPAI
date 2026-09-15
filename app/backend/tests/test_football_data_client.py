@@ -13,7 +13,9 @@ import pytest
 
 sys.path.append(str(Path(__file__).resolve().parents[3]))
 
-from app.backend.football_data_client import FootballDataClient, NormalizedMatch, _RateLimiter
+from app.backend.football_data_client import (
+    FootballDataClient, NormalizedMatch, RateLimitWouldBlock, _RateLimiter,
+)
 from app.backend.results_cache import ResultsCache
 
 _SCHEDULED_MATCH = {
@@ -142,6 +144,44 @@ def test_get_results_bypasses_the_cache_for_today_even_on_a_repeat_call(tmp_path
     # a later call for the same date, once it's genuinely yesterday, must
     # not find a leftover stale entry from when it was still "today".
     assert cache.get("PL", "2026-09-15") is None
+
+
+def test_get_results_blocking_false_raises_instead_of_sleeping_when_rate_limited() -> None:
+    """settlement.py's auto-settle-on-log path (main.py) needs this --
+    without it, logging a bet can block the whole request for up to a
+    minute waiting on football-data.org's rate limit to reset (found live,
+    2026-09-15)."""
+    session = _mock_session([_FINISHED_MATCH])
+    client = FootballDataClient(api_key="fake-key", session=session)
+    client._rate_limiter.update_from_headers(
+        {"x-requests-available-minute": "0", "X-RequestCounter-Reset": "45"}
+    )
+
+    with pytest.raises(RateLimitWouldBlock):
+        client.get_results(date_from="2026-08-22", date_to="2026-08-22", blocking=False)
+
+    session.get.assert_not_called()
+
+
+def test_get_results_blocking_true_still_calls_through_when_rate_limited(tmp_path: Path) -> None:
+    """The default (blocking=True, every caller except auto-settle-on-log)
+    is completely unchanged -- still waits via wait_if_needed() rather
+    than raising."""
+    session = _mock_session([_FINISHED_MATCH])
+    client = FootballDataClient(api_key="fake-key", session=session)
+    client._rate_limiter.update_from_headers(
+        {"x-requests-available-minute": "0", "X-RequestCounter-Reset": "0"}  # already reset, no real sleep
+    )
+
+    results = client.get_results(date_from="2026-08-22", date_to="2026-08-22")
+
+    assert results == [
+        NormalizedMatch(
+            match_id="538164", utc_date="2026-05-24T15:00:00Z", status="FINISHED",
+            home_team="West Ham", away_team="Leeds United", home_goals=3, away_goals=0,
+        )
+    ]
+    session.get.assert_called_once()
 
 
 def test_get_fixtures_sends_auth_header_and_status_filter() -> None:
@@ -298,6 +338,24 @@ def test_rate_limiter_does_not_sleep_before_any_response_seen() -> None:
 
     limiter.wait_if_needed()
 
+
+def test_would_block_matches_wait_if_needed_exactly() -> None:
+    """would_block() (added alongside blocking=False -- see get_results()
+    below) must agree with wait_if_needed()'s own exhaustion check in
+    every state, or a blocking=False caller could still get blocked
+    (would_block() says no, wait_if_needed() sleeps anyway) or skip a call
+    it didn't actually need to (the reverse)."""
+    sleep_fn = MagicMock()
+    limiter = _RateLimiter(sleep_fn=sleep_fn, time_fn=lambda: 100.0)
+    assert limiter.would_block() is False  # no response seen yet
+
+    limiter.update_from_headers({"x-requests-available-minute": "5", "X-RequestCounter-Reset": "60"})
+    assert limiter.would_block() is False  # budget available
+
+    limiter.update_from_headers({"x-requests-available-minute": "0", "X-RequestCounter-Reset": "45"})
+    assert limiter.would_block() is True  # exhausted, reset still in the future
+
+    # would_block() itself must never actually sleep -- it's a pure check.
     sleep_fn.assert_not_called()
 
 

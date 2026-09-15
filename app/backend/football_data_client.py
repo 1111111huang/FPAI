@@ -93,6 +93,24 @@ class _RateLimiter:
         if wait_seconds > 0:
             self._sleep_fn(wait_seconds)
 
+    def would_block(self) -> bool:
+        """True if a call right now would hit wait_if_needed()'s blocking
+        sleep -- lets a caller on a user-facing request path (e.g.
+        auto-settle-on-log, below) decide to skip instead of blocking,
+        without duplicating wait_if_needed()'s own exhaustion logic."""
+        if self._remaining is None or self._remaining > 0 or self._reset_at is None:
+            return False
+        return self._reset_at - self._time_fn() > 0
+
+
+class RateLimitWouldBlock(requests.exceptions.RequestException):
+    """Raised by _get_matches() when blocking=False and the rate limiter's
+    budget is exhausted, instead of sleeping for up to a minute. Subclasses
+    RequestException so every existing per-competition try/except in
+    settlement.py's settle_open_bets() already catches it -- no new except
+    clause needed anywhere that already tolerates a transient results-fetch
+    failure."""
+
 
 class FootballDataClient:
     """Typed wrapper around football-data.org's fixtures/results API."""
@@ -142,7 +160,20 @@ class FootballDataClient:
 
     def get_results(
         self, competition_code: str = "PL", date_from: str | None = None, date_to: str | None = None,
+        blocking: bool = True,
     ) -> list[NormalizedMatch]:
+        # blocking=False (settlement.py's settle_open_bets, threaded down
+        # from main.py's auto-settle-on-log path only -- see
+        # RateLimitWouldBlock's own docstring): raises instead of sleeping
+        # through _RateLimiter.wait_if_needed()'s up-to-a-minute blocking
+        # wait when the budget's exhausted. A bet-logging request
+        # shouldn't hang on an external API's rate limit just because it
+        # also tries to auto-settle -- the bet is already saved open either
+        # way (_settle_if_already_decided's own try/except), so skipping
+        # cleanly here just means it settles later via the normal Settle
+        # open bets flow (still blocking=True, a deliberate user-triggered
+        # wait) instead of immediately.
+        #
         # W213: caching only applies to the single-exact-day shape every
         # real caller actually uses (settlement.py/recommendation_outcomes.py
         # both pass date_from == date_to) -- a genuine multi-day range
@@ -166,13 +197,14 @@ class FootballDataClient:
             cached = self._results_cache.get(competition_code, date_from)
             if cached is not None:
                 return cached
-            matches = self._get_matches(competition_code, "FINISHED", date_from, date_to)
+            matches = self._get_matches(competition_code, "FINISHED", date_from, date_to, blocking=blocking)
             self._results_cache.store(competition_code, date_from, matches)
             return matches
-        return self._get_matches(competition_code, "FINISHED", date_from, date_to)
+        return self._get_matches(competition_code, "FINISHED", date_from, date_to, blocking=blocking)
 
     def _get_matches(
         self, competition_code: str, status: str, date_from: str | None, date_to: str | None,
+        blocking: bool = True,
     ) -> list[NormalizedMatch]:
         params: dict[str, str] = {"status": status}
         if date_from:
@@ -180,6 +212,10 @@ class FootballDataClient:
         if date_to:
             params["dateTo"] = date_to
 
+        if not blocking and self._rate_limiter.would_block():
+            raise RateLimitWouldBlock(
+                f"Rate limit exhausted for {competition_code}; skipping non-blocking call rather than waiting."
+            )
         self._rate_limiter.wait_if_needed()
         response = self._session.get(
             f"{BASE_URL}/competitions/{competition_code}/matches",

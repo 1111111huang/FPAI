@@ -1352,11 +1352,24 @@ async def _settle_if_already_decided(tracker: BetTracker, bet: Bet, user_id: int
     this user so one user's bet log can't trigger settlement work for
     another user's open bets. Failures here (e.g. the results API being
     down) never fail bet creation -- the bet is already saved open; it
-    settles later via the normal Settle open bets flow instead."""
+    settles later via the normal Settle open bets flow instead.
+
+    blocking=False (found live, 2026-09-15): this runs synchronously inside
+    a user-facing POST /api/bets/* response -- W213's ResultsCache fix
+    means a same-day get_results() call here can no longer silently return
+    stale cached data, but it also means it always hits the live API for
+    today, which can now block for up to a minute if football-data.org's
+    rate limit is tight (up to 5 competitions x however many distinct open-
+    bet dates this user has). Logging a bet should never hang on that --
+    blocking=False skips any competition/date whose budget is exhausted
+    right now (RateLimitWouldBlock, caught the same as any other transient
+    results-fetch failure) rather than waiting; it settles on the next
+    attempt (a later log, or the explicit Settle open bets button, which
+    keeps the default blocking=True since that's a deliberate user wait)."""
     try:
         client = get_fixtures_client()
         sweden_client = get_sweden_fixtures_client()
-        await run_in_threadpool(settle_open_bets, tracker, client, sweden_client, user_id=user_id)
+        await run_in_threadpool(settle_open_bets, tracker, client, sweden_client, user_id=user_id, blocking=False)
     except Exception:
         LOGGER.warning("Auto-settle-on-log failed for bet %s -- left open.", bet.id, exc_info=True)
         return bet
