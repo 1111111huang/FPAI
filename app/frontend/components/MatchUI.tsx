@@ -246,7 +246,7 @@ async function resolveCachedRecommendations(matches: Match[]): Promise<Match[]> 
   );
 }
 
-function formatKickoff(iso: string): string {
+export function formatKickoff(iso: string): string {
   const d = new Date(iso);
   return d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
 }
@@ -287,13 +287,22 @@ export function dayDiff(iso: string, asOf: Date, sandboxMode: boolean): number {
   return Math.round((dOnly.getTime() - tOnly.getTime()) / 86_400_000);
 }
 
-function formatDay(iso: string, asOf: Date, sandboxMode: boolean): string {
+export function formatDay(iso: string, asOf: Date, sandboxMode: boolean): string {
   const diffDays = dayDiff(iso, asOf, sandboxMode);
   if (diffDays === 0) return "today";
   if (diffDays === 1) return "tomorrow";
   if (diffDays === -1) return "yesterday";
   if (diffDays > 1) return `in ${diffDays} days`;
   return `${-diffDays} days ago`;
+}
+
+// W218: shared "Today · Full Time" / "Today · 3:00 PM" style label for
+// LogBetModal's fixture header -- the same day/time convention every list
+// page already uses (MatchCard's closing row), reused instead of a fourth
+// copy of this exact ternary.
+export function matchStatusLabel(kickoffIso: string, isCompleted: boolean, asOf: Date, sandboxMode: boolean): string {
+  const day = formatDay(kickoffIso, asOf, sandboxMode);
+  return `${day} · ${isCompleted ? "Full Time" : formatKickoff(kickoffIso)}`;
 }
 
 // Direct user report: today's own already-finished match (Atleti v Malaga,
