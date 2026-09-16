@@ -45,6 +45,7 @@ vi.mock("@/lib/api", () => ({
   // note. Unmocked, this is a vi.fn() returning undefined -- .then() on
   // that throws in any authenticated test that renders MatchAnalysisPage.
   getBets: vi.fn(),
+  logBetManual: vi.fn(),
   ApiError: class ApiError extends Error {},
 }));
 
@@ -791,6 +792,33 @@ describe("MatchCard quick-log control (W215/W217)", () => {
     await user.keyboard("{Enter}");
 
     expect(container.querySelector(".expand-rows")).toHaveClass("is-open");
+  });
+});
+
+describe("MatchCard -- 'N logged' indicator (direct user request, 2026-09-15)", () => {
+  const bet = (overrides: Partial<import("@/lib/types").Bet> = {}) => ({
+    id: 1, match_id: "m1", date: "2026-08-22", home_team: "Arsenal", away_team: "Everton",
+    market: "result_3way", selection: "home", odds: 2.1, stake: 10, outcome: "open" as const,
+    profit_loss: null, source: "manual" as const, recommendation_snapshot: null, created_at: "now",
+    ...overrides,
+  });
+
+  it("shows an 'N logged' pill when bets prop includes bets for this match", () => {
+    const match = baseMatch({ id: "m1" });
+    render(<MatchCard match={match} onUpdate={() => {}} bets={[bet(), bet({ id: 2, market: "btts", selection: "yes" })]} />);
+    expect(screen.getByText("2 logged")).toBeInTheDocument();
+  });
+
+  it("omits the pill entirely when no bet in the list belongs to this match", () => {
+    const match = baseMatch({ id: "m1" });
+    render(<MatchCard match={match} onUpdate={() => {}} bets={[bet({ match_id: "some-other-match" })]} />);
+    expect(screen.queryByText(/logged$/)).not.toBeInTheDocument();
+  });
+
+  it("omits the pill when no bets prop is passed at all -- unaffected caller/default", () => {
+    const match = baseMatch({ id: "m1" });
+    render(<MatchCard match={match} onUpdate={() => {}} />);
+    expect(screen.queryByText(/logged$/)).not.toBeInTheDocument();
   });
 });
 

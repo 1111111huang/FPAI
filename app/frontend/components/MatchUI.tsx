@@ -32,6 +32,7 @@ import {
   MinusCircle,
   Plus,
   Question,
+  Ticket,
   Trophy,
   WarningCircle,
   X,
@@ -45,6 +46,7 @@ import {
   getCachedRecommendation,
   getFixtures,
   logBetFromRecommendation,
+  logBetManual,
 } from "@/lib/api";
 import type { Bet, Fixture, MatchRecommendationOut } from "@/lib/types";
 import { useSandboxAsOf } from "@/lib/useSandboxAsOf";
@@ -882,6 +884,8 @@ export function MatchCard({
   asOf = new Date(),
   sandboxMode = false,
   tintIndex,
+  bets = NO_BETS,
+  onBetsChanged = () => {},
 }: {
   match: Match;
   onUpdate: (m: Match) => void;
@@ -892,12 +896,28 @@ export function MatchCard({
   // cards pass this (matching that group's DATE_GROUP_WASHES index); Match
   // Explorer's ungrouped list omits it, keeping the plain style.
   tintIndex?: number;
+  // Direct user request (2026-09-15): the full signed-in user's bet list
+  // (useAllBets(), above) -- filtered to this match below for the header's
+  // "N logged" indicator and threaded into LogBetButton so its own
+  // "Logged"/"Log another" state survives a reload too, not just this
+  // session's own just-submitted bet. Defaults to empty so every existing
+  // caller/test that doesn't pass it (an unauthenticated visitor's page,
+  // or a test rendering MatchCard standalone) is unaffected.
+  bets?: Bet[];
+  // Called after "Log another" successfully logs a new bet, so the parent
+  // page's useAllBets() can refetch and every card's count/state updates
+  // together -- a no-op default for the same reason as `bets` above.
+  onBetsChanged?: () => void;
 }) {
   const [open, setOpen] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const isCompleted = match.status === "completed";
   const isLive = match.status === "live";
+  // Direct user request: "more bets are allowed to be logged" even once
+  // one already is -- every bet logged for this match, any market, not
+  // just the one the card's own quick-log button tracks.
+  const myBets = useMemo(() => bets.filter((b) => b.match_id === match.id), [bets, match.id]);
   const shown = resolveRecommendation(match);
   // null covers "not completed yet", "no recommendation", "no bet was
   // actually recommended", and "market unresolvable" (e.g. corners)
@@ -1000,6 +1020,18 @@ export function MatchCard({
             (previous layout). Filled pills (STATUS_META.fill/TrustSignal's
             own bg-warning/15) match this redesign's visual language. */}
         <div className="flex items-center justify-end gap-1.5">
+          {/* Direct user request: a match with a logged bet still allows
+              logging more (a different market, or another on the same
+              pick) -- this count is the one visible sign of that without
+              expanding the card, so it isn't mistaken for "done, nothing
+              more to do here" the way the bottom box's own badge alone
+              could otherwise read. */}
+          {myBets.length > 0 && (
+            <span className="flex items-center gap-1 rounded-full border border-accent/40 bg-accent/10 px-2 py-0.5 text-[11px] font-medium text-accent">
+              <Ticket size={11} weight="fill" />
+              {myBets.length} logged
+            </span>
+          )}
           {isLive && <LiveBadge />}
           {/* Completed: StatusBadge (the pre-match recommendation type) drops
               out of this row -- that's now stated in the footer instead
@@ -1254,7 +1286,10 @@ export function MatchCard({
                 variant="pill"
                 homeTeam={match.home}
                 awayTeam={match.away}
+                date={match.kickoffIso.slice(0, 10)}
                 statusLabel={matchStatusLabel(match.kickoffIso, isCompleted, asOf, sandboxMode)}
+                matchBets={myBets}
+                onBetsChanged={onBetsChanged}
               />
             </div>
           )}
@@ -1347,6 +1382,46 @@ export function MatchCard({
   );
 }
 
+const NO_BETS: Bet[] = [];
+
+/** Direct user request (2026-09-15): "N logged"/outcome indicators on
+ * MatchCard, persisted across a reload -- not just this session's own
+ * just-submitted state (LogBetButton's pre-existing `done`/`loggedBet`
+ * only ever reflected that). Fetches the signed-in user's full bet list
+ * once for whichever page renders a list of MatchCards (Dashboard, Match
+ * Explorer) -- mirrors MatchAnalysisPage's own existing single-match
+ * `getBets()` fetch (its `loggedKeys` Set, just scoped to one match id
+ * there instead of every match here) -- and `refetch()` lets a card ask
+ * for a fresh list right after it logs a new bet, so the header count and
+ * the bottom-box "Logged" state update together without a page reload.
+ * Best-effort: a fetch failure just means no bets show anywhere, the same
+ * "cosmetic, never blocking" precedent that hook already established. */
+function useAllBets(): { bets: Bet[]; refetch: () => void } {
+  const { status } = useSession();
+  const [bets, setBets] = useState<Bet[]>(NO_BETS);
+  const [tick, setTick] = useState(0);
+
+  useEffect(() => {
+    if (status !== "authenticated") {
+      setBets(NO_BETS);
+      return;
+    }
+    let cancelled = false;
+    getBets()
+      .then((result) => {
+        if (!cancelled) setBets(result);
+      })
+      .catch(() => {
+        // Best-effort -- see comment above.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [status, tick]);
+
+  return { bets, refetch: () => setTick((t) => t + 1) };
+}
+
 // ---------------------------------------------------------------------------
 // Page 1 -- Dashboard ("/"): today's real E0 fixtures.
 // ---------------------------------------------------------------------------
@@ -1355,6 +1430,7 @@ export function DashboardPage() {
   // AppShell (below) independently calls this same hook too -- see its own
   // comment. Known duplicate fetch, not shared/cached; accepted for now.
   const { asOf, sandboxMode } = useSandboxAsOf();
+  const { bets, refetch: refetchBets } = useAllBets();
   const [matches, setMatches] = useState<Match[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   // W42: bumped by the retry button to force a fresh load() run through the
@@ -1568,6 +1644,8 @@ export function DashboardPage() {
                             asOf={asOf}
                             sandboxMode={sandboxMode}
                             tintIndex={i}
+                            bets={bets}
+                            onBetsChanged={refetchBets}
                           />
                         ))}
                       </div>
@@ -1628,6 +1706,7 @@ export function DashboardPage() {
 
 export function MatchExplorerPage() {
   const { asOf, sandboxMode } = useSandboxAsOf();
+  const { bets, refetch: refetchBets } = useAllBets();
   const [query, setQuery] = useState("");
   const [matches, setMatches] = useState<Match[] | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -1772,7 +1851,16 @@ export function MatchExplorerPage() {
                 </div>
                 <div className="flex flex-col gap-2.5">
                   {group.matches.map((m) => (
-                    <MatchCard key={m.id} match={m} onUpdate={updateMatch} asOf={asOf} sandboxMode={sandboxMode} tintIndex={i} />
+                    <MatchCard
+                      key={m.id}
+                      match={m}
+                      onUpdate={updateMatch}
+                      asOf={asOf}
+                      sandboxMode={sandboxMode}
+                      tintIndex={i}
+                      bets={bets}
+                      onBetsChanged={refetchBets}
+                    />
                   ))}
                 </div>
               </div>
@@ -1808,6 +1896,9 @@ export function LogBetButton({
   statusLabel,
   homeTeam,
   awayTeam,
+  date,
+  matchBets = NO_BETS,
+  onBetsChanged = () => {},
 }: {
   matchId: string;
   recommendation: MatchRecommendationOut;
@@ -1827,6 +1918,19 @@ export function LogBetButton({
   statusLabel: string;
   homeTeam: string;
   awayTeam: string;
+  // Direct user request (2026-09-15): needed only for "Log another"'s
+  // logBetManual() call (pill variant only, below) -- YYYY-MM-DD, same
+  // shape ManualBetForm's own formatDate(fixture.utc_date) produces.
+  // Optional since the "link" variant (ProbabilityRow) never renders that
+  // flow and has no equally-cheap date on hand to pass.
+  date?: string;
+  // Every bet logged for this match, any market -- lets "done" (and
+  // "Log another"'s own visibility) survive a reload instead of resetting
+  // to "not logged" until this component's own local state is set fresh
+  // by a submit in the current session. Optional/defaulted for the same
+  // reason as `bets` on MatchCard, above.
+  matchBets?: Bet[];
+  onBetsChanged?: () => void;
 }) {
   const { status } = useSession();
   const pathname = usePathname();
@@ -1837,6 +1941,22 @@ export function LogBetButton({
   // component only ever needs to know whether a bet was just logged.
   const [done, setDone] = useState(false);
   const [loggedBet, setLoggedBet] = useState<Bet | null>(null);
+  // Direct user request (2026-09-15): "Log another" opens a second,
+  // separate modal instance in editable mode (a different market/
+  // selection than the one this button's own locked flow tracks) -- kept
+  // as its own state rather than reusing `open`/the locked modal above,
+  // since the two need different LogBetModal props (locked vs. not) and
+  // can't both be "the" open modal at once anyway.
+  const [loggingAnother, setLoggingAnother] = useState(false);
+  // The persisted record for this exact market+selection, if any -- takes
+  // over from the local `loggedBet` once a fresh page load hands it back
+  // via `matchBets` (that local state only ever covers this session's own
+  // just-submitted bet). Prefers the local one when both exist so a
+  // fresh submit's fuller detail (e.g. an outcome W212 already settled)
+  // shows immediately, without waiting on onBetsChanged()'s refetch.
+  const persistedBet = matchBets.find((b) => b.market === market && b.selection === selection) ?? null;
+  const effectiveDone = done || persistedBet !== null;
+  const effectiveLoggedBet = loggedBet ?? persistedBet;
 
   if (status === "unauthenticated") {
     // W215: the whole current URL (query params included), not a bare
@@ -1863,12 +1983,12 @@ export function LogBetButton({
   }
   if (status === "loading") return null;
 
-  if (done) {
+  if (effectiveDone) {
     // W215: logBetFromRecommendation() already returns the settled outcome
     // (W212 may have auto-settled it immediately) -- show it instead of a
     // flat "Logged" that hides real information already in hand, and give
     // a way to see it in context instead of a dead end.
-    const outcome = loggedBet?.outcome;
+    const outcome = effectiveLoggedBet?.outcome;
     if (variant === "pill") {
       // W219: direct user mockup -- a bordered pill badge (matching this
       // card's own "Not Hit"/"Positive Edge" badge language, not the plain
@@ -1895,6 +2015,47 @@ export function LogBetButton({
             View in Bet Tracker
             <CaretRight size={11} />
           </Link>
+          {/* Direct user request (2026-09-15): being done with *this*
+              market/pick doesn't mean nothing more can be logged on this
+              match -- lets a different market get its own bet without
+              losing the badge/link above. Editable (not locked) since the
+              point is picking something other than what's already logged;
+              `date` is only ever missing for the "link" variant, which
+              never reaches this branch. */}
+          {date && (
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                setLoggingAnother(true);
+              }}
+              className="ml-auto flex shrink-0 items-center gap-1 rounded-full border border-border-strong px-3 py-1.5 font-semibold text-ink transition hover:border-accent hover:text-accent"
+            >
+              <Plus size={13} weight="bold" />
+              Log another
+            </button>
+          )}
+          {date && loggingAnother && (
+            <LogBetModal
+              open
+              onClose={() => setLoggingAnother(false)}
+              homeTeam={homeTeam}
+              awayTeam={awayTeam}
+              statusLabel={statusLabel}
+              locked={false}
+              market="result_3way"
+              selection=""
+              odds={null}
+              onSubmit={async ({ market: newMarket, selection: newSelection, odds, stake }) => {
+                await logBetManual({
+                  match_id: matchId, date, home_team: homeTeam, away_team: awayTeam,
+                  market: newMarket, selection: newSelection, odds, stake,
+                });
+                setLoggingAnother(false);
+                onBetsChanged();
+              }}
+            />
+          )}
         </span>
       );
     }
@@ -1948,6 +2109,7 @@ export function LogBetButton({
         setLoggedBet(bet);
         setDone(true);
         setOpen(false);
+        onBetsChanged();
       }}
     />
   );

@@ -2,7 +2,7 @@ import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { LogBetButton } from "../MatchUI";
-import { ApiError, logBetFromRecommendation } from "@/lib/api";
+import { ApiError, logBetFromRecommendation, logBetManual } from "@/lib/api";
 
 const mockUseSession = vi.fn();
 vi.mock("next-auth/react", () => ({
@@ -18,6 +18,7 @@ vi.mock("next/navigation", () => ({
 
 vi.mock("@/lib/api", () => ({
   logBetFromRecommendation: vi.fn(),
+  logBetManual: vi.fn(),
   ApiError: class ApiError extends Error {
     status?: number;
     constructor(message: string, status?: number) {
@@ -49,6 +50,7 @@ describe("LogBetButton auth-awareness", () => {
     mockUsePathname.mockReturnValue("/matches/m1");
     mockUseSearchParams.mockReturnValue(new URLSearchParams());
     vi.mocked(logBetFromRecommendation).mockReset();
+    vi.mocked(logBetManual).mockReset();
   });
 
   it("shows a Sign in prompt instead of the log-bet control when unauthenticated", () => {
@@ -183,5 +185,85 @@ describe("LogBetButton auth-awareness", () => {
 
     expect(screen.getByText("2.35")).toBeInTheDocument();
     expect(screen.getByText("Home")).toBeInTheDocument();
+  });
+});
+
+describe("LogBetButton -- persisted done state and 'Log another' (2026-09-15)", () => {
+  const persistedBet = {
+    id: 9, match_id: "m1", date: "2026-08-22", home_team: "Arsenal", away_team: "Everton",
+    market: "result_3way", selection: "home", odds: 2.1, stake: 10, outcome: "lost" as const,
+    profit_loss: -10, source: "manual" as const, recommendation_snapshot: null, created_at: "now",
+  };
+
+  beforeEach(() => {
+    mockUseSession.mockReset();
+    mockUsePathname.mockReset();
+    mockUseSearchParams.mockReset();
+    mockUsePathname.mockReturnValue("/matches/m1");
+    mockUseSearchParams.mockReturnValue(new URLSearchParams());
+    mockUseSession.mockReturnValue({ status: "authenticated", data: { user: { email: "a@b.com" } } });
+    vi.mocked(logBetFromRecommendation).mockReset();
+    vi.mocked(logBetManual).mockReset();
+  });
+
+  it("shows the Logged state on first render from matchBets alone -- no submit needed in this session", () => {
+    render(
+      <LogBetButton
+        matchId="m1" recommendation={recommendation} market="result_3way" selection="home" variant="pill"
+        date="2026-08-22" matchBets={[persistedBet]} {...commonProps}
+      />
+    );
+
+    expect(screen.getByText("Logged · Lost")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Log Bet" })).not.toBeInTheDocument();
+  });
+
+  it("'Log another' only appears for the pill variant with a persisted bet -- not the link variant", () => {
+    const { rerender } = render(
+      <LogBetButton
+        matchId="m1" recommendation={recommendation} market="result_3way" selection="home" variant="pill"
+        date="2026-08-22" matchBets={[persistedBet]} {...commonProps}
+      />
+    );
+    expect(screen.getByRole("button", { name: /log another/i })).toBeInTheDocument();
+
+    rerender(
+      <LogBetButton
+        matchId="m1" recommendation={recommendation} market="result_3way" selection="home" variant="link"
+        matchBets={[persistedBet]} {...commonProps}
+      />
+    );
+    expect(screen.queryByRole("button", { name: /log another/i })).not.toBeInTheDocument();
+  });
+
+  it("'Log another' opens an unlocked modal and logs via logBetManual, then notifies the parent to refetch", async () => {
+    vi.mocked(logBetManual).mockResolvedValue({
+      id: 10, match_id: "m1", date: "2026-08-22", home_team: "Arsenal", away_team: "Everton",
+      market: "btts", selection: "yes", odds: 1.9, stake: 5, outcome: "open",
+      profit_loss: null, source: "manual", recommendation_snapshot: null, created_at: "now",
+    });
+    const onBetsChanged = vi.fn();
+    const user = userEvent.setup();
+    render(
+      <LogBetButton
+        matchId="m1" recommendation={recommendation} market="result_3way" selection="home" variant="pill"
+        date="2026-08-22" matchBets={[persistedBet]} onBetsChanged={onBetsChanged} {...commonProps}
+      />
+    );
+
+    await user.click(screen.getByRole("button", { name: /log another/i }));
+    // Unlocked -- a real dropdown, not the locked flow's fixed text.
+    expect(screen.getByLabelText(/^market$/i).tagName).toBe("SELECT");
+    await user.selectOptions(screen.getByLabelText(/^market$/i), "btts");
+    await user.selectOptions(screen.getByLabelText(/^pick$/i), "yes");
+    await user.type(screen.getByLabelText(/^odds$/i), "1.9");
+    await user.type(screen.getByLabelText(/^stake$/i), "5");
+    await user.click(screen.getByRole("button", { name: /confirm bet/i }));
+
+    expect(logBetManual).toHaveBeenCalledWith({
+      match_id: "m1", date: "2026-08-22", home_team: "Arsenal", away_team: "Everton",
+      market: "btts", selection: "yes", odds: 1.9, stake: 5,
+    });
+    expect(onBetsChanged).toHaveBeenCalled();
   });
 });
