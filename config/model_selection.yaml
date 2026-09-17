@@ -3107,18 +3107,6 @@ contexts:
       - MKT_LAMBDA_AWAY
       - MKT_POISSON_BTTS_PROB
       - MKT_LAMBDA_AH_DIFF
-      - DC_LAMBDA_HOME
-      - DC_LAMBDA_AWAY
-      - DC_ATTACK_HOME
-      - DC_DEFENSE_HOME
-      - DC_ATTACK_AWAY
-      - DC_DEFENSE_AWAY
-      - DC_CORNER_LAMBDA_HOME
-      - DC_CORNER_LAMBDA_AWAY
-      - DC_CORNER_ATTACK_HOME
-      - DC_CORNER_DEFENSE_HOME
-      - DC_CORNER_ATTACK_AWAY
-      - DC_CORNER_DEFENSE_AWAY
       - CTX_HOME_GOALS_STD_R5
       - CTX_HOME_CONCEDED_STD_R5
       - CTX_HOME_CORNERS_STD_R5
@@ -3131,36 +3119,13 @@ contexts:
       - CTX_AWAY_SCORE_STREAK
       - CTX_AWAY_WIN_STREAK
       - CTX_AWAY_CS_STREAK
-      - SQUAD_HOME_XG_MEAN_R3
-      - SQUAD_HOME_XG_MEAN_R5
-      - SQUAD_HOME_XA_MEAN_R3
-      - SQUAD_HOME_XA_MEAN_R5
-      - SQUAD_HOME_RATING_MEAN_R3
-      - SQUAD_HOME_RATING_MEAN_R5
-      - SQUAD_AWAY_XG_MEAN_R3
-      - SQUAD_AWAY_XG_MEAN_R5
-      - SQUAD_AWAY_XA_MEAN_R3
-      - SQUAD_AWAY_XA_MEAN_R5
-      - SQUAD_AWAY_RATING_MEAN_R3
-      - SQUAD_AWAY_RATING_MEAN_R5
-      - LUCK_HOME_BURNOUT_R5
-      - LUCK_AWAY_BURNOUT_R5
-      - XOC_HOME
-      - XOC_AWAY
-      - FRDS_HOME
-      - FRDS_AWAY
-      - DEF_ANCHOR_HOME
-      - DEF_ANCHOR_AWAY
-      - LINEUP_HOME_KEY_ATTACKER_MISSING
-      - LINEUP_AWAY_KEY_ATTACKER_MISSING
       metric_name: test_log_loss
-      metric_value: 0.6914508169063674
-      mlflow_run_id: 8a0c483be0014276bfcc2868196e2f8d
-      model_path: models/btts_i1_xgboost_v1_20260916.joblib
-      # refit_on_full_data + time_decay_half_life_days=180 (US#203, direct user decision to override the logloss gate given confirmed real-edge win): see documents/user_stories.md. No calibrator (btts calibrators disabled, BUG-066).
+      metric_value: 0.691617
+      mlflow_run_id: 50488f2aa8184e1fa3c453ea21865e8d
+      model_path: models/btts_i1_xgboost_v1_20260816.joblib
       model_type: xgboost
-      previous_model_path: models/btts_i1_xgboost_v1_20260816.joblib
-      selected_at: '2026-09-16T23:39:57Z'
+      previous_model_path: models/btts_i1_lr_v1_20260815.joblib
+      selected_at: '2026-08-16T13:52:45Z'
     home_corners:
       feature_subset:
       - OFF_HOME_FTHG_R3
