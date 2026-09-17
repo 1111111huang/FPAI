@@ -534,7 +534,16 @@ def _prefer_higher_probability_conditional_pick(data: dict) -> dict:
     which syncs `overall` to whatever `recommendation_pick` names -- so a
     switch made here is reflected in `overall` (and therefore the frontend
     badge) the same way any other pick resolution already is, with no
-    separate sync logic needed."""
+    separate sync logic needed.
+
+    Rebuilds `explanation` too, not just `recommendation_pick`. Found live
+    (2026-09-17), same investigation: `explanation` is the LLM's own prose,
+    written to justify its ORIGINAL pick -- left untouched after a switch,
+    it keeps reading like a case for the candidate no longer shown, the
+    same badge-vs-narrative mismatch class this whole redesign started
+    from. Replaced with a switch-rationale bullet plus the new pick's own
+    one-line self-reported `reason` (A88) -- every candidate already
+    carries one, so no new LLM call or synthesis is needed."""
     pick = data.get("recommendation_pick")
     candidates = data.get("candidates") or []
     current = resolve_recommendation_pick(candidates, pick)
@@ -555,14 +564,29 @@ def _prefer_higher_probability_conditional_pick(data: dict) -> dict:
         return data
 
     data["recommendation_pick"] = {"market": best["market"], "selection": best["selection"]}
-    limitations = list(data.get("limitations") or [])
-    limitations.append(
+    switch_note = (
         f"Switched the recommendation from {current['market']!r}/{current['selection']!r} (direct_bet, "
         f"ml_probability {current['ml_probability']}) to {best['market']!r}/{best['selection']!r} "
         f"(conditional, ml_probability {best['ml_probability']}) -- a much more likely winner worth "
         "waiting on, even though it isn't bettable at the current price."
     )
+    limitations = list(data.get("limitations") or [])
+    limitations.append(switch_note)
     data["limitations"] = limitations
+    # Found live (2026-09-17), same investigation as the redesign above:
+    # `explanation` is the LLM's own prose, written to justify its ORIGINAL
+    # pick (here, the draw) -- left untouched, it would keep reading like a
+    # case for the draw while the badge/market shown is now btts, the exact
+    # class of stale-narrative-vs-badge mismatch this whole story started
+    # from (Section 35.1, agent_techspec.md). Every candidate already
+    # carries its own one-line self-reported `reason` (A88) explaining why
+    # IT specifically wins or loses -- rebuild `explanation` from the new
+    # pick's own reason plus the switch rationale, so the narrative the
+    # user reads actually matches what they're looking at.
+    new_explanation = [switch_note]
+    if best.get("reason"):
+        new_explanation.append(best["reason"])
+    data["explanation"] = new_explanation
     return data
 
 

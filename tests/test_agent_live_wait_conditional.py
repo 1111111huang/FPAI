@@ -303,6 +303,40 @@ def test_does_not_switch_when_conditional_market_is_not_eligible():
     assert rec["recommendation_pick"] == {"market": "result_3way", "selection": "draw"}
 
 
+def test_switching_pick_rebuilds_explanation_around_the_new_candidate():
+    """Found live (2026-09-17): explanation is the LLM's own prose written
+    to justify the ORIGINAL pick (the draw) -- left untouched, it would
+    keep reading like a case for the draw while the badge/market shown is
+    now btts. Must be rebuilt from the new pick's own reason, not left
+    stale."""
+    data = {
+        **_VALID, "overall": "direct_bet",
+        "candidates": [_DRAW, _BTTS_CONDITIONAL],
+        "recommendation_pick": {"market": "result_3way", "selection": "draw"},
+        "explanation": ["The draw is well-supported by both teams' recent head-to-head record."],
+    }
+
+    rec = extract_recommendation(_wrap_json(data))
+
+    assert rec["recommendation_pick"] == {"market": "btts", "selection": "yes"}
+    assert not any("draw is well-supported" in line for line in rec["explanation"])
+    assert any("Qualifies once the price improves" in line for line in rec["explanation"])
+    assert any("Switched" in line and "draw" in line and "btts" in line for line in rec["explanation"])
+
+
+def test_explanation_untouched_when_pick_is_not_switched():
+    data = {
+        **_VALID, "overall": "direct_bet",
+        "candidates": [_DRAW],
+        "recommendation_pick": {"market": "result_3way", "selection": "draw"},
+        "explanation": ["The draw is well-supported by both teams' recent head-to-head record."],
+    }
+
+    rec = extract_recommendation(_wrap_json(data))
+
+    assert rec["explanation"] == ["The draw is well-supported by both teams' recent head-to-head record."]
+
+
 def test_does_not_switch_when_pick_is_not_a_direct_bet():
     """Scoped to a currently-direct_bet pick only -- a no_bet/conditional
     pick has nothing to compare a 'certain edge in hand' against."""
