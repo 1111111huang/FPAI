@@ -449,6 +449,18 @@ contexts:
       - MKT_LAMBDA_AWAY
       - MKT_POISSON_BTTS_PROB
       - MKT_LAMBDA_AH_DIFF
+      - DC_LAMBDA_HOME
+      - DC_LAMBDA_AWAY
+      - DC_ATTACK_HOME
+      - DC_DEFENSE_HOME
+      - DC_ATTACK_AWAY
+      - DC_DEFENSE_AWAY
+      - DC_CORNER_LAMBDA_HOME
+      - DC_CORNER_LAMBDA_AWAY
+      - DC_CORNER_ATTACK_HOME
+      - DC_CORNER_DEFENSE_HOME
+      - DC_CORNER_ATTACK_AWAY
+      - DC_CORNER_DEFENSE_AWAY
       - CTX_HOME_GOALS_STD_R5
       - CTX_HOME_CONCEDED_STD_R5
       - CTX_HOME_CORNERS_STD_R5
@@ -461,13 +473,36 @@ contexts:
       - CTX_AWAY_SCORE_STREAK
       - CTX_AWAY_WIN_STREAK
       - CTX_AWAY_CS_STREAK
+      - SQUAD_HOME_XG_MEAN_R3
+      - SQUAD_HOME_XG_MEAN_R5
+      - SQUAD_HOME_XA_MEAN_R3
+      - SQUAD_HOME_XA_MEAN_R5
+      - SQUAD_HOME_RATING_MEAN_R3
+      - SQUAD_HOME_RATING_MEAN_R5
+      - SQUAD_AWAY_XG_MEAN_R3
+      - SQUAD_AWAY_XG_MEAN_R5
+      - SQUAD_AWAY_XA_MEAN_R3
+      - SQUAD_AWAY_XA_MEAN_R5
+      - SQUAD_AWAY_RATING_MEAN_R3
+      - SQUAD_AWAY_RATING_MEAN_R5
+      - LUCK_HOME_BURNOUT_R5
+      - LUCK_AWAY_BURNOUT_R5
+      - XOC_HOME
+      - XOC_AWAY
+      - FRDS_HOME
+      - FRDS_AWAY
+      - DEF_ANCHOR_HOME
+      - DEF_ANCHOR_AWAY
+      - LINEUP_HOME_KEY_ATTACKER_MISSING
+      - LINEUP_AWAY_KEY_ATTACKER_MISSING
       metric_name: test_log_loss
-      metric_value: 0.680194
-      mlflow_run_id: 9115bdfb7b84482fb913bb1e83bdfb35
-      model_path: models/btts_d1_xgboost_v1_20260816.joblib
+      metric_value: 0.6902894758118923
+      mlflow_run_id: 6c8cb076777b4241abf43afb4f1a3177
+      model_path: models/btts_d1_xgboost_v1_20260916.joblib
+      # refit_on_full_data + time_decay_half_life_days=180 (US#203, direct user decision to override the logloss gate given confirmed real-edge win): see documents/user_stories.md. No calibrator (btts calibrators disabled, BUG-066).
       model_type: xgboost
-      previous_model_path: models/btts_d1_lr_v1_20260815.joblib
-      selected_at: '2026-08-16T14:23:33Z'
+      previous_model_path: models/btts_d1_xgboost_v1_20260816.joblib
+      selected_at: '2026-09-16T23:39:57Z'
     home_corners:
       feature_subset:
       - OFF_HOME_FTHG_R3
@@ -1322,6 +1357,18 @@ contexts:
       - MKT_LAMBDA_AWAY
       - MKT_POISSON_BTTS_PROB
       - MKT_LAMBDA_AH_DIFF
+      - DC_LAMBDA_HOME
+      - DC_LAMBDA_AWAY
+      - DC_ATTACK_HOME
+      - DC_DEFENSE_HOME
+      - DC_ATTACK_AWAY
+      - DC_DEFENSE_AWAY
+      - DC_CORNER_LAMBDA_HOME
+      - DC_CORNER_LAMBDA_AWAY
+      - DC_CORNER_ATTACK_HOME
+      - DC_CORNER_DEFENSE_HOME
+      - DC_CORNER_ATTACK_AWAY
+      - DC_CORNER_DEFENSE_AWAY
       - CTX_HOME_GOALS_STD_R5
       - CTX_HOME_CONCEDED_STD_R5
       - CTX_HOME_CORNERS_STD_R5
@@ -1334,12 +1381,36 @@ contexts:
       - CTX_AWAY_SCORE_STREAK
       - CTX_AWAY_WIN_STREAK
       - CTX_AWAY_CS_STREAK
+      - SQUAD_HOME_XG_MEAN_R3
+      - SQUAD_HOME_XG_MEAN_R5
+      - SQUAD_HOME_XA_MEAN_R3
+      - SQUAD_HOME_XA_MEAN_R5
+      - SQUAD_HOME_RATING_MEAN_R3
+      - SQUAD_HOME_RATING_MEAN_R5
+      - SQUAD_AWAY_XG_MEAN_R3
+      - SQUAD_AWAY_XG_MEAN_R5
+      - SQUAD_AWAY_XA_MEAN_R3
+      - SQUAD_AWAY_XA_MEAN_R5
+      - SQUAD_AWAY_RATING_MEAN_R3
+      - SQUAD_AWAY_RATING_MEAN_R5
+      - LUCK_HOME_BURNOUT_R5
+      - LUCK_AWAY_BURNOUT_R5
+      - XOC_HOME
+      - XOC_AWAY
+      - FRDS_HOME
+      - FRDS_AWAY
+      - DEF_ANCHOR_HOME
+      - DEF_ANCHOR_AWAY
+      - LINEUP_HOME_KEY_ATTACKER_MISSING
+      - LINEUP_AWAY_KEY_ATTACKER_MISSING
       metric_name: test_log_loss
-      metric_value: 0.685867
-      mlflow_run_id: 98cb676b5b644d91a8d62eb000671d4d
-      model_path: models/btts_xgboost_v1_20260627.joblib
+      metric_value: 0.688933556728723
+      mlflow_run_id: afa3215a56034612a4ef730f462b1241
+      model_path: models/btts_xgboost_v1_20260916.joblib
+      # refit_on_full_data + time_decay_half_life_days=180 (US#203, direct user decision to override the logloss gate given confirmed real-edge win): see documents/user_stories.md. No calibrator (btts calibrators disabled, BUG-066).
       model_type: xgboost
-      selected_at: '2026-06-27T19:52:59Z'
+      previous_model_path: models/btts_xgboost_v1_20260627.joblib
+      selected_at: '2026-09-16T23:39:57Z'
     home_corners:
       metric_name: test_mae
       metric_value: 2.142982
@@ -1830,6 +1901,18 @@ contexts:
       - MKT_LAMBDA_AWAY
       - MKT_POISSON_BTTS_PROB
       - MKT_LAMBDA_AH_DIFF
+      - DC_LAMBDA_HOME
+      - DC_LAMBDA_AWAY
+      - DC_ATTACK_HOME
+      - DC_DEFENSE_HOME
+      - DC_ATTACK_AWAY
+      - DC_DEFENSE_AWAY
+      - DC_CORNER_LAMBDA_HOME
+      - DC_CORNER_LAMBDA_AWAY
+      - DC_CORNER_ATTACK_HOME
+      - DC_CORNER_DEFENSE_HOME
+      - DC_CORNER_ATTACK_AWAY
+      - DC_CORNER_DEFENSE_AWAY
       - CTX_HOME_GOALS_STD_R5
       - CTX_HOME_CONCEDED_STD_R5
       - CTX_HOME_CORNERS_STD_R5
@@ -1842,13 +1925,36 @@ contexts:
       - CTX_AWAY_SCORE_STREAK
       - CTX_AWAY_WIN_STREAK
       - CTX_AWAY_CS_STREAK
+      - SQUAD_HOME_XG_MEAN_R3
+      - SQUAD_HOME_XG_MEAN_R5
+      - SQUAD_HOME_XA_MEAN_R3
+      - SQUAD_HOME_XA_MEAN_R5
+      - SQUAD_HOME_RATING_MEAN_R3
+      - SQUAD_HOME_RATING_MEAN_R5
+      - SQUAD_AWAY_XG_MEAN_R3
+      - SQUAD_AWAY_XG_MEAN_R5
+      - SQUAD_AWAY_XA_MEAN_R3
+      - SQUAD_AWAY_XA_MEAN_R5
+      - SQUAD_AWAY_RATING_MEAN_R3
+      - SQUAD_AWAY_RATING_MEAN_R5
+      - LUCK_HOME_BURNOUT_R5
+      - LUCK_AWAY_BURNOUT_R5
+      - XOC_HOME
+      - XOC_AWAY
+      - FRDS_HOME
+      - FRDS_AWAY
+      - DEF_ANCHOR_HOME
+      - DEF_ANCHOR_AWAY
+      - LINEUP_HOME_KEY_ATTACKER_MISSING
+      - LINEUP_AWAY_KEY_ATTACKER_MISSING
       metric_name: test_log_loss
-      metric_value: 0.690383
-      mlflow_run_id: d3fb04d1626943d89398b653550ea863
-      model_path: models/btts_f1_xgboost_v1_20260816.joblib
+      metric_value: 0.6970006173602311
+      mlflow_run_id: 76b2922dd714420e9e006a626652d6b2
+      model_path: models/btts_f1_xgboost_v1_20260916.joblib
+      # refit_on_full_data + time_decay_half_life_days=180 (US#203, direct user decision to override the logloss gate given confirmed real-edge win): see documents/user_stories.md. No calibrator (btts calibrators disabled, BUG-066).
       model_type: xgboost
-      previous_model_path: models/btts_f1_lr_v1_20260815.joblib
-      selected_at: '2026-08-16T14:53:24Z'
+      previous_model_path: models/btts_f1_xgboost_v1_20260816.joblib
+      selected_at: '2026-09-16T23:39:57Z'
     home_corners:
       feature_subset:
       - OFF_HOME_FTHG_R3
@@ -3001,6 +3107,18 @@ contexts:
       - MKT_LAMBDA_AWAY
       - MKT_POISSON_BTTS_PROB
       - MKT_LAMBDA_AH_DIFF
+      - DC_LAMBDA_HOME
+      - DC_LAMBDA_AWAY
+      - DC_ATTACK_HOME
+      - DC_DEFENSE_HOME
+      - DC_ATTACK_AWAY
+      - DC_DEFENSE_AWAY
+      - DC_CORNER_LAMBDA_HOME
+      - DC_CORNER_LAMBDA_AWAY
+      - DC_CORNER_ATTACK_HOME
+      - DC_CORNER_DEFENSE_HOME
+      - DC_CORNER_ATTACK_AWAY
+      - DC_CORNER_DEFENSE_AWAY
       - CTX_HOME_GOALS_STD_R5
       - CTX_HOME_CONCEDED_STD_R5
       - CTX_HOME_CORNERS_STD_R5
@@ -3013,13 +3131,36 @@ contexts:
       - CTX_AWAY_SCORE_STREAK
       - CTX_AWAY_WIN_STREAK
       - CTX_AWAY_CS_STREAK
+      - SQUAD_HOME_XG_MEAN_R3
+      - SQUAD_HOME_XG_MEAN_R5
+      - SQUAD_HOME_XA_MEAN_R3
+      - SQUAD_HOME_XA_MEAN_R5
+      - SQUAD_HOME_RATING_MEAN_R3
+      - SQUAD_HOME_RATING_MEAN_R5
+      - SQUAD_AWAY_XG_MEAN_R3
+      - SQUAD_AWAY_XG_MEAN_R5
+      - SQUAD_AWAY_XA_MEAN_R3
+      - SQUAD_AWAY_XA_MEAN_R5
+      - SQUAD_AWAY_RATING_MEAN_R3
+      - SQUAD_AWAY_RATING_MEAN_R5
+      - LUCK_HOME_BURNOUT_R5
+      - LUCK_AWAY_BURNOUT_R5
+      - XOC_HOME
+      - XOC_AWAY
+      - FRDS_HOME
+      - FRDS_AWAY
+      - DEF_ANCHOR_HOME
+      - DEF_ANCHOR_AWAY
+      - LINEUP_HOME_KEY_ATTACKER_MISSING
+      - LINEUP_AWAY_KEY_ATTACKER_MISSING
       metric_name: test_log_loss
-      metric_value: 0.691617
-      mlflow_run_id: 50488f2aa8184e1fa3c453ea21865e8d
-      model_path: models/btts_i1_xgboost_v1_20260816.joblib
+      metric_value: 0.6914508169063674
+      mlflow_run_id: 8a0c483be0014276bfcc2868196e2f8d
+      model_path: models/btts_i1_xgboost_v1_20260916.joblib
+      # refit_on_full_data + time_decay_half_life_days=180 (US#203, direct user decision to override the logloss gate given confirmed real-edge win): see documents/user_stories.md. No calibrator (btts calibrators disabled, BUG-066).
       model_type: xgboost
-      previous_model_path: models/btts_i1_lr_v1_20260815.joblib
-      selected_at: '2026-08-16T13:52:45Z'
+      previous_model_path: models/btts_i1_xgboost_v1_20260816.joblib
+      selected_at: '2026-09-16T23:39:57Z'
     home_corners:
       feature_subset:
       - OFF_HOME_FTHG_R3
