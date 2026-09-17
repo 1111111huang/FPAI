@@ -30,7 +30,7 @@ class _CapturingModel:
         self.train_calls: list[dict[str, Any]] = []
 
     def train(self, X: Any, y: Any, eval_set: Any | None = None, sample_weight: Any | None = None) -> None:
-        self.train_calls.append({"n_rows": len(X), "eval_set": eval_set})
+        self.train_calls.append({"n_rows": len(X), "eval_set": eval_set, "sample_weight": sample_weight})
 
     def predict_proba(self, X: Any):
         import numpy as np
@@ -127,6 +127,31 @@ def test_refit_on_full_data_records_metadata_and_skips_calibration(tmp_path: Pat
     assert written["metadata"]["refit_on_full_data"] is True
     assert written["metadata"]["full_data_cutoff"] == "2026-05-24T00:00:00"
     assert calibrator_calls == [], "calibrating against X_val is in-sample once it's folded into the full-data fit"
+
+
+def test_refit_on_full_data_with_time_decay_does_not_crash_on_shape_mismatch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+):
+    """Bug found live (2026-09-16): _combine_time_decay's full-data-refit call
+    multiplied the full-data sample_weight (train+val+test length) against
+    self.train_dates (train-only length) -- a shape mismatch nobody had hit
+    before, since no prior refit_on_full_data promotion also set
+    time_decay_half_life_days. The refit weights must be built from dates
+    spanning ALL of train+val+test, not just the train-only date vector."""
+    model = _CapturingModel()
+    manager = _make_manager(tmp_path, model, refit_on_full_data=True)
+    manager.time_decay_half_life_days = 180.0
+    _wire_common_mocks(manager, monkeypatch, n_train=10, n_val=3, n_test=3)
+    manager.train_dates = pd.to_datetime(pd.Series(["2026-01-01"] * 10))
+    manager.full_data_dates = pd.to_datetime(pd.Series(["2026-01-01"] * 16))
+
+    manager.run_pipeline(external_run=True)  # must not raise
+
+    assert len(model.train_calls) == 2
+    full_data_call = model.train_calls[1]
+    assert full_data_call["n_rows"] == 16
+    assert full_data_call["sample_weight"] is not None
+    assert len(full_data_call["sample_weight"]) == 16
 
 
 def test_default_path_still_calibrates_and_has_no_full_data_cutoff(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):

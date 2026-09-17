@@ -201,6 +201,7 @@ class ModelManager:
         # (same side-effect-attribute pattern as self.training_cutoff below).
         self.time_decay_half_life_days: float | None = time_decay_half_life_days
         self.train_dates: pd.Series | None = None
+        self.full_data_dates: pd.Series | None = None
         # Direct user decision (2026-09-16): the deployed artifact should be
         # a static, season-frozen evidence provider -- train/val/test exists
         # to SELECT the architecture/hyperparameters honestly, not to starve
@@ -655,6 +656,11 @@ class ModelManager:
         # (same df slice) -- consumed by _compute_time_decay_weight in
         # train()/run_pipeline() when time_decay_half_life_days is set.
         self.train_dates = pd.to_datetime(df.iloc[:train_end]["date"]).reset_index(drop=True)
+        # All of train+val+test's own dates, same row order pd.concat(X_train,
+        # X_val, X_test) produces -- the refit_on_full_data fit needs THESE
+        # dates for its own time-decay weights, not train_dates (see
+        # _combine_time_decay's dates param and the bug noted there).
+        self.full_data_dates = pd.to_datetime(df["date"]).reset_index(drop=True)
 
         X_train = X.iloc[:train_end].copy()
         X_val = X.iloc[train_end:val_end].copy()
@@ -769,13 +775,23 @@ class ModelManager:
         
         return test_metrics, prediction_output
 
-    def _combine_time_decay(self, sample_weight: np.ndarray | None) -> np.ndarray | None:
+    def _combine_time_decay(self, sample_weight: np.ndarray | None, dates: pd.Series | None = None) -> np.ndarray | None:
         """US#189: multiply in the recency weight, if configured. A no-op
         (returns sample_weight unchanged) when time_decay_half_life_days is
-        None (the default) or train_dates hasn't been populated yet."""
-        if self.time_decay_half_life_days is None or self.train_dates is None:
+        None (the default) or no dates are available yet.
+
+        `dates` defaults to self.train_dates (the train-only fit) -- pass
+        self.full_data_dates explicitly for the refit_on_full_data fit.
+        Bug found live (2026-09-16): before this parameter existed, the
+        full-data refit always multiplied its train+val+test-length sample
+        weights against train_dates' train-only length, a shape mismatch
+        that had simply never been exercised until a caller combined
+        refit_on_full_data with time_decay_half_life_days for the first
+        time. See tests/test_model_manager_refit_full_data.py."""
+        dates = self.train_dates if dates is None else dates
+        if self.time_decay_half_life_days is None or dates is None:
             return sample_weight
-        decay_weight = _compute_time_decay_weight(self.train_dates, self.time_decay_half_life_days)
+        decay_weight = _compute_time_decay_weight(dates, self.time_decay_half_life_days)
         return decay_weight if sample_weight is None else np.asarray(sample_weight) * decay_weight
 
     def train(self) -> tuple[pd.Series, pd.DataFrame, pd.Series]:
@@ -860,7 +876,7 @@ class ModelManager:
                     X_all = pd.concat([X_train, X_val, X_test])
                     y_all = pd.concat([y_train, y_val, y_test])
                     full_sample_weight = _compute_sample_weight(y_all, self.target_definition.task_type, alpha=self.sample_weight_alpha)
-                    full_sample_weight = self._combine_time_decay(full_sample_weight)
+                    full_sample_weight = self._combine_time_decay(full_sample_weight, dates=self.full_data_dates)
                     # Found live (2026-09-16): early_stopping_rounds is baked
                     # into the underlying XGBoost estimator's constructor for
                     # these model classes, unconditionally requiring an
