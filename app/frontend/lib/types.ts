@@ -53,6 +53,16 @@ export type MatchRecommendationOut = {
   // One bullet per aspect (value edge, team news, form, market caveats, ...)
   // instead of one narrative paragraph -- direct user request.
   explanation: string[];
+  // A113: additive structured-reasoning fields for the "Why This Pick" UI
+  // -- null whenever the agent didn't produce them (a pre-A113 cached row,
+  // a non-compliant model response, or a pick switched post-hoc server-
+  // side with no per-candidate replacement text) -- components must fall
+  // back to explanation/limitations in that case, never assume these are
+  // present. team_evidence/the_read are direct_bet/conditional only;
+  // no_bet_read is no_bet/insufficient_data only.
+  team_evidence?: { home: string; away: string } | null;
+  the_read?: string | null;
+  no_bet_read?: string | null;
   confidence: "low" | "medium" | "high" | string;
   limitations: string[];
   prediction_basis: string;

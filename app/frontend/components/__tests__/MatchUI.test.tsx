@@ -1061,8 +1061,75 @@ describe("MatchAnalysisPage -- cache-first load (W47)", () => {
 
     render(<MatchAnalysisPage id="m1" home="Arsenal" away="Everton" date="2026-08-22" />);
 
-    await screen.findByText("Agent Reasoning");
+    // A113: "Agent Reasoning" renamed to "Why This Pick" as part of the
+    // structured-reasoning redesign.
+    await screen.findByText("Why This Pick");
     expect(screen.queryByText("Squad Intelligence")).not.toBeInTheDocument();
+  });
+
+  it("A113: renders the structured Why This Pick blocks when team_evidence/the_read are present", async () => {
+    const rec = makeRecommendation({
+      candidates: [
+        {
+          market: "btts", selection: "yes", recommendation_type: "direct_bet",
+          current_odds: 1.73, min_odds: 1.71, ml_probability: 0.672, implied_probability: 0.578,
+          value_edge: 0.094, composite_score: 0.6, reason: "Both sides look open at the back.",
+        },
+      ],
+      recommendation_pick: { market: "btts", selection: "yes" },
+      overall: "direct_bet",
+      team_evidence: { home: "Arsenal fact.", away: "Everton fact." },
+      the_read: "Neither side looks capable of keeping a clean sheet right now.",
+      explanation: ["should not render -- structured blocks take over"],
+    });
+    vi.mocked(getCachedRecommendation).mockResolvedValue(rec);
+
+    render(<MatchAnalysisPage id="m1" home="Arsenal" away="Everton" date="2026-08-22" />);
+
+    expect(await screen.findByText("Value case")).toBeInTheDocument();
+    expect(screen.getByText("Arsenal fact.")).toBeInTheDocument();
+    expect(screen.getByText("Everton fact.")).toBeInTheDocument();
+    expect(screen.getByText("The read")).toBeInTheDocument();
+    expect(screen.getByText("Neither side looks capable of keeping a clean sheet right now.")).toBeInTheDocument();
+    expect(screen.getByText("Betting price")).toBeInTheDocument();
+    expect(screen.getByText("This price is live and ready to bet on now. No need to wait for it to move.")).toBeInTheDocument();
+    expect(screen.getByText("Auto-checked")).toBeInTheDocument();
+    // The old flat explanation bullet must NOT also render -- one or the
+    // other, never both.
+    expect(screen.queryByText("should not render -- structured blocks take over")).not.toBeInTheDocument();
+  });
+
+  it("A113: falls back to the flat explanation list when team_evidence/the_read are absent", async () => {
+    const rec = makeRecommendation({ explanation: ["plain fallback bullet"], team_evidence: null, the_read: null });
+    vi.mocked(getCachedRecommendation).mockResolvedValue(rec);
+
+    render(<MatchAnalysisPage id="m1" home="Arsenal" away="Everton" date="2026-08-22" />);
+
+    expect(await screen.findByText("plain fallback bullet")).toBeInTheDocument();
+    expect(screen.queryByText("Value case")).not.toBeInTheDocument();
+  });
+
+  it("A113: no_bet mode renders the no_bet_read block instead of the direct_bet blocks", async () => {
+    const rec = makeRecommendation({
+      overall: "no_bet",
+      candidates: [
+        {
+          market: "total_goals", selection: "over_2.5", recommendation_type: "no_bet",
+          current_odds: 1.9, min_odds: 1.71, ml_probability: 0.541, implied_probability: 0.523,
+          value_edge: 0.018, composite_score: 0.3, reason: "Too close to the line to act on.",
+        },
+      ],
+      recommendation_pick: null,
+      no_bet_read: "Neither team profiles as a bet worth putting money on tonight.",
+      explanation: ["should not render -- no_bet block takes over"],
+    });
+    vi.mocked(getCachedRecommendation).mockResolvedValue(rec);
+
+    render(<MatchAnalysisPage id="m1" home="Arsenal" away="Everton" date="2026-08-22" />);
+
+    expect(await screen.findByText("No qualifying edge today")).toBeInTheDocument();
+    expect(screen.getByText("Neither team profiles as a bet worth putting money on tonight.")).toBeInTheDocument();
+    expect(screen.queryByText("should not render -- no_bet block takes over")).not.toBeInTheDocument();
   });
 
   it("W111: shows a plain-language summary sentence naming the actual team, not just 'home'", async () => {

@@ -28,11 +28,14 @@ import {
   ChartBar,
   CheckCircle,
   Clock,
+  Lightning,
   MagnifyingGlass,
   MinusCircle,
   Plus,
   Question,
+  Target,
   Ticket,
+  TrendUp,
   Trophy,
   WarningCircle,
   X,
@@ -105,6 +108,15 @@ export type Match = {
   // One bullet per aspect, mirroring lib/types.ts's MatchRecommendationOut.
   explanation: string[];
   limitations: string[];
+  // A113: structured "Why This Pick" content -- optional (not just
+  // nullable), matching unitBetMultiplier's own precedent below, so every
+  // existing hand-built Match literal across the test suite (none of
+  // which set these) keeps type-checking unmodified. null/undefined
+  // whenever absent (pre-A113 data, non-compliant response, or a post-hoc
+  // pick switch); renderers must fall back to explanation/limitations.
+  teamEvidence?: { home: string; away: string } | null;
+  theRead?: string | null;
+  noBetRead?: string | null;
   predictionBasis: string;
   // W15: first-class trust signals, independent of predictionBasis/overall --
   // must read as lower-trust even when predictionBasis claims full coverage.
@@ -181,6 +193,9 @@ export function fixtureToMatch(fixture: Fixture, asOf?: Date, sandboxMode = fals
     rawRecommendation: null,
     explanation: [],
     limitations: [],
+    teamEvidence: null,
+    theRead: null,
+    noBetRead: null,
     predictionBasis: "",
     coldStartRisk: false,
     featureCompleteness: null,
@@ -198,6 +213,9 @@ export function applyRecommendation(match: Match, rec: MatchRecommendationOut): 
     predictionBasis: rec.prediction_basis,
     explanation: rec.explanation,
     limitations: rec.limitations,
+    teamEvidence: rec.team_evidence ?? null,
+    theRead: rec.the_read ?? null,
+    noBetRead: rec.no_bet_read ?? null,
     coldStartRisk: rec.cold_start_risk,
     featureCompleteness: rec.feature_completeness,
     unknownTeam: rec.unknown_team,
@@ -1350,14 +1368,7 @@ export function MatchCard({
             {error && <ErrorState message={error} onRetry={handleExpand} />}
             {!loading && !error && match.hasRecommendation && (
               <>
-                <ul className="space-y-1 text-ink-secondary">
-                  {match.explanation.map((point, i) => (
-                    <li key={i} className="flex gap-1.5">
-                      <span aria-hidden="true">·</span>
-                      <span>{point}</span>
-                    </li>
-                  ))}
-                </ul>
+                <WhyThisPickSection match={match} shown={shown} />
                 {match.invalidMarketCount > 0 && (
                   <p className="mt-2 flex items-center gap-1.5 text-xs text-serious">
                     <WarningCircle weight="fill" size={13} />
@@ -2256,6 +2267,183 @@ export function marketLabel(market: string): { label: string; subtitle: string |
   return { label: spaced.charAt(0).toUpperCase() + spaced.slice(1), subtitle: null };
 }
 
+// ---------------------------------------------------------------------------
+// A113: "Why This Pick" -- icon-tagged structured reasoning blocks, direct
+// user spec (2026-09-17). Ground rules the whole section follows: never
+// name a threshold/price range/internal cutoff (a reader can only disagree
+// with the read, not with a rule they can't see); show the model's own
+// numbers as data (ProbabilityTapeBar) rather than narrating them in prose;
+// each content type gets its own icon-tagged block, never folded into one
+// flat bullet list. Falls back to the pre-A113 flat explanation/limitations
+// rendering whenever the structured fields the model needs to supply
+// (teamEvidence/theRead/noBetRead) are absent -- a pre-A113 cached row, a
+// non-compliant model response, or a pick switched post-hoc server-side
+// (src/agent/schema.py's _prefer_higher_probability_conditional_pick,
+// which clears these rather than leave stale content for a different
+// candidate) -- see WhyThisPickSection below for that fallback.
+// ---------------------------------------------------------------------------
+
+/** Split-width "tale of the tape" bar: model probability vs. market
+ * probability, both rendered as data (bold numbers on a proportionally-
+ * sized fill), not narrated in a sentence. `captionMode="gap"` (the
+ * direct_bet/conditional value case) states the gap in percentage points
+ * with no claim about why it matters; `captionMode="neutral"` (the no_bet
+ * closest-candidate case) never states the margin it missed by. */
+function ProbabilityTapeBar({
+  heading,
+  modelProb,
+  marketProb,
+  captionMode = "gap",
+}: {
+  heading: string;
+  modelProb: number;
+  marketProb: number;
+  captionMode?: "gap" | "neutral";
+}) {
+  const modelPct = modelProb * 100;
+  const marketPct = marketProb * 100;
+  const gapPts = modelPct - marketPct;
+  const caption =
+    captionMode === "neutral"
+      ? "Too close a read to put money behind"
+      : `Model reads ${gapPts >= 0 ? "+" : ""}${gapPts.toFixed(1)}% ${gapPts >= 0 ? "higher" : "lower"} than the market price`;
+  return (
+    <div className="mt-2">
+      <p className="text-center text-[11px] font-medium uppercase tracking-wide text-muted">{heading}</p>
+      <div className="mt-1.5 flex overflow-hidden rounded-lg border border-border bg-surface">
+        <div
+          className="min-w-0 bg-warning/25 px-3 py-2.5"
+          style={{ flexBasis: `${Math.max(modelPct, 1)}%` }}
+        >
+          <p className="text-[10px] font-medium uppercase tracking-wide text-ink-secondary">Model</p>
+          <p className="text-xl font-bold text-ink">{modelPct.toFixed(1)}%</p>
+        </div>
+        <div className="min-w-0 flex-1 px-3 py-2.5 text-right">
+          <p className="text-[10px] font-medium uppercase tracking-wide text-muted">Market</p>
+          <p className="text-xl font-bold text-ink-secondary">{marketPct.toFixed(1)}%</p>
+        </div>
+      </div>
+      <p className="mt-1.5 text-center text-xs text-muted">{caption}</p>
+    </div>
+  );
+}
+
+/** One icon-tagged row: a colored square icon, a bold title, an optional
+ * "Auto-checked" tag (system-generated content, not the model's own
+ * prose), and free-form children below. */
+function WhyPickRow({
+  icon,
+  iconClass,
+  title,
+  autoChecked = false,
+  children,
+}: {
+  icon: React.ReactNode;
+  iconClass: string;
+  title: string;
+  autoChecked?: boolean;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className="flex gap-3 border-t border-border py-4 first:border-t-0 first:pt-0">
+      <span className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-lg ${iconClass}`}>{icon}</span>
+      <div className="min-w-0 flex-1">
+        <div className="flex items-center gap-2">
+          <p className="text-sm font-semibold text-ink">{title}</p>
+          {autoChecked && (
+            <span className="inline-flex items-center gap-1 rounded-full border border-border px-1.5 py-0.5 text-[10px] text-muted">
+              <Lightning size={10} weight="fill" /> Auto-checked
+            </span>
+          )}
+        </div>
+        <div className="mt-1 text-sm leading-relaxed text-ink-secondary">{children}</div>
+      </div>
+    </div>
+  );
+}
+
+/** Betting-price text, entirely code-generated (never the LLM's own
+ * prose) -- always tagged "Auto-checked" per the content spec, since the
+ * whole point is keeping the source of a code-side note visible. No
+ * internal threshold/range is named; target_odds (when present) is a
+ * per-pick computed number, not a fixed internal cutoff. */
+function bettingPriceText(candidate: MarketRec): string {
+  if (candidate.recommendationType === "direct_bet") {
+    return "This price is live and ready to bet on now. No need to wait for it to move.";
+  }
+  if (candidate.targetOdds) {
+    return `This price isn't quite there yet -- worth waiting for it to reach about ${candidate.targetOdds.toFixed(2)}.`;
+  }
+  return "This price isn't quite there yet. If you're comfortable waiting, it may improve.";
+}
+
+function WhyThisPickSection({ match, shown }: { match: Match; shown: MarketRec | undefined }) {
+  const noBetMode = match.overall === "no_bet" || match.overall === "insufficient_data";
+
+  if (!noBetMode && shown && match.teamEvidence && match.theRead) {
+    const marketMeta = marketLabel(shown.market);
+    const pick = pickLabel(match, shown.selection);
+    return (
+      <div>
+        <WhyPickRow icon={<TrendUp size={18} weight="bold" />} iconClass="bg-warning/15 text-warning" title="Value case">
+          <p>
+            {marketMeta.label} {pick} reads as the strongest value on this fixture, at odds of{" "}
+            <span className="font-semibold text-ink">{shown.currentOdds?.toFixed(2)}</span>.
+          </p>
+          <ProbabilityTapeBar heading="Win probability" modelProb={shown.mlProbability} marketProb={shown.impliedProbability} />
+        </WhyPickRow>
+        <WhyPickRow icon={<TeamBadge name={match.home} />} iconClass="bg-transparent p-0" title={match.home}>
+          {match.teamEvidence.home}
+        </WhyPickRow>
+        <WhyPickRow icon={<TeamBadge name={match.away} />} iconClass="bg-transparent p-0" title={match.away}>
+          {match.teamEvidence.away}
+        </WhyPickRow>
+        <WhyPickRow icon={<Target size={18} weight="bold" />} iconClass="bg-violet-500/15 text-violet-300" title="The read">
+          {match.theRead}
+        </WhyPickRow>
+        <WhyPickRow icon={<Clock size={18} weight="bold" />} iconClass="bg-good/15 text-good" title="Betting price" autoChecked>
+          {bettingPriceText(shown)}
+        </WhyPickRow>
+      </div>
+    );
+  }
+
+  if (noBetMode && match.noBetRead) {
+    const closest = [...match.candidates]
+      .filter((c) => c.recommendationType === "no_bet")
+      .sort((a, b) => b.valueEdge - a.valueEdge)[0];
+    return (
+      <div>
+        <WhyPickRow icon={<MinusCircle size={18} weight="bold" />} iconClass="bg-surface text-ink-secondary" title="No qualifying edge today">
+          <p>{match.noBetRead}</p>
+          {closest && (
+            <ProbabilityTapeBar
+              heading={`${marketLabel(closest.market).label} — closest read`}
+              modelProb={closest.mlProbability}
+              marketProb={closest.impliedProbability}
+              captionMode="neutral"
+            />
+          )}
+        </WhyPickRow>
+      </div>
+    );
+  }
+
+  // Fallback: pre-A113 cached data, a non-compliant model response, or a
+  // pick switched post-hoc with no structured replacement content -- the
+  // original flat bullet-list rendering, unchanged.
+  return (
+    <ul className="space-y-1 text-ink-secondary">
+      {match.explanation.map((point, i) => (
+        <li key={i} className="flex gap-1.5">
+          <span aria-hidden="true">·</span>
+          <span>{point}</span>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
 /** W111: one plain-English sentence, composed entirely from fields already
  * on the recommendation (overall/confidence/resolveRecommendation) -- no new backend
  * field, no LLM call. Sits ahead of the jargon-dense Model Probabilities
@@ -2375,6 +2563,9 @@ export function MatchAnalysisPage({
             recommendationPick: null,
             explanation: [],
             limitations: [],
+            teamEvidence: null,
+            theRead: null,
+            noBetRead: null,
             predictionBasis: "",
             coldStartRisk: false,
             featureCompleteness: null,
@@ -2520,16 +2711,11 @@ export function MatchAnalysisPage({
               a permanent stub is worse than no section at all. */}
 
           <section className="mt-8">
-            <h2 className="text-sm font-semibold uppercase tracking-wide text-muted">Agent Reasoning</h2>
+            <h2 className="flex items-center gap-1.5 text-sm font-semibold uppercase tracking-wide text-muted">
+              <Question size={16} weight="bold" /> Why This Pick
+            </h2>
             <div className="mt-2 rounded-lg border border-border bg-surface p-4">
-              <ul className="space-y-1.5 text-sm leading-relaxed text-ink-secondary">
-                {match.explanation.map((point, i) => (
-                  <li key={i} className="flex gap-1.5">
-                    <span aria-hidden="true">·</span>
-                    <span>{point}</span>
-                  </li>
-                ))}
-              </ul>
+              <WhyThisPickSection match={match} shown={shown} />
               {match.limitations.length > 0 && (
                 <ul className="mt-3 space-y-1 border-t border-border pt-3">
                   {match.limitations.map((l, i) => (
