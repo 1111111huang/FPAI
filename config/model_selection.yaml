@@ -4251,13 +4251,13 @@ contexts:
       - LINEUP_HOME_KEY_ATTACKER_MISSING
       - LINEUP_AWAY_KEY_ATTACKER_MISSING
       metric_name: test_log_loss
-      metric_value: 0.698782
-      mlflow_run_id: 1caabb642d92447fa6b959c04d943350
+      metric_value: 0.689214
+      mlflow_run_id: d84ac15a4b024ea9af88371d5ca55972
       model_path: models/btts_sp1_xgboost_v1_20260916.joblib
-      # refit_on_full_data (see .metadata.json): promoted directly per US#192, not via select-best-models -- metric unchanged by design. No calibrator (btts calibrators disabled, BUG-066).
+      # refit_on_full_data + time_decay_half_life_days=180 (US#203): clears the 0.005 logloss gate (0.6988->0.6892) AND confirmed +25.0pp real edge on held-out real-odds matches (baseline was +14.5pp) -- see documents/user_stories.md US#203. No calibrator (btts calibrators disabled, BUG-066).
       model_type: xgboost
       previous_model_path: models/btts_sp1_xgboost_v1_20260807.joblib
-      selected_at: '2026-09-16T17:21:09Z'
+      selected_at: '2026-09-16T23:39:24Z'
     home_corners:
       feature_subset:
       - OFF_HOME_FTHG_R3
