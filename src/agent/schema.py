@@ -414,48 +414,52 @@ def _promote_favorite_to_conditional_for_live_wait(
 ) -> dict:
     """A112, direct user strategy (2026-09-17): a favorite priced at
     live_wait_min_odds or better (not shorter) is worth recommending as
-    'conditional' rather than betting -- or not betting -- right now. The
-    strategy: waiting into the match for an early non-event (classic
-    example: btts priced around -150, wait ~20min, if neither side has
-    scored yet the live price drifts out toward +100 with the true
-    probability barely changed) reliably gets a better number on a pick
-    that's still likely to win.
+    'conditional' rather than not betting at all right now. The strategy:
+    waiting into the match for an early non-event (classic example: btts
+    priced around -150, wait ~20min, if neither side has scored yet the
+    live price drifts out toward +100 with the true probability barely
+    changed) reliably gets a better number on a pick that's still likely
+    to win.
 
     A candidate qualifies when ALL of:
-      1. market/selection is in _CONDITIONAL_ELIGIBLE_MARKETS (A54's own
+      1. recommendation_type == 'no_bet' -- scoped to 'no_bet' only. Found
+         live (2026-09-17), a real card (Espanyol v Elche btts, edge 9.4%
+         at 1.73/-137, the only qualifying candidate on the match): the
+         original version of this rule ALSO overrode an existing
+         'direct_bet' to 'conditional' whenever it met the same price/
+         probability checks -- but that throws away a CERTAIN edge in hand
+         (9.4%, already clearing the bar right now) for an UNCERTAIN future
+         one, with no comparison of which is actually better, and no
+         weighing of the real risk that the price doesn't drift as
+         expected (an early goal moves btts:yes the WRONG way -- shorter,
+         not toward +100). The LLM's own explanation text is also written
+         BEFORE this override runs, so it stayed direct_bet-flavored
+         ("the bet can be taken at the current price") while the badge
+         said "Conditional" -- a live, user-reported contradiction.
+         Direct user clarification, same investigation: overriding an
+         *already-qualifying* direct_bet isn't a same-candidate decision
+         at all -- it's a cross-candidate one (comparing a genuine
+         direct_bet against a DIFFERENT, higher-probability candidate that
+         only qualifies once its price improves), handled by
+         _prefer_higher_probability_conditional_pick() below, which runs
+         later in the pipeline. This function's only job is filling the
+         'no_bet' gap the value-edge check alone wouldn't (a candidate
+         whose CURRENT price/edge doesn't clear the bar, but whose
+         expected target price would).
+      2. market/selection is in _CONDITIONAL_ELIGIBLE_MARKETS (A54's own
          restriction -- waiting has to be a real directional strategy).
-      2. current_odds >= live_wait_min_odds -- not too short a price to
+      3. current_odds >= live_wait_min_odds -- not too short a price to
          realistically wait on (e.g. -150 or better).
-      3. current_odds < live_wait_target_odds -- there's an actual price
-         improvement to wait FOR. Found live (2026-09-17) while adding
-         check 4 below: the original version only checked #2, so a
-         direct_bet already priced BETTER than the target (e.g. already at
-         +150, longer than the +100 target) could get "promoted" to
-         conditional -- recommending waiting for a WORSE price than
-         already available. This check makes that structurally impossible.
-      4. ml_probability - implied(live_wait_target_odds) >= min_value_edge
+      4. current_odds < live_wait_target_odds -- there's an actual price
+         improvement to wait FOR (a 'no_bet' candidate already priced
+         longer than the target would have cleared edge at the target too,
+         by the same monotonic-implied-probability reasoning as check 5 --
+         this is mostly a defensive/structural guard here, not the load-
+         bearing check it was when this rule could also touch direct_bet).
+      5. ml_probability - implied(live_wait_target_odds) >= min_value_edge
          -- direct user refinement (2026-09-17): don't recommend waiting
          on a coin-flip-ish favorite that wouldn't even clear the edge bar
-         at the assumed target price. Subsumes the original bare
-         "ml_probability > 0.5" check (with target_odds=2.0/+100 and
-         min_value_edge=0.05, this requires ml_probability >= 0.55, a
-         strictly stronger bar) -- for an EXISTING 'direct_bet', check 4 is
-         automatically satisfied whenever checks 2+3 hold (its own edge at
-         a SHORTER current price already cleared min_value_edge, and
-         implied probability only drops -- edge only grows -- as price
-         lengthens toward the target), so this uniform check changes
-         nothing for a legitimate direct_bet while genuinely gating the
-         'no_bet' case the user asked for.
-
-    Unlike every other check in this file, this one PROMOTES rather than
-    downgrades: it can turn 'no_bet' into 'conditional' (a gap the
-    value-edge check alone wouldn't fill on its own, since the point is
-    the CURRENT price/edge doesn't need to already clear the bar -- only
-    the price this is expected to drift to needs to) and can override an
-    existing 'direct_bet' too (direct user preference: a likely winner is
-    worth waiting on for the better price rather than betting the worse
-    one now). Already-'conditional' candidates are left alone (nothing to
-    do).
+         at the assumed target price.
 
     live_wait_min_odds=None (default) disables this rule entirely -- only a
     config that explicitly opts in (config/agent_config.yaml) sees this
@@ -475,7 +479,7 @@ def _promote_favorite_to_conditional_for_live_wait(
     implied_at_target = 1 / live_wait_target_odds
     limitations = list(data.get("limitations") or [])
     for candidate in data.get("candidates", []):
-        if candidate["recommendation_type"] == "conditional":
+        if candidate["recommendation_type"] != "no_bet":
             continue
         if (candidate["market"], candidate["selection"]) not in _CONDITIONAL_ELIGIBLE_MARKETS:
             continue
@@ -487,16 +491,77 @@ def _promote_favorite_to_conditional_for_live_wait(
             continue
         edge_at_target = prob - implied_at_target
         if edge_at_target >= min_value_edge:
-            previous = candidate["recommendation_type"]
             candidate["recommendation_type"] = "conditional"
             limitations.append(
-                f"Promoted {candidate['market']!r}/{candidate['selection']!r} from {previous!r} to "
+                f"Promoted {candidate['market']!r}/{candidate['selection']!r} from 'no_bet' to "
                 f"conditional: current_odds {odds} is between the {live_wait_min_odds} floor and the "
                 f"{live_wait_target_odds} live-wait target, and ml_probability {prob} clears "
                 f"min_value_edge ({edge_at_target:.4f} >= {min_value_edge}) at that target price -- "
-                "a likely winner still worth waiting on for a better price rather than betting "
-                "(or not betting) now."
+                "a likely winner still worth waiting on for a better price rather than not betting at all."
             )
+    data["limitations"] = limitations
+    return data
+
+
+def _prefer_higher_probability_conditional_pick(data: dict) -> dict:
+    """A112 refinement, direct user clarification (2026-09-17), replacing
+    this rule's original same-candidate direct_bet override (see the
+    docstring above): the live-wait trade-off is a CROSS-candidate
+    decision, not a same-candidate one. Concrete example given: a match
+    has a 'draw' direct_bet (10% edge, 30% ml_probability) and a 'btts'
+    candidate that only qualifies as 'conditional' once its price hits the
+    live-wait target (4% edge now, would be 5% at +100, 55% ml_probability)
+    -- the btts conditional pick is the BETTER recommendation, because its
+    win probability is far higher, even though its edge is smaller and it
+    isn't bettable at the current price at all.
+
+    Runs near the end of the pipeline: only reconsiders `recommendation_pick`
+    when it currently resolves to a 'direct_bet' candidate (the LLM's own
+    choice, already past every other guardrail including A91's self-
+    consistency check) -- finds every OTHER candidate that is 'conditional'
+    and in _CONDITIONAL_ELIGIBLE_MARKETS (A54's restriction still applies:
+    waiting only makes sense for those markets), and switches the pick to
+    whichever one has the single HIGHEST ml_probability, but only if that
+    beats the current direct_bet's own ml_probability. A no-op when the
+    resolved pick isn't 'direct_bet', when no eligible 'conditional'
+    candidate exists, or when none beats the current pick's probability --
+    the certain, already-qualifying direct_bet stands in every other case.
+
+    Must run AFTER _downgrade_recommendation_below_top_composite_score
+    (A91): that check validates the LLM's own self-consistency against its
+    OWN pick, which would be the wrong thing to re-run against a pick this
+    function itself chose. Must run BEFORE _resolve_recommendation_pick,
+    which syncs `overall` to whatever `recommendation_pick` names -- so a
+    switch made here is reflected in `overall` (and therefore the frontend
+    badge) the same way any other pick resolution already is, with no
+    separate sync logic needed."""
+    pick = data.get("recommendation_pick")
+    candidates = data.get("candidates") or []
+    current = resolve_recommendation_pick(candidates, pick)
+    if current is None or current["recommendation_type"] != "direct_bet":
+        return data
+
+    eligible_conditionals = [
+        c for c in candidates
+        if c is not current
+        and c["recommendation_type"] == "conditional"
+        and (c["market"], c["selection"]) in _CONDITIONAL_ELIGIBLE_MARKETS
+    ]
+    if not eligible_conditionals:
+        return data
+
+    best = max(eligible_conditionals, key=lambda c: c["ml_probability"])
+    if best["ml_probability"] <= current["ml_probability"]:
+        return data
+
+    data["recommendation_pick"] = {"market": best["market"], "selection": best["selection"]}
+    limitations = list(data.get("limitations") or [])
+    limitations.append(
+        f"Switched the recommendation from {current['market']!r}/{current['selection']!r} (direct_bet, "
+        f"ml_probability {current['ml_probability']}) to {best['market']!r}/{best['selection']!r} "
+        f"(conditional, ml_probability {best['ml_probability']}) -- a much more likely winner worth "
+        "waiting on, even though it isn't bettable at the current price."
+    )
     data["limitations"] = limitations
     return data
 
@@ -836,6 +901,7 @@ def extract_recommendation(
         )
         data = _compute_target_odds(data, min_value_edge)
         data = _downgrade_recommendation_below_top_composite_score(data)
+        data = _prefer_higher_probability_conditional_pick(data)
         data = _resolve_recommendation_pick(data)
         data = _attach_unit_bet_multiplier(data)
         return data  # type: ignore[return-value]
