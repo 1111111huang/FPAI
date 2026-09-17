@@ -133,6 +133,72 @@ def test_promoted_candidate_gets_a_real_target_odds():
     assert rec["candidates"][0]["target_odds"] is not None
 
 
+def test_not_promoted_when_edge_at_target_price_does_not_clear_min_value_edge():
+    """Direct user refinement (2026-09-17): a bare ml_probability > 0.5
+    isn't enough -- it must clear min_value_edge AT the live-wait target
+    price (default 2.0 / +100). 0.52 - implied(2.0)=0.5 = 0.02, below the
+    default 0.05 min_value_edge -- a coin-flip-ish favorite not worth
+    recommending a wait on."""
+    candidate = {**_VALID_CANDIDATE, "ml_probability": 0.52}
+    data = {**_VALID, "candidates": [candidate]}
+
+    rec = extract_recommendation(_wrap_json(data), live_wait_min_odds=_LIVE_WAIT_MIN_ODDS, min_value_edge=0.05)
+
+    assert rec["candidates"][0]["recommendation_type"] == "no_bet"
+    assert rec["limitations"] == []
+
+
+def test_promoted_when_edge_at_target_price_clears_min_value_edge():
+    """Mirror of the above at the threshold: 0.56 - 0.5 = 0.06 >= 0.05."""
+    candidate = {**_VALID_CANDIDATE, "ml_probability": 0.56}
+    data = {**_VALID, "candidates": [candidate]}
+
+    rec = extract_recommendation(_wrap_json(data), live_wait_min_odds=_LIVE_WAIT_MIN_ODDS, min_value_edge=0.05)
+
+    assert rec["candidates"][0]["recommendation_type"] == "conditional"
+
+
+def test_direct_bet_already_better_than_target_is_not_touched():
+    """Correctness fix found while adding the edge-clearing check
+    (2026-09-17): a direct_bet already priced LONGER (better) than the
+    live-wait target has nothing to wait for -- promoting it to
+    'conditional' would recommend waiting for a WORSE price than already
+    available. current_odds=2.5 (+150) is already better than the +100
+    (2.0) target."""
+    candidate = {**_VALID_CANDIDATE, "recommendation_type": "direct_bet", "current_odds": 2.5, "value_edge": 0.2}
+    data = {**_VALID, "overall": "direct_bet", "candidates": [candidate]}
+
+    rec = extract_recommendation(_wrap_json(data), live_wait_min_odds=_LIVE_WAIT_MIN_ODDS)
+
+    assert rec["candidates"][0]["recommendation_type"] == "direct_bet"
+    assert rec["limitations"] == []
+
+
+def test_direct_bet_at_exactly_the_target_price_is_not_touched():
+    """odds >= live_wait_target_odds is exclusive of the target itself --
+    already AT the target price, nothing left to wait for."""
+    candidate = {**_VALID_CANDIDATE, "recommendation_type": "direct_bet", "current_odds": 2.0, "value_edge": 0.1}
+    data = {**_VALID, "overall": "direct_bet", "candidates": [candidate]}
+
+    rec = extract_recommendation(_wrap_json(data), live_wait_min_odds=_LIVE_WAIT_MIN_ODDS)
+
+    assert rec["candidates"][0]["recommendation_type"] == "direct_bet"
+
+
+def test_custom_target_odds_is_respected_not_hardcoded():
+    """A longer custom target (e.g. +150/2.5) needs more edge to clear at
+    that price -- ml_probability 0.6's edge at 2.5 (implied 0.4) is 0.20,
+    comfortably above 0.05, so this should still promote with a
+    non-default target."""
+    data = {**_VALID}
+
+    rec = extract_recommendation(
+        _wrap_json(data), live_wait_min_odds=_LIVE_WAIT_MIN_ODDS, live_wait_target_odds=2.5,
+    )
+
+    assert rec["candidates"][0]["recommendation_type"] == "conditional"
+
+
 def test_survives_the_stricter_general_conditional_floor():
     """The core conflict this rule resolves: the general conditional floor
     (min_conditional_odds_threshold, prod default 1.71 / -140) is STRICTER

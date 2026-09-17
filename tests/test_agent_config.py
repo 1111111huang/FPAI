@@ -97,6 +97,7 @@ def test_default_config_has_a112_live_wait_min_odds():
     below (extended to also assert this field is None there)."""
     cfg = AgentConfig.default()
     assert cfg.live_wait_min_odds == pytest.approx(1.6667)
+    assert cfg.live_wait_target_odds == pytest.approx(2.0)
 
 
 def test_from_yaml_missing_file():

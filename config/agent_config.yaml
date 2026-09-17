@@ -61,6 +61,7 @@ min_value_edge: 0.05            # model prob must exceed implied prob by at leas
 # ~20min) reliably drifts these eligible markets to a better price. See
 # src/agent/schema.py's _promote_favorite_to_conditional_for_live_wait.
 live_wait_min_odds: 1.6667      # decimal / -150 American
+live_wait_target_odds: 2.0      # decimal / +100 American -- must clear min_value_edge at this price
 
 # Markets the agent evaluates per match
 markets:

@@ -336,6 +336,7 @@ def _build_recommendation(
             min_value_edge=config.min_value_edge,
             min_value_edge_result_3way_draw=config.min_value_edge_result_3way_draw,
             live_wait_min_odds=config.live_wait_min_odds,
+            live_wait_target_odds=config.live_wait_target_odds,
             home_team=match_info.get("home_team"),
             away_team=match_info.get("away_team"),
         )

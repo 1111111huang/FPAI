@@ -61,6 +61,14 @@ class AgentConfig:
     # None (default) disables this rule entirely; only a config that
     # explicitly sets it opts in.
     live_wait_min_odds: float | None = None
+    # A112 refinement, direct user request (2026-09-17): the assumed price
+    # this strategy waits for -- a candidate only promotes to 'conditional'
+    # when ml_probability clears min_value_edge AT THIS price (not the
+    # current one), and only when current_odds is actually shorter than
+    # this (nothing to wait for otherwise). Real default even when
+    # live_wait_min_odds is unset -- harmless, since the whole rule is off
+    # in that case regardless.
+    live_wait_target_odds: float = 2.0  # decimal / +100 American
 
     @classmethod
     def from_yaml(cls, path: str | Path) -> "AgentConfig":
@@ -77,6 +85,7 @@ class AgentConfig:
         kwargs["max_conditional_odds_threshold"] = data.get("max_conditional_odds_threshold", float("inf"))
         kwargs["min_value_edge_result_3way_draw"] = data.get("min_value_edge_result_3way_draw")
         kwargs["live_wait_min_odds"] = data.get("live_wait_min_odds")
+        kwargs["live_wait_target_odds"] = data.get("live_wait_target_odds", 2.0)
         return cls(**kwargs)
 
     @classmethod

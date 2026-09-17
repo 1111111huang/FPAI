@@ -409,28 +409,53 @@ def _downgrade_conditional_above_ceiling(data: dict, max_conditional_odds_thresh
     return data
 
 
-def _promote_favorite_to_conditional_for_live_wait(data: dict, live_wait_min_odds: float | None) -> dict:
-    """A112, direct user strategy (2026-09-17): a favorite (ml_probability >
-    0.5) priced at live_wait_min_odds or better (not shorter) is worth
-    recommending as 'conditional' rather than betting -- or not betting --
-    right now. The strategy: waiting into the match for an early non-event
-    (classic example: btts priced around -150, wait ~20min, if neither side
-    has scored yet the live price drifts out toward +100 with the true
+def _promote_favorite_to_conditional_for_live_wait(
+    data: dict, live_wait_min_odds: float | None, live_wait_target_odds: float, min_value_edge: float,
+) -> dict:
+    """A112, direct user strategy (2026-09-17): a favorite priced at
+    live_wait_min_odds or better (not shorter) is worth recommending as
+    'conditional' rather than betting -- or not betting -- right now. The
+    strategy: waiting into the match for an early non-event (classic
+    example: btts priced around -150, wait ~20min, if neither side has
+    scored yet the live price drifts out toward +100 with the true
     probability barely changed) reliably gets a better number on a pick
-    that's still likely to win. Direct user preference, given both a
-    'direct_bet' and this condition: prefer 'conditional' -- a likely
-    winner is worth waiting on for the better price rather than betting the
-    worse one now.
+    that's still likely to win.
+
+    A candidate qualifies when ALL of:
+      1. market/selection is in _CONDITIONAL_ELIGIBLE_MARKETS (A54's own
+         restriction -- waiting has to be a real directional strategy).
+      2. current_odds >= live_wait_min_odds -- not too short a price to
+         realistically wait on (e.g. -150 or better).
+      3. current_odds < live_wait_target_odds -- there's an actual price
+         improvement to wait FOR. Found live (2026-09-17) while adding
+         check 4 below: the original version only checked #2, so a
+         direct_bet already priced BETTER than the target (e.g. already at
+         +150, longer than the +100 target) could get "promoted" to
+         conditional -- recommending waiting for a WORSE price than
+         already available. This check makes that structurally impossible.
+      4. ml_probability - implied(live_wait_target_odds) >= min_value_edge
+         -- direct user refinement (2026-09-17): don't recommend waiting
+         on a coin-flip-ish favorite that wouldn't even clear the edge bar
+         at the assumed target price. Subsumes the original bare
+         "ml_probability > 0.5" check (with target_odds=2.0/+100 and
+         min_value_edge=0.05, this requires ml_probability >= 0.55, a
+         strictly stronger bar) -- for an EXISTING 'direct_bet', check 4 is
+         automatically satisfied whenever checks 2+3 hold (its own edge at
+         a SHORTER current price already cleared min_value_edge, and
+         implied probability only drops -- edge only grows -- as price
+         lengthens toward the target), so this uniform check changes
+         nothing for a legitimate direct_bet while genuinely gating the
+         'no_bet' case the user asked for.
 
     Unlike every other check in this file, this one PROMOTES rather than
     downgrades: it can turn 'no_bet' into 'conditional' (a gap the
-    value-edge check alone wouldn't fill, since the point is the CURRENT
-    price/edge doesn't need to already clear the bar -- only the price this
-    is expected to drift to needs to) and can override an existing
-    'direct_bet' too (the user's own stated preference above). Restricted
-    to the same _CONDITIONAL_ELIGIBLE_MARKETS as A54 -- waiting has to be a
-    real directional strategy for the market, not a coin flip. Already-
-    'conditional' candidates are left alone (nothing to do).
+    value-edge check alone wouldn't fill on its own, since the point is
+    the CURRENT price/edge doesn't need to already clear the bar -- only
+    the price this is expected to drift to needs to) and can override an
+    existing 'direct_bet' too (direct user preference: a likely winner is
+    worth waiting on for the better price rather than betting the worse
+    one now). Already-'conditional' candidates are left alone (nothing to
+    do).
 
     live_wait_min_odds=None (default) disables this rule entirely -- only a
     config that explicitly opts in (config/agent_config.yaml) sees this
@@ -447,6 +472,7 @@ def _promote_favorite_to_conditional_for_live_wait(data: dict, live_wait_min_odd
     pick."""
     if live_wait_min_odds is None:
         return data
+    implied_at_target = 1 / live_wait_target_odds
     limitations = list(data.get("limitations") or [])
     for candidate in data.get("candidates", []):
         if candidate["recommendation_type"] == "conditional":
@@ -457,14 +483,19 @@ def _promote_favorite_to_conditional_for_live_wait(data: dict, live_wait_min_odd
         prob = candidate["ml_probability"]
         if odds is None or prob is None:
             continue
-        if prob > 0.5 and odds >= live_wait_min_odds:
+        if odds < live_wait_min_odds or odds >= live_wait_target_odds:
+            continue
+        edge_at_target = prob - implied_at_target
+        if edge_at_target >= min_value_edge:
             previous = candidate["recommendation_type"]
             candidate["recommendation_type"] = "conditional"
             limitations.append(
                 f"Promoted {candidate['market']!r}/{candidate['selection']!r} from {previous!r} to "
-                f"conditional: ml_probability {prob} > 0.5 and current_odds {odds} >= "
-                f"{live_wait_min_odds} (live-wait strategy) -- a likely winner still worth waiting "
-                "on for a better price rather than betting (or not betting) now."
+                f"conditional: current_odds {odds} is between the {live_wait_min_odds} floor and the "
+                f"{live_wait_target_odds} live-wait target, and ml_probability {prob} clears "
+                f"min_value_edge ({edge_at_target:.4f} >= {min_value_edge}) at that target price -- "
+                "a likely winner still worth waiting on for a better price rather than betting "
+                "(or not betting) now."
             )
     data["limitations"] = limitations
     return data
@@ -696,6 +727,7 @@ def extract_recommendation(
     min_value_edge: float = 0.05,
     min_value_edge_result_3way_draw: float | None = None,
     live_wait_min_odds: float | None = None,
+    live_wait_target_odds: float = 2.0,
     home_team: str | None = None,
     away_team: str | None = None,
 ) -> MatchRecommendation:
@@ -799,7 +831,9 @@ def extract_recommendation(
         data = _restrict_conditional_to_eligible_markets(data)
         data = _downgrade_conditional_below_floor(data, min_conditional_odds_threshold)
         data = _downgrade_conditional_above_ceiling(data, max_conditional_odds_threshold)
-        data = _promote_favorite_to_conditional_for_live_wait(data, live_wait_min_odds)
+        data = _promote_favorite_to_conditional_for_live_wait(
+            data, live_wait_min_odds, live_wait_target_odds, min_value_edge,
+        )
         data = _compute_target_odds(data, min_value_edge)
         data = _downgrade_recommendation_below_top_composite_score(data)
         data = _resolve_recommendation_pick(data)
