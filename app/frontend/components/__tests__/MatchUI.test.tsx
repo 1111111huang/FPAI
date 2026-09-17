@@ -333,7 +333,11 @@ describe("MatchCard", () => {
     render(<MatchCard match={match} onUpdate={vi.fn()} />);
     expect(screen.queryByText("Wait ≥")).not.toBeInTheDocument();
     expect(screen.getByText("Odds")).toBeInTheDocument();
-    expect(screen.getByText("1.80")).toBeInTheDocument();
+    // W231: "1.80" now legitimately appears twice -- the collapsed header's
+    // own Odds box, and the always-in-DOM (CSS-collapsed) expanded "Value
+    // case" row restating it -- anchor off the Odds label's own sibling,
+    // the one this test actually cares about, rather than assume uniqueness.
+    expect(screen.getByText("Odds").nextElementSibling).toHaveTextContent("1.80");
   });
 
   it("shows the plain Odds box when target_odds is null (not applicable, or no such target exists)", () => {
@@ -548,7 +552,9 @@ describe("MatchCard -- live match display", () => {
     });
     render(<MatchCard match={match} onUpdate={vi.fn()} />);
     expect(screen.getByText("Odds")).toBeInTheDocument();
-    expect(screen.getByText("1.66")).toBeInTheDocument();
+    // W231: anchor off the Odds label -- "1.66" also legitimately appears
+    // in the always-in-DOM (CSS-collapsed) expanded "Value case" row.
+    expect(screen.getByText("Odds").nextElementSibling).toHaveTextContent("1.66");
     expect(screen.queryByText("Live Odds")).not.toBeInTheDocument();
   });
 });
@@ -572,7 +578,10 @@ describe("MatchCard -- Market/Pick/Odds/Edge grid redesign (2026-08-13, direct m
     // the pick's team-named label (pickLabel reuses selectionLabel).
     expect(screen.getAllByText("Arsenal")).toHaveLength(2);
     expect(screen.getByText("To Win")).toBeInTheDocument();
-    expect(screen.getByText("1.80")).toBeInTheDocument();
+    // W231: anchor off the Decimal pill's own sibling -- "1.80" also
+    // legitimately appears in the always-in-DOM (CSS-collapsed) expanded
+    // "Value case" row.
+    expect(screen.getByText("Decimal").previousElementSibling).toHaveTextContent("1.80");
     expect(screen.getByText("Decimal")).toBeInTheDocument();
     expect(screen.getByText("+4.0%")).toBeInTheDocument();
     expect(screen.getByText("Positive Edge")).toBeInTheDocument();
@@ -680,7 +689,10 @@ describe("MatchCard -- resolveRecommendation prefers the resolved pick over a hi
       recommendationPick: { market: "result_3way", selection: "home" },
     });
     render(<MatchCard match={match} onUpdate={vi.fn()} />);
-    expect(screen.getByText("1.80")).toBeInTheDocument();
+    // W231: anchor off the Decimal pill's own sibling -- "1.80" also
+    // legitimately appears in the always-in-DOM (CSS-collapsed) expanded
+    // "Value case" row.
+    expect(screen.getByText("Decimal").previousElementSibling).toHaveTextContent("1.80");
     expect(screen.getByText("+4.0%")).toBeInTheDocument();
     expect(screen.queryByText("5.00")).not.toBeInTheDocument();
     expect(screen.queryByText("+8.0%")).not.toBeInTheDocument();
@@ -1124,7 +1136,21 @@ describe("MatchAnalysisPage -- cache-first load (W47)", () => {
   });
 
   it("W231: renders redesigned fallback rows when team_evidence/the_read are absent", async () => {
-    const rec = makeRecommendation({ explanation: ["plain fallback bullet"], team_evidence: null, the_read: null });
+    // Value case/Betting price both need a resolved pick (shown) to know
+    // which market/odds to render -- without candidates/recommendation_pick
+    // there's nothing concrete for either row to show, so this fixture
+    // needs a real one, same as every other candidate-bearing test here.
+    const rec = makeRecommendation({
+      explanation: ["plain fallback bullet"], team_evidence: null, the_read: null,
+      candidates: [
+        {
+          market: "btts", selection: "yes", recommendation_type: "direct_bet",
+          current_odds: 1.73, min_odds: 1.71, ml_probability: 0.672, implied_probability: 0.578,
+          value_edge: 0.094, composite_score: 0.6, reason: "Both sides look open at the back.",
+        },
+      ],
+      recommendation_pick: { market: "btts", selection: "yes" },
+    });
     vi.mocked(getCachedRecommendation).mockResolvedValue(rec);
 
     render(<MatchAnalysisPage id="m1" home="Arsenal" away="Everton" date="2026-08-22" />);

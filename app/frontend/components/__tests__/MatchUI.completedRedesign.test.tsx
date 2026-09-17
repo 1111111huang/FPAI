@@ -150,7 +150,9 @@ describe("MatchCard -- completed match, odds column becomes money won (direct us
     const match = baseMatch({ status: "upcoming", result: undefined });
     render(<MatchCard match={match} onUpdate={vi.fn()} />);
     expect(screen.getByText("Odds")).toBeInTheDocument();
-    expect(screen.getByText("3.00")).toBeInTheDocument(); // baseMatch()'s currentOdds
+    // W231: anchor off the Odds label -- "3.00" also legitimately appears
+    // in the always-in-DOM (CSS-collapsed) expanded "Value case" row.
+    expect(screen.getByText("Odds").nextElementSibling).toHaveTextContent("3.00"); // baseMatch()'s currentOdds
     expect(screen.queryByText("Money Won")).not.toBeInTheDocument();
   });
 });
