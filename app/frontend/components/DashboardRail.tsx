@@ -31,14 +31,20 @@ import { computeHit, formatEdge, formatMoneyWon, type Match, type Overall } from
 type SliceKey = Overall | "completed_hit" | "completed_miss" | "completed_unresolved";
 const PENDING_ORDER: SliceKey[] = ["direct_bet", "conditional", "no_bet", "insufficient_data"];
 const COMPLETED_ORDER: SliceKey[] = ["completed_hit", "completed_miss", "completed_unresolved"];
+// W229 color standardization: repointed to the new variable names.
+// insufficient_data moves from the old shared red to --orange, mirroring
+// STATUS_META's own same-day change (MatchUI.tsx) -- "confidence low" is
+// orange's new role, not a settled-bet negative outcome. completed_miss
+// stays on --red (HitBadge's own "Not Hit" convention, unchanged -- a
+// genuinely settled, didn't-win outcome).
 const DONUT_COLOR: Record<SliceKey, string> = {
-  direct_bet: "var(--status-good)",
-  conditional: "var(--status-warning)",
-  no_bet: "var(--text-muted)",
-  insufficient_data: "var(--status-serious)",
-  completed_hit: "var(--status-good)",
-  completed_miss: "var(--status-serious)",
-  completed_unresolved: "var(--accent)",
+  direct_bet: "var(--green)",
+  conditional: "var(--orange)",
+  no_bet: "var(--text-3)",
+  insufficient_data: "var(--orange)",
+  completed_hit: "var(--green)",
+  completed_miss: "var(--red)",
+  completed_unresolved: "var(--blue)",
 };
 const DONUT_LABEL: Record<SliceKey, string> = {
   direct_bet: "Direct Bet",
@@ -85,7 +91,9 @@ function EdgeDonut({
   return (
     <div className="mt-3 flex items-center gap-4">
       <svg viewBox="0 0 100 100" width={88} height={88} className="shrink-0 -rotate-90" aria-hidden="true">
-        <circle cx="50" cy="50" r={RADIUS} fill="none" stroke="var(--gridline)" strokeWidth={14} />
+        {/* W229 color standardization: --gridline (old, removed) -> --border,
+            the closest surviving neutral tone for a chart's own track. */}
+        <circle cx="50" cy="50" r={RADIUS} fill="none" stroke="var(--border)" strokeWidth={14} />
         {arcs.map((arc) => (
           <circle
             key={arc.key}

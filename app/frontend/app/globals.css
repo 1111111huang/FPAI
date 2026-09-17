@@ -3,36 +3,87 @@
 @tailwind utilities;
 
 /*
-  Palette: dataviz skill's validated reference instance (references/palette.md),
-  dark steps only. Locked to dark mode per D6 (Page Theme Lock: one theme for
-  the whole page, not auto/light). Status colors are reserved from the accent
-  so recommendation badges never collide with interactive elements; both were
-  WCAG-contrast-checked against this dark surface. Ported verbatim from
-  sandbox/app/globals.css, validated there first.
+  Palette: standardized color audit, direct user spec (2026-09-17) --
+  11-color system (backgrounds/borders/text/6 semantic colors), replacing
+  the earlier ad-hoc palette (a single --status-warning covering both
+  brand/model-data gold AND caution states; a single --surface-1 covering
+  card/modal/inset depths with no distinction; --status-critical and
+  --status-serious both meaning "red" with no real difference between
+  them). Locked to dark mode per D6 (Page Theme Lock: one theme for the
+  whole page, not auto/light).
+
+  Two structural fixes from the audit, both applied throughout the app,
+  not just defined here:
+  - Orange/red no longer overlap. "Didn't win" (a settled bet's lost/not-
+    hit outcome, generic errors, malformed-data warnings) is red,
+    uniformly -- the old --status-critical/--status-serious split (two
+    reds with no real distinction) collapses into one. Orange is freed for
+    genuine warning/caution states: a `conditional` pick waiting for a
+    better price, cold-start/unknown-team risk, and `insufficient_data`
+    ("confidence low" -- the user's own example of what orange should
+    cover) -- all of which previously shared the same gold/amber hex as
+    the brand color itself, with no way to tell "this is Oddsey's own
+    brand mark" apart from "this needs your attention" at a glance.
+  - The tape bar's "Market" fill was a one-off inline gradient
+    (#3d3d48 -> #28282f), not a variable -- promoted to --slate, one
+    source for every "market" data point (tape bar fill, future dots/
+    chips) instead of several slightly-different grays.
+
+  Team crests and league badges are deliberately NOT part of this system
+  (Villarreal is purple because Villarreal is purple, not because a UI
+  token says so) -- see MatchUI.tsx's teamColor()/LEAGUE_COLORS, untouched
+  by this pass.
 */
 :root {
-  --page-plane: #0d0d0d;
-  --surface-1: #1a1a19;
-  --text-primary: #ffffff;
-  --text-secondary: #c3c2b7;
-  --text-muted: #898781;
-  --gridline: #2c2c2a;
-  --border-hairline: rgba(255, 255, 255, 0.1);
-  --border-hairline-strong: rgba(255, 255, 255, 0.22);
-  --accent: #3987e5;
-  --status-good: #0ca30c;
-  --status-warning: #fab219;
-  --status-serious: #ec835a;
-  --status-critical: #d03b3b;
+  /* Backgrounds, by depth */
+  --bg-app: #0a0a0d;
+  --bg-card: #131317;
+  --bg-card-raised: #191920;
+  --bg-inset: #0e0e12;
+
+  /* Borders */
+  --border: #242430;
+  --border-soft: #1c1c24;
+
+  /* Text */
+  --text-1: #f1f1ee;
+  --text-2: #9a9aa4;
+  --text-3: #5c5c66;
+
+  /* Brand + semantic colors */
+  --gold: #d8ab52;
+  --blue: #5b8cff;
+  --green: #4fd08a;
+  --orange: #e8985e;
+  --red: #ef6b6b;
+  --purple: #9b8cf0;
+  /* "Market" data (tape bar fill, future dots/chips) -- promoted from a
+     one-off gradient, see comment above. */
+  --slate: #3d3d48;
+
+  /* Solid dark tints, one per semantic color -- pill/badge BACKGROUNDS
+     only, always paired with their own full-strength color as the
+     foreground/border, never used standalone. color-mix() rather than a
+     hand-picked hex per color: a real, computed blend against the app
+     background (not a translucent overlay, which shifts depending on
+     what's stacked behind it) that stays correct if a base color above
+     is ever retuned, without six more magic hex values to keep in sync
+     by hand. */
+  --gold-dim: color-mix(in srgb, var(--gold) 16%, var(--bg-app));
+  --blue-dim: color-mix(in srgb, var(--blue) 16%, var(--bg-app));
+  --green-dim: color-mix(in srgb, var(--green) 16%, var(--bg-app));
+  --orange-dim: color-mix(in srgb, var(--orange) 16%, var(--bg-app));
+  --red-dim: color-mix(in srgb, var(--red) 16%, var(--bg-app));
+  --purple-dim: color-mix(in srgb, var(--purple) 16%, var(--bg-app));
 }
 
 * {
-  border-color: var(--border-hairline);
+  border-color: var(--border);
 }
 
 body {
-  background: var(--page-plane);
-  color: var(--text-primary);
+  background: var(--bg-app);
+  color: var(--text-1);
   /* Direct user spec (2026-09-17): Inter, the default for everything --
      --font-inter is set on <html> by app/layout.tsx's next/font/google
      call; system-ui etc. stay as the fallback stack for the brief window

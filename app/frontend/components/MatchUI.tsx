@@ -411,7 +411,7 @@ const STATUS_META: Record<
   direct_bet: {
     text: "text-good",
     ring: "border-good/40",
-    fill: "bg-good/15",
+    fill: "bg-good-dim",
     icon: <CheckCircle weight="fill" size={13} />,
     label: "Direct Bet",
     verdict: "BET",
@@ -423,7 +423,7 @@ const STATUS_META: Record<
   conditional: {
     text: "text-warning",
     ring: "border-warning/40",
-    fill: "bg-warning/15",
+    fill: "bg-warning-dim",
     icon: <Clock weight="fill" size={13} />,
     label: "Conditional",
     verdict: "WAIT",
@@ -431,17 +431,23 @@ const STATUS_META: Record<
   },
   no_bet: {
     text: "text-muted",
-    ring: "border-border-strong",
+    ring: "border-border",
     fill: "bg-surface",
     icon: <MinusCircle weight="fill" size={13} />,
     label: "No Bet",
     verdict: "PASS",
     explain: "No sufficient edge found -- not worth betting on this market.",
   },
+  // W229 color standardization: moved from "serious" (red) to "warning"
+  // (orange) -- direct user framing for orange's freed-up role after
+  // the red/orange merge was literally "confidence low," and this status
+  // means exactly that. Not a settled-bet negative outcome (red's own,
+  // narrower role now) -- a pre-bet "couldn't get a confident read"
+  // state, categorically different from "lost."
   insufficient_data: {
-    text: "text-serious",
-    ring: "border-serious/40",
-    fill: "bg-serious/15",
+    text: "text-warning",
+    ring: "border-warning/40",
+    fill: "bg-warning-dim",
     icon: <Question weight="fill" size={13} />,
     label: "Insufficient Data",
     verdict: "NO READ",
@@ -467,7 +473,7 @@ const STATUS_META: Record<
 const HIGHLIGHT_LEFT_BORDER: Record<RecommendationType, string> = {
   direct_bet: "border-l-good bg-good/10",
   conditional: "border-l-warning bg-warning/10",
-  no_bet: "border-l-border-strong bg-surface",
+  no_bet: "border-l-border bg-surface",
 };
 
 // ---------------------------------------------------------------------------
@@ -684,13 +690,15 @@ function initials(name: string) {
  * kicked off) and "completed" (final score, betting closed). Sits alongside
  * the existing recommendation badge (StatusBadge/TrustSignal) rather than
  * replacing it -- "what was recommended pre-kickoff" and "this is happening
- * right now" are two different, both-relevant facts. status-critical (red)
- * is otherwise unused in this palette -- a natural fit for something this
- * urgent/real-time. No minute/clock shown -- not data this app has. */
+ * right now" are two different, both-relevant facts. Uses the standard
+ * "serious"/red token (W229 color standardization merged the old separate
+ * "critical" red into it -- one true red, no distinction between them) --
+ * a natural fit for something this urgent/real-time. No minute/clock
+ * shown -- not data this app has. */
 function LiveBadge() {
   return (
-    <span className="inline-flex items-center gap-1.5 rounded-md border border-critical/40 bg-critical/15 px-2 py-0.5 text-[11px] font-medium uppercase tracking-wide text-critical">
-      <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-critical" />
+    <span className="inline-flex items-center gap-1.5 rounded-md border border-serious/40 bg-serious/15 px-2 py-0.5 text-[11px] font-medium uppercase tracking-wide text-serious">
+      <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-serious" />
       LIVE
     </span>
   );
@@ -705,14 +713,14 @@ function LiveBadge() {
 function HitBadge({ hit }: { hit: boolean }) {
   if (hit) {
     return (
-      <span className="inline-flex items-center gap-1.5 rounded-md border border-good/40 bg-good/15 px-2 py-0.5 text-[11px] font-medium uppercase tracking-wide text-good">
+      <span className="inline-flex items-center gap-1.5 rounded-md border border-good/40 bg-good-dim px-2 py-0.5 text-[11px] font-medium uppercase tracking-wide text-good">
         <CheckCircle weight="fill" size={13} />
         Hit
       </span>
     );
   }
   return (
-    <span className="inline-flex items-center gap-1.5 rounded-md border border-serious/40 bg-serious/15 px-2 py-0.5 text-[11px] font-medium uppercase tracking-wide text-serious">
+    <span className="inline-flex items-center gap-1.5 rounded-md border border-serious/40 bg-serious-dim px-2 py-0.5 text-[11px] font-medium uppercase tracking-wide text-serious">
       <XCircle weight="fill" size={13} />
       Not Hit
     </span>
@@ -745,7 +753,7 @@ function TrustSignal({ match, size = "sm" }: { match: Match; size?: "sm" | "lg" 
   const pad = size === "lg" ? "px-3 py-1.5 text-sm" : "px-2 py-0.5 text-[11px]";
   return (
     <span
-      className={`inline-flex items-center gap-1.5 rounded-md border border-warning/40 bg-warning/15 text-warning ${pad} font-medium`}
+      className={`inline-flex items-center gap-1.5 rounded-md border border-warning/40 bg-warning-dim text-warning ${pad} font-medium`}
       title={
         // W107: plain-language first, raw figure second -- previously just
         // the bare `feature_completeness=0.71` figure with no explanation
@@ -772,7 +780,7 @@ export function TeamBadge({ name, size = "sm" }: { name: string; size?: "sm" | "
       style={{
         background: primary,
         color: textColorFor(primary),
-        border: `1.5px solid ${secondary ?? "var(--border-hairline)"}`,
+        border: `1.5px solid ${secondary ?? "var(--border-soft)"}`,
       }}
       aria-hidden="true"
     >
@@ -810,7 +818,7 @@ export function LeagueBadge({ code, size = "sm" }: { code: string; size?: "sm" |
       style={{
         background: primary,
         color: textColorFor(primary),
-        border: `1.5px solid ${secondary ?? "var(--border-hairline)"}`,
+        border: `1.5px solid ${secondary ?? "var(--border-soft)"}`,
       }}
       aria-hidden="true"
     >
@@ -874,7 +882,7 @@ function Toggle({ checked, onChange, label }: { checked: boolean; onChange: (v: 
         aria-checked={checked}
         onClick={() => onChange(!checked)}
         className={`relative h-5 w-9 shrink-0 rounded-full transition-colors duration-150 ${
-          checked ? "bg-accent" : "border border-border-strong bg-surface"
+          checked ? "bg-accent" : "border border-border bg-surface"
         }`}
       >
         <span
@@ -1017,7 +1025,7 @@ export function MatchCard({
     // W120 follow-up: bg-page (near-opaque) instead of bg-surface/40 -- needs
     // to read as its own distinct surface against the date panel's colored
     // gradient wash behind it, not blend into it.
-    <div className="rounded-xl border border-border bg-page/80 transition-all duration-150 hover:-translate-y-px hover:border-border-strong">
+    <div className="rounded-xl border border-border bg-page/80 transition-all duration-150 hover:-translate-y-px hover:border-border">
       {/* W217: was a plain <button onClick={handleExpand}> -- direct user
           request put a real, always-visible "Log bet" trigger directly on
           this face (below), and a <button> nested inside another <button>
@@ -1094,7 +1102,7 @@ export function MatchCard({
               {!isCompleted && <StatusBadge status={shown?.recommendationType ?? match.overall} />}
             </>
           ) : (
-            <span className="rounded-md border border-border-strong bg-surface px-2 py-0.5 text-[11px] font-medium uppercase tracking-wide text-muted">
+            <span className="rounded-md border border-border bg-surface px-2 py-0.5 text-[11px] font-medium uppercase tracking-wide text-muted">
               {isCompleted ? "Settled" : "Not yet generated"}
             </span>
           )}
@@ -1267,13 +1275,13 @@ export function MatchCard({
                 </div>
                 {isCompleted ? (
                   shown?.currentOdds != null && (
-                    <span className="mt-1 inline-block rounded-full border border-border-strong bg-surface px-1.5 py-0.5 text-[10px] text-muted">
+                    <span className="mt-1 inline-block rounded-full border border-border bg-surface px-1.5 py-0.5 text-[10px] text-muted">
                       Pre-match edge
                     </span>
                   )
                 ) : (
                   shown?.currentOdds != null && shown.recommendationType !== "no_bet" && shown.valueEdge >= 0 && (
-                    <span className="mt-1 inline-block rounded-full border border-good/40 bg-good/10 px-1.5 py-0.5 text-[10px] text-good">
+                    <span className="mt-1 inline-block rounded-full border border-good/40 bg-good-dim px-1.5 py-0.5 text-[10px] text-good">
                       Positive Edge
                     </span>
                   )
@@ -1296,7 +1304,7 @@ export function MatchCard({
                     {match.unitBetMultiplier.toFixed(1)} UB
                   </div>
                   {isCompleted && (
-                    <span className="mt-1 inline-block rounded-full border border-border-strong bg-surface px-1.5 py-0.5 text-[10px] text-muted">
+                    <span className="mt-1 inline-block rounded-full border border-border bg-surface px-1.5 py-0.5 text-[10px] text-muted">
                       Pre-match stake
                     </span>
                   )}
@@ -1661,7 +1669,7 @@ export function DashboardPage() {
                       <div className="mb-3 flex items-center justify-between gap-3">
                         <div className="flex items-center gap-3">
                           <h2 className="text-lg font-bold tracking-tight text-ink">{group.label}</h2>
-                          <span className="rounded-full border border-border-strong px-2 py-0.5 text-xs text-ink-secondary">
+                          <span className="rounded-full border border-border px-2 py-0.5 text-xs text-ink-secondary">
                             {group.matches.length} match{group.matches.length === 1 ? "" : "es"}
                           </span>
                         </div>
@@ -1875,7 +1883,7 @@ export function MatchExplorerPage() {
                 <div className="mb-3 flex items-center justify-between gap-3">
                   <div className="flex items-center gap-3">
                     <h2 className="text-lg font-bold tracking-tight text-ink">{group.label}</h2>
-                    <span className="rounded-full border border-border-strong px-2 py-0.5 text-xs text-ink-secondary">
+                    <span className="rounded-full border border-border px-2 py-0.5 text-xs text-ink-secondary">
                       {group.matches.length} match{group.matches.length === 1 ? "" : "es"}
                     </span>
                   </div>
@@ -2033,10 +2041,10 @@ export function LogBetButton({
           <span
             className={`inline-flex items-center gap-1 rounded-full border px-2 py-1 font-medium ${
               outcome === "won"
-                ? "border-good/40 bg-good/10 text-good"
+                ? "border-good/40 bg-good-dim text-good"
                 : outcome === "lost"
-                ? "border-serious/40 bg-serious/10 text-serious"
-                : "border-border-strong bg-surface text-muted"
+                ? "border-serious/40 bg-serious-dim text-serious"
+                : "border-border bg-surface text-muted"
             }`}
           >
             {outcome === "won" && <CheckCircle weight="fill" size={12} />}
@@ -2061,7 +2069,7 @@ export function LogBetButton({
                 e.stopPropagation();
                 setLoggingAnother(true);
               }}
-              className="ml-auto flex shrink-0 items-center gap-1 rounded-full border border-border-strong px-3 py-1.5 font-semibold text-ink transition hover:border-accent hover:text-accent"
+              className="ml-auto flex shrink-0 items-center gap-1 rounded-full border border-border px-3 py-1.5 font-semibold text-ink transition hover:border-accent hover:text-accent"
             >
               <Plus size={13} weight="bold" />
               Log another
@@ -2441,23 +2449,25 @@ function ProbabilityTapeBar({
           previously had no background of its own at all -- it inherited
           this wrapper's bg-surface, which is the exact same tone as the
           card the bar sits inside, so it read as "no fill." Model's own
-          bg-warning/25 (a faint 25%-opacity wash) was real but too subtle
-          to register as an intentional color either. Both segments now
-          get a real, solid fill: bg-warning for Model (with dark text for
-          contrast against the bright gold, not text-ink's white -- white
-          on bright gold fails contrast), bg-page (the app's true-black
-          layer, distinctly darker than the card's own bg-surface) for
-          Market. The wrapper itself carries no background of its own
-          anymore -- both segments' fills meet at the boundary directly. */}
+          bg-warning/25 (a faint 25%-opacity wash, and the wrong token --
+          "warning" is now the caution color, not brand/model-data) was
+          real but too subtle to register as an intentional color either.
+          W229 color standardization: Model is bg-gold (the standardized
+          "Model probability" role, dark text for contrast against the
+          bright gold -- white on bright gold fails contrast), Market is
+          bg-slate (promoted from this exact one-off gradient into a real
+          token, the standardized "Market probability" role). The wrapper
+          itself carries no background of its own -- both segments' fills
+          meet at the boundary directly. */}
       <div className="mt-1.5 flex overflow-hidden rounded-lg border border-border">
         <div
-          className="min-w-0 bg-warning px-3 py-2.5"
+          className="min-w-0 bg-gold px-3 py-2.5"
           style={{ flexBasis: `${Math.max(modelPct, 1)}%` }}
         >
           <p className="text-[10px] font-medium uppercase tracking-wide text-page/70">Model</p>
           <p className="font-mono text-xl font-bold text-page">{modelPct.toFixed(1)}%</p>
         </div>
-        <div className="min-w-0 flex-1 bg-page px-3 py-2.5 text-right">
+        <div className="min-w-0 flex-1 bg-slate px-3 py-2.5 text-right">
           <p className="text-[10px] font-medium uppercase tracking-wide text-muted">Market</p>
           <p className="font-mono text-xl font-bold text-ink">{marketPct.toFixed(1)}%</p>
         </div>
@@ -2524,7 +2534,13 @@ function WhyThisPickSection({ match, shown }: { match: Match; shown: MarketRec |
     const pick = pickLabel(match, shown.selection);
     return (
       <div>
-        <WhyPickRow icon={<TrendUp size={18} weight="bold" />} iconClass="bg-warning/15 text-warning" title="Value case">
+        {/* W229 color standardization: gold (Model/brand-data), not
+            warning/orange (now the caution color) -- this block is about
+            the model's own value read, not a warning state. Uses the new
+            solid gold-dim pill-background token rather than a translucent
+            opacity modifier, matching the standardized dim-variant
+            convention. */}
+        <WhyPickRow icon={<TrendUp size={18} weight="bold" />} iconClass="bg-gold-dim text-gold" title="Value case">
           <p>
             {marketMeta.label} {pick} reads as the strongest value on this fixture, at odds of{" "}
             <span className="font-semibold text-ink">{shown.currentOdds?.toFixed(2)}</span>.

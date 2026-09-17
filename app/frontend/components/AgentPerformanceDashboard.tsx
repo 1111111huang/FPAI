@@ -248,7 +248,7 @@ export function AgentPerformancePage() {
               type="button"
               onClick={() => setDays(opt.days)}
               className={`rounded-full border px-3 py-1 text-xs ${
-                days === opt.days ? "border-accent bg-accent text-white" : "border-border-strong text-ink-secondary"
+                days === opt.days ? "border-accent bg-accent text-white" : "border-border text-ink-secondary"
               }`}
             >
               {opt.label}

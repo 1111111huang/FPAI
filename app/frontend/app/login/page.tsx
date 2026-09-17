@@ -81,7 +81,7 @@ function LoginPageInner() {
   if (loopDetected) {
     return (
       <div className="flex min-h-[calc(100vh-4rem)] items-center justify-center px-4">
-        <div className="w-full max-w-sm rounded-2xl border border-border bg-surface p-8 text-center shadow-[0_0_60px_-15px_var(--accent)]">
+        <div className="w-full max-w-sm rounded-2xl border border-border bg-surface p-8 text-center shadow-[0_0_60px_-15px_var(--blue)]">
           <h1 className="text-xl font-semibold text-ink">Having trouble signing in</h1>
           <p className="mt-2 text-sm text-ink-secondary">
             You're signed in, but this page couldn't get you to {callbackUrl}. Try a full page reload, or come back
@@ -103,7 +103,7 @@ function LoginPageInner() {
           middleware page-redirect with a client-side dialog, a bigger
           architecture change than asked for here), so this is the page
           itself redesigned to read as that focused window on its own. */}
-      <div className="w-full max-w-sm rounded-2xl border border-border bg-surface p-8 text-center shadow-[0_0_60px_-15px_var(--accent)]">
+      <div className="w-full max-w-sm rounded-2xl border border-border bg-surface p-8 text-center shadow-[0_0_60px_-15px_var(--blue)]">
         <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-full border-2 border-accent">
           <Image src="/oddsey-logo.png" width={40} height={40} alt="" priority />
         </div>

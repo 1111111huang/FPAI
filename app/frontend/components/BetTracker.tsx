@@ -109,7 +109,7 @@ function ManualBetForm({ onLogged, onSessionExpired }: { onLogged: () => void; o
                     key={f.match_id}
                     type="button"
                     onClick={() => setSelected(f)}
-                    className="flex items-center gap-2 rounded-lg border border-border p-2 text-left text-sm text-ink hover:border-border-strong"
+                    className="flex items-center gap-2 rounded-lg border border-border p-2 text-left text-sm text-ink hover:border-border"
                   >
                     <TeamBadge name={f.home_team} />
                     {f.home_team} v {f.away_team}
@@ -557,7 +557,7 @@ export function BetTrackerPage() {
             type="button"
             onClick={handleSettle}
             disabled={settling}
-            className="rounded-md border border-border px-3 py-1.5 text-xs font-medium text-ink-secondary hover:border-border-strong disabled:opacity-50"
+            className="rounded-md border border-border px-3 py-1.5 text-xs font-medium text-ink-secondary hover:border-border disabled:opacity-50"
           >
             {settling ? "Checking results…" : "Settle open bets"}
           </button>
