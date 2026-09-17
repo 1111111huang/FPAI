@@ -409,6 +409,67 @@ def _downgrade_conditional_above_ceiling(data: dict, max_conditional_odds_thresh
     return data
 
 
+def _promote_favorite_to_conditional_for_live_wait(data: dict, live_wait_min_odds: float | None) -> dict:
+    """A112, direct user strategy (2026-09-17): a favorite (ml_probability >
+    0.5) priced at live_wait_min_odds or better (not shorter) is worth
+    recommending as 'conditional' rather than betting -- or not betting --
+    right now. The strategy: waiting into the match for an early non-event
+    (classic example: btts priced around -150, wait ~20min, if neither side
+    has scored yet the live price drifts out toward +100 with the true
+    probability barely changed) reliably gets a better number on a pick
+    that's still likely to win. Direct user preference, given both a
+    'direct_bet' and this condition: prefer 'conditional' -- a likely
+    winner is worth waiting on for the better price rather than betting the
+    worse one now.
+
+    Unlike every other check in this file, this one PROMOTES rather than
+    downgrades: it can turn 'no_bet' into 'conditional' (a gap the
+    value-edge check alone wouldn't fill, since the point is the CURRENT
+    price/edge doesn't need to already clear the bar -- only the price this
+    is expected to drift to needs to) and can override an existing
+    'direct_bet' too (the user's own stated preference above). Restricted
+    to the same _CONDITIONAL_ELIGIBLE_MARKETS as A54 -- waiting has to be a
+    real directional strategy for the market, not a coin flip. Already-
+    'conditional' candidates are left alone (nothing to do).
+
+    live_wait_min_odds=None (default) disables this rule entirely -- only a
+    config that explicitly opts in (config/agent_config.yaml) sees this
+    behavior; every other caller/test is unaffected by construction.
+
+    Must run AFTER A66's own floor check and the ceiling check: those exist
+    for the ORIGINAL 'conditional' reasoning (waiting for a general
+    pre-match price drift), and their floor (currently 1.71, -140) is
+    actually tighter than this strategy's own explicit floor (e.g. 1.6667,
+    -150) -- if this ran before them, a newly-promoted -150 pick would be
+    immediately undone by a floor built for a different premise. Must run
+    BEFORE A52's target_odds computation, so these newly-conditional
+    candidates get a real target price too, same as any other conditional
+    pick."""
+    if live_wait_min_odds is None:
+        return data
+    limitations = list(data.get("limitations") or [])
+    for candidate in data.get("candidates", []):
+        if candidate["recommendation_type"] == "conditional":
+            continue
+        if (candidate["market"], candidate["selection"]) not in _CONDITIONAL_ELIGIBLE_MARKETS:
+            continue
+        odds = candidate["current_odds"]
+        prob = candidate["ml_probability"]
+        if odds is None or prob is None:
+            continue
+        if prob > 0.5 and odds >= live_wait_min_odds:
+            previous = candidate["recommendation_type"]
+            candidate["recommendation_type"] = "conditional"
+            limitations.append(
+                f"Promoted {candidate['market']!r}/{candidate['selection']!r} from {previous!r} to "
+                f"conditional: ml_probability {prob} > 0.5 and current_odds {odds} >= "
+                f"{live_wait_min_odds} (live-wait strategy) -- a likely winner still worth waiting "
+                "on for a better price rather than betting (or not betting) now."
+            )
+    data["limitations"] = limitations
+    return data
+
+
 def _compute_target_odds(data: dict, min_value_edge: float) -> dict:
     """A52: for each 'conditional' market with real current_odds, compute the
     price it would need to reach to actually clear the value-edge bar --
@@ -634,6 +695,7 @@ def extract_recommendation(
     max_conditional_odds_threshold: float = float("inf"),
     min_value_edge: float = 0.05,
     min_value_edge_result_3way_draw: float | None = None,
+    live_wait_min_odds: float | None = None,
     home_team: str | None = None,
     away_team: str | None = None,
 ) -> MatchRecommendation:
@@ -737,6 +799,7 @@ def extract_recommendation(
         data = _restrict_conditional_to_eligible_markets(data)
         data = _downgrade_conditional_below_floor(data, min_conditional_odds_threshold)
         data = _downgrade_conditional_above_ceiling(data, max_conditional_odds_threshold)
+        data = _promote_favorite_to_conditional_for_live_wait(data, live_wait_min_odds)
         data = _compute_target_odds(data, min_value_edge)
         data = _downgrade_recommendation_below_top_composite_score(data)
         data = _resolve_recommendation_pick(data)

@@ -55,6 +55,13 @@ min_value_edge: 0.05            # model prob must exceed implied prob by at leas
 # conditional clause templating) stays in the codebase, opt-in and fully
 # tested, should a future backtest find a specific context still needs it.
 
+# A112, direct user strategy (2026-09-17): favorites (ml_probability > 0.5)
+# priced at -150 American or better get flagged 'conditional' -- waiting
+# into the match for an early non-event (e.g. btts priced ~-150, no goal by
+# ~20min) reliably drifts these eligible markets to a better price. See
+# src/agent/schema.py's _promote_favorite_to_conditional_for_live_wait.
+live_wait_min_odds: 1.6667      # decimal / -150 American
+
 # Markets the agent evaluates per match
 markets:
   - result_3way

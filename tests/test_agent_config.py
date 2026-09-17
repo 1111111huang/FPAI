@@ -85,6 +85,18 @@ def test_posture_and_backtest_configs_keep_the_original_a29_a66_odds_bounds():
         assert cfg.max_odds_threshold == 11.0
         assert cfg.min_conditional_odds_threshold == 1.5
         assert cfg.max_conditional_odds_threshold == float("inf")
+        assert cfg.live_wait_min_odds is None
+
+
+def test_default_config_has_a112_live_wait_min_odds():
+    """A112, direct user strategy (2026-09-17): favorites priced -150
+    American or better get flagged 'conditional' for the live-wait
+    strategy. Only the live production default opts in, same precedent as
+    the 2026-08-28 odds tightening above -- posture configs are unaffected,
+    covered by test_posture_and_backtest_configs_keep_the_original_a29_a66_odds_bounds
+    below (extended to also assert this field is None there)."""
+    cfg = AgentConfig.default()
+    assert cfg.live_wait_min_odds == pytest.approx(1.6667)
 
 
 def test_from_yaml_missing_file():

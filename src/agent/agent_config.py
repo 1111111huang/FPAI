@@ -51,6 +51,16 @@ class AgentConfig:
     # full root-cause record). None (default) preserves every existing
     # config's behavior unchanged; only config/agent_config.yaml sets one.
     min_value_edge_result_3way_draw: float | None = None
+    # A112, direct user strategy (2026-09-17): a favorite (ml_probability >
+    # 0.5) priced at this decimal odds or better -- i.e. not shorter -- is
+    # worth flagging 'conditional' even when it would otherwise be a
+    # 'direct_bet' or 'no_bet': waiting into the match for an early
+    # non-event (e.g. no goal by ~20min for a btts/over-type pick)
+    # reliably drifts these markets to a better price. See
+    # src/agent/schema.py's _promote_favorite_to_conditional_for_live_wait.
+    # None (default) disables this rule entirely; only a config that
+    # explicitly sets it opts in.
+    live_wait_min_odds: float | None = None
 
     @classmethod
     def from_yaml(cls, path: str | Path) -> "AgentConfig":
@@ -66,6 +76,7 @@ class AgentConfig:
         kwargs["suppress_forecast_uncertainty"] = data.get("suppress_forecast_uncertainty", False)
         kwargs["max_conditional_odds_threshold"] = data.get("max_conditional_odds_threshold", float("inf"))
         kwargs["min_value_edge_result_3way_draw"] = data.get("min_value_edge_result_3way_draw")
+        kwargs["live_wait_min_odds"] = data.get("live_wait_min_odds")
         return cls(**kwargs)
 
     @classmethod
