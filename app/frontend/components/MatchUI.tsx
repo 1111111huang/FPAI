@@ -449,6 +449,21 @@ const STATUS_META: Record<
   },
 };
 
+// W227: full literal Tailwind class strings, not derived via runtime string
+// manipulation on STATUS_META's own `ring` field -- Tailwind's JIT content
+// scanner only generates CSS for class names it finds as complete literal
+// strings in the source, so a `.replace("border-", "border-l-")`-style
+// derived class would silently produce no CSS (invisible in dev if that
+// exact string happens to already be used elsewhere by chance, broken in
+// a real production build). ProbabilityRow's highlighted-pick-row left
+// accent border only ever needs the 3 RecommendationType values (never
+// insufficient_data -- a table row's own status can't be that).
+const HIGHLIGHT_LEFT_BORDER: Record<RecommendationType, string> = {
+  direct_bet: "border-l-good/40",
+  conditional: "border-l-warning/40",
+  no_bet: "border-l-border-strong",
+};
+
 // ---------------------------------------------------------------------------
 // Helpers ported from DraftUI.tsx
 // ---------------------------------------------------------------------------
@@ -2126,11 +2141,70 @@ export function LogBetButton({
   );
 }
 
+// W227: direct user mockup -- a boxed banner above the Model Probabilities
+// table calling out the actual pick (colored to match its own status),
+// replacing the plain summarySentence() paragraph for an actionable match.
+// null for a non-actionable one (no_bet/insufficient_data, or no resolved
+// pick) -- summarySentence()'s existing paragraph still covers that case
+// unchanged, nothing to log or call out with a colored pill for it.
+function PickBanner({
+  match,
+  shown,
+  matchId,
+  homeTeam,
+  awayTeam,
+  statusLabel,
+  alreadyLogged,
+}: {
+  match: Match;
+  shown: MarketRec | undefined;
+  matchId: string;
+  homeTeam: string;
+  awayTeam: string;
+  statusLabel: string;
+  alreadyLogged: boolean;
+}) {
+  if (!shown || !isActionable(match) || !match.rawRecommendation) return null;
+  const s = STATUS_META[shown.recommendationType];
+  // W111's own lesson (a generic "Home Win"/"Away Win" reads worse than
+  // naming the actual team) still applies here -- result_3way uses
+  // pickLabel() (team-name-aware), everything else uses the generic
+  // marketSelectionTitle() the table rows also use, since "BTTS No"/
+  // "Over 2.5" already ARE the natural, market-identifying label.
+  const pillText = shown.market === "result_3way" ? pickLabel(match, shown.selection) : marketSelectionTitle(shown.market, shown.selection);
+  return (
+    <div className="mt-6 flex flex-wrap items-center justify-between gap-4 rounded-xl border border-border bg-surface p-3.5">
+      <div className="flex min-w-0 flex-wrap items-center gap-3">
+        <span
+          className={`inline-flex shrink-0 items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-semibold ${s.ring} ${s.fill} ${s.text}`}
+        >
+          {pillText}
+        </span>
+        <p className="text-sm text-ink">Oddsey&apos;s pick for this fixture, at {match.confidence} confidence.</p>
+      </div>
+      <div className="flex shrink-0 items-center gap-2">
+        <LogBetButton
+          matchId={matchId}
+          recommendation={match.rawRecommendation}
+          market={shown.market}
+          selection={shown.selection}
+          variant="pill"
+          statusLabel={statusLabel}
+          homeTeam={homeTeam}
+          awayTeam={awayTeam}
+        />
+        {alreadyLogged && <span className="text-[11px] text-muted">(already logged)</span>}
+      </div>
+    </div>
+  );
+}
+
 function ProbabilityRow({
   m,
   matchId,
   recommendation,
   alreadyLogged = false,
+  highlighted = false,
   statusLabel,
   homeTeam,
   awayTeam,
@@ -2139,6 +2213,11 @@ function ProbabilityRow({
   matchId?: string;
   recommendation?: MatchRecommendationOut;
   alreadyLogged?: boolean;
+  // W227: this row is the match's own resolved pick -- a left accent
+  // border + subtle background tint (colored to the row's own status,
+  // same STATUS_META colors every other status signal in the app uses)
+  // distinguishes it from the rest of the table at a glance.
+  highlighted?: boolean;
   // W218: threaded straight through to LogBetButton's own LogBetModal --
   // see its prop comment for why these aren't pulled from recommendation.
   statusLabel: string;
@@ -2148,9 +2227,17 @@ function ProbabilityRow({
   const anomalous = isAnomalousDirectBet(m);
   const s = STATUS_META[m.recommendationType];
   return (
-    <div className="grid grid-cols-[1fr_auto_auto_auto_auto] items-center gap-4 border-b border-border py-3 text-sm last:border-b-0">
-      <span className="flex flex-col gap-1 truncate text-ink">
-        <span className="truncate">
+    <div
+      className={`grid grid-cols-[1fr_auto_auto_auto_auto_auto] items-center gap-4 border-b border-l-2 py-3 text-sm last:border-b-0 ${
+        highlighted ? `${HIGHLIGHT_LEFT_BORDER[m.recommendationType]} ${s.fill}` : "border-l-transparent"
+      } border-border`}
+    >
+      <span className="flex flex-col gap-0.5 truncate">
+        {/* W227: a generic, human-readable title ("Home Win", "BTTS No")
+            above the raw market/selection identifier -- previously the raw
+            identifier was the only thing shown at all. */}
+        <span className="truncate font-medium text-ink">{marketSelectionTitle(m.market, m.selection)}</span>
+        <span className="truncate font-mono text-[11px] text-muted">
           {m.market} · {m.selection}
         </span>
         {/* W84/A52: targetOdds is code-computed (src/agent/schema.py
@@ -2164,25 +2251,6 @@ function ProbabilityRow({
         {m.recommendationType === "conditional" && m.targetOdds != null && (
           <span className={`font-mono text-xs ${STATUS_META.conditional.text}`}>
             Needs {m.targetOdds.toFixed(2)}+ to clear edge
-          </span>
-        )}
-        {/* W210 follow-up (2026-09-14): re-enabled -- see Task 3's
-            auth-aware LogBetButton and AppShell's Task 1 sign-in UI. */}
-        {matchId && recommendation && !anomalous && (
-          <span className="flex items-center gap-1.5">
-            <LogBetButton
-              matchId={matchId}
-              recommendation={recommendation}
-              market={m.market}
-              selection={m.selection}
-              statusLabel={statusLabel}
-              homeTeam={homeTeam}
-              awayTeam={awayTeam}
-            />
-            {/* W215: a warning, not a block -- a genuinely different
-                real-world wager on the same market is still plausible, so
-                LogBetButton stays fully enabled either way. */}
-            {alreadyLogged && <span className="text-[10px] text-muted">(already logged)</span>}
           </span>
         )}
       </span>
@@ -2202,8 +2270,33 @@ function ProbabilityRow({
           Data issue
         </span>
       ) : (
-        <span className={`justify-self-end ${s.text}`}>{s.label}</span>
+        <span className="justify-self-end">
+          <StatusBadge status={m.recommendationType} />
+        </span>
       )}
+      {/* W210 follow-up (2026-09-14): re-enabled -- see Task 3's
+          auth-aware LogBetButton and AppShell's Task 1 sign-in UI. W227:
+          moved into its own trailing column, previously embedded under
+          the market name in column 1. */}
+      <span className="justify-self-end">
+        {matchId && recommendation && !anomalous && (
+          <span className="flex items-center gap-1.5">
+            <LogBetButton
+              matchId={matchId}
+              recommendation={recommendation}
+              market={m.market}
+              selection={m.selection}
+              statusLabel={statusLabel}
+              homeTeam={homeTeam}
+              awayTeam={awayTeam}
+            />
+            {/* W215: a warning, not a block -- a genuinely different
+                real-world wager on the same market is still plausible, so
+                LogBetButton stays fully enabled either way. */}
+            {alreadyLogged && <span className="text-[10px] text-muted">(already logged)</span>}
+          </span>
+        )}
+      </span>
     </div>
   );
 }
@@ -2241,6 +2334,34 @@ function pickCaption(selection: string): string | null {
   if (selection.startsWith("over")) return "Over";
   if (selection.startsWith("under")) return "Under";
   return null;
+}
+
+// W227: direct user mockup -- the Model Probabilities table and the pick
+// banner both need one generic, human-readable title per (market,
+// selection) pair ("Home Win", "BTTS No", "Over 2.5") -- distinct from
+// pickLabel()/selectionLabel() above, which embed the actual team name for
+// a single highlighted pick's own sentence ("Oddsey recommends betting on
+// Real Betis..."); this table lists every market side by side, so a
+// team-name-specific phrasing wouldn't read sensibly for the away/draw
+// rows. A lookup table for the markets this app actually emits (mirrors
+// src/agent/schema.py's MarketCandidate market/selection Literals), with a
+// humanized fallback for anything unexpected rather than rendering blank.
+const _MARKET_SELECTION_TITLE: Record<string, string> = {
+  "result_3way:home": "Home Win",
+  "result_3way:draw": "Draw",
+  "result_3way:away": "Away Win",
+  "btts:yes": "BTTS Yes",
+  "btts:no": "BTTS No",
+  "total_goals:over_2.5": "Over 2.5",
+  "total_goals:under_2.5": "Under 2.5",
+  "total_corners:over_9.5": "Corners Over 9.5",
+  "total_corners:under_9.5": "Corners Under 9.5",
+};
+function marketSelectionTitle(market: string, selection: string): string {
+  const known = _MARKET_SELECTION_TITLE[`${market}:${selection}`];
+  if (known) return known;
+  const selectionPart = selection.replace(/_/g, " ");
+  return `${marketLabel(market).label} ${selectionPart.charAt(0).toUpperCase()}${selectionPart.slice(1)}`;
 }
 
 // W121 follow-up (mockup point 3): human-readable market names, not the raw
@@ -2632,13 +2753,24 @@ export function MatchAnalysisPage({
         </div>
         {match && (
           <div className="text-right">
-            <div
+            {/* W227: direct user mockup -- the verdict is now a small pill
+                (icon + short verdict word, e.g. "BET"/"WAIT"/"PASS") rather
+                than large standalone colored text. Reuses STATUS_META's own
+                icon/verdict/color fields directly (not StatusBadge, which
+                always renders `.label` -- "Direct Bet" -- not the shorter
+                `.verdict` this header wants). */}
+            <span
               title={STATUS_META[shown?.recommendationType ?? match.overall].explain}
-              className={`text-2xl font-bold tracking-tight ${STATUS_META[shown?.recommendationType ?? match.overall].text}`}
+              className={`inline-flex items-center gap-1.5 rounded-full border px-3 py-1 text-sm font-semibold ${
+                STATUS_META[shown?.recommendationType ?? match.overall].ring
+              } ${STATUS_META[shown?.recommendationType ?? match.overall].fill} ${
+                STATUS_META[shown?.recommendationType ?? match.overall].text
+              }`}
             >
+              {STATUS_META[shown?.recommendationType ?? match.overall].icon}
               {STATUS_META[shown?.recommendationType ?? match.overall].verdict}
-            </div>
-            <div title={CONFIDENCE_EXPLAIN} className="mt-1 text-xs text-ink-secondary">
+            </span>
+            <div title={CONFIDENCE_EXPLAIN} className="mt-1.5 text-xs text-ink-secondary">
               Confidence: <span className="font-medium text-ink">{match.confidence}</span>
             </div>
             <div className="mt-2 flex justify-end">
@@ -2663,17 +2795,33 @@ export function MatchAnalysisPage({
         <>
           {/* W111: plain-language on-ramp, ahead of the jargon-dense table
               below it -- direct feedback that a reader with no betting
-              vocabulary has nothing to read before the numbers today. */}
-          <p className="mt-6 text-sm leading-relaxed text-ink">{summarySentence(match)}</p>
+              vocabulary has nothing to read before the numbers today.
+              W227: superseded by PickBanner for an actionable match (direct
+              user mockup) -- kept unchanged for no_bet/insufficient_data,
+              which PickBanner deliberately renders nothing for. */}
+          {isActionable(match) && shown ? (
+            <PickBanner
+              match={match}
+              shown={shown}
+              matchId={id}
+              homeTeam={home}
+              awayTeam={away}
+              statusLabel={matchStatusLabel(match.kickoffIso, match.status === "completed", asOf, sandboxMode)}
+              alreadyLogged={loggedKeys.has(`${shown.market}::${shown.selection}`)}
+            />
+          ) : (
+            <p className="mt-6 text-sm leading-relaxed text-ink">{summarySentence(match)}</p>
+          )}
 
           <section className="mt-8">
             <h2 className="text-sm font-semibold uppercase tracking-wide text-muted">Model Probabilities</h2>
-            <div className="mt-2 grid grid-cols-[1fr_auto_auto_auto_auto] gap-4 text-[11px] uppercase tracking-wide text-muted">
-              <span />
+            <div className="mt-2 grid grid-cols-[1fr_auto_auto_auto_auto_auto] gap-4 text-[11px] uppercase tracking-wide text-muted">
+              <span>Market</span>
               <span title={MODEL_PROBABILITY_EXPLAIN} className="text-right">Model</span>
               <span className="text-right">Market</span>
               <span title={EDGE_EXPLAIN} className="text-right">Edge</span>
               <span className="justify-self-end">Status</span>
+              <span className="justify-self-end">&nbsp;</span>
             </div>
             {match.candidates.length === 0 ? (
               <p className="mt-2 rounded-lg border border-border bg-surface p-3.5 text-sm text-ink-secondary">
@@ -2687,6 +2835,7 @@ export function MatchAnalysisPage({
                   matchId={id}
                   recommendation={rawRecommendation ?? undefined}
                   alreadyLogged={loggedKeys.has(`${m.market}::${m.selection}`)}
+                  highlighted={shown?.market === m.market && shown?.selection === m.selection}
                   homeTeam={home}
                   awayTeam={away}
                   statusLabel={matchStatusLabel(match.kickoffIso, match.status === "completed", asOf, sandboxMode)}

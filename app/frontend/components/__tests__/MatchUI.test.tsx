@@ -1132,7 +1132,81 @@ describe("MatchAnalysisPage -- cache-first load (W47)", () => {
     expect(screen.queryByText("should not render -- no_bet block takes over")).not.toBeInTheDocument();
   });
 
-  it("W111: shows a plain-language summary sentence naming the actual team, not just 'home'", async () => {
+  it("W227: PickBanner renders a market label (not a team name) for a non-result_3way pick", async () => {
+    // LogBetButton renders "Sign in to log this bet" when unauthenticated
+    // -- authenticate so its real "Log Bet" pill text is what's checked.
+    vi.mocked(useSession).mockReturnValue({ data: { user: {} }, status: "authenticated" } as never);
+    const rec = makeRecommendation({
+      overall: "direct_bet",
+      confidence: "medium",
+      candidates: [
+        {
+          market: "btts", selection: "no", recommendation_type: "direct_bet",
+          current_odds: 1.73, min_odds: 1.71, ml_probability: 0.684, implied_probability: 0.578, value_edge: 0.106,
+        },
+      ],
+      recommendation_pick: { market: "btts", selection: "no" },
+    });
+    vi.mocked(getCachedRecommendation).mockResolvedValue(rec);
+
+    render(<MatchAnalysisPage id="m1" home="Real Betis" away="Getafe" date="2026-09-17" />);
+
+    // "BTTS No" appears twice: PickBanner's own pill and the Model
+    // Probabilities table's row title for the same candidate.
+    expect((await screen.findAllByText("BTTS No")).length).toBeGreaterThanOrEqual(1);
+    expect(screen.getByText("Oddsey's pick for this fixture, at medium confidence.")).toBeInTheDocument();
+    expect(screen.getByText("Log Bet")).toBeInTheDocument();
+  });
+
+  it("W227: PickBanner does not render for no_bet -- falls back to the plain summary sentence", async () => {
+    const rec = makeRecommendation({
+      overall: "no_bet",
+      candidates: [
+        {
+          market: "btts", selection: "yes", recommendation_type: "no_bet",
+          current_odds: 2.0, min_odds: 1.71, ml_probability: 0.5, implied_probability: 0.5, value_edge: 0.0,
+        },
+      ],
+      recommendation_pick: null,
+    });
+    vi.mocked(getCachedRecommendation).mockResolvedValue(rec);
+
+    render(<MatchAnalysisPage id="m1" home="Arsenal" away="Everton" date="2026-08-22" />);
+
+    await screen.findByText("Model Probabilities");
+    expect(screen.queryByText("Oddsey's pick for this fixture, at medium confidence.")).not.toBeInTheDocument();
+    expect(screen.queryByText("Log Bet")).not.toBeInTheDocument();
+  });
+
+  it("W227: the Model Probabilities table highlights the resolved pick's own row, not the others", async () => {
+    const rec = makeRecommendation({
+      overall: "direct_bet",
+      candidates: [
+        {
+          market: "btts", selection: "no", recommendation_type: "direct_bet",
+          current_odds: 1.73, min_odds: 1.71, ml_probability: 0.684, implied_probability: 0.578, value_edge: 0.106,
+        },
+        {
+          market: "btts", selection: "yes", recommendation_type: "no_bet",
+          current_odds: 2.05, min_odds: 1.71, ml_probability: 0.32, implied_probability: 0.49, value_edge: -0.17,
+        },
+      ],
+      recommendation_pick: { market: "btts", selection: "no" },
+    });
+    vi.mocked(getCachedRecommendation).mockResolvedValue(rec);
+
+    render(<MatchAnalysisPage id="m1" home="Real Betis" away="Getafe" date="2026-09-17" />);
+    await screen.findByText("Model Probabilities");
+
+    // Two "BTTS No" occurrences now exist (PickBanner's own pill, plus the
+    // table row) -- getAllByText and take the table's own row title.
+    const pickedRow = screen.getAllByText("BTTS No").find((el) => el.closest("div.grid"))?.closest("div.grid");
+    const otherRow = screen.getByText("BTTS Yes").closest("div.grid");
+    expect(pickedRow?.className).toContain("border-l-good/40");
+    expect(otherRow?.className).toContain("border-l-transparent");
+  });
+
+  it("W111/W227: an actionable pick names the actual team, not just 'home' -- now via PickBanner's pill", async () => {
     vi.mocked(getCachedRecommendation).mockResolvedValue(
       makeRecommendation({
         overall: "direct_bet",
@@ -1149,10 +1223,11 @@ describe("MatchAnalysisPage -- cache-first load (W47)", () => {
 
     render(<MatchAnalysisPage id="m1" home="Arsenal" away="Everton" date="2026-08-22" />);
 
-    expect(
-      // Rebrand: FPAI -> Oddsey.
-      await screen.findByText("Oddsey recommends betting on Arsenal (result_3way), with high confidence.")
-    ).toBeInTheDocument();
+    // W227: the old summarySentence paragraph is superseded by PickBanner
+    // for an actionable match -- W111's own lesson (name the team, not
+    // "home") still applies, now via the pill's own text.
+    expect(await screen.findByText("Arsenal")).toBeInTheDocument();
+    expect(screen.getByText("Oddsey's pick for this fixture, at high confidence.")).toBeInTheDocument();
   });
 
   it("W111: falls back to a plain no-data sentence when overall is insufficient_data", async () => {
