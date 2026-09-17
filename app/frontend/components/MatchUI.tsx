@@ -455,25 +455,28 @@ const STATUS_META: Record<
   },
 };
 
-// W227: full literal Tailwind class strings, not derived via runtime string
-// manipulation on STATUS_META's own fields -- Tailwind's JIT content
-// scanner only generates CSS for class names it finds as complete literal
-// strings in the source, so a `.replace("border-", "border-l-")`-style
-// derived class would silently produce no CSS (invisible in dev if that
-// exact string happens to already be used elsewhere by chance, broken in
-// a real production build). A dedicated map, not STATUS_META's own `ring`/
-// `fill` (tuned for a small pill badge, where a 40%-opacity border and a
-// 15%-opacity wash read clearly against a small contained shape) -- found
-// live, direct user report (2026-09-17): those same values were too subtle
-// spread across a whole wide table row to register as "highlighted" at
-// all. Solid (no-opacity) border color + a stronger wash for a row-width
-// highlight. ProbabilityRow's highlighted-pick-row accent only ever needs
-// the 3 RecommendationType values (never insufficient_data -- a table
-// row's own status can't be that).
-const HIGHLIGHT_LEFT_BORDER: Record<RecommendationType, string> = {
-  direct_bet: "border-l-good bg-good/10",
-  conditional: "border-l-warning bg-warning/10",
-  no_bet: "border-l-border bg-surface",
+// W230, direct user reference screenshot: full literal Tailwind class
+// strings, not derived via runtime string manipulation on STATUS_META's
+// own fields -- Tailwind's JIT content scanner only generates CSS for
+// class names it finds as complete literal strings in the source, so a
+// `.replace("border-", "border-l-")`-style derived class would silently
+// produce no CSS (invisible in dev if that exact string happens to
+// already be used elsewhere by chance, broken in a real production
+// build). A dedicated map, not STATUS_META's own `ring`/`fill` (tuned for
+// a small pill badge, where a 40%-opacity border and a 15%-opacity wash
+// read clearly against a small contained shape) -- a flat 15%-opacity
+// wash was also too subtle spread across a whole wide row (found live,
+// 2026-09-17). W230 follow-up: the reference row reads as a continuous
+// dark-tinted band behind the recommended bet, not only a left accent or
+// a fade that disappears across the row, so highlighted rows use the
+// app's solid `-dim` semantic surfaces. The table row still keeps the
+// left-border color and Model-probability color tied to the row's own
+// RecommendationType (three values only -- never insufficient_data, a
+// table row's own status can't be that).
+const HIGHLIGHT_ROW_STYLE: Record<RecommendationType, { border: string; background: string; text: string }> = {
+  direct_bet: { border: "border-l-good", background: "bg-good-dim", text: "text-good" },
+  conditional: { border: "border-l-warning", background: "bg-warning-dim", text: "text-warning" },
+  no_bet: { border: "border-l-border", background: "bg-surface", text: "text-ink" },
 };
 
 // ---------------------------------------------------------------------------
@@ -2240,10 +2243,11 @@ function ProbabilityRow({
 }) {
   const anomalous = isAnomalousDirectBet(m);
   const s = STATUS_META[m.recommendationType];
+  const highlight = HIGHLIGHT_ROW_STYLE[m.recommendationType];
   return (
     <div
       className={`grid grid-cols-[1fr_auto_auto_auto_auto_auto] items-center gap-4 border-b border-l-4 py-3 text-sm last:border-b-0 ${
-        highlighted ? HIGHLIGHT_LEFT_BORDER[m.recommendationType] : "border-l-transparent"
+        highlighted ? `${highlight.border} ${highlight.background}` : "border-l-transparent"
       } border-border`}
     >
       <span className="flex flex-col gap-0.5 truncate">
@@ -2268,7 +2272,14 @@ function ProbabilityRow({
           </span>
         )}
       </span>
-      <span className="text-right font-mono text-ink">{formatPct(m.mlProbability)}</span>
+      {/* W230: colored to match the row's own status when it's the
+          resolved pick (reference screenshot: "68%" reads green on the
+          highlighted row, plain white everywhere else) -- odds stays
+          plain either way, only Model% and Edge% (already conditionally
+          colored below) carry the status color. */}
+      <span className={`text-right font-mono ${highlighted ? highlight.text : "text-ink"}`}>
+        {formatPct(m.mlProbability)}
+      </span>
       <span className={`text-right font-mono ${anomalous ? "text-serious" : "text-ink-secondary"}`}>
         {m.currentOdds ? m.currentOdds.toFixed(2) : anomalous ? "missing" : "—"}
       </span>
@@ -2409,13 +2420,10 @@ export function marketLabel(market: string): { label: string; subtitle: string |
 // with the read, not with a rule they can't see); show the model's own
 // numbers as data (ProbabilityTapeBar) rather than narrating them in prose;
 // each content type gets its own icon-tagged block, never folded into one
-// flat bullet list. Falls back to the pre-A113 flat explanation/limitations
-// rendering whenever the structured fields the model needs to supply
-// (teamEvidence/theRead/noBetRead) are absent -- a pre-A113 cached row, a
-// non-compliant model response, or a pick switched post-hoc server-side
-// (src/agent/schema.py's _prefer_higher_probability_conditional_pick,
-// which clears these rather than leave stale content for a different
-// candidate) -- see WhyThisPickSection below for that fallback.
+// flat bullet list. W231: the visual treatment must not depend on the
+// optional A113 structured fields being present -- expanded MatchCards all
+// use the same row-based system, while richer team-specific rows appear only
+// when the backend supplied teamEvidence/theRead/noBetRead.
 // ---------------------------------------------------------------------------
 
 /** Split-width "tale of the tape" bar: model probability vs. market
@@ -2526,8 +2534,25 @@ function bettingPriceText(candidate: MarketRec): string {
   return "This price isn't quite there yet. If you're comfortable waiting, it may improve.";
 }
 
+function ExplanationPoints({ points }: { points: string[] }) {
+  return (
+    <ul className="space-y-1">
+      {points.map((point, i) => (
+        <li key={i} className="flex gap-1.5">
+          <span aria-hidden="true">·</span>
+          <span>{point}</span>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
 function WhyThisPickSection({ match, shown }: { match: Match; shown: MarketRec | undefined }) {
   const noBetMode = match.overall === "no_bet" || match.overall === "insufficient_data";
+  const explanation =
+    match.explanation.length > 0
+      ? match.explanation
+      : ["The agent did not return written reasoning for this recommendation."];
 
   if (!noBetMode && shown && match.teamEvidence && match.theRead) {
     const marketMeta = marketLabel(shown.market);
@@ -2563,14 +2588,43 @@ function WhyThisPickSection({ match, shown }: { match: Match; shown: MarketRec |
     );
   }
 
-  if (noBetMode && match.noBetRead) {
+  if (!noBetMode && shown) {
+    const marketMeta = marketLabel(shown.market);
+    const pick = pickLabel(match, shown.selection);
+    return (
+      <div>
+        <WhyPickRow icon={<TrendUp size={18} weight="bold" />} iconClass="bg-gold-dim text-gold" title="Value case">
+          <p>
+            {marketMeta.label} {pick} is the current pick
+            {shown.currentOdds != null ? (
+              <>
+                , at odds of <span className="font-semibold text-ink">{shown.currentOdds.toFixed(2)}</span>
+              </>
+            ) : (
+              " for this fixture"
+            )}
+            .
+          </p>
+          <ProbabilityTapeBar heading="Win probability" modelProb={shown.mlProbability} marketProb={shown.impliedProbability} />
+        </WhyPickRow>
+        <WhyPickRow icon={<Target size={18} weight="bold" />} iconClass="bg-purple-dim text-purple" title="The read">
+          <ExplanationPoints points={explanation} />
+        </WhyPickRow>
+        <WhyPickRow icon={<Clock size={18} weight="bold" />} iconClass="bg-good-dim text-good" title="Betting price" autoChecked>
+          {bettingPriceText(shown)}
+        </WhyPickRow>
+      </div>
+    );
+  }
+
+  if (noBetMode) {
     const closest = [...match.candidates]
       .filter((c) => c.recommendationType === "no_bet")
       .sort((a, b) => b.valueEdge - a.valueEdge)[0];
     return (
       <div>
         <WhyPickRow icon={<MinusCircle size={18} weight="bold" />} iconClass="bg-surface text-ink-secondary" title="No qualifying edge today">
-          <p>{match.noBetRead}</p>
+          {match.noBetRead ? <p>{match.noBetRead}</p> : <ExplanationPoints points={explanation} />}
           {closest && (
             <ProbabilityTapeBar
               heading={`${marketLabel(closest.market).label} — closest read`}
@@ -2584,18 +2638,13 @@ function WhyThisPickSection({ match, shown }: { match: Match; shown: MarketRec |
     );
   }
 
-  // Fallback: pre-A113 cached data, a non-compliant model response, or a
-  // pick switched post-hoc with no structured replacement content -- the
-  // original flat bullet-list rendering, unchanged.
+  // Final fallback: structurally odd data (for example, direct_bet overall
+  // with no resolved pick). Keep it in the same row system rather than
+  // reverting expanded cards to the old unstyled bullet block.
   return (
-    <ul className="space-y-1 text-ink-secondary">
-      {match.explanation.map((point, i) => (
-        <li key={i} className="flex gap-1.5">
-          <span aria-hidden="true">·</span>
-          <span>{point}</span>
-        </li>
-      ))}
-    </ul>
+    <WhyPickRow icon={<Question size={18} weight="bold" />} iconClass="bg-surface text-ink-secondary" title="The read">
+      <ExplanationPoints points={explanation} />
+    </WhyPickRow>
   );
 }
 

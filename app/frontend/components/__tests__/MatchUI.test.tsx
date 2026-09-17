@@ -779,6 +779,30 @@ describe("MatchCard quick-log control (W215/W217)", () => {
     expect(screen.queryByRole("button", { name: "Log bet" })).not.toBeInTheDocument();
   });
 
+  it("W231: expanded cards use the redesigned Why This Pick rows even without optional team evidence", async () => {
+    const match = applyRecommendation(baseMatch(), {
+      match: {}, overall: "direct_bet", confidence: "high",
+      explanation: ["Fallback reasoning should still be inside the redesigned row."], limitations: [],
+      prediction_basis: "team_history_and_market", invalid_market_count: 0, cold_start_risk: false,
+      feature_completeness: 0.9, unknown_team: false, team_evidence: null, the_read: null,
+      recommendation_pick: { market: "btts", selection: "no" },
+      candidates: [{
+        market: "btts", selection: "no", recommendation_type: "direct_bet",
+        current_odds: 2.3, min_odds: 1.5, ml_probability: 0.631, implied_probability: 0.435, value_edge: 0.196,
+      }],
+    });
+    const user = userEvent.setup();
+    render(<MatchCard match={match} onUpdate={() => {}} />);
+
+    await user.click(screen.getByRole("button", { name: /arsenal.*everton/i }));
+
+    expect(screen.getByText("Value case")).toBeInTheDocument();
+    expect(screen.getByText("The read")).toBeInTheDocument();
+    expect(screen.getByText("Fallback reasoning should still be inside the redesigned row.")).toBeInTheDocument();
+    expect(screen.getByText("Betting price")).toBeInTheDocument();
+    expect(screen.getByText("Win probability")).toBeInTheDocument();
+  });
+
   it("W217: the card's own expand/collapse is still keyboard-operable (Enter/Space) now that it's a role=button div, not a real <button>", async () => {
     const match = applyRecommendation(baseMatch(), {
       match: {}, overall: "no_bet", confidence: "high", explanation: ["test"], limitations: [],
@@ -1099,14 +1123,16 @@ describe("MatchAnalysisPage -- cache-first load (W47)", () => {
     expect(screen.queryByText("should not render -- structured blocks take over")).not.toBeInTheDocument();
   });
 
-  it("A113: falls back to the flat explanation list when team_evidence/the_read are absent", async () => {
+  it("W231: renders redesigned fallback rows when team_evidence/the_read are absent", async () => {
     const rec = makeRecommendation({ explanation: ["plain fallback bullet"], team_evidence: null, the_read: null });
     vi.mocked(getCachedRecommendation).mockResolvedValue(rec);
 
     render(<MatchAnalysisPage id="m1" home="Arsenal" away="Everton" date="2026-08-22" />);
 
     expect(await screen.findByText("plain fallback bullet")).toBeInTheDocument();
-    expect(screen.queryByText("Value case")).not.toBeInTheDocument();
+    expect(screen.getByText("Value case")).toBeInTheDocument();
+    expect(screen.getByText("The read")).toBeInTheDocument();
+    expect(screen.getByText("Betting price")).toBeInTheDocument();
   });
 
   it("A113: no_bet mode renders the no_bet_read block instead of the direct_bet blocks", async () => {
@@ -1205,9 +1231,18 @@ describe("MatchAnalysisPage -- cache-first load (W47)", () => {
     // Found live, direct user report: the /40-opacity border + reused badge
     // `fill` were too subtle to register as "highlighted" across a whole
     // row -- now a solid border plus a dedicated, stronger wash.
+    // W230 follow-up: the reference screenshot's recommended bet reads as
+    // a continuous dim row background, not a gradient that fades out.
     expect(pickedRow?.className).toContain("border-l-good");
-    expect(pickedRow?.className).toContain("bg-good/10");
+    expect(pickedRow?.className).toContain("bg-good-dim");
+    expect(pickedRow?.className).not.toContain("bg-gradient-to-r");
     expect(otherRow?.className).toContain("border-l-transparent");
+
+    // W230: the Model% figure itself is colored to match the row's status
+    // on the highlighted row (reference screenshot), plain everywhere else.
+    expect(screen.getByText("68%").className).toContain("text-good");
+    expect(screen.getByText("32%").className).toContain("text-ink");
+    expect(screen.getByText("32%").className).not.toContain("text-good");
   });
 
   it("W111/W227: an actionable pick names the actual team, not just 'home' -- now via PickBanner's pill", async () => {

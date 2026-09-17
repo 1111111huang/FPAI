@@ -84,9 +84,11 @@ Sections, top to bottom:
 1. **Header** — teams, competition, date, and a large verdict (BET / WAIT / PASS / NO READ) with
    confidence and trust-signal badges.
 2. **Model Probabilities** — one row per market: ML probability, current odds, value edge,
-   recommendation status. A conditional market with a computed target price shows "Needs X.XX+ to
-   clear edge" instead of just a static edge number. Each actionable row has an inline **Log bet**
-   control (see §5).
+   recommendation status. The resolved recommended row uses a solid dim semantic background
+   (green for Direct Bet, orange for Conditional) plus a left accent border so the pick reads as
+   a row-level selection, not just a badge. A conditional market with a computed target price shows
+   "Needs X.XX+ to clear edge" instead of just a static edge number. Each actionable row has an
+   inline **Log bet** control (see §5).
 3. **Squad Intelligence** — placeholder; the agent's player/squad reasoning exists in the engine
    but isn't yet exposed through this endpoint, so this always reads "Not yet exposed by the API
    for this view."
@@ -108,7 +110,7 @@ because the feature works but wasn't judged ready to surface. See §7 for what "
 
 | Component | Role |
 |---|---|
-| `MatchCard` | The one card used on both Dashboard and Match Explorer. Collapsed: kickoff time, tier tag, teams with color badges, best market + edge or day label. Click to expand: lazily fetches/generates the recommendation, then shows the explanation bullets and a link to full analysis. Live (W144): adds `LiveBadge` + a real-time score row, market/odds unchanged (no in-play odds feed). Completed-today (W145/W146): `StatusBadge` replaced by "FT" + `HitBadge`, pick struck through on a miss, edge relabeled "Pre-match edge". |
+| `MatchCard` | The one card used on both Dashboard and Match Explorer. Collapsed: kickoff time, tier tag, teams with color badges, best market + edge or day label. Click to expand: lazily fetches/generates the recommendation, then shows the row-based "Why This Pick" treatment and a link to full analysis. Rich recommendations include Value case, team evidence, The read, and Betting price; older/thinner recommendations still use the same row style with existing explanation text. Live (W144): adds `LiveBadge` + a real-time score row, market/odds unchanged (no in-play odds feed). Completed-today (W145/W146): `StatusBadge` replaced by "FT" + `HitBadge`, pick struck through on a miss, edge relabeled "Pre-match edge". |
 | `StatusBadge` | The 4-state verdict pill (Direct Bet / Conditional / No Bet / Insufficient Data) — same colors, same labels, everywhere a verdict appears. Not shown on a completed `MatchCard` — `HitBadge` takes its slot there instead (W146). |
 | `LiveBadge` | (W144) Red pulsing dot + "LIVE", `--status-critical`. Renders alongside `StatusBadge`, not instead of it — pre-kickoff recommendation and in-progress state are two different, both-relevant facts. |
 | `HitBadge` | (W145/W146) "Hit" (green `CheckCircle`) / "Not Hit" (orange `XCircle`) for a completed match's recommended market, resolved via the same rule as `src/agent/market_resolution.py`'s `market_correct()`. Shown both as the card's top badge and as an inline echo under the struck-through pick. |
