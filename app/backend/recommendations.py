@@ -22,7 +22,7 @@ from app.backend.sandbox_clock import is_sandbox_mode, sandbox_scoped_path
 from src.agent import tools as agent_tools
 from src.agent.graph import run_agent as _real_run_agent
 from src.agent.market_resolution import resolve_recommendation_pick
-from src.agent.schema import normalize_explanation, reported_teams, teams_match
+from src.agent.schema import normalize_explanation, normalize_structured_reasoning, reported_teams, teams_match
 from src.agent.snapshot_store import league_base_dir, SnapshotMissingError
 from src.ingestion.common.team_mapping import TeamNameMapper
 from src.utils.db_manager import DuckDBManager
@@ -395,6 +395,13 @@ class MatchRecommendationOut(BaseModel):
     confidence: str
     limitations: list[str]
     prediction_basis: str
+    # A113: additive structured-reasoning fields for the "Why This Pick" UI
+    # -- see src/agent/schema.py's normalize_structured_reasoning(). None on
+    # any pre-A113 cached row (no such keys at all), same default-safely
+    # convention as feature_completeness/unit_bet_multiplier below.
+    team_evidence: dict[str, str] | None = None
+    the_read: str | None = None
+    no_bet_read: str | None = None
     invalid_market_count: int = 0
     # W15: surfaced so the UI can treat cold_start_risk as a first-class
     # trust signal regardless of what prediction_basis claims. Default safely
@@ -505,6 +512,11 @@ def validate_and_degrade(
         limitations.append("No resolvable recommendation_pick -- overall capped at no_bet.")
         overall = "no_bet"
 
+    # dict(raw), not raw itself -- normalize_structured_reasoning mutates
+    # its argument in place, and raw is the caller's own dict (a cache row
+    # or the agent's live output), not ours to modify as a side effect.
+    reasoning = normalize_structured_reasoning(dict(raw))
+
     return MatchRecommendationOut(
         match=raw.get("match") or {},
         overall=overall,
@@ -514,6 +526,9 @@ def validate_and_degrade(
         confidence=raw.get("confidence") or "low",
         limitations=limitations,
         prediction_basis=raw.get("prediction_basis") or "unknown",
+        team_evidence=reasoning["team_evidence"],
+        the_read=reasoning["the_read"],
+        no_bet_read=reasoning["no_bet_read"],
         invalid_market_count=invalid_count,
         cold_start_risk=bool(raw.get("cold_start_risk", False)),
         feature_completeness=raw.get("feature_completeness"),

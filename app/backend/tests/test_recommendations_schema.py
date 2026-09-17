@@ -245,6 +245,30 @@ def test_missing_unit_bet_multiplier_defaults_to_none_for_pre_a82_cached_data():
     assert result.unit_bet_multiplier is None
 
 
+def test_a113_structured_reasoning_passes_through_unchanged():
+    raw = {
+        **_VALID_RAW,
+        "team_evidence": {"home": "Arsenal fact.", "away": "Everton fact."},
+        "the_read": "A plain-language judgment.",
+    }
+    result = validate_and_degrade(raw, "Arsenal", "Everton")
+    assert result.team_evidence == {"home": "Arsenal fact.", "away": "Everton fact."}
+    assert result.the_read == "A plain-language judgment."
+
+
+def test_missing_a113_structured_reasoning_defaults_to_none_for_pre_a113_cached_data():
+    result = validate_and_degrade(_VALID_RAW, "Arsenal", "Everton")
+    assert result.team_evidence is None
+    assert result.the_read is None
+    assert result.no_bet_read is None
+
+
+def test_malformed_a113_team_evidence_degrades_to_none_not_a_crash():
+    raw = {**_VALID_RAW, "team_evidence": "not a dict"}
+    result = validate_and_degrade(raw, "Arsenal", "Everton")
+    assert result.team_evidence is None
+
+
 def test_candidates_and_recommendation_pick_pass_through():
     raw = {**_VALID_RAW}
     result = validate_and_degrade(raw)

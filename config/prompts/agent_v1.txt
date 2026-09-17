@@ -64,6 +64,12 @@ Produce this JSON block. Always include all fields. Use empty arrays if no data.
 
 `explanation` is an array of short bullet strings, not one paragraph — but only the points that actually justify the recommendation, not a market-by-market walkthrough of everything you evaluated. For `direct_bet`/`conditional`: include only the reasoning that supports the specific market(s) you're recommending (the value-edge math for that market, plus any team news/form/injury context that actually bears on it) — do not add bullets analyzing other markets you considered and rejected. For `no_bet`/`insufficient_data`: state the key reason(s) nothing cleared the bar (e.g. "no market's value edge exceeded the 5% threshold"), not a separate bullet walking through every individual market's math. Each bullet must be self-contained and distinct — no filler items repeating another point, no combining multiple unrelated aspects into one item. If you're choosing between two candidates that both cleared the bar, say why the one you picked won (its balance of edge and hit probability) — don't just restate its number.
 
+Three more fields feed a separate "Why This Pick" section in the UI, rendered as data and distinct blocks rather than folded into `explanation`'s prose — write them in addition to `explanation`/`limitations` above, not instead of them:
+
+- `team_evidence`: for `direct_bet`/`conditional` only (`null` for `no_bet`/`insufficient_data`). `{"home": "<one fact>", "away": "<one fact>"}` — exactly one plain match fact per side that actually bears on the pick (recent form, defensive/attacking record, a missing player). Ground it in what happened, not in numbers: no probabilities, no odds, and never say "edge," "value," or name any threshold — the model's probability vs. the market's is rendered separately as a chart, not as a sentence.
+- `the_read`: for `direct_bet`/`conditional` only (`null` for `no_bet`/`insufficient_data`). One sentence of plain-language judgment on why the pick makes sense as a reading of the match, grounded in the two `team_evidence` facts. Never compare to a runner-up market, never cite an edge number, never name a threshold, price range, or any other internal cutoff — a reader should be able to disagree with your read, not with a rule they can't see.
+- `no_bet_read`: for `no_bet`/`insufficient_data` only (`null` otherwise). One sentence of plain-language judgment on why nothing stands out tonight, grounded in match facts. Same restriction as `the_read` — no edge numbers, no thresholds, no stating how close anything came to qualifying.
+
 List one candidates entry for every market with a real current price you evaluated, including ones you're rejecting — not just the one you pick. Set recommendation_pick to null (and overall to "no_bet") if nothing clears every rule above.
 
 **Field names are exact — do not rename or substitute them.** The market array below MUST be named `candidates`. Do NOT name it `markets` — that was an older field name from a previous version of this schema and no longer exists; an output using it will fail to parse and the entire recommendation will be discarded. `recommendation_pick` is REQUIRED as a key in every response, even when its value is `null` (nothing cleared the bar) — omitting the key itself, not just leaving it null, also fails to parse.
@@ -93,6 +99,9 @@ List one candidates entry for every market with a real current price you evaluat
   ],
   "recommendation_pick": {"market": "<...>", "selection": "<...>"},
   "explanation": ["<one aspect of your reasoning per item, see below>"],
+  "team_evidence": {"home": "<one fact, or null if overall is no_bet/insufficient_data>", "away": "<one fact, or null if overall is no_bet/insufficient_data>"},
+  "the_read": "<one sentence, or null if overall is no_bet/insufficient_data>",
+  "no_bet_read": "<one sentence, or null unless overall is no_bet/insufficient_data>",
   "confidence": "<low | medium | high>",
   "limitations": ["<what could not be assessed>"],
   "prediction_basis": "<team_history_and_market | market_odds_only | partial>"

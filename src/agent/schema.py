@@ -62,6 +62,15 @@ class MatchRecommendation(TypedDict):
     confidence: Literal["low", "medium", "high"]
     limitations: list[str]
     prediction_basis: str
+    # A113: additive structured-reasoning fields for the redesigned "Why
+    # This Pick" UI -- see normalize_structured_reasoning()'s own docstring.
+    # None whenever the LLM didn't produce them (or the pick was switched
+    # post-hoc by _prefer_higher_probability_conditional_pick, which clears
+    # them rather than leave stale content for a different candidate) --
+    # the frontend falls back to explanation/limitations in that case.
+    team_evidence: dict[str, str] | None
+    the_read: str | None
+    no_bet_read: str | None
     # A82: Kelly-derived stake-sizing suggestion for the recommendation's
     # actual pick, as a multiple of an abstract "Unit Bet" -- not a dollar
     # figure. Computed here (like target_odds/A52), never by the LLM. None
@@ -184,6 +193,41 @@ def normalize_explanation(value: object) -> list[str]:
     if isinstance(value, str) and value.strip():
         return [value.strip()]
     return []
+
+
+def normalize_structured_reasoning(data: dict) -> dict:
+    """A113, direct user spec (2026-09-17): `team_evidence`/`the_read`/
+    `no_bet_read` let the frontend render "Why This Pick" as separate,
+    icon-tagged blocks (value case, per-side evidence, a judgment read,
+    betting-price note) instead of a flat bullet list -- see
+    documents/agent_user_stories.md A113 for the full content spec.
+
+    Additive, not a replacement: `explanation`/`limitations` are populated
+    exactly as before regardless, so a client that doesn't render these
+    yet (or a cached pre-A113 row, or a model that doesn't yet comply with
+    the updated prompt) still gets the same fields it always has. Because
+    of that, these are normalized LENIENTLY, never strictly validated via
+    MatchRecommendationModel -- a malformed or missing value degrades to
+    None (the frontend's own signal to fall back to the flat-list
+    rendering for that block) rather than failing parsing of an otherwise-
+    valid recommendation. `team_evidence` requires both `home`/`away` as
+    non-empty strings to count -- a partial object is treated the same as
+    absent, since the frontend renders both sides together as one block."""
+    team_evidence = data.get("team_evidence")
+    if (
+        isinstance(team_evidence, dict)
+        and isinstance(team_evidence.get("home"), str) and team_evidence["home"].strip()
+        and isinstance(team_evidence.get("away"), str) and team_evidence["away"].strip()
+    ):
+        data["team_evidence"] = {"home": team_evidence["home"].strip(), "away": team_evidence["away"].strip()}
+    else:
+        data["team_evidence"] = None
+
+    for key in ("the_read", "no_bet_read"):
+        value = data.get(key)
+        data[key] = value.strip() if isinstance(value, str) and value.strip() else None
+
+    return data
 
 
 def _downgrade_direct_bet_below_value_edge_floor(data: dict, min_value_edge: float) -> dict:
@@ -587,6 +631,16 @@ def _prefer_higher_probability_conditional_pick(data: dict) -> dict:
     if best.get("reason"):
         new_explanation.append(best["reason"])
     data["explanation"] = new_explanation
+    # A113: team_evidence/the_read were written to justify the ORIGINAL
+    # pick -- same staleness class as explanation above, but there's no
+    # per-candidate replacement text for them the way `reason` covers
+    # explanation (team_evidence/the_read are recommendation-level, not
+    # per-candidate). Cleared to None rather than left stale; the frontend
+    # already falls back to explanation/limitations whenever these are
+    # None, so this degrades gracefully to the same rebuilt explanation
+    # above, not a broken or missing section.
+    data["team_evidence"] = None
+    data["the_read"] = None
     return data
 
 
@@ -879,6 +933,7 @@ def extract_recommendation(
         # after -- a plain-string explanation would otherwise fail
         # MatchRecommendationModel.model_validate() before this ever runs.
         data["explanation"] = normalize_explanation(data.get("explanation"))
+        data = normalize_structured_reasoning(data)
 
         # BUG-020: `not in` on a set requires hashing the LHS -- a malformed
         # response with a dict/list `overall` (observed live from
