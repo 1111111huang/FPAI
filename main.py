@@ -156,6 +156,13 @@ def _build_parser() -> argparse.ArgumentParser:
              "that has actually seen everything available, not just the oldest 70%%. Metrics/promotion "
              "decisions are unaffected (still computed before this refit). Skips calibration fitting.",
     )
+    train_target_parser.add_argument(
+        "--time-decay-half-life-days", type=float, default=None,
+        help="US#189/US#203: weight training rows by recency, halving a row's influence every N days "
+             "relative to the newest row. None (default) preserves current behavior -- every row weighted "
+             "equally regardless of age. Validated 2026-09-16 for btts (all 5 leagues, half_life=180) as a "
+             "real fix for US#192's btts:no bias -- see documents/user_stories.md US#203.",
+    )
 
     # train-forecast-suite
     train_suite_parser = subparsers.add_parser("train-forecast-suite", help="Train all registered forecast target models")
@@ -799,7 +806,7 @@ def _xgb_params_for_target(target_name: str, model_key: str) -> dict:
 
 def run_train_target(
     target_name: str, model_name: str | None = None, context: str = "E0", sample_weight_alpha: float | None = None,
-    refit_full_data: bool = False,
+    refit_full_data: bool = False, time_decay_half_life_days: float | None = None,
 ) -> Path:
     """Train one registry-backed forecast target model.
 
@@ -873,6 +880,7 @@ def run_train_target(
         competition_id=competition_id,
         sample_weight_alpha=effective_alpha,
         refit_on_full_data=refit_full_data,
+        time_decay_half_life_days=time_decay_half_life_days,
     )
     model_path = model_manager.run_pipeline()
     LOGGER.info("Target model saved to %s", model_path)
@@ -1991,6 +1999,7 @@ def main() -> None:
         run_train_target(
             target_name=str(args.target), model_name=args.model, context=str(args.context),
             refit_full_data=bool(args.refit_full_data),
+            time_decay_half_life_days=args.time_decay_half_life_days,
         )
     elif args.command == "train-forecast-suite":
         run_train_forecast_suite(targets=args.targets, context=str(args.context))

@@ -336,6 +336,25 @@ def test_run_train_target_passes_sample_weight_alpha_to_model_manager(monkeypatc
     assert captured.get("sample_weight_alpha") == 0.5
 
 
+def test_run_train_target_passes_time_decay_half_life_days_to_model_manager(monkeypatch: pytest.MonkeyPatch) -> None:
+    """US#189/US#203: --time-decay-half-life-days must reach ModelManager's
+    constructor, same wiring pattern as --refit-full-data."""
+    captured: dict = {}
+
+    class _FakeManager:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+        def run_pipeline(self):
+            return Path("fake_model.joblib")
+
+    monkeypatch.setattr(main, "ModelManager", _FakeManager)
+
+    main.run_train_target("btts", model_name="xgb", context="SP1", time_decay_half_life_days=180.0)
+
+    assert captured.get("time_decay_half_life_days") == 180.0
+
+
 def test_run_train_target_defaults_result_3way_alpha_from_table(monkeypatch: pytest.MonkeyPatch) -> None:
     """2026-08-20 final-review fix: omitting sample_weight_alpha must NOT
     silently revert a routine retrain to 1.0 for a league this fix chose a
