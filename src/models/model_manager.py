@@ -29,6 +29,7 @@ from src.models.skellam_result_model import SkellamResultModel
 from src.models.two_stage_result_model import TwoStageResultModel
 from src.utils.config_loader import AppSettings, load_settings
 from src.utils.db_manager import DuckDBManager
+from src.utils.fingerprint import data_fingerprint, file_fingerprint
 from src.utils.mlflow_config import configure_mlflow_tracking
 from src.utils.logger import get_logger
 
@@ -161,6 +162,7 @@ class ModelManager:
         competition_id: str = "E0",
         sample_weight_alpha: float = 1.0,
         time_decay_half_life_days: float | None = None,
+        refit_on_full_data: bool = False,
     ) -> None:
         """Initialize manager with a model instance and YAML config path."""
         self.model = model
@@ -199,6 +201,21 @@ class ModelManager:
         # (same side-effect-attribute pattern as self.training_cutoff below).
         self.time_decay_half_life_days: float | None = time_decay_half_life_days
         self.train_dates: pd.Series | None = None
+        # Direct user decision (2026-09-16): the deployed artifact should be
+        # a static, season-frozen evidence provider -- train/val/test exists
+        # to SELECT the architecture/hyperparameters honestly, not to starve
+        # the actually-served model of ~30% of its own available history.
+        # True refits self.model on train+val+test combined (chronologically
+        # everything up to the real data ceiling) as the LAST step of
+        # run_pipeline(), after the honest held-out metrics are already
+        # computed and logged from the train-only fit -- so promotion
+        # decisions still compare genuinely out-of-sample numbers, only the
+        # artifact that actually gets saved/served is the full-data one.
+        # Calibration fitting is skipped in this mode (see run_pipeline):
+        # X_val is no longer held-out once folded into the final fit, so
+        # calibrating against it there would be in-sample, not validation.
+        self.refit_on_full_data: bool = refit_on_full_data
+        self.full_data_cutoff: str | None = None
         # US#185: defense-in-depth for direct-Python usage that bypasses
         # main.py's own call -- cheap/idempotent, see mlflow_config.py.
         configure_mlflow_tracking(config_path)
@@ -290,10 +307,26 @@ class ModelManager:
         X_val: pd.DataFrame,
         y_val: pd.Series,
         model_path: Path,
+        X_test: pd.DataFrame | None = None,
+        y_test: pd.Series | None = None,
     ) -> dict[str, float] | None:
         """Fit a probability calibrator on val-set probabilities and save as sidecar.
 
-        Returns a dict with log_loss before/after calibration, or None for regressors.
+        X_test/y_test (optional, but always passed by run_pipeline): the
+        REAL promotion gate, added after BUG-066 found the val-set-only
+        ll_before/ll_after check can't distinguish a genuinely better
+        calibrator from one that just overfits a plateau to the exact data
+        it was fit on -- confirmed live, 7 of 8 real production calibrators
+        tested showed a clean in-sample gain and a real out-of-sample loss.
+        A calibrator that doesn't ALSO improve log_loss on X_test (never
+        touched during fitting) is not saved at all. Omitting X_test/y_test
+        preserves the old val-only behavior for any caller that hasn't been
+        updated yet -- but every current caller (run_pipeline) now passes
+        both, so this only matters for tests exercising the pre-gate shape.
+
+        Returns a dict with log_loss before/after calibration (both
+        measured on X_val, for continuity with existing diagnostics/mlflow
+        logging), or None if calibration was skipped or failed the gate.
         """
         if not hasattr(model, "predict_proba"):
             return None
@@ -340,6 +373,40 @@ class ModelManager:
             else:
                 return None
 
+            if X_test is not None and y_test is not None:
+                test_raw_proba = np.asarray(model.predict_proba(X_test))
+                if sidecar["type"] == "binary":
+                    y_test_arr = pd.to_numeric(y_test, errors="coerce").astype(float).to_numpy()
+                    test_cal_pos = sidecar["calibrator"].predict(test_raw_proba[:, 1])
+                    test_cal_proba = np.stack([1 - test_cal_pos, test_cal_pos], axis=1)
+                    test_ll_before = float(log_loss(y_test_arr, test_raw_proba))
+                    test_ll_after = float(log_loss(y_test_arr, test_cal_proba))
+                else:
+                    y_test_raw = y_test.to_numpy()
+                    test_cal_proba = np.zeros_like(test_raw_proba)
+                    for c, cal in enumerate(sidecar["calibrator"]):
+                        test_cal_proba[:, c] = cal.predict(test_raw_proba[:, c])
+                    test_cal_proba /= test_cal_proba.sum(axis=1, keepdims=True).clip(min=1e-9)
+                    test_ll_before = float(log_loss(y_test_raw, test_raw_proba, labels=sidecar.get("classes")))
+                    test_ll_after = float(log_loss(y_test_raw, test_cal_proba, labels=sidecar.get("classes")))
+                if test_ll_after >= test_ll_before:
+                    LOGGER.warning(
+                        "Calibration REJECTED (fails held-out gate) | val: before=%.4f after=%.4f | "
+                        "test: before=%.4f after=%.4f -- not saved",
+                        ll_before, ll_after, test_ll_before, test_ll_after,
+                    )
+                    return None
+
+            # Found live while adding test coverage for this: several
+            # existing tests call this function against a model_path that's
+            # never actually written to disk (irrelevant to what they're
+            # testing). In the real run_pipeline() call site, model.save()
+            # always runs before this function, so model_path always
+            # exists there -- but this function's own contract never
+            # required that, and shouldn't start silently requiring it now.
+            # None here means the same thing None already means for a
+            # pre-fingerprint sidecar: nothing to check against.
+            sidecar["model_fingerprint"] = file_fingerprint(model_path) if model_path.exists() else None
             cal_path = model_path.with_suffix(model_path.suffix + ".calibration.pkl")
             joblib.dump(sidecar, str(cal_path))
             if mlflow.active_run() is not None:
@@ -452,6 +519,19 @@ class ModelManager:
                 }
         feature_importance = self._extract_feature_importance(feature_names, self.model)
         metadata["feature_importance"] = feature_importance.head(50).to_dict(orient="records")
+        # US#197: a content hash of X_val's shape/values, so a later "did
+        # this model's training data actually change" question (e.g. after
+        # a feature_store rebuild) is a direct equality check instead of
+        # the forensic raw-vs-calibrated probability reconstruction this
+        # session needed by hand.
+        metadata["training_data_fingerprint"] = data_fingerprint({
+            "n_rows": len(X_val),
+            "columns": sorted(X_val.columns),
+            "value_summary": {
+                col: round(float(X_val[col].mean()), 6)
+                for col in sorted(X_val.columns) if pd.api.types.is_numeric_dtype(X_val[col])
+            },
+        })
         return metadata
 
     @staticmethod
@@ -564,6 +644,13 @@ class ModelManager:
         val_end = max(train_end + 1, int(total * (train_ratio + val_ratio)))
         val_end = min(val_end, total - 1)
         self.training_cutoff = pd.to_datetime(df.iloc[train_end - 1]["date"]).isoformat()
+        # Real data ceiling (train+val+test's own last date) -- distinct
+        # from training_cutoff above, which only reflects the train-only
+        # split boundary. Recorded here so a refit_on_full_data artifact's
+        # metadata can honestly state what it was actually trained through,
+        # rather than leaving the misleadingly-stale training_cutoff as the
+        # only recorded date.
+        self.full_data_cutoff = pd.to_datetime(df.iloc[-1]["date"]).isoformat()
         # US#189: train rows' own dates, aligned by position to X_train/y_train
         # (same df slice) -- consumed by _compute_time_decay_weight in
         # train()/run_pipeline() when time_decay_half_life_days is set.
@@ -759,6 +846,43 @@ class ModelManager:
                     mlflow.log_metric(f"{target_name}_{metric_name}", float(value))
                     LOGGER.info("%s %s: %.4f", target_name, metric_name, value)
 
+                # Direct user decision (2026-09-16): metrics above are the
+                # honest, held-out promotion signal (train-only fit vs.
+                # genuinely unseen val/test) -- unchanged. The ARTIFACT that
+                # actually gets saved/served is a different question: once
+                # this architecture/hyperparameter choice is validated, the
+                # deployed model should be a static, season-frozen evidence
+                # provider trained on everything available up to the real
+                # data ceiling, not just the oldest 70%. Refit in place,
+                # after metrics are already locked in, so nothing here can
+                # leak into the promotion decision above.
+                if self.refit_on_full_data:
+                    X_all = pd.concat([X_train, X_val, X_test])
+                    y_all = pd.concat([y_train, y_val, y_test])
+                    full_sample_weight = _compute_sample_weight(y_all, self.target_definition.task_type, alpha=self.sample_weight_alpha)
+                    full_sample_weight = self._combine_time_decay(full_sample_weight)
+                    # Found live (2026-09-16): early_stopping_rounds is baked
+                    # into the underlying XGBoost estimator's constructor for
+                    # these model classes, unconditionally requiring an
+                    # eval_set on every .fit() call for that instance's
+                    # lifetime -- eval_set=None raised "Must have at least 1
+                    # validation dataset for early stopping." X_val is
+                    # already folded into X_all/y_all above, so reusing it
+                    # here only means "watch this slice to decide when to
+                    # stop adding trees," not a held-out evaluation -- a
+                    # standard, accepted compromise for a final full-data
+                    # refit, and no worse than the leakage every other
+                    # X_all-inclusive model family already accepts by fitting
+                    # once with no eval_set at all.
+                    refit_eval_set = [(X_val, y_val)] if isinstance(
+                        self.model, (XGBoostModel, XGBoostRegressorModel, GoalStackerModel, TwoStageResultModel, QuantileIntervalModel, EnsembleResultModel)
+                    ) else None
+                    self.model.train(X_all, y_all, eval_set=refit_eval_set, sample_weight=full_sample_weight)
+                    LOGGER.info(
+                        "%s: refit on full data (train+val+test, %d rows through %s) for serving",
+                        target_name, len(X_all), self.full_data_cutoff,
+                    )
+
                 date_tag = datetime.now().strftime("%Y%m%d")
                 model_prefix = self.model.__class__.__name__.lower().replace("model", "")
                 save_path = self.model_dir / build_artifact_filename(
@@ -767,9 +891,15 @@ class ModelManager:
                 self.model.save(str(save_path))
                 metadata = self._build_artifact_metadata(save_path, selected_features, X_val, y_val)
                 metadata["metrics"] = {metric_name: float(value) for metric_name, value in metrics.items()}
-                # US#61: fit isotonic calibrator on val set for classifiers
-                if self.target_definition.task_type != "regression":
-                    cal_metrics = self._fit_and_save_calibrator(self.model, X_val, y_val, save_path)
+                metadata["refit_on_full_data"] = self.refit_on_full_data
+                if self.refit_on_full_data:
+                    metadata["full_data_cutoff"] = self.full_data_cutoff
+                # US#61: fit isotonic calibrator on val set for classifiers --
+                # skipped when refit_on_full_data, since X_val is no longer
+                # held-out once folded into the final fit above (calibrating
+                # against it there would be in-sample, not validation).
+                if self.target_definition.task_type != "regression" and not self.refit_on_full_data:
+                    cal_metrics = self._fit_and_save_calibrator(self.model, X_val, y_val, save_path, X_test=X_test, y_test=y_test)
                     if cal_metrics:
                         metadata["calibration"] = cal_metrics
                 self._write_artifact_metadata(save_path, metadata)

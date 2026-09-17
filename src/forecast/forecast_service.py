@@ -29,6 +29,11 @@ from src.logic.target_registry import (
 )
 from src.utils.config_loader import AppSettings, load_settings
 from src.utils.db_manager import DuckDBManager
+from src.utils.fingerprint import data_fingerprint, file_fingerprint
+from src.utils.logger import get_logger
+
+LOGGER = get_logger(__name__)
+
 
 def _apply_calibration(raw_proba: np.ndarray, sidecar: dict[str, Any] | None) -> np.ndarray:
     """US#186: apply a model's own saved calibration sidecar (produced by
@@ -231,11 +236,28 @@ class ForecastService:
     @staticmethod
     def _load_calibrator_sidecar(model_path: Path) -> dict[str, Any] | None:
         """US#186: load a model's saved isotonic-calibration sidecar, if
-        ModelManager._fit_and_save_calibrator wrote one alongside it."""
+        ModelManager._fit_and_save_calibrator wrote one alongside it.
+
+        US#196: self-disables (returns None) if the sidecar's recorded
+        model_fingerprint no longer matches the model file currently on
+        disk -- the automatic version of BUG-066's manual `.broken_bug066`
+        rename: a model silently replaced under the same filename without
+        its calibrator being refit no longer serves a stale calibration
+        undetected. A sidecar with no model_fingerprint at all (saved
+        before this change, or in a test that never wrote a real model
+        file) is trusted as before -- nothing to check it against."""
         cal_path = model_path.with_suffix(model_path.suffix + ".calibration.pkl")
         if not cal_path.exists():
             return None
-        return joblib.load(str(cal_path))
+        sidecar = joblib.load(str(cal_path))
+        stored_fingerprint = sidecar.get("model_fingerprint")
+        if stored_fingerprint is not None and model_path.exists() and stored_fingerprint != file_fingerprint(model_path):
+            LOGGER.warning(
+                "Calibrator sidecar for %s is stale (model file changed since calibration was fit) -- ignoring.",
+                model_path.name,
+            )
+            return None
+        return sidecar
 
     @staticmethod
     def _load_model_by_format(model_path: Path) -> Any:
@@ -353,6 +375,17 @@ class ForecastService:
                 "probabilities": probability_map,
                 "uncertainty": normalized_entropy_uncertainty(probabilities),
             }
+            # US#197: a content hash of the exact feature values that fed
+            # this prediction -- unconditional (not gated on a calibrator
+            # existing), since the point is knowing what fed ANY
+            # prediction. Turns "did this snapshot see the same feature
+            # values live serving sees now" into a direct equality check
+            # instead of the raw-vs-calibrated probability reconstruction
+            # this session needed by hand to investigate BUG-066/US#173.
+            result["feature_fingerprint"] = data_fingerprint({
+                col: round(float(val), 6) if pd.notna(val) else None
+                for col, val in feature_row.iloc[0].items()
+            })
             # A107 (BUG-066 follow-up): the pre-calibration probabilities,
             # only when a calibrator actually ran -- forecast_payload
             # previously kept only the post-calibration value, so a

@@ -149,6 +149,13 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Training context: a registered competition_id (e.g. E0, international). "
              "'league' is accepted as a deprecated alias for E0.",
     )
+    train_target_parser.add_argument(
+        "--refit-full-data", action="store_true",
+        help="After computing honest held-out metrics (train-only fit vs. val/test), refit the "
+             "SAVED artifact on train+val+test combined -- a static, season-frozen model for serving "
+             "that has actually seen everything available, not just the oldest 70%%. Metrics/promotion "
+             "decisions are unaffected (still computed before this refit). Skips calibration fitting.",
+    )
 
     # train-forecast-suite
     train_suite_parser = subparsers.add_parser("train-forecast-suite", help="Train all registered forecast target models")
@@ -792,6 +799,7 @@ def _xgb_params_for_target(target_name: str, model_key: str) -> dict:
 
 def run_train_target(
     target_name: str, model_name: str | None = None, context: str = "E0", sample_weight_alpha: float | None = None,
+    refit_full_data: bool = False,
 ) -> Path:
     """Train one registry-backed forecast target model.
 
@@ -864,6 +872,7 @@ def run_train_target(
         context=competition_id,
         competition_id=competition_id,
         sample_weight_alpha=effective_alpha,
+        refit_on_full_data=refit_full_data,
     )
     model_path = model_manager.run_pipeline()
     LOGGER.info("Target model saved to %s", model_path)
@@ -1979,7 +1988,10 @@ def main() -> None:
             minute=int(args.minute),
         )
     elif args.command == "train-target":
-        run_train_target(target_name=str(args.target), model_name=args.model, context=str(args.context))
+        run_train_target(
+            target_name=str(args.target), model_name=args.model, context=str(args.context),
+            refit_full_data=bool(args.refit_full_data),
+        )
     elif args.command == "train-forecast-suite":
         run_train_forecast_suite(targets=args.targets, context=str(args.context))
     elif args.command == "forecast":

@@ -184,3 +184,73 @@ def test_predict_target_omits_raw_probabilities_when_no_calibrator():
     result = service._predict_target(definition, _FakeBinaryModel(), {}, feature_row)
 
     assert "raw_probabilities" not in result
+
+
+def test_load_calibrator_sidecar_self_disables_when_model_file_changed(tmp_path: Path):
+    from src.utils.fingerprint import file_fingerprint
+
+    model_path = tmp_path / "model.joblib"
+    model_path.write_bytes(b"original model bytes")
+
+    cal_path = tmp_path / "model.joblib.calibration.pkl"
+    joblib.dump({"type": "binary", "calibrator": object(), "model_fingerprint": file_fingerprint(model_path)}, cal_path)
+
+    # Sidecar matches the model right now.
+    assert ForecastService._load_calibrator_sidecar(model_path) is not None
+
+    # Model file silently replaced under the same filename (the exact
+    # BUG-066 gap) -- the sidecar's stored fingerprint no longer matches.
+    model_path.write_bytes(b"a completely different model")
+    assert ForecastService._load_calibrator_sidecar(model_path) is None
+
+
+def test_load_calibrator_sidecar_still_works_for_a_pre_fingerprint_sidecar(tmp_path: Path):
+    """A sidecar saved before this change has no model_fingerprint key at
+    all -- must not crash, and must still load."""
+    model_path = tmp_path / "model.joblib"
+    model_path.write_bytes(b"some model bytes")
+    cal_path = tmp_path / "model.joblib.calibration.pkl"
+    joblib.dump({"type": "binary", "calibrator": object()}, cal_path)
+
+    assert ForecastService._load_calibrator_sidecar(model_path) is not None
+
+
+def test_predict_target_includes_feature_fingerprint(tmp_path: Path):
+    """US#197: every classification prediction carries a content hash of
+    the exact feature values that fed it -- unconditional, not gated on a
+    calibrator existing, since the point is knowing what fed ANY
+    prediction."""
+    class _FakeBinaryModel:
+        classes_ = np.array([0, 1])
+
+        def predict_proba(self, X):
+            return np.array([[0.4, 0.6]] * len(X))
+
+    service = ForecastService.__new__(ForecastService)
+    definition = get_target_definition("btts")
+    import pandas as pd
+    feature_row = pd.DataFrame({"a": [1.0], "b": [2.5]})
+    metadata: dict = {}
+
+    result = service._predict_target(definition, _FakeBinaryModel(), metadata, feature_row)
+
+    assert "feature_fingerprint" in result
+    assert len(result["feature_fingerprint"]) == 16
+
+
+def test_predict_target_feature_fingerprint_changes_when_features_change():
+    class _FakeBinaryModel:
+        classes_ = np.array([0, 1])
+
+        def predict_proba(self, X):
+            return np.array([[0.4, 0.6]] * len(X))
+
+    service = ForecastService.__new__(ForecastService)
+    definition = get_target_definition("btts")
+    import pandas as pd
+    metadata: dict = {}
+
+    result_a = service._predict_target(definition, _FakeBinaryModel(), metadata, pd.DataFrame({"a": [1.0]}))
+    result_b = service._predict_target(definition, _FakeBinaryModel(), metadata, pd.DataFrame({"a": [2.0]}))
+
+    assert result_a["feature_fingerprint"] != result_b["feature_fingerprint"]

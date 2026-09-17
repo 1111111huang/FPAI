@@ -97,3 +97,80 @@ def test_fit_and_save_calibrator_uses_sigmoid_for_small_multiclass_val_set(tmp_p
     sidecar_path = model_path.with_suffix(model_path.suffix + ".calibration.pkl")
     sidecar = joblib.load(str(sidecar_path))
     assert all(isinstance(cal, _SigmoidCalibration) for cal in sidecar["calibrator"])
+
+
+class _AlwaysWorseOnTestModel:
+    """A fake binary classifier whose predict_proba is well-behaved on
+    whatever data it's asked about, but where the fitted calibrator
+    (isotonic, on a tiny synthetic val set) will provably NOT generalize --
+    reproduces the exact BUG-066 shape (clean in-sample gain, real
+    out-of-sample loss) without needing a real 1000+-row dataset."""
+
+    def predict_proba(self, X: pd.DataFrame) -> np.ndarray:
+        n = len(X)
+        return np.tile(np.array([0.5, 0.5]), (n, 1))
+
+
+def test_fit_and_save_calibrator_rejects_a_calibrator_that_hurts_on_held_out_test(tmp_path: Path):
+    model = _AlwaysWorseOnTestModel()
+    X_val = pd.DataFrame({"f": range(6)})
+    y_val = pd.Series([1, 0, 1, 0, 1, 0])
+    X_test = pd.DataFrame({"f": range(6)})
+    y_test = pd.Series([0, 0, 0, 0, 0, 0])  # real rate 0.0, nothing like val's 0.5
+
+    model_path = tmp_path / "fake_model.joblib"
+    model_path.write_bytes(b"fake model bytes")
+
+    result = ModelManager._fit_and_save_calibrator(model, X_val, y_val, model_path, X_test=X_test, y_test=y_test)
+
+    assert result is None, "a calibrator that doesn't generalize to held-out test data must not be saved at all"
+    assert not model_path.with_suffix(model_path.suffix + ".calibration.pkl").exists()
+
+
+def test_fit_and_save_calibrator_still_saves_a_calibrator_that_genuinely_generalizes(tmp_path: Path):
+    """A model that's SYSTEMATICALLY overconfident (true P(y=1|x) = sigmoid(x),
+    but the model reports sigmoid(4x) -- the same exaggeration mechanism on
+    both val and test, unlike a distribution shift) is exactly what Platt/
+    sigmoid recalibration is for, and should genuinely improve log_loss on
+    held-out test too, not just val."""
+    rng = np.random.default_rng(7)
+    n = 400
+    x = rng.normal(size=n)
+    true_prob = 1 / (1 + np.exp(-x))
+    y = (rng.random(n) < true_prob).astype(int)
+    overconfident_prob = 1 / (1 + np.exp(-4 * x))  # same direction, exaggerated confidence
+
+    X_val = pd.DataFrame({"f": x[:200]})
+    y_val = pd.Series(y[:200])
+    X_test = pd.DataFrame({"f": x[200:]})
+    y_test = pd.Series(y[200:])
+    proba_by_row = dict(zip(x, overconfident_prob))
+
+    class _OverconfidentModel:
+        def predict_proba(self, X):
+            pos = np.array([proba_by_row[v] for v in X["f"]])
+            return np.stack([1 - pos, pos], axis=1)
+
+    model_path = tmp_path / "real_model.joblib"
+    model_path.write_bytes(b"real model bytes")
+
+    result = ModelManager._fit_and_save_calibrator(_OverconfidentModel(), X_val, y_val, model_path, X_test=X_test, y_test=y_test)
+
+    assert result is not None
+    assert model_path.with_suffix(model_path.suffix + ".calibration.pkl").exists()
+
+
+def test_fit_and_save_calibrator_stores_model_fingerprint_in_sidecar(tmp_path: Path):
+    import joblib
+
+    from src.utils.fingerprint import file_fingerprint
+
+    model, X_val, y_val = _train_multiclass_model()
+    model_path = tmp_path / "result_3way_fp_test.joblib"
+    model_path.write_bytes(b"a real saved model, for fingerprint purposes")
+
+    result = ModelManager._fit_and_save_calibrator(model, X_val, y_val, model_path)
+    assert result is not None
+
+    sidecar = joblib.load(str(model_path.with_suffix(model_path.suffix + ".calibration.pkl")))
+    assert sidecar["model_fingerprint"] == file_fingerprint(model_path)
