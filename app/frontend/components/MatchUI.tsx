@@ -450,18 +450,24 @@ const STATUS_META: Record<
 };
 
 // W227: full literal Tailwind class strings, not derived via runtime string
-// manipulation on STATUS_META's own `ring` field -- Tailwind's JIT content
+// manipulation on STATUS_META's own fields -- Tailwind's JIT content
 // scanner only generates CSS for class names it finds as complete literal
 // strings in the source, so a `.replace("border-", "border-l-")`-style
 // derived class would silently produce no CSS (invisible in dev if that
 // exact string happens to already be used elsewhere by chance, broken in
-// a real production build). ProbabilityRow's highlighted-pick-row left
-// accent border only ever needs the 3 RecommendationType values (never
-// insufficient_data -- a table row's own status can't be that).
+// a real production build). A dedicated map, not STATUS_META's own `ring`/
+// `fill` (tuned for a small pill badge, where a 40%-opacity border and a
+// 15%-opacity wash read clearly against a small contained shape) -- found
+// live, direct user report (2026-09-17): those same values were too subtle
+// spread across a whole wide table row to register as "highlighted" at
+// all. Solid (no-opacity) border color + a stronger wash for a row-width
+// highlight. ProbabilityRow's highlighted-pick-row accent only ever needs
+// the 3 RecommendationType values (never insufficient_data -- a table
+// row's own status can't be that).
 const HIGHLIGHT_LEFT_BORDER: Record<RecommendationType, string> = {
-  direct_bet: "border-l-good/40",
-  conditional: "border-l-warning/40",
-  no_bet: "border-l-border-strong",
+  direct_bet: "border-l-good bg-good/10",
+  conditional: "border-l-warning bg-warning/10",
+  no_bet: "border-l-border-strong bg-surface",
 };
 
 // ---------------------------------------------------------------------------
@@ -2228,8 +2234,8 @@ function ProbabilityRow({
   const s = STATUS_META[m.recommendationType];
   return (
     <div
-      className={`grid grid-cols-[1fr_auto_auto_auto_auto_auto] items-center gap-4 border-b border-l-2 py-3 text-sm last:border-b-0 ${
-        highlighted ? `${HIGHLIGHT_LEFT_BORDER[m.recommendationType]} ${s.fill}` : "border-l-transparent"
+      className={`grid grid-cols-[1fr_auto_auto_auto_auto_auto] items-center gap-4 border-b border-l-4 py-3 text-sm last:border-b-0 ${
+        highlighted ? HIGHLIGHT_LEFT_BORDER[m.recommendationType] : "border-l-transparent"
       } border-border`}
     >
       <span className="flex flex-col gap-0.5 truncate">
@@ -2431,17 +2437,29 @@ function ProbabilityTapeBar({
   return (
     <div className="mt-2">
       <p className="text-center text-[11px] font-medium uppercase tracking-wide text-muted">{heading}</p>
-      <div className="mt-1.5 flex overflow-hidden rounded-lg border border-border bg-surface">
+      {/* Found live, direct user report (2026-09-17): the Market segment
+          previously had no background of its own at all -- it inherited
+          this wrapper's bg-surface, which is the exact same tone as the
+          card the bar sits inside, so it read as "no fill." Model's own
+          bg-warning/25 (a faint 25%-opacity wash) was real but too subtle
+          to register as an intentional color either. Both segments now
+          get a real, solid fill: bg-warning for Model (with dark text for
+          contrast against the bright gold, not text-ink's white -- white
+          on bright gold fails contrast), bg-page (the app's true-black
+          layer, distinctly darker than the card's own bg-surface) for
+          Market. The wrapper itself carries no background of its own
+          anymore -- both segments' fills meet at the boundary directly. */}
+      <div className="mt-1.5 flex overflow-hidden rounded-lg border border-border">
         <div
-          className="min-w-0 bg-warning/25 px-3 py-2.5"
+          className="min-w-0 bg-warning px-3 py-2.5"
           style={{ flexBasis: `${Math.max(modelPct, 1)}%` }}
         >
-          <p className="text-[10px] font-medium uppercase tracking-wide text-ink-secondary">Model</p>
-          <p className="text-xl font-bold text-ink">{modelPct.toFixed(1)}%</p>
+          <p className="text-[10px] font-medium uppercase tracking-wide text-page/70">Model</p>
+          <p className="font-mono text-xl font-bold text-page">{modelPct.toFixed(1)}%</p>
         </div>
-        <div className="min-w-0 flex-1 px-3 py-2.5 text-right">
+        <div className="min-w-0 flex-1 bg-page px-3 py-2.5 text-right">
           <p className="text-[10px] font-medium uppercase tracking-wide text-muted">Market</p>
-          <p className="text-xl font-bold text-ink-secondary">{marketPct.toFixed(1)}%</p>
+          <p className="font-mono text-xl font-bold text-ink">{marketPct.toFixed(1)}%</p>
         </div>
       </div>
       <p className="mt-1.5 text-center text-xs text-muted">{caption}</p>

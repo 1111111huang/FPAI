@@ -1202,7 +1202,11 @@ describe("MatchAnalysisPage -- cache-first load (W47)", () => {
     // table row) -- getAllByText and take the table's own row title.
     const pickedRow = screen.getAllByText("BTTS No").find((el) => el.closest("div.grid"))?.closest("div.grid");
     const otherRow = screen.getByText("BTTS Yes").closest("div.grid");
-    expect(pickedRow?.className).toContain("border-l-good/40");
+    // Found live, direct user report: the /40-opacity border + reused badge
+    // `fill` were too subtle to register as "highlighted" across a whole
+    // row -- now a solid border plus a dedicated, stronger wash.
+    expect(pickedRow?.className).toContain("border-l-good");
+    expect(pickedRow?.className).toContain("bg-good/10");
     expect(otherRow?.className).toContain("border-l-transparent");
   });
 

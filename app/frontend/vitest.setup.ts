@@ -3,10 +3,15 @@ import "@testing-library/jest-dom/vitest";
 
 // next/font/google relies on Next.js's own SWC/webpack compiler transform to
 // work -- under Vitest (Vite's transform, not Next's build pipeline) the
-// real import isn't callable at all ("Montserrat is not a function").
-// Standard Next.js testing guidance: stub it with a plain className.
+// real import isn't callable at all ("Inter is not a function"). Standard
+// Next.js testing guidance: stub it with a plain className/variable.
+// Direct user spec (2026-09-17): Inter/IBM Plex Mono (app/layout.tsx)
+// replaced the earlier Montserrat-for-the-wordmark-only setup (AppShell.tsx
+// now just uses font-semibold, inheriting the new global Inter default --
+// no separate next/font/google call of its own to mock anymore).
 vi.mock("next/font/google", () => ({
-  Montserrat: () => ({ className: "font-montserrat-mock" }),
+  Inter: () => ({ className: "font-inter-mock", variable: "font-inter-mock-variable" }),
+  IBM_Plex_Mono: () => ({ className: "font-plex-mono-mock", variable: "font-plex-mono-mock-variable" }),
 }));
 
 // AppShell (rendered by every page) now renders UserMenu, which calls

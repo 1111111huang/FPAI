@@ -33,7 +33,11 @@
 body {
   background: var(--page-plane);
   color: var(--text-primary);
-  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+  /* Direct user spec (2026-09-17): Inter, the default for everything --
+     --font-inter is set on <html> by app/layout.tsx's next/font/google
+     call; system-ui etc. stay as the fallback stack for the brief window
+     before the self-hosted font file loads. */
+  font-family: var(--font-inter), system-ui, -apple-system, "Segoe UI", sans-serif;
   font-variant-numeric: tabular-nums;
 }
 
