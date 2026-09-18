@@ -167,7 +167,12 @@ class TeamNameMapper:
             return {}
         return {str(key): str(value) for key, value in payload.items()}
 
-    def map_team(self, team_name: str, candidates: Iterable[str] | None = None) -> str:
+    def map_team(
+        self,
+        team_name: str,
+        candidates: Iterable[str] | None = None,
+        use_token_match: bool = False,
+    ) -> str:
         """Map a team name using explicit mappings or a fuzzy fallback."""
         normalized = " ".join(str(team_name).strip().split())
         if not normalized:
@@ -187,7 +192,7 @@ class TeamNameMapper:
             )
             return normalized
 
-        suggestion, score = self.suggest(normalized, candidates)
+        suggestion, score = self.suggest(normalized, candidates, use_token_match=use_token_match)
         if suggestion is None:
             LOGGER.warning(
                 "Unmapped team '%s'. Add mapping to %s.",
@@ -217,14 +222,38 @@ class TeamNameMapper:
         )
         return normalized
 
-    def suggest(self, team_name: str, candidates: Iterable[str]) -> tuple[str | None, float]:
-        """Suggest the closest mapping candidate for a new team name."""
+    def suggest(
+        self, team_name: str, candidates: Iterable[str], use_token_match: bool = False
+    ) -> tuple[str | None, float]:
+        """Suggest the closest mapping candidate for a new team name.
+
+        `use_token_match=True` (opt-in) additionally scores each candidate by
+        `_token_containment_score` before falling back to Levenshtein --
+        closes the club-type-prefix gap ("TSG Hoffenheim" vs "Hoffenheim")
+        plain Levenshtein can't bridge (0.71 similarity, below the 0.82
+        threshold). Left False (the default) for every pre-existing caller
+        (fotmob/understat merge.py), whose candidate pools span whole-league
+        history and can contain genuinely distinct, differently-named clubs a
+        token-subset match would wrongly conflate (see
+        tests/test_three_leagues_team_mapping.py's "GFC Ajaccio" case).
+
+        If two or more candidates tie for the best score, returns (None,
+        best_score) rather than guessing one -- more likely to matter once
+        token matching makes an exact-token tie between two real candidates
+        possible (e.g. two "Real ..." clubs sharing the word "Real")."""
         best_name: str | None = None
         best_score = -1.0
+        tied = False
         for candidate in candidates:
             candidate_name = standardize_team_name(str(candidate))
-            score = _similarity_score(team_name, candidate_name)
+            token_score = _token_containment_score(team_name, candidate_name) if use_token_match else None
+            score = token_score if token_score is not None else _similarity_score(team_name, candidate_name)
             if score > best_score:
                 best_score = score
                 best_name = candidate_name
+                tied = False
+            elif score == best_score:
+                tied = True
+        if tied and best_score >= self.min_similarity:
+            return None, best_score
         return best_name, best_score
