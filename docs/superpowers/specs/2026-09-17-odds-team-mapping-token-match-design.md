@@ -54,19 +54,38 @@ Two new module-level helpers:
 - `_tokenize(value: str) -> set[str]` -- fold accents (reuse `_fold_accents`),
   lowercase, replace non-alphanumeric characters with spaces, split into a
   word set. `"TSG Hoffenheim"` -> `{"tsg", "hoffenheim"}`.
-- `_token_subset_match(left: str, right: str) -> bool` -- true when one side's
-  full token set is a non-empty subset of the other's. `{"hoffenheim"} <=
-  {"tsg", "hoffenheim"}` -> match. `{"manchester", "united"} <= {"west",
-  "ham", "united"}`? No (neither side is a full subset of the other) -> no
-  match. This directional, whole-token-set requirement is what keeps it from
-  false-matching two unrelated clubs that merely share one common word.
+- `_token_containment_score(left: str, right: str) -> float | None` -- `None`
+  if the two token sets don't relate by containment (falls back to Levenshtein
+  below); `1.0` if the token sets are exactly equal (e.g. a pure word-order
+  variant); `0.95` if one side's full token set is a *strict* non-empty
+  subset of the other's (a club-type prefix: `{"hoffenheim"} <=
+  {"tsg", "hoffenheim"}`). `{"manchester", "united"}` vs `{"west", "ham",
+  "united"}` relates neither way (neither is a subset of the other -- they
+  merely share one common word) -> `None`, falls back to Levenshtein as
+  today. Equal-set matches deliberately outrank strict-subset ones (1.0 vs
+  0.95) so that when a candidate list contains both an exact token match and
+  a merely-prefixed one, the exact one always wins outright instead of tying
+  with it under the ambiguity guard below.
 
-`TeamNameMapper.suggest()` scores each candidate by
-`_token_subset_match` first (a fixed score, `0.95` -- confidently above
-`min_similarity` but distinguishable in logs from a true exact/accent-fold
-match) and falls back to the existing `_similarity_score` (Levenshtein)
-otherwise. The rest of `suggest()`'s "keep the best-scoring candidate" loop
-is unchanged.
+`TeamNameMapper.suggest()` gains a `use_token_match: bool = False` parameter.
+When `True`, each candidate is scored by `_token_containment_score` first,
+falling back to the existing `_similarity_score` (Levenshtein) only when that
+returns `None`. When `False` (the default), behavior is byte-for-byte
+identical to today. `map_team()` gains the same passthrough parameter,
+defaulting to `False`.
+
+**Opt-in, not global, and this is a deliberate change from the original
+approved design** (caught during test-writing, confirmed with the user
+2026-09-17): `suggest()` is shared by `fotmob/merge.py` and
+`understat/merge.py`, whose candidate pools span *all seasons* of a league,
+not one day's fixtures. `test_three_leagues_team_mapping.py` already documents
+a real case where `"GFC Ajaccio"` (an older, distinct club) must NOT
+token-subset-match `"Ajaccio"` (AC Ajaccio's later, unrelated promotion, same
+league) -- their raw_matches rows are disjoint seasons, and merging them would
+silently corrupt both clubs' historical stats. Only `eod_batch.py`'s
+`odds_lookup()` and `t30_refresh.py`'s `refresh_match_at_t30()` pass
+`use_token_match=True`; fotmob/understat's existing calls are untouched and
+keep their exact current behavior.
 
 ### 2. Ambiguity guard (`suggest()`)
 
@@ -84,7 +103,7 @@ warning branch -- no new log branch needed.
 
 - `odds_lookup(odds_events, candidates=None)` (`eod_batch.py`) -- new
   optional parameter, passed straight through to `mapper.map_team(name,
-  candidates)` for both home and away.
+  candidates, use_token_match=True)` for both home and away.
 - `run_eod_batch()` builds the candidate pool once per batch from that
   batch's own `fixtures`: each fixture's home/away team name, mapped through
   `map_team()` with no candidates (the reliable, already-working side of the
@@ -92,8 +111,9 @@ warning branch -- no new log branch needed.
   call sites (the primary date and the fallback-window date).
 - `t30_refresh.py`'s `refresh_match_at_t30()` builds a tight 2-name candidate
   pool from just its own single `fixture` (home + away, canonical) and passes
-  it to its own `odds_lookup()` call -- even lower collision risk than the
-  batch case, since there are only ever two names to choose between.
+  it to its own `odds_lookup()` call (also with `use_token_match=True`) --
+  even lower collision risk than the batch case, since there are only ever
+  two names to choose between.
 - `matched_odds_event()` / `match_odds()` / `add_secondary_odds()` are
   unchanged. The fixture side of the join already resolves correctly; only
   the odds side needed a candidate pool.
