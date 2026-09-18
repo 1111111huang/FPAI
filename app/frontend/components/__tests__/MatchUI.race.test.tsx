@@ -20,7 +20,7 @@
  */
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
-import { DashboardPage, MatchExplorerPage } from "../MatchUI";
+import { DashboardPage, MatchExplorerPage, __resetDashboardMatchesCacheForTests } from "../MatchUI";
 import { getFixtures, getSandboxStatus } from "@/lib/api";
 import type { Fixture } from "@/lib/types";
 
@@ -51,6 +51,7 @@ function fixture(id: string): Fixture {
 
 describe("fixture-fetch race guard (W42)", () => {
   beforeEach(() => {
+    __resetDashboardMatchesCacheForTests();
     vi.mocked(getFixtures).mockReset();
     vi.mocked(getSandboxStatus).mockReset();
   });

@@ -19,7 +19,7 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { DashboardPage, MatchExplorerPage } from "../MatchUI";
+import { DashboardPage, MatchExplorerPage, __resetDashboardMatchesCacheForTests } from "../MatchUI";
 import { generateRecommendation, getCachedRecommendation, getFixtures, getSandboxStatus } from "@/lib/api";
 import type { Fixture, MatchRecommendationOut } from "@/lib/types";
 
@@ -57,6 +57,7 @@ function makeRecommendation(overrides: Partial<MatchRecommendationOut> = {}): Ma
 
 describe("Dashboard initial-list precompute visibility (W53)", () => {
   beforeEach(() => {
+    __resetDashboardMatchesCacheForTests();
     vi.mocked(getFixtures).mockReset();
     vi.mocked(getCachedRecommendation).mockReset();
     vi.mocked(generateRecommendation).mockReset();
@@ -184,6 +185,7 @@ describe("Dashboard initial-list precompute visibility (W53)", () => {
 
 describe("Match Explorer initial render is not blocked by the bulk cache check (W53 follow-up)", () => {
   beforeEach(() => {
+    __resetDashboardMatchesCacheForTests();
     vi.mocked(getFixtures).mockReset();
     vi.mocked(getCachedRecommendation).mockReset();
     vi.mocked(generateRecommendation).mockReset();
@@ -234,6 +236,7 @@ describe("Match Explorer initial render is not blocked by the bulk cache check (
 
 describe("Daily Edges UB explainer line (W169)", () => {
   beforeEach(() => {
+    __resetDashboardMatchesCacheForTests();
     vi.mocked(getFixtures).mockReset();
     vi.mocked(getCachedRecommendation).mockReset();
     vi.mocked(getSandboxStatus).mockReset();

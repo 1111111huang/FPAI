@@ -1,7 +1,14 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { DashboardPage, MatchExplorerPage, MatchCard, dayDiff, type Match } from "../MatchUI";
+import {
+  DashboardPage,
+  MatchExplorerPage,
+  MatchCard,
+  dayDiff,
+  type Match,
+  __resetDashboardMatchesCacheForTests,
+} from "../MatchUI";
 import { generateRecommendation, getCachedRecommendation, getFixtures, getSandboxStatus } from "@/lib/api";
 import type { Fixture, MatchRecommendationOut } from "@/lib/types";
 
@@ -14,6 +21,7 @@ describe("date-boundary correctness via the sandbox clock (W38)", () => {
     // `it` blocks below (vi.mock("@/lib/api") without a factory shares one
     // mock instance for the whole file), which can mask a genuinely failing
     // assertion behind a stale matching call left over from an earlier test.
+    __resetDashboardMatchesCacheForTests();
     vi.mocked(getFixtures).mockReset();
     vi.mocked(getSandboxStatus).mockReset();
     vi.mocked(getFixtures).mockResolvedValue([]);
@@ -205,6 +213,7 @@ describe("sandbox mode does not leak real results for fixtures still-future rela
   // once the page has genuinely converged on its final state, immune to
   // which exact tick the flicker lands on.
   beforeEach(() => {
+    __resetDashboardMatchesCacheForTests();
     vi.mocked(getFixtures).mockReset();
     vi.mocked(getSandboxStatus).mockReset();
     vi.mocked(getCachedRecommendation).mockReset();
@@ -301,6 +310,7 @@ describe("sandbox mode does not leak real results for fixtures still-future rela
 
 describe("MatchExplorerPage -- actionable-only filter (W108)", () => {
   beforeEach(() => {
+    __resetDashboardMatchesCacheForTests();
     vi.mocked(getFixtures).mockReset();
     vi.mocked(getSandboxStatus).mockReset();
     vi.mocked(getCachedRecommendation).mockReset();

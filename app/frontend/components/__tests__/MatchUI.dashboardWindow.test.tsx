@@ -11,7 +11,7 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { DashboardPage } from "../MatchUI";
+import { DashboardPage, __resetDashboardMatchesCacheForTests } from "../MatchUI";
 import { getCachedRecommendation, getFixtures, getSandboxStatus } from "@/lib/api";
 import type { Fixture, MatchRecommendationOut } from "@/lib/types";
 
@@ -32,6 +32,7 @@ function fixture(id: string, utcDate: string, overrides: Partial<Fixture> = {}):
 
 describe("Dashboard always shows the next 10 matches (date-grouped, not today-only)", () => {
   beforeEach(() => {
+    __resetDashboardMatchesCacheForTests();
     vi.mocked(getFixtures).mockReset();
     vi.mocked(getSandboxStatus).mockReset();
     // Keep useSandboxAsOf's asOf pinned to the real-clock Date it starts
@@ -266,6 +267,7 @@ describe("Dashboard always shows the next 10 matches (date-grouped, not today-on
 
 describe("Dashboard -- live and today's-completed matches (direct user request)", () => {
   beforeEach(() => {
+    __resetDashboardMatchesCacheForTests();
     vi.mocked(getFixtures).mockReset();
     vi.mocked(getSandboxStatus).mockReset();
     vi.mocked(getSandboxStatus).mockResolvedValue({ sandbox_mode: false, as_of: "" });

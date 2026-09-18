@@ -267,6 +267,56 @@ async function resolveCachedRecommendations(matches: Match[]): Promise<Match[]> 
   );
 }
 
+/** Module-level (outside the component, survives unmount) so navigating to a
+ * match's detail page and back doesn't re-run DashboardPage's ~12-call load
+ * (1 fixtures + up to 10 concurrent recommendation calls + AppShell's own
+ * duplicate sandbox-status fetch) every single time -- direct user report,
+ * keyed by the same `today` date string load() already fetches with.
+ *
+ * TTL is adaptive, not fixed: a live or soon-to-start match means scores/
+ * live-wait odds can move, so that entry expires fast; a quiet window with
+ * nothing imminent can sit far longer since nothing about it changes on its
+ * own. ponytail: a plain module-level Map, not a real cache library --
+ * upgrade to something with LRU eviction if this ever grows past a handful
+ * of date keys per session (it won't -- one user, one dashboard). */
+const DASHBOARD_CACHE_LIVE_TTL_MS = 60_000;
+const DASHBOARD_CACHE_IDLE_TTL_MS = 5 * 60_000;
+const DASHBOARD_CACHE_IMMINENT_WINDOW_MS = 30 * 60_000;
+const DASHBOARD_CACHE_LIVE_MATCH_DURATION_MS = 3 * 60 * 60_000;
+
+const dashboardMatchesCache = new Map<string, { matches: Match[]; fetchedAt: number; ttlMs: number }>();
+
+function isLiveOrImminent(kickoffIso: string, now: number): boolean {
+  const kickoff = new Date(kickoffIso).getTime();
+  const elapsed = now - kickoff;
+  return elapsed >= 0
+    ? elapsed < DASHBOARD_CACHE_LIVE_MATCH_DURATION_MS
+    : -elapsed <= DASHBOARD_CACHE_IMMINENT_WINDOW_MS;
+}
+
+function getDashboardMatchesCache(key: string): Match[] | null {
+  const entry = dashboardMatchesCache.get(key);
+  if (!entry || Date.now() - entry.fetchedAt > entry.ttlMs) return null;
+  return entry.matches;
+}
+
+function setDashboardMatchesCache(key: string, matches: Match[]): void {
+  const now = Date.now();
+  const ttlMs = matches.some((m) => isLiveOrImminent(m.kickoffIso, now))
+    ? DASHBOARD_CACHE_LIVE_TTL_MS
+    : DASHBOARD_CACHE_IDLE_TTL_MS;
+  dashboardMatchesCache.set(key, { matches, fetchedAt: now, ttlMs });
+}
+
+/** Test-only escape hatch: this cache is module-level by design (it has to
+ * survive DashboardPage unmounting), but that means it also survives between
+ * separate `render(<DashboardPage />)` calls in the same test file, where
+ * each test expects its own fresh mocked fetch. Real app code never calls
+ * this -- the TTL is what bounds it there. */
+export function __resetDashboardMatchesCacheForTests(): void {
+  dashboardMatchesCache.clear();
+}
+
 export function formatKickoff(iso: string): string {
   const d = new Date(iso);
   return d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
@@ -1497,19 +1547,28 @@ export function DashboardPage() {
 
     async function load() {
       setError(null);
+      // Always the next 10 matches going forward from asOf, regardless of
+      // how many (if any) fall on asOf's own date -- a 90-day forward
+      // window, the same convention MatchExplorerPage's search already
+      // uses (this codebase's established precedent for "how far to look
+      // for the next real fixtures"). W51: scripts/launch_sandbox.py's
+      // fetch_sandbox_fixtures() mirrors this exact window/sort/cap (90
+      // days forward, sorted kickoff-ascending, capped at 10) so
+      // --precompute actually covers what the Dashboard shows -- if this
+      // window, sort, or cap ever changes, update that Python copy too,
+      // there is no shared implementation.
+      const today = dateString(asOf, sandboxMode);
+      // W233: a fresh-enough cached list (see dashboardMatchesCache above)
+      // skips the fetch entirely -- no blanking loading state, no network
+      // calls -- so returning here from a match's detail page shows
+      // instantly instead of re-running the full ~12-call load.
+      const cached = getDashboardMatchesCache(today);
+      if (cached) {
+        setMatches(cached);
+        return;
+      }
       setMatches(null);
       try {
-        // Always the next 10 matches going forward from asOf, regardless of
-        // how many (if any) fall on asOf's own date -- a 90-day forward
-        // window, the same convention MatchExplorerPage's search already
-        // uses (this codebase's established precedent for "how far to look
-        // for the next real fixtures"). W51: scripts/launch_sandbox.py's
-        // fetch_sandbox_fixtures() mirrors this exact window/sort/cap (90
-        // days forward, sorted kickoff-ascending, capped at 10) so
-        // --precompute actually covers what the Dashboard shows -- if this
-        // window, sort, or cap ever changes, update that Python copy too,
-        // there is no shared implementation.
-        const today = dateString(asOf, sandboxMode);
         const to = addDays(asOf, 90, sandboxMode);
         const fixtures = await getFixtures(today, dateString(to, sandboxMode));
         if (cancelled) return;
@@ -1546,6 +1605,7 @@ export function DashboardPage() {
         const resolvedMatches = await resolveCachedRecommendations(nearest);
         if (cancelled) return;
         setMatches(resolvedMatches);
+        setDashboardMatchesCache(today, resolvedMatches);
       } catch (err) {
         if (!cancelled) setError(err instanceof ApiError ? err.message : "Could not load fixtures.");
       }
