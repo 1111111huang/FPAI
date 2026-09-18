@@ -474,8 +474,8 @@ const STATUS_META: Record<
 // RecommendationType (three values only -- never insufficient_data, a
 // table row's own status can't be that).
 const HIGHLIGHT_ROW_STYLE: Record<RecommendationType, { border: string; background: string; text: string }> = {
-  direct_bet: { border: "border-l-good", background: "bg-good-dim", text: "text-good" },
-  conditional: { border: "border-l-warning", background: "bg-warning-dim", text: "text-warning" },
+  direct_bet: { border: "border-l-good", background: "bg-gradient-to-r from-good-dim via-good-dim/40 to-transparent", text: "text-good" },
+  conditional: { border: "border-l-warning", background: "bg-gradient-to-r from-warning-dim via-warning-dim/40 to-transparent", text: "text-warning" },
   no_bet: { border: "border-l-border", background: "bg-surface", text: "text-ink" },
 };
 
@@ -2246,7 +2246,7 @@ function ProbabilityRow({
   const highlight = HIGHLIGHT_ROW_STYLE[m.recommendationType];
   return (
     <div
-      className={`grid grid-cols-[1fr_auto_auto_auto_auto_auto] items-center gap-4 border-b border-l-4 py-3 text-sm last:border-b-0 ${
+      className={`grid grid-cols-[1fr_auto_auto_auto_auto_auto] items-center gap-4 border-b border-l-4 py-3 pl-3 text-sm last:border-b-0 ${
         highlighted ? `${highlight.border} ${highlight.background}` : "border-l-transparent"
       } border-border`}
     >
@@ -2898,7 +2898,7 @@ export function MatchAnalysisPage({
 
           <section className="mt-8">
             <h2 className="text-sm font-semibold uppercase tracking-wide text-muted">Model Probabilities</h2>
-            <div className="mt-2 grid grid-cols-[1fr_auto_auto_auto_auto_auto] gap-4 text-[11px] uppercase tracking-wide text-muted">
+            <div className="mt-2 grid grid-cols-[1fr_auto_auto_auto_auto_auto] gap-4 pl-4 text-[11px] uppercase tracking-wide text-muted">
               <span>Market</span>
               <span title={MODEL_PROBABILITY_EXPLAIN} className="text-right">Model</span>
               <span className="text-right">Market</span>
