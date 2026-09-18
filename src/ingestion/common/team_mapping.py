@@ -104,6 +104,38 @@ def _similarity_score(left: str, right: str) -> float:
     return 1.0 - (distance / max_len)
 
 
+def _tokenize(value: str) -> set[str]:
+    """Lowercase, accent-folded, punctuation-stripped word set -- 'TSG
+    Hoffenheim' -> {'tsg', 'hoffenheim'}. Used by `_token_containment_score`
+    below, not by the exact/accent-fold lookup paths in `map_team()`, which
+    stay untouched."""
+    folded = _fold_accents(value).lower()
+    cleaned = "".join(ch if ch.isalnum() or ch.isspace() else " " for ch in folded)
+    return set(cleaned.split())
+
+
+def _token_containment_score(left: str, right: str) -> float | None:
+    """Token-containment score for `use_token_match=True` callers, or None
+    if the two names don't relate this way (caller falls back to
+    `_similarity_score`). Equal token sets (a pure word-order variant) score
+    1.0; a genuine strict subset -- one side is the other plus extra words,
+    e.g. a club-type prefix like 'TSG Hoffenheim' vs 'Hoffenheim' -- scores
+    0.95. Ranking equal-set above strict-subset means an exact token match in
+    a candidate list always outright wins over a merely-prefixed one, rather
+    than tying with it under suggest()'s ambiguity guard. Two names that just
+    happen to share one common word ('Manchester United' vs 'West Ham
+    United') relate neither way -- neither full token set is a subset of the
+    other -- so this returns None for them, same as any unrelated pair."""
+    left_tokens, right_tokens = _tokenize(left), _tokenize(right)
+    if not left_tokens or not right_tokens:
+        return None
+    if left_tokens == right_tokens:
+        return 1.0
+    if left_tokens <= right_tokens or right_tokens <= left_tokens:
+        return 0.95
+    return None
+
+
 class TeamNameMapper:
     """Map a source's team names to the CSV canonical names."""
 
