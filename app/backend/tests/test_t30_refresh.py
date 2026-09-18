@@ -79,6 +79,30 @@ def test_refreshes_even_when_odds_unchanged_for_lineup_confirmation(tmp_path: Pa
     assert len(cache.get_history("m1", _future_date(1), agent_config_hash)) == 2  # a new row was written
 
 
+def test_odds_matched_via_token_containment_for_club_type_prefix_mismatch(tmp_path: Path) -> None:
+    """W234, mirroring the eod_batch.py regression test: T-30's own
+    single-fixture candidate pool must also resolve a club-type-prefix
+    mismatch via token-containment matching."""
+    config = AgentConfig.default()
+    cache = RecommendationCache(db_path=tmp_path / "cache.db")
+    fixture = _fixture(home="Testopolis", away="Rivertown")
+    odds_client = MagicMock()
+    odds_client.get_odds.return_value = [
+        NormalizedOdds(
+            home_team="FC Testopolis", away_team="Rivertown", commence_time="2026-08-22T15:00:00Z",
+            home_odds=1.9, draw_odds=3.4, away_odds=4.2,
+        ),
+    ]
+
+    with patch("app.backend.recommendations.run_agent", return_value=_RECOMMENDATION) as mock_run_agent:
+        result = refresh_match_at_t30(
+            fixture, odds_client=odds_client, cache=cache, config=config, date_str=_future_date(1)
+        )
+
+    mock_run_agent.assert_called_once()
+    assert result.outcome == "refreshed"
+
+
 def test_get_odds_is_called_with_an_explicit_epl_sport_key(tmp_path: Path) -> None:
     """W58: must not rely on get_odds()'s own "soccer_epl" default parameter."""
     config = AgentConfig.default()
