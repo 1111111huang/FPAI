@@ -33,6 +33,13 @@ export type MarketCandidateOut = {
   // (not conditional, no current_odds, or no such target exists) or absent
   // entirely on a pre-A52 cached row, so optional rather than required.
   target_odds?: number | null;
+  // Server-computed (app/backend/recommendations.py _attach_shap_contributions),
+  // never LLM-authored -- already signed relative to THIS candidate's own
+  // selection (positive = supports it), so nothing on this side needs to
+  // know which raw class it came from. Absent for result_3way (no
+  // unambiguous per-selection sign across 3 candidates) and for any
+  // pre-this-change cached row.
+  shap_contributions?: { feature: string; shap_value: number; value: number | null }[] | null;
   // A88/W193: the agent's own self-reported edge/hit-probability balance,
   // and the one-line reason this candidate won or lost -- both optional so
   // a pre-this-change cached row (no such keys at all) still type-checks.

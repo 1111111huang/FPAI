@@ -11,6 +11,7 @@ import { afterEach, describe, expect, it, test, vi, beforeEach } from "vitest";
 
 import {
   applyRecommendation,
+  featureLabel,
   fixtureToMatch,
   LeagueBadge,
   LogBetButton,
@@ -18,6 +19,7 @@ import {
   MatchCard,
   MatchExplorerPage,
   resolveRecommendation,
+  shapSummarySentence,
   StatusBadge,
   TeamBadge,
   type Match,
@@ -1184,6 +1186,36 @@ describe("MatchAnalysisPage -- cache-first load (W47)", () => {
     expect(screen.queryByText("should not render -- no_bet block takes over")).not.toBeInTheDocument();
   });
 
+  it("no_bet mode's closest-read tape bar surfaces the highest-edge candidate even when it's typed 'conditional', not just 'no_bet' ones", async () => {
+    const rec = makeRecommendation({
+      overall: "no_bet",
+      candidates: [
+        {
+          market: "result_3way", selection: "draw", recommendation_type: "no_bet",
+          current_odds: 14.0, min_odds: 1.71, ml_probability: 0.108, implied_probability: 0.071,
+          value_edge: 0.036, composite_score: 0.3, reason: "n/a",
+        },
+        {
+          market: "btts", selection: "yes", recommendation_type: "conditional",
+          current_odds: 1.83, min_odds: 1.71, ml_probability: 0.6, implied_probability: 0.546,
+          value_edge: 0.049, composite_score: 0.5, reason: "n/a",
+        },
+      ],
+      recommendation_pick: null,
+      no_bet_read: "Both teams to score is the closest angle.",
+    });
+    vi.mocked(getCachedRecommendation).mockResolvedValue(rec);
+
+    render(<MatchAnalysisPage id="m1" home="Arsenal" away="Everton" date="2026-08-22" />);
+
+    expect(await screen.findByText("BTTS Yes — closest read")).toBeInTheDocument();
+    // Widths must be normalized to modelPct/(modelPct+marketPct), not modelPct/100 --
+    // otherwise two probabilities that don't sum to 100% (60% model, 54.6% market
+    // here) leave a visual gap or overflow in the bar instead of filling it.
+    const modelFill = screen.getByText("60.0%").closest("div[style]") as HTMLElement;
+    expect(modelFill.style.flexBasis).toBe(`${(60 / (60 + 54.6)) * 100}%`);
+  });
+
   it("W227: PickBanner renders a market label (not a team name) for a non-result_3way pick", async () => {
     // LogBetButton renders "Sign in to log this bet" when unauthenticated
     // -- authenticate so its real "Log Bet" pill text is what's checked.
@@ -1581,5 +1613,128 @@ describe("MatchExplorerPage -- league section headers (direct user request)", ()
     const [from, to] = vi.mocked(getFixtures).mock.calls[0];
     expect(from! < today).toBe(true);
     expect(to! > today).toBe(true);
+  });
+});
+
+describe("featureLabel (W233)", () => {
+  const match = baseMatch({ home: "Brentford", away: "Chelsea" });
+
+  it("names the actual away team for an _AWAY_ feature", () => {
+    expect(featureLabel("LINEUP_AWAY_KEY_ATTACKER_MISSING", match)).toBe("Chelsea is missing a key attacker");
+  });
+
+  it("names the actual home team and adds a rolling-window qualifier", () => {
+    expect(featureLabel("SQUAD_HOME_XG_MEAN_R3", match)).toBe("Brentford's expected goals (last 3)");
+  });
+
+  it("never team-prefixes a market-wide feature with no HOME_/AWAY_ side marker", () => {
+    expect(featureLabel("MKT_IMPLIED_HOME", match)).toBe("the market's implied home-win chance");
+  });
+
+  it("falls back to a humanized version of anything not in the stem map", () => {
+    expect(featureLabel("SOME_BRAND_NEW_FEATURE", match)).toBe("some brand new feature");
+  });
+});
+
+describe("shapSummarySentence (W233)", () => {
+  const match = baseMatch({ home: "Brentford", away: "Chelsea" });
+
+  it("names the top positive contributors and the strongest one against", () => {
+    const candidate: MarketRec = {
+      ...CANDIDATE_BTTS,
+      shapContributions: [
+        { feature: "LINEUP_AWAY_KEY_ATTACKER_MISSING", shapValue: 0.17, value: 1 },
+        { feature: "SQUAD_HOME_XG_MEAN_R3", shapValue: 0.11, value: 0.2 },
+        { feature: "CTX_AWAY_REST_DAYS", shapValue: -0.09, value: 12 },
+      ],
+    };
+
+    const sentence = shapSummarySentence(match, candidate);
+
+    expect(sentence).toBe(
+      "BTTS No is driven mainly by Chelsea is missing a key attacker and Brentford's expected goals (last 3), " +
+        "despite Chelsea's days of rest pointing the other way."
+    );
+  });
+
+  it("drops a contribution whose value is unavailable rather than naming an unquoted market", () => {
+    const candidate: MarketRec = {
+      ...CANDIDATE_BTTS,
+      shapContributions: [
+        { feature: "MKT_LAMBDA_AWAY", shapValue: 0.2, value: null }, // no O2.5/AH odds quoted
+        { feature: "SQUAD_HOME_XG_MEAN_R3", shapValue: 0.11, value: 0.2 },
+      ],
+    };
+
+    const sentence = shapSummarySentence(match, candidate);
+
+    expect(sentence).not.toContain("market-implied away goals");
+    expect(sentence).toContain("Brentford's expected goals");
+  });
+
+  it("returns null when there are no contributions at all (composite model, or result_3way)", () => {
+    expect(shapSummarySentence(match, { ...CANDIDATE_BTTS, shapContributions: null })).toBeNull();
+    expect(shapSummarySentence(match, { ...CANDIDATE_BTTS, shapContributions: undefined })).toBeNull();
+  });
+
+  it("returns null when every available contribution points the other way", () => {
+    const candidate: MarketRec = {
+      ...CANDIDATE_BTTS,
+      shapContributions: [{ feature: "CTX_AWAY_REST_DAYS", shapValue: -0.09, value: 12 }],
+    };
+
+    expect(shapSummarySentence(match, candidate)).toBeNull();
+  });
+});
+
+describe("WhyThisPickSection shap sentence (W233)", () => {
+  beforeEach(() => {
+    vi.mocked(getCachedRecommendation).mockReset();
+    vi.mocked(getStatus).mockReset().mockRejectedValue(new Error("no backend"));
+    vi.mocked(getSandboxStatus).mockReset().mockResolvedValue({ sandbox_mode: false, as_of: null });
+    vi.mocked(getBets).mockReset().mockResolvedValue([]);
+  });
+
+  it("renders the shap sentence above the model-vs-market bar for a direct-bet pick", async () => {
+    vi.mocked(getCachedRecommendation).mockResolvedValue(
+      makeRecommendation({
+        overall: "direct_bet",
+        recommendation_pick: { market: "btts", selection: "no" },
+        candidates: [
+          {
+            market: "btts", selection: "no", recommendation_type: "direct_bet",
+            current_odds: 3.0, min_odds: 1.8, ml_probability: 0.51, implied_probability: 0.333, value_edge: 0.176,
+            shap_contributions: [
+              { feature: "LINEUP_AWAY_KEY_ATTACKER_MISSING", shap_value: 0.17, value: 1 },
+              { feature: "CTX_AWAY_REST_DAYS", shap_value: -0.09, value: 12 },
+            ],
+          },
+        ],
+      })
+    );
+
+    render(<MatchAnalysisPage id="m1" home="Brentford" away="Chelsea" date="2026-09-18" league="E0" />);
+
+    expect(await screen.findByText(/is driven mainly by Chelsea is missing a key attacker/)).toBeInTheDocument();
+  });
+
+  it("renders nothing extra when the candidate has no shap_contributions (e.g. a composite model)", async () => {
+    vi.mocked(getCachedRecommendation).mockResolvedValue(
+      makeRecommendation({
+        overall: "direct_bet",
+        recommendation_pick: { market: "result_3way", selection: "home" },
+        candidates: [
+          {
+            market: "result_3way", selection: "home", recommendation_type: "direct_bet",
+            current_odds: 2.1, min_odds: 1.8, ml_probability: 0.55, implied_probability: 0.48, value_edge: 0.07,
+          },
+        ],
+      })
+    );
+
+    render(<MatchAnalysisPage id="m1" home="Arsenal" away="Everton" date="2026-09-18" league="E0" />);
+
+    expect(await screen.findByText("Value case")).toBeInTheDocument();
+    expect(screen.queryByText(/is driven mainly by/)).not.toBeInTheDocument();
   });
 });

@@ -77,6 +77,9 @@ export type MarketRec = {
   impliedProbability: number;
   valueEdge: number;
   targetOdds?: number | null;
+  // See lib/types.ts's MarketCandidateOut.shap_contributions -- already
+  // signed toward this candidate's own selection, server-side.
+  shapContributions?: { feature: string; shapValue: number; value: number | null }[] | null;
 };
 
 export type RecommendationPick = { market: string; selection: string };
@@ -233,6 +236,11 @@ export function applyRecommendation(match: Match, rec: MatchRecommendationOut): 
       impliedProbability: c.implied_probability,
       valueEdge: c.value_edge,
       targetOdds: c.target_odds ?? null,
+      shapContributions: c.shap_contributions?.map((s) => ({
+        feature: s.feature,
+        shapValue: s.shap_value,
+        value: s.value,
+      })) ?? null,
     })),
   };
 }
@@ -2449,6 +2457,135 @@ function marketSelectionTitle(market: string, selection: string): string {
   return `${marketLabel(market).label} ${selectionPart.charAt(0).toUpperCase()}${selectionPart.slice(1)}`;
 }
 
+// Human-readable stems for the feature codes that show up as top SHAP
+// contributors. Matched by substring, not exact name, since group prefixes
+// aren't uniform-length across families (OFF_HOME_XG_R5, SQUAD_HOME_XG_MEAN_R3,
+// OPP_ADJ_HOME_GOALS_SCORED_R5 all carry "XG"/"GOALS_SCORED" at different
+// depths) -- deliberately approximate, not exhaustive: covers the stems
+// that actually showed up as top contributors investigating real
+// production models, with a humanized fallback for anything else, same
+// "known map + fallback, never a raw code" convention as
+// marketSelectionTitle() above.
+const _FEATURE_STEM_LABEL: Record<string, string> = {
+  KEY_ATTACKER_MISSING: "missing a key attacker",
+  XGA: "expected goals conceded",
+  XG: "expected goals",
+  XA: "expected assists",
+  FTHG: "goals scored",
+  FTAG: "goals conceded",
+  SHOT_ACCURACY: "shot accuracy",
+  HST: "shots on target",
+  AST: "shots on target",
+  HS: "shots",
+  AS: "shots",
+  HC: "corners won",
+  AC: "corners won",
+  HY: "yellow cards",
+  AY: "yellow cards",
+  HR: "red cards",
+  AR: "red cards",
+  DISCIPLINE_SCORE: "discipline record",
+  SAVE_RATE: "save rate",
+  REST_DAYS: "days of rest",
+  WIN_STREAK: "current win streak",
+  SCORE_STREAK: "current scoring streak",
+  CS_STREAK: "current clean-sheet streak",
+  CUM_PTS: "points total this season",
+  PPG_L10: "points per game (last 10)",
+  GOALS_STD: "scoring consistency",
+  CONCEDED_STD: "defensive consistency",
+  CORNERS_STD: "corner-count consistency",
+  RATING_MEAN: "squad rating",
+  OVERROUND: "the bookmaker's margin",
+  IMPLIED_HOME: "the market's implied home-win chance",
+  IMPLIED_DRAW: "the market's implied draw chance",
+  IMPLIED_AWAY: "the market's implied away-win chance",
+  IMPLIED_OVER25: "the market's implied over-2.5 chance",
+  LAMBDA_TOTAL: "the market-implied total goals",
+  LAMBDA_HOME: "the market-implied home goals",
+  LAMBDA_AWAY: "the market-implied away goals",
+  LAMBDA_AH_DIFF: "the market's handicap-implied goal gap",
+  POISSON_BTTS_PROB: "the market-implied BTTS chance",
+  AH_LINE: "the Asian handicap line",
+  AH_HOME_ODDS: "the home handicap price",
+  AH_AWAY_ODDS: "the away handicap price",
+  H2H_TOTAL_GOALS: "head-to-head scoring history",
+  H2H_CORNERS: "head-to-head corner history",
+  H2H_HOME_WIN_RATE: "head-to-head home win rate",
+};
+const _FEATURE_STEM_ENTRIES_BY_LENGTH = Object.entries(_FEATURE_STEM_LABEL).sort(
+  ([a], [b]) => b.length - a.length
+);
+
+/** Turns an internal feature code ("LINEUP_AWAY_KEY_ATTACKER_MISSING",
+ * "SQUAD_HOME_XG_MEAN_R3") into a short reader-facing phrase -- names the
+ * actual team when the code carries a HOME_/AWAY_ side, and adds a
+ * rolling-window qualifier when one applies. */
+export function featureLabel(name: string, match: Match): string {
+  const side: "home" | "away" | null = /_HOME_/.test(name) ? "home" : /_AWAY_/.test(name) ? "away" : null;
+
+  const windowMatch = name.match(/_(R3|R5|EMA5|L10)$/);
+  const windowSuffix = windowMatch
+    ? windowMatch[1] === "EMA5"
+      ? " (recent trend)"
+      : ` (last ${windowMatch[1].replace(/\D/g, "")})`
+    : "";
+
+  // Longest key first -- a short stem code ("AY" -> yellow cards) can be a
+  // pure substring accident inside an unrelated, longer one ("REST_DAYS"
+  // contains "AY"), so the more specific match has to get first refusal.
+  let stem: string | null = null;
+  for (const [key, label] of _FEATURE_STEM_ENTRIES_BY_LENGTH) {
+    if (name.includes(key)) {
+      stem = label;
+      break;
+    }
+  }
+  if (stem === null) {
+    stem = name
+      .replace(/^[A-Z_]+?_(HOME|AWAY)_/, "")
+      .replace(/_(R3|R5|EMA5|L10)$/, "")
+      .replace(/_/g, " ")
+      .toLowerCase();
+  }
+
+  if (side) {
+    const team = side === "home" ? match.home : match.away;
+    return `${team}${stem.startsWith("missing") ? " is" : "'s"} ${stem}${windowSuffix}`;
+  }
+  return `${stem}${windowSuffix}`;
+}
+
+/** W233 (direct user spec, 2026-09-18): a 1-2 sentence line composed
+ * entirely from this candidate's own shap_contributions -- code-only, never
+ * the LLM's prose. Sits directly above the ProbabilityTapeBar it explains,
+ * not in its own section: the model-vs-market bar already IS the model's
+ * justification, this sentence just names what's actually driving that
+ * number. Returns null (renders nothing) when there's nothing to say -- no
+ * contributions attached (composite model, or a result_3way candidate,
+ * which never gets shap_contributions -- see _attach_shap_contributions),
+ * or every contribution happens to point the other way.
+ *
+ * Deliberately drops any contribution whose value is null (the feature
+ * wasn't available for this match, e.g. no O2.5/AH odds quoted) rather than
+ * caveating it inline -- naming an unavailable market as if it were
+ * observed is exactly the failure mode this session's own investigation
+ * flagged. It can still be the single largest contributor and simply won't
+ * be named in the sentence; the raw list (shapContributions) still has it
+ * for anyone who wants it. */
+export function shapSummarySentence(match: Match, candidate: MarketRec): string | null {
+  const available = (candidate.shapContributions ?? []).filter((c) => c.value !== null);
+  const supporting = available.filter((c) => c.shapValue > 0).slice(0, 2);
+  if (supporting.length === 0) return null;
+
+  const against = available.find((c) => c.shapValue < 0);
+  const pick = marketSelectionTitle(candidate.market, candidate.selection);
+  const supportPhrase = supporting.map((c) => featureLabel(c.feature, match)).join(" and ");
+  const againstPhrase = against ? `, despite ${featureLabel(against.feature, match)} pointing the other way` : "";
+
+  return `${pick} is driven mainly by ${supportPhrase}${againstPhrase}.`;
+}
+
 // W121 follow-up (mockup point 3): human-readable market names, not the raw
 // backend string (`shown.market` was previously rendered verbatim -- a
 // reader would have seen "result_3way"/"total_goals" literally). Covers
@@ -2505,6 +2642,8 @@ function ProbabilityTapeBar({
 }) {
   const modelPct = modelProb * 100;
   const marketPct = marketProb * 100;
+  const total = modelPct + marketPct;
+  const modelShare = total > 0 ? (modelPct / total) * 100 : 50;
   const gapPts = modelPct - marketPct;
   const caption =
     captionMode === "neutral"
@@ -2530,7 +2669,7 @@ function ProbabilityTapeBar({
       <div className="mt-1.5 flex overflow-hidden rounded-lg border border-border">
         <div
           className="min-w-0 bg-gold px-3 py-2.5"
-          style={{ flexBasis: `${Math.max(modelPct, 1)}%` }}
+          style={{ flexBasis: `${Math.max(modelShare, 1)}%` }}
         >
           <p className="text-[10px] font-medium uppercase tracking-wide text-page">Model</p>
           <p className="font-mono text-xl font-bold text-page">{modelPct.toFixed(1)}%</p>
@@ -2617,6 +2756,7 @@ function WhyThisPickSection({ match, shown }: { match: Match; shown: MarketRec |
   if (!noBetMode && shown && match.teamEvidence && match.theRead) {
     const marketMeta = marketLabel(shown.market);
     const pick = pickLabel(match, shown.selection);
+    const shapSentence = shapSummarySentence(match, shown);
     return (
       <div>
         {/* W229 color standardization: gold (Model/brand-data), not
@@ -2630,6 +2770,7 @@ function WhyThisPickSection({ match, shown }: { match: Match; shown: MarketRec |
             {marketMeta.label} {pick} reads as the strongest value on this fixture, at odds of{" "}
             <span className="font-semibold text-ink">{shown.currentOdds?.toFixed(2)}</span>.
           </p>
+          {shapSentence && <p className="mt-1 text-ink-secondary">{shapSentence}</p>}
           <ProbabilityTapeBar heading="Win probability" modelProb={shown.mlProbability} marketProb={shown.impliedProbability} />
         </WhyPickRow>
         <WhyPickRow icon={<TeamBadge name={match.home} />} iconClass="bg-transparent p-0" title={match.home}>
@@ -2651,6 +2792,7 @@ function WhyThisPickSection({ match, shown }: { match: Match; shown: MarketRec |
   if (!noBetMode && shown) {
     const marketMeta = marketLabel(shown.market);
     const pick = pickLabel(match, shown.selection);
+    const shapSentence = shapSummarySentence(match, shown);
     return (
       <div>
         <WhyPickRow icon={<TrendUp size={18} weight="bold" />} iconClass="bg-gold-dim text-gold" title="Value case">
@@ -2665,6 +2807,7 @@ function WhyThisPickSection({ match, shown }: { match: Match; shown: MarketRec |
             )}
             .
           </p>
+          {shapSentence && <p className="mt-1 text-ink-secondary">{shapSentence}</p>}
           <ProbabilityTapeBar heading="Win probability" modelProb={shown.mlProbability} marketProb={shown.impliedProbability} />
         </WhyPickRow>
         <WhyPickRow icon={<Target size={18} weight="bold" />} iconClass="bg-purple-dim text-purple" title="The read">
@@ -2678,16 +2821,16 @@ function WhyThisPickSection({ match, shown }: { match: Match; shown: MarketRec |
   }
 
   if (noBetMode) {
-    const closest = [...match.candidates]
-      .filter((c) => c.recommendationType === "no_bet")
-      .sort((a, b) => b.valueEdge - a.valueEdge)[0];
+    const closest = [...match.candidates].sort((a, b) => b.valueEdge - a.valueEdge)[0];
+    const shapSentence = closest ? shapSummarySentence(match, closest) : null;
     return (
       <div>
         <WhyPickRow icon={<MinusCircle size={18} weight="bold" />} iconClass="bg-surface text-ink-secondary" title="No qualifying edge today">
           {match.noBetRead ? <p>{match.noBetRead}</p> : <ExplanationPoints points={explanation} />}
+          {shapSentence && <p className="mt-1 text-ink-secondary">{shapSentence}</p>}
           {closest && (
             <ProbabilityTapeBar
-              heading={`${marketLabel(closest.market).label} — closest read`}
+              heading={`${marketSelectionTitle(closest.market, closest.selection)} — closest read`}
               modelProb={closest.mlProbability}
               marketProb={closest.impliedProbability}
               captionMode="neutral"
