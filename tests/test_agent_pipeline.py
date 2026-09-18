@@ -87,8 +87,11 @@ def test_parse_odds_from_search_text_returns_none_for_empty_text():
     assert _parse_odds_from_search_text(None) is None
 
 
-def test_research_node_runs_availability_and_form_searches_only_when_odds_supplied():
-    with patch("src.agent.tools._dated_web_search", side_effect=["injury text", "form text"]) as mock_search:
+def test_research_node_runs_availability_context_and_form_searches_only_when_odds_supplied():
+    with patch(
+        "src.agent.tools._dated_web_search",
+        side_effect=["injury text", "context text", "form text"],
+    ) as mock_search:
         state = _base_state(match_info={
             "home_team": "A", "away_team": "B", "date": "2026-06-21",
             "odds": {"home": 2.0, "draw": 3.0, "away": 3.5},
@@ -96,20 +99,21 @@ def test_research_node_runs_availability_and_form_searches_only_when_odds_suppli
         result = research_node(state)
 
     assert result["research_evidence"]["availability"] == "injury text"
+    assert result["research_evidence"]["match_context"] == "context text"
     assert result["research_evidence"]["form_context"] == "form text"
     assert result["research_evidence"]["odds_verification"] is None
-    assert mock_search.call_count == 2
+    assert mock_search.call_count == 3
 
 
 def test_research_node_also_runs_odds_search_when_caller_supplied_no_odds():
     with patch(
         "src.agent.tools._dated_web_search",
-        side_effect=["injury text", "form text", "Man City 1.45 Draw 4.50 Arsenal 7.00"],
+        side_effect=["injury text", "context text", "form text", "Man City 1.45 Draw 4.50 Arsenal 7.00"],
     ) as mock_search:
         state = _base_state(match_info={"home_team": "A", "away_team": "B", "date": "2026-06-21"})
         result = research_node(state)
 
-    assert mock_search.call_count == 3
+    assert mock_search.call_count == 4
     odds_verification = result["research_evidence"]["odds_verification"]
     assert odds_verification["parsed_odds"] == {"home": 1.45, "draw": 4.50, "away": 7.00}
 
@@ -125,7 +129,7 @@ def test_research_node_near_kickoff_uses_confirmed_lineup_query_first():
     something, no fallback call is made."""
     with patch(
         "src.agent.tools._dated_web_search",
-        side_effect=["confirmed lineup text", "form text"],
+        side_effect=["confirmed lineup text", "context text", "form text"],
     ) as mock_search:
         state = _base_state(match_info={
             "home_team": "A", "away_team": "B", "date": "2026-06-21",
@@ -135,7 +139,7 @@ def test_research_node_near_kickoff_uses_confirmed_lineup_query_first():
         result = research_node(state)
 
     assert result["research_evidence"]["availability"] == "confirmed lineup text"
-    assert mock_search.call_count == 2
+    assert mock_search.call_count == 3
     first_query = mock_search.call_args_list[0].args[0] if mock_search.call_args_list[0].args else mock_search.call_args_list[0].kwargs["query"]
     assert "confirmed" in first_query.lower()
 
@@ -146,7 +150,7 @@ def test_research_node_near_kickoff_falls_back_to_predicted_query_when_confirmed
     other context already uses, rather than returning nothing."""
     with patch(
         "src.agent.tools._dated_web_search",
-        side_effect=["No results found.", "predicted lineup text", "form text"],
+        side_effect=["No results found.", "predicted lineup text", "context text", "form text"],
     ) as mock_search:
         state = _base_state(match_info={
             "home_team": "A", "away_team": "B", "date": "2026-06-21",
@@ -156,7 +160,7 @@ def test_research_node_near_kickoff_falls_back_to_predicted_query_when_confirmed
         result = research_node(state)
 
     assert result["research_evidence"]["availability"] == "predicted lineup text"
-    assert mock_search.call_count == 3
+    assert mock_search.call_count == 4
     queries = [c.args[0] if c.args else c.kwargs["query"] for c in mock_search.call_args_list]
     assert "confirmed" in queries[0].lower()
     assert queries[1] == "A B injury suspension team news"  # unchanged existing query, reused as the fallback
@@ -167,7 +171,10 @@ def test_research_node_without_near_kickoff_is_unchanged():
     keep today's exact single-query behavior -- confirmed lineups can never
     exist that far before kickoff regardless of query wording, so there's
     nothing to gain and a real cost (an extra call) to avoid."""
-    with patch("src.agent.tools._dated_web_search", side_effect=["injury text", "form text"]) as mock_search:
+    with patch(
+        "src.agent.tools._dated_web_search",
+        side_effect=["injury text", "context text", "form text"],
+    ) as mock_search:
         state = _base_state(match_info={
             "home_team": "A", "away_team": "B", "date": "2026-06-21",
             "odds": {"home": 2.0, "draw": 3.0, "away": 3.5},
@@ -175,7 +182,7 @@ def test_research_node_without_near_kickoff_is_unchanged():
         result = research_node(state)
 
     assert result["research_evidence"]["availability"] == "injury text"
-    assert mock_search.call_count == 2
+    assert mock_search.call_count == 3
 
 
 from src.agent.pipeline import _format_evidence_message, forecast_node
@@ -339,10 +346,14 @@ def test_forecast_node_propagates_tool_error_payload():
 
 def test_format_evidence_message_includes_forecast_and_research_evidence():
     payload = {"result_3way": {"probabilities": {"home": 0.5}}}
-    evidence = {"availability": "no injuries", "form_context": "won last 3", "odds_verification": {"results": "odds text", "parsed_odds": None}}
+    evidence = {
+        "availability": "no injuries", "match_context": "mid-table, 4-3-3",
+        "form_context": "won last 3", "odds_verification": {"results": "odds text", "parsed_odds": None},
+    }
     message = _format_evidence_message(payload, evidence)
 
     assert "no injuries" in message
+    assert "MATCH_CONTEXT_SEARCH_RESULT: mid-table, 4-3-3" in message
     assert "won last 3" in message
     assert "odds text" in message
     assert "result_3way" in message

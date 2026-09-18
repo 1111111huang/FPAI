@@ -57,9 +57,9 @@ def _parse_odds_from_search_text(text: str | None) -> dict | None:
 
 def research_node(state: dict) -> dict:
     """A32: guarantees minimum research coverage deterministically instead of
-    depending on the LLM choosing to search. Always runs availability and
-    recent-form searches; only runs an odds-verification search when the
-    caller didn't already supply odds (match_info.get('odds')).
+    depending on the LLM choosing to search. Always runs availability,
+    match-context, and recent-form searches; only runs an odds-verification
+    search when the caller didn't already supply odds (match_info.get('odds')).
 
     near_kickoff (direct user request, 2026-09-07): real starting lineups
     are typically confirmed only ~T-60 minutes before kickoff -- every
@@ -72,7 +72,19 @@ def research_node(state: dict) -> dict:
     cost -- an extra call -- to avoid). When set, tries a confirmed-lineup-
     specific query first and only falls back to the regular query (which
     still finds a predicted lineup, same as every other context) if nothing
-    confirmed has been published yet."""
+    confirmed has been published yet.
+
+    match_context (A115, direct user spec 2026-09-17): one broad search
+    covering league position/motivation, tactical style, and attacking/
+    defensive profile -- the Priority-1 research items for result_3way,
+    total_goals, and btts respectively (agent_v1.txt's "Evidence Priority
+    by Market" section tells the LLM how to weigh it per market it's
+    evaluating). Deliberately one consolidated query, not one search per
+    market: the per-match search budget (A111's ~$0.02/match cost model,
+    Tavily's shared account quota) doesn't support a literal per-market
+    fan-out, and a single broad query already surfaces this content in
+    practice (team news/preview articles routinely cover form, table
+    context, and tactics together)."""
     from src.agent.tools import _dated_web_search
 
     match_info = state["match_info"]
@@ -85,10 +97,14 @@ def research_node(state: dict) -> dict:
             availability_text = _dated_web_search(regular_query)
     else:
         availability_text = _dated_web_search(regular_query)
+    context_text = _dated_web_search(
+        f"{home} {away} match preview tactical analysis league position motivation"
+    )
     form_text = _dated_web_search(f"{home} {away} recent form last 5 matches")
 
     evidence: dict = {
         "availability": availability_text,
+        "match_context": context_text,
         "form_context": form_text,
         "odds_verification": None,
     }
@@ -153,6 +169,7 @@ def _format_evidence_message(
         "",
         "FORECAST_PAYLOAD: " + json.dumps(payload_to_serialize, default=str),
         "AVAILABILITY_SEARCH_RESULT: " + (evidence.get("availability") or "No results."),
+        "MATCH_CONTEXT_SEARCH_RESULT: " + (evidence.get("match_context") or "No results."),
         "FORM_SEARCH_RESULT: " + (evidence.get("form_context") or "No results."),
     ]
     odds_verification = evidence.get("odds_verification")
@@ -166,7 +183,7 @@ def _format_evidence_message(
         "prose about the data above.",
         "",
         "Your final answer must be a single JSON object with EXACTLY these top-level "
-        "keys, no others: match, overall, markets, explanation, confidence, "
+        "keys, no others: match, overall, candidates, explanation, confidence, "
         "limitations, prediction_basis. Do not wrap your answer in any other key "
         "(e.g. not {\"recommendation\": ...} or {\"response\": ...}) -- use these exact "
         "field names at the top level.",
