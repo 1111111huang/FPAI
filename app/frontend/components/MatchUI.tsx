@@ -2472,7 +2472,7 @@ function ProbabilityTapeBar({
           className="min-w-0 bg-gold px-3 py-2.5"
           style={{ flexBasis: `${Math.max(modelPct, 1)}%` }}
         >
-          <p className="text-[10px] font-medium uppercase tracking-wide text-page/70">Model</p>
+          <p className="text-[10px] font-medium uppercase tracking-wide text-page">Model</p>
           <p className="font-mono text-xl font-bold text-page">{modelPct.toFixed(1)}%</p>
         </div>
         <div className="min-w-0 flex-1 bg-slate px-3 py-2.5 text-right">
@@ -2948,15 +2948,6 @@ export function MatchAnalysisPage({
             </h2>
             <div className="mt-2 rounded-lg border border-border bg-surface p-4">
               <WhyThisPickSection match={match} shown={shown} />
-              {match.limitations.length > 0 && (
-                <ul className="mt-3 space-y-1 border-t border-border pt-3">
-                  {match.limitations.map((l, i) => (
-                    <li key={i} className="text-xs text-ink-secondary">
-                      · {l}
-                    </li>
-                  ))}
-                </ul>
-              )}
             </div>
           </section>
         </>

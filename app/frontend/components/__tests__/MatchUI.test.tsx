@@ -1257,11 +1257,13 @@ describe("MatchAnalysisPage -- cache-first load (W47)", () => {
     // Found live, direct user report: the /40-opacity border + reused badge
     // `fill` were too subtle to register as "highlighted" across a whole
     // row -- now a solid border plus a dedicated, stronger wash.
-    // W230 follow-up: the reference screenshot's recommended bet reads as
-    // a continuous dim row background, not a gradient that fades out.
+    // W232 follow-up (2026-09-17): a flat full-width wash read as cramped
+    // against the reference row -- now a left-to-right gradient fade, so
+    // the tint is strongest at the accent border and fades out by the
+    // time it reaches the odds/buttons.
     expect(pickedRow?.className).toContain("border-l-good");
-    expect(pickedRow?.className).toContain("bg-good-dim");
-    expect(pickedRow?.className).not.toContain("bg-gradient-to-r");
+    expect(pickedRow?.className).toContain("bg-gradient-to-r");
+    expect(pickedRow?.className).toContain("from-good-dim");
     expect(otherRow?.className).toContain("border-l-transparent");
 
     // W230: the Model% figure itself is colored to match the row's status
