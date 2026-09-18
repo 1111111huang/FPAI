@@ -28,7 +28,7 @@ from datetime import timezone
 from app.backend import recommendations
 from app.backend.agent_config_hash import compute_agent_config_hash
 from app.backend.eod_batch import (
-    LEAGUE_CODE, add_secondary_odds, has_kicked_off, match_odds, odds_lookup,
+    LEAGUE_CODE, _TEAM_MAPPING_PATH, add_secondary_odds, has_kicked_off, match_odds, odds_lookup,
 )
 from app.backend.football_data_client import NormalizedMatch
 from app.backend.odds_api_client import OddsAPIClient
@@ -37,6 +37,7 @@ from app.backend.recommendation_cache import RecommendationCache
 from app.backend.recommendations import validate_and_degrade
 from app.backend.sandbox_clock import sandbox_now
 from src.agent.agent_config import AgentConfig
+from src.ingestion.common.team_mapping import TeamNameMapper
 from src.utils.logger import get_logger
 
 LOGGER = get_logger(__name__)
@@ -95,7 +96,14 @@ def refresh_match_at_t30(
         )
         return T30RefreshResult(match_id=fixture.match_id, outcome="skipped_no_odds")
 
-    odds_by_teams = odds_lookup(odds_events)
+    # W234: a tight 2-name candidate pool (just this fixture's own home/away)
+    # lets odds_lookup() resolve a club-type-prefixed odds-side spelling via
+    # token-containment matching -- even lower collision risk than
+    # eod_batch.py's whole-batch pool, since there are only ever two names to
+    # choose between.
+    fixture_mapper = TeamNameMapper(mapping_path=str(_TEAM_MAPPING_PATH))
+    fixture_candidates = [fixture_mapper.map_team(fixture.home_team), fixture_mapper.map_team(fixture.away_team)]
+    odds_by_teams = odds_lookup(odds_events, fixture_candidates)
     fresh_odds = match_odds(fixture, odds_by_teams)
     if fresh_odds is None:
         LOGGER.info(
