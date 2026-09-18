@@ -553,6 +553,42 @@ def test_odds_matched_via_canonical_team_name_despite_provider_spelling_differen
     assert captured_match_info["odds"] == {"home": 1.4, "draw": 4.5, "away": 7.0}
 
 
+def test_odds_matched_via_token_containment_for_club_type_prefix_mismatch(tmp_path: Path) -> None:
+    """W234: a club-type-prefix mismatch ('FC Testopolis' vs the fixture's
+    bare 'Testopolis') that plain exact/accent-fold lookup can't bridge --
+    the documented recurring class behind BUG-057/W191/W192 (TSG Hoffenheim,
+    1. FC Koln, ...). Token-containment matching against this batch's own
+    fixture-derived candidate pool must resolve it without a manual mapping
+    entry. Invented team names, not real clubs, so this doesn't depend on
+    config/team_mapping.json's current (or future) real content."""
+    fixtures_client = MagicMock()
+    fixtures_client.get_fixtures.return_value = [_fixture("m1", "Testopolis", "Rivertown")]
+    odds_client = MagicMock()
+    odds_client.get_odds.return_value = [
+        NormalizedOdds(
+            home_team="FC Testopolis", away_team="Rivertown", commence_time="2026-08-22T15:00:00Z",
+            home_odds=1.9, draw_odds=3.4, away_odds=4.2,
+        ),
+    ]
+    cache = RecommendationCache(db_path=tmp_path / "cache.db")
+    config = AgentConfig.default()
+    captured_match_info = {}
+
+    def _capture(match_info, config):
+        captured_match_info.update(match_info)
+        return _RECOMMENDATION
+
+    with patch("app.backend.recommendations.run_agent", side_effect=_capture):
+        asyncio.run(
+            run_eod_batch(
+                fixtures_client=fixtures_client, odds_client=odds_client, cache=cache, config=config,
+                schedule_t30=lambda f: None, date_str=_future_date(1),
+            )
+        )
+
+    assert captured_match_info["odds"] == {"home": 1.9, "draw": 3.4, "away": 4.2}
+
+
 def test_unmatched_odds_proceeds_with_no_odds_rather_than_skipping(tmp_path: Path) -> None:
     fixtures_client = MagicMock()
     fixtures_client.get_fixtures.return_value = [_fixture("m1", "Arsenal", "Everton")]

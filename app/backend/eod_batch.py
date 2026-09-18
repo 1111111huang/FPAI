@@ -34,7 +34,7 @@ import asyncio
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Callable
+from typing import Callable, Iterable
 
 from app.backend import recommendations
 from app.backend.agent_config_hash import compute_agent_config_hash
@@ -69,9 +69,22 @@ class EodBatchResult:
     unchanged: int = 0
 
 
-def odds_lookup(odds_events: list[NormalizedOdds]) -> dict[tuple[str, str], NormalizedOdds]:
+def odds_lookup(
+    odds_events: list[NormalizedOdds], candidates: Iterable[str] | None = None
+) -> dict[tuple[str, str], NormalizedOdds]:
+    """W234: `candidates`, when supplied, lets a club-type-prefixed odds-side
+    spelling ("TSG Hoffenheim") resolve via token-containment matching
+    against the batch's own fixture-derived canonical names, instead of
+    needing a manual config/team_mapping.json entry for every new instance
+    of the same recurring pattern (BUG-057/W191/W192)."""
     mapper = TeamNameMapper(mapping_path=str(_TEAM_MAPPING_PATH))
-    return {(mapper.map_team(o.home_team), mapper.map_team(o.away_team)): o for o in odds_events}
+    return {
+        (
+            mapper.map_team(o.home_team, candidates, use_token_match=True),
+            mapper.map_team(o.away_team, candidates, use_token_match=True),
+        ): o
+        for o in odds_events
+    }
 
 
 def already_fresh(
@@ -270,13 +283,29 @@ async def run_eod_batch(
     sport_key = ODDS_SPORT_KEY_BY_COMPETITION[league]
     if odds_client is None:
         odds_by_teams_by_date: dict[str, dict] = {}
-    elif fixture_dates <= {date_str}:
-        odds_by_teams_by_date = {date_str: odds_lookup(odds_client.get_odds(sport_key=sport_key) or [])}
     else:
-        odds_by_teams_by_date = {
-            fixture_date: odds_lookup(odds_client.get_odds(sport_key=sport_key, date=fixture_date) or [])
-            for fixture_date in fixture_dates
-        }
+        # W234: this batch's own fixture team names (already resolved to
+        # their canonical form) become the candidate pool for the odds
+        # side's own mapping -- lets odds_lookup() bridge a club-type-prefix
+        # mismatch (e.g. "TSG Hoffenheim") that has no direct
+        # config/team_mapping.json entry yet.
+        fixture_mapper = TeamNameMapper(mapping_path=str(_TEAM_MAPPING_PATH))
+        fixture_team_candidates = sorted({
+            fixture_mapper.map_team(name)
+            for fixture in fixtures
+            for name in (fixture.home_team, fixture.away_team)
+        })
+        if fixture_dates <= {date_str}:
+            odds_by_teams_by_date = {
+                date_str: odds_lookup(odds_client.get_odds(sport_key=sport_key) or [], fixture_team_candidates)
+            }
+        else:
+            odds_by_teams_by_date = {
+                fixture_date: odds_lookup(
+                    odds_client.get_odds(sport_key=sport_key, date=fixture_date) or [], fixture_team_candidates
+                )
+                for fixture_date in fixture_dates
+            }
 
     agent_config_hash = compute_agent_config_hash(config)
     semaphore = asyncio.Semaphore(concurrency)
