@@ -35,6 +35,65 @@ from src.utils.logger import get_logger
 LOGGER = get_logger(__name__)
 
 
+def _compute_shap_contributions(model: Any, feature_row: pd.DataFrame, top_n: int = 8) -> list[dict[str, Any]] | None:
+    """Per-prediction SHAP attribution, computed atomically with the
+    prediction it explains -- same call, same feature_row -- so it can
+    never drift from what's actually served. An after-the-fact
+    reconstruction (even against live data, even minutes later) isn't
+    guaranteed to match: confirmed the hard way reverse-engineering a live
+    BTTS prediction, where the number had already moved on by the time it
+    was investigated.
+
+    Tree-only (shap.TreeExplainer): covers the large majority of production
+    models (XGBoost/RandomForest). Composite models (Skellam, TwoStage,
+    Ensemble, QuantileInterval) have no single tree estimator to explain --
+    returns None for those, same gap ModelManager._extract_feature_importance
+    already has, rather than guessing at an explanation.
+
+    ponytail: one TreeExplainer is built per prediction call rather than
+    cached per loaded model -- fine at today's serving volume (a handful of
+    targets per forecast_upcoming call), revisit with an explainer cache
+    keyed by artifact path if this shows up in latency.
+    """
+    estimator = getattr(model, "model", model)
+    try:
+        import shap
+
+        explainer = shap.TreeExplainer(estimator)
+        values = np.asarray(explainer(feature_row).values)[0]
+
+        if values.ndim > 1:
+            # Multiclass: (n_features, n_classes) -- attribute to whichever
+            # class this row's own predicted probabilities favor most, so
+            # the explanation matches the label actually being shown for it.
+            predicted_idx = int(np.argmax(np.abs(values).sum(axis=0)))
+            values = values[:, predicted_idx]
+
+        feature_names = list(feature_row.columns)
+        order = np.argsort(-np.abs(values))[:top_n]
+        contributions = []
+        for i in order:
+            raw_value = feature_row.iloc[0, i]
+            contributions.append({
+                "feature": feature_names[i],
+                "shap_value": round(float(values[i]), 6),
+                # None (not 0.0 or a fabricated value) when the underlying
+                # market/feature simply wasn't available for this match -- a
+                # missing-value contribution is real (XGBoost's learned
+                # default-direction routing), but must never be rendered as
+                # if a real market signal was observed.
+                "value": None if pd.isna(raw_value) else float(raw_value),
+            })
+        return contributions
+    except Exception:
+        # Never a precondition for serving the prediction itself -- an
+        # unsupported model type or a shap-internal error degrades to "no
+        # explanation" exactly like ModelManager._extract_feature_importance
+        # already does, not a failed forecast.
+        LOGGER.debug("SHAP explanation unavailable for %s -- skipping.", type(estimator).__name__, exc_info=True)
+        return None
+
+
 def _apply_calibration(raw_proba: np.ndarray, sidecar: dict[str, Any] | None) -> np.ndarray:
     """US#186: apply a model's own saved calibration sidecar (produced by
     ModelManager._fit_and_save_calibrator, computed for every classifier
@@ -400,6 +459,9 @@ class ForecastService:
                     label: round(float(probability), 6)
                     for label, probability in zip(raw_labels, raw_vector, strict=False)
                 }
+            shap_contributions = _compute_shap_contributions(model, feature_row)
+            if shap_contributions is not None:
+                result["shap_contributions"] = shap_contributions
             return result
 
         expected = float(np.asarray(model.predict(feature_row), dtype=float).ravel()[0])
@@ -431,6 +493,9 @@ class ForecastService:
                     upper_residual=float(interval_config.get("upper_residual", 0.0)),
                     coverage=float(interval_config.get("coverage", 0.8)),
                 )
+        shap_contributions = _compute_shap_contributions(model, feature_row)
+        if shap_contributions is not None:
+            payload["shap_contributions"] = shap_contributions
         return payload
 
     def _load_context_models(self, context: str) -> dict[str, tuple[TargetDefinition, Any, dict[str, Any]]]:

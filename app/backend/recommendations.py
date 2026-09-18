@@ -270,6 +270,54 @@ def run_agent(match_info: dict, config=None):
             return _run_agent_in_mode("record", match_info, config, sandbox_match_id, _SANDBOX_SNAPSHOT_BASE_DIR)
 
 
+# A market whose two candidate selections are strict opposites, and which
+# selection ForecastService's SHAP output (_compute_shap_contributions) is
+# already signed toward -- positive shap_value there means "supports this
+# selection". result_3way is deliberately absent: 3 candidates share one
+# multiclass explanation, and only the class the model actually predicted
+# has an unambiguous sign, so it's attached to none rather than guessed.
+_SHAP_POSITIVE_SELECTION: dict[str, str] = {
+    "btts": "yes",
+    "total_goals": "over_2.5",
+    "total_corners": "over_9.5",
+    "home_corners": "over_9.5",
+    "away_corners": "over_9.5",
+}
+
+
+def _attach_shap_contributions(recommendation: dict, forecast_payload: dict | None) -> dict:
+    """Deterministically attaches each candidate's own SHAP explanation from
+    forecast_payload["forecast"][market]["shap_contributions"] -- computed
+    inline with the prediction itself (ForecastService._predict_target), so
+    it can never explain a different number than the one actually served.
+    Never LLM-authored: the agent's own JSON output never carries this field
+    at all, so there's nothing here to trust or distrust from the LLM.
+
+    Sign convention: ForecastService signs a binary/regression target's SHAP
+    output toward its "positive" side (whichever class predict_proba's
+    column 1 is, or "raises the regression output" for a regressor) --
+    _SHAP_POSITIVE_SELECTION says what that side's selection string is for
+    each market. The matching candidate gets it as-is; its opposite gets
+    every shap_value negated, so a reader of either candidate can treat
+    "positive = supports what I'm looking at" universally, with no
+    per-market sign logic pushed into the frontend."""
+    forecast = (forecast_payload or {}).get("forecast", {})
+    for candidate in recommendation.get("candidates", []) or []:
+        market = candidate.get("market")
+        positive_selection = _SHAP_POSITIVE_SELECTION.get(market)
+        if positive_selection is None:
+            continue
+        contributions = forecast.get(market, {}).get("shap_contributions")
+        if not contributions:
+            continue
+        flip = candidate.get("selection") != positive_selection
+        candidate["shap_contributions"] = [
+            {**c, "shap_value": -c["shap_value"]} if flip else dict(c)
+            for c in contributions
+        ]
+    return recommendation
+
+
 def unwrap_agent_result(result: dict) -> tuple[dict, list[dict], dict | None]:
     """A107: split run_agent()'s return value into (recommendation,
     reasoning_trace, forecast_payload). Used by the 3 real generation call
@@ -287,10 +335,11 @@ def unwrap_agent_result(result: dict) -> tuple[dict, list[dict], dict | None]:
     if isinstance(result, dict) and "recommendation" in result and "messages" in result:
         from src.agent.graph import serialize_agent_messages
 
+        forecast_payload = result.get("forecast_payload")
         return (
-            result["recommendation"],
+            _attach_shap_contributions(result["recommendation"], forecast_payload),
             serialize_agent_messages(result.get("messages", [])),
-            result.get("forecast_payload"),
+            forecast_payload,
         )
     return result, [], None
 
@@ -339,6 +388,24 @@ class RecommendationRequest(BaseModel):
         return _composite_match_key(self.home_team, self.away_team, self.date)
 
 
+class ShapContributionOut(BaseModel):
+    """One feature's per-prediction SHAP contribution, already signed
+    relative to *this* candidate's own selection (positive = pushed the
+    model toward this selection) -- see _attach_shap_contributions below,
+    which does that sign alignment once, server-side, so the frontend never
+    has to reason about which raw class a market's SHAP output was computed
+    against."""
+
+    feature: str
+    shap_value: float
+    # None (not 0.0) when the underlying feature genuinely wasn't available
+    # for this match (e.g. no O2.5/AH odds quoted) -- a missing market can
+    # still carry a real, nonzero shap_value via XGBoost's learned
+    # default-direction routing, but must never be rendered as if a real
+    # value was observed.
+    value: float | None = None
+
+
 class MarketCandidateOut(BaseModel):
     # Constrained to the same vocabulary config/prompts/agent_v1.txt already
     # specifies to the LLM (result_3way/btts/total_goals/home_corners/
@@ -378,6 +445,13 @@ class MarketCandidateOut(BaseModel):
     # not the stricter Literal src/agent/schema.py uses -- matching this
     # class's own already-loose `recommendation_type: str` typing.
     initial_recommendation_type: str | None = None
+    # Computed and attached server-side by _attach_shap_contributions, never
+    # by the LLM -- same "code's own numbers, not narrated/transcribed by
+    # the agent" convention as ml_probability's own upstream computation.
+    # None whenever the market has no tree-explainable model (composite
+    # models like Skellam) or is a 3-way market not matching the predicted
+    # side (see _attach_shap_contributions's own docstring).
+    shap_contributions: list[ShapContributionOut] | None = None
 
 
 class RecommendationPickOut(BaseModel):
