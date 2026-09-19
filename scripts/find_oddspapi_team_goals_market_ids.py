@@ -9,7 +9,18 @@ Usage: python scripts/find_oddspapi_team_goals_market_ids.py
 Requires ODDSPAPI_API_KEY in .env. /v4/markets is a metadata/reference
 endpoint -- confirmed in the W199 investigation notes (documents/
 app_user_stories.md) not to count against the 250/month historical-odds
-quota."""
+quota.
+
+CONFIRMED (2026-09-19): market 10226 is marketType "teamtotals-team1",
+handicap 1.5; market 10242 is marketType "teamtotals-team2", handicap 1.5
+(both directly labeled by /v4/markets itself -- no line-parsing ambiguity).
+team1 = home, team2 = away: independently verified by cross-referencing
+live /v4/fixtures participant1Name/participant2Name against
+data/oddspapi_snapshots/fixture_metadata.json's own home/away fields
+across 9 different real fixtures, zero mismatches. See
+data/oddspapi_snapshots/team_goals_line_map.json for the pinned IDs and
+documents/agent_techspec.md's home/away goals market section (W199) for
+the full write-up."""
 from __future__ import annotations
 
 import json
