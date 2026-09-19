@@ -56,6 +56,13 @@ LEAGUE_CODE = "E0"
 
 _TEAM_MAPPING_PATH = Path(__file__).parent.parent.parent / "config" / "team_mapping.json"
 
+# W199: The Odds API confirmed live (2026-09) that UK bookmakers essentially
+# never price team_totals, unlike totals/btts (which get fine uk-only
+# coverage) -- us/us2-licensed books (DraftKings/FanDuel/BetMGM-type) do.
+# Scoped to just this one fetch so totals/btts/h2h keep their existing,
+# cheaper uk-only cost.
+_TEAM_TOTALS_REGIONS = ("uk", "us", "us2")
+
 
 @dataclass
 class EodBatchResult:
@@ -165,22 +172,24 @@ def add_secondary_odds(
     sport_key: str,
     odds_by_teams: dict[tuple[str, str], NormalizedOdds],
 ) -> None:
-    """W164/W164a, shared by run_eod_batch (below) and t30_refresh.py's
-    refresh_match_at_t30 -- both need the identical "fetch or reuse
-    total_goals/btts odds" behavior, and having it live in only one of
-    them is exactly how t30_refresh.py silently fell behind W164 the first
-    time (T-30 refreshes kept regenerating on 1X2 odds alone, degrading
-    straight back into the "20/24 live picks were draws" bug W164 fixed).
+    """W164/W164a/W199, shared by run_eod_batch (below) and t30_refresh.py's
+    refresh_match_at_t30. Fetches totals/btts AND (W199) team_totals
+    (home_goals/away_goals), folding both into `match_info` and `odds`,
+    each with its own independent cache-reuse tracking -- a cache row that
+    predates W199 has total_goals/btts keys but no home_goals/away_goals
+    key, so team_totals gets its own one-time backfill fetch even when
+    totals/btts are reused unchanged from cache.
 
-    Folds total_goals/btts odds into `match_info` (so the LLM prompt sees
-    them, graph.py) and into `odds` (so already_fresh()'s dedup/freshness
-    check also reacts to a secondary-market price move, not just a h2h
-    move) -- reusing the prior cached secondary-market snapshot when h2h
-    odds haven't moved since (W164a: get_event_odds() costs real Odds-API
-    credits per call), fetching fresh only when h2h moved or nothing's
-    cached yet. Mutates both `match_info` and `odds` in place; caller must
-    already have set `match_info["odds"] = odds` and `odds` must already be
-    the matched h2h dict (match_odds()'s return)."""
+    Folds total_goals/btts (and home_goals/away_goals) odds into
+    `match_info` (so the LLM prompt sees them, graph.py) and into `odds`
+    (so already_fresh()'s dedup/freshness check also reacts to a
+    secondary-market price move, not just a h2h move) -- reusing the prior
+    cached secondary-market snapshot when h2h odds haven't moved since
+    (W164a: get_event_odds() costs real Odds-API credits per call),
+    fetching fresh only when h2h moved or nothing's cached yet. Mutates
+    both `match_info` and `odds` in place; caller must already have set
+    `match_info["odds"] = odds` and `odds` must already be the matched h2h
+    dict (match_odds()'s return)."""
     cached_entry = cache.get_latest(fixture.match_id, fixture_date, agent_config_hash)
     h2h_unchanged = cached_entry is not None and {
         k: cached_entry.odds.get(k) for k in ("home", "draw", "away")
@@ -188,6 +197,11 @@ def add_secondary_odds(
     already_checked_secondary = cached_entry is not None and (
         "total_goals" in cached_entry.odds or "btts" in cached_entry.odds
     )
+    already_checked_team_totals = cached_entry is not None and (
+        "home_goals" in cached_entry.odds or "away_goals" in cached_entry.odds
+    )
+    odds_event = matched_odds_event(fixture, odds_by_teams)
+    get_event_odds = getattr(odds_client, "get_event_odds", None)
 
     if h2h_unchanged and already_checked_secondary:
         if cached_entry.odds.get("total_goals"):
@@ -197,8 +211,6 @@ def add_secondary_odds(
         odds["total_goals"] = cached_entry.odds.get("total_goals")
         odds["btts"] = cached_entry.odds.get("btts")
     else:
-        odds_event = matched_odds_event(fixture, odds_by_teams)
-        get_event_odds = getattr(odds_client, "get_event_odds", None)
         if get_event_odds is not None and odds_event is not None and odds_event.event_id:
             secondary = get_event_odds(sport_key=sport_key, event_id=odds_event.event_id)
             if secondary is not None:
@@ -208,6 +220,27 @@ def add_secondary_odds(
                     match_info["btts_odds"] = secondary.btts
                 odds["total_goals"] = secondary.total_goals
                 odds["btts"] = secondary.btts
+
+    if h2h_unchanged and already_checked_team_totals:
+        if cached_entry.odds.get("home_goals"):
+            match_info["home_goals_odds"] = cached_entry.odds["home_goals"]
+        if cached_entry.odds.get("away_goals"):
+            match_info["away_goals_odds"] = cached_entry.odds["away_goals"]
+        odds["home_goals"] = cached_entry.odds.get("home_goals")
+        odds["away_goals"] = cached_entry.odds.get("away_goals")
+    else:
+        if get_event_odds is not None and odds_event is not None and odds_event.event_id:
+            team_totals = get_event_odds(
+                sport_key=sport_key, event_id=odds_event.event_id, markets=("team_totals",),
+                regions=_TEAM_TOTALS_REGIONS, home_team=odds_event.home_team, away_team=odds_event.away_team,
+            )
+            if team_totals is not None:
+                if team_totals.home_goals:
+                    match_info["home_goals_odds"] = team_totals.home_goals
+                if team_totals.away_goals:
+                    match_info["away_goals_odds"] = team_totals.away_goals
+                odds["home_goals"] = team_totals.home_goals
+                odds["away_goals"] = team_totals.away_goals
 
 
 async def run_eod_batch(

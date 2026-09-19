@@ -348,7 +348,8 @@ def test_secondary_odds_fetched_and_threaded_into_match_info_and_odds_dedup_key(
             )
         )
 
-    odds_client.get_event_odds.assert_called_once_with(sport_key="soccer_epl", event_id="evt1")
+    assert odds_client.get_event_odds.call_count == 2
+    odds_client.get_event_odds.assert_any_call(sport_key="soccer_epl", event_id="evt1")
     assert captured_match_info["total_goals_odds"] == {"over_2.5": 1.9, "under_2.5": 1.95}
     assert captured_match_info["btts_odds"] == {"yes": 1.7, "no": 2.1}
 
@@ -421,6 +422,7 @@ def test_secondary_odds_reused_from_cache_not_refetched_when_h2h_unchanged(tmp_p
         odds={
             "home": 1.8, "draw": 3.6, "away": 4.5,
             "total_goals": {"over_2.5": 1.9, "under_2.5": 1.95}, "btts": {"yes": 1.7, "no": 2.1},
+            "home_goals": {"over_1.5": 1.6, "under_1.5": 2.2}, "away_goals": {"over_1.5": 2.5, "under_1.5": 1.5},
         },
         recommendation=_RECOMMENDATION, triggered_by="scheduled",
     )
@@ -477,7 +479,8 @@ def test_secondary_odds_refetched_when_h2h_odds_moved(tmp_path: Path) -> None:
             )
         )
 
-    odds_client.get_event_odds.assert_called_once_with(sport_key="soccer_epl", event_id="evt1")
+    assert odds_client.get_event_odds.call_count == 2
+    odds_client.get_event_odds.assert_any_call(sport_key="soccer_epl", event_id="evt1")
     assert captured_match_info["total_goals_odds"] == {"over_2.5": 1.95, "under_2.5": 1.9}
 
 
@@ -513,8 +516,60 @@ def test_secondary_odds_backfilled_once_for_a_cache_row_that_predates_the_featur
             )
         )
 
-    odds_client.get_event_odds.assert_called_once_with(sport_key="soccer_epl", event_id="evt1")
+    assert odds_client.get_event_odds.call_count == 2
+    odds_client.get_event_odds.assert_any_call(sport_key="soccer_epl", event_id="evt1")
     assert captured_match_info["total_goals_odds"] == {"over_2.5": 1.9, "under_2.5": 1.95}
+
+
+def test_team_totals_odds_fetched_with_wider_regions_and_threaded_into_match_info(tmp_path: Path) -> None:
+    """W199: team_totals needs a wider region set than totals/btts (The
+    Odds API confirmed live: UK bookmakers essentially never price it) --
+    a second get_event_odds() call, distinct from the totals/btts one,
+    with regions=(uk,us,us2) and the matched event's own team-name
+    spelling (not the fixture's football-data.org spelling)."""
+    fixtures_client = MagicMock()
+    fixtures_client.get_fixtures.return_value = [_fixture("m1", "Arsenal", "Everton")]
+    odds_client = MagicMock()
+    odds_client.get_odds.return_value = [
+        NormalizedOdds(
+            home_team="Arsenal", away_team="Everton", commence_time="2026-08-22T15:00:00Z",
+            home_odds=1.8, draw_odds=3.6, away_odds=4.5, event_id="evt1",
+        ),
+    ]
+    odds_client.get_event_odds.side_effect = [
+        NormalizedSecondaryOdds(total_goals={"over_2.5": 1.9, "under_2.5": 1.95}, btts={"yes": 1.7, "no": 2.1}),
+        NormalizedSecondaryOdds(
+            total_goals=None, btts=None,
+            home_goals={"over_1.5": 1.6, "under_1.5": 2.2}, away_goals={"over_1.5": 2.5, "under_1.5": 1.5},
+        ),
+    ]
+    cache = RecommendationCache(db_path=tmp_path / "cache.db")
+    config = AgentConfig.default()
+    captured_match_info = {}
+
+    def _capture(match_info, config):
+        captured_match_info.update(match_info)
+        return _RECOMMENDATION
+
+    with patch("app.backend.recommendations.run_agent", side_effect=_capture):
+        asyncio.run(
+            run_eod_batch(
+                fixtures_client=fixtures_client, odds_client=odds_client, cache=cache, config=config,
+                schedule_t30=lambda f: None, date_str=_future_date(1),
+            )
+        )
+
+    odds_client.get_event_odds.assert_any_call(
+        sport_key="soccer_epl", event_id="evt1", markets=("team_totals",),
+        regions=("uk", "us", "us2"), home_team="Arsenal", away_team="Everton",
+    )
+    assert captured_match_info["home_goals_odds"] == {"over_1.5": 1.6, "under_1.5": 2.2}
+    assert captured_match_info["away_goals_odds"] == {"over_1.5": 2.5, "under_1.5": 1.5}
+
+    agent_config_hash = compute_agent_config_hash(config)
+    cached = cache.get_latest("m1", _future_date(1), agent_config_hash)
+    assert cached.odds["home_goals"] == {"over_1.5": 1.6, "under_1.5": 2.2}
+    assert cached.odds["away_goals"] == {"over_1.5": 2.5, "under_1.5": 1.5}
 
 
 def test_odds_matched_via_canonical_team_name_despite_provider_spelling_differences(tmp_path: Path) -> None:
