@@ -363,7 +363,7 @@ And inside the existing `describe("marketCorrect ...")` block:
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `cd app/frontend && npx jest MatchUI.hitMiss.test.tsx`
+Run: `cd app/frontend && npx vitest run MatchUI.hitMiss.test.tsx`
 Expected: the 4 new tests FAIL (`homeGoalsSide`/`awayGoalsSide` undefined; `marketCorrect` returns `null`).
 
 - [ ] **Step 3: Implement the TS mirror**
@@ -461,12 +461,12 @@ const _MARKET_SELECTION_TITLE: Record<string, string> = {
 
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run: `cd app/frontend && npx jest MatchUI.hitMiss.test.tsx`
+Run: `cd app/frontend && npx vitest run MatchUI.hitMiss.test.tsx`
 Expected: all PASS.
 
 - [ ] **Step 5: Run the full MatchUI test suite (regression check)**
 
-Run: `cd app/frontend && npx jest MatchUI`
+Run: `cd app/frontend && npx vitest run MatchUI`
 Expected: all PASS (the new `ActualOutcome` fields are non-optional additions consumed only by the new branches above â€” every existing call site of `buildActualOutcome`/`marketCorrect` is unaffected).
 
 - [ ] **Step 6: Commit**
@@ -1458,7 +1458,7 @@ Expected: all PASS, including every pre-existing test in this file (unaffected â
 Run: `python -m pytest tests/ app/backend/tests/ -v`
 Expected: all PASS.
 
-Run: `cd app/frontend && npx jest`
+Run: `cd app/frontend && npx vitest run`
 Expected: all PASS.
 
 - [ ] **Step 6: Commit**
