@@ -171,6 +171,38 @@ def test_build_match_info_includes_only_whichever_market_the_lookup_actually_has
     assert info["corners_odds"] == {"over_9.5": 1.9, "under_9.5": 1.95}
 
 
+def test_build_match_info_includes_home_and_away_goals_odds_when_present():
+    with patch(
+        "src.agent.backtest._load_oddspapi_odds_lookup",
+        return_value={"m1": {
+            "home_goals_1.5_odds": {"over": 1.6, "under": 2.2},
+            "away_goals_1.5_odds": {"over": 2.5, "under": 1.5},
+        }},
+    ):
+        info = _build_match_info(_row())
+    assert info["home_goals_odds"] == {"over_1.5": 1.6, "under_1.5": 2.2}
+    assert info["away_goals_odds"] == {"over_1.5": 2.5, "under_1.5": 1.5}
+
+
+def test_build_match_info_omits_home_and_away_goals_odds_when_match_id_not_in_lookup():
+    with patch("src.agent.backtest._load_oddspapi_odds_lookup", return_value={}):
+        info = _build_match_info(_row())
+    assert "home_goals_odds" not in info
+    assert "away_goals_odds" not in info
+
+
+def test_build_match_info_includes_home_goals_odds_independent_of_away_goals_odds():
+    """Same independent-per-market coverage precedent as btts vs. corners
+    (A99.5) -- a match missing one team's line must not lose the other."""
+    with patch(
+        "src.agent.backtest._load_oddspapi_odds_lookup",
+        return_value={"m1": {"home_goals_1.5_odds": {"over": 1.6, "under": 2.2}}},
+    ):
+        info = _build_match_info(_row())
+    assert info["home_goals_odds"] == {"over_1.5": 1.6, "under_1.5": 2.2}
+    assert "away_goals_odds" not in info
+
+
 def test_load_outcome_away_win():
     outcome = load_outcome(_row(fthg=0, ftag=2))
     assert outcome["result"] == "away"

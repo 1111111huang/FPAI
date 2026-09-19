@@ -183,14 +183,21 @@ def _build_match_info(row: pd.Series) -> dict[str, Any]:
     # A100: OddsPapi lookup, keyed by our own match_id -- covers a subset of
     # matches (2026-01-01 onward only, confirmed vendor cutoff) and each
     # market independently (btts ~95% real-tick coverage, corners ~99.9% at
-    # the 9.5 line within that window), so each is threaded in only when
-    # actually present rather than assumed to travel together.
+    # the 9.5 line within that window; home/away goals ~89%/~84% at the 1.5
+    # line respectively, W199), so each is threaded in only when actually
+    # present rather than assumed to travel together.
     oddspapi_odds = _load_oddspapi_odds_lookup().get(row["match_id"], {})
     if "btts_odds" in oddspapi_odds:
         match_info["btts_odds"] = oddspapi_odds["btts_odds"]
     if "corners_9.5_odds" in oddspapi_odds:
         corners = oddspapi_odds["corners_9.5_odds"]
         match_info["corners_odds"] = {"over_9.5": corners["over"], "under_9.5": corners["under"]}
+    if "home_goals_1.5_odds" in oddspapi_odds:
+        home_goals = oddspapi_odds["home_goals_1.5_odds"]
+        match_info["home_goals_odds"] = {"over_1.5": home_goals["over"], "under_1.5": home_goals["under"]}
+    if "away_goals_1.5_odds" in oddspapi_odds:
+        away_goals = oddspapi_odds["away_goals_1.5_odds"]
+        match_info["away_goals_odds"] = {"over_1.5": away_goals["over"], "under_1.5": away_goals["under"]}
     return match_info
 
 
