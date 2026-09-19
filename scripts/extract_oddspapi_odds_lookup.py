@@ -30,6 +30,16 @@ CORNERS_MARKET_ID = "10803"  # confirmed via corners_line_map.json: handicap 9.5
 CORNERS_OUTCOME_OVER = "10803"
 CORNERS_OUTCOME_UNDER = "10804"
 
+HOME_GOALS_LINE = 1.5
+HOME_GOALS_MARKET_ID = "10226"  # from data/oddspapi_snapshots/team_goals_line_map.json
+HOME_GOALS_OUTCOME_OVER = "10226"
+HOME_GOALS_OUTCOME_UNDER = str(int("10226") + 1)
+
+AWAY_GOALS_LINE = 1.5
+AWAY_GOALS_MARKET_ID = "10242"
+AWAY_GOALS_OUTCOME_OVER = "10242"
+AWAY_GOALS_OUTCOME_UNDER = str(int("10242") + 1)
+
 
 def _last_price(outcomes: dict, outcome_id: str) -> float | None:
     outcome = outcomes.get(outcome_id)
@@ -64,20 +74,36 @@ def main() -> None:
         corners_over = _last_price(corners_outcomes, CORNERS_OUTCOME_OVER)
         corners_under = _last_price(corners_outcomes, CORNERS_OUTCOME_UNDER)
 
+        home_goals_outcomes = outcomes_by_market.get(HOME_GOALS_MARKET_ID, {}).get("outcomes", {})
+        home_goals_over = _last_price(home_goals_outcomes, HOME_GOALS_OUTCOME_OVER)
+        home_goals_under = _last_price(home_goals_outcomes, HOME_GOALS_OUTCOME_UNDER)
+
+        away_goals_outcomes = outcomes_by_market.get(AWAY_GOALS_MARKET_ID, {}).get("outcomes", {})
+        away_goals_over = _last_price(away_goals_outcomes, AWAY_GOALS_OUTCOME_OVER)
+        away_goals_under = _last_price(away_goals_outcomes, AWAY_GOALS_OUTCOME_UNDER)
+
         entry: dict = {}
         if btts_yes is not None and btts_no is not None:
             entry["btts_odds"] = {"yes": btts_yes, "no": btts_no}
         if corners_over is not None and corners_under is not None:
             entry[f"corners_{CORNERS_LINE}_odds"] = {"over": corners_over, "under": corners_under}
+        if home_goals_over is not None and home_goals_under is not None:
+            entry[f"home_goals_{HOME_GOALS_LINE}_odds"] = {"over": home_goals_over, "under": home_goals_under}
+        if away_goals_over is not None and away_goals_under is not None:
+            entry[f"away_goals_{AWAY_GOALS_LINE}_odds"] = {"over": away_goals_over, "under": away_goals_under}
         if entry:
             lookup[match_id] = entry
 
     OUT_PATH.write_text(json.dumps(lookup, indent=2))
     with_btts = sum(1 for v in lookup.values() if "btts_odds" in v)
     with_corners = sum(1 for v in lookup.values() if f"corners_{CORNERS_LINE}_odds" in v)
+    with_home_goals = sum(1 for v in lookup.values() if f"home_goals_{HOME_GOALS_LINE}_odds" in v)
+    with_away_goals = sum(1 for v in lookup.values() if f"away_goals_{AWAY_GOALS_LINE}_odds" in v)
     print(f"Matches with any odds: {len(lookup)}")
     print(f"  with btts_odds: {with_btts}")
     print(f"  with corners_{CORNERS_LINE}_odds: {with_corners}")
+    print(f"  with home_goals_{HOME_GOALS_LINE}_odds: {with_home_goals}")
+    print(f"  with away_goals_{AWAY_GOALS_LINE}_odds: {with_away_goals}")
     print(f"Skipped (no saved file): {skipped_no_file}")
     print(f"Wrote {OUT_PATH}")
 
