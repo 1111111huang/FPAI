@@ -824,7 +824,108 @@ git commit -m "feat(app): parse team_totals (home_goals/away_goals) from The Odd
 
 **Files:**
 - Modify: `app/backend/eod_batch.py:157-211`
+- Modify: `app/backend/scheduler_wiring.py:91-147` (amendment, added after Task 6's code review)
 - Test: `app/backend/tests/test_eod_batch.py`
+- Test: `app/backend/tests/test_scheduler_wiring.py`
+
+- [ ] **Step 0 (amendment): forward the new `get_event_odds()` params through the production wrapper classes**
+
+Task 6's code review caught a real forward-compat gap: `app/backend/scheduler_wiring.py`'s `PersistingOddsClient` and `FallbackOddsClient` both wrap `OddsAPIClient.get_event_odds()` but only forward `sport_key`/`event_id`/`markets` — not the `regions`/`home_team`/`away_team` params Task 6 added. This is the exact same bug class already documented in that file as W99 ("wrapper never forwarded `date`... crashed with a real TypeError the very first time this exact production code path ever ran... local/sandbox testing structurally never exercises this class at all"). Since this task's own Step 4 is about to call `get_event_odds(..., regions=..., home_team=..., away_team=...)` through the real production client (which flows through these wrappers), fix this FIRST, before wiring anything else, so Task 7's own new call doesn't repeat W99.
+
+In `app/backend/scheduler_wiring.py`, update `PersistingOddsClient.get_event_odds()` (currently ~line 105):
+
+```python
+    def get_event_odds(
+        self, sport_key: str, event_id: str, markets: tuple[str, ...] = ("totals", "btts"),
+        regions: tuple[str, ...] | None = None, home_team: str | None = None, away_team: str | None = None,
+    ):
+        # W164/W199: same persist-after-call contract as get_odds() above --
+        # self._client here is OddsAPIClient specifically (not
+        # HistoricalOddsClient, which has no per-event odds concept at all;
+        # build_odds_client() only ever wraps OddsAPIClient in this class).
+        # W199 (post-W99 lesson): regions/home_team/away_team must be
+        # forwarded too, not just markets -- the exact same "wrapper drops a
+        # newly-added param, crashes the first time production actually
+        # calls it" bug W99 already found for get_odds()'s own `date` param.
+        result = self._client.get_event_odds(
+            sport_key=sport_key, event_id=event_id, markets=markets,
+            regions=regions, home_team=home_team, away_team=away_team,
+        )
+        self._store.save(self._counter)
+        return result
+```
+
+And `FallbackOddsClient.get_event_odds()` (currently ~line 143):
+
+```python
+    def get_event_odds(
+        self, sport_key: str, event_id: str, markets: tuple[str, ...] = ("totals", "btts"),
+        regions: tuple[str, ...] | None = None, home_team: str | None = None, away_team: str | None = None,
+    ):
+        return self._try_each_client(
+            lambda client: client.get_event_odds(
+                sport_key=sport_key, event_id=event_id, markets=markets,
+                regions=regions, home_team=home_team, away_team=away_team,
+            ),
+            "get_event_odds",
+        )
+```
+
+Add to `app/backend/tests/test_scheduler_wiring.py`, right after the existing `test_persisting_odds_client_get_event_odds_saves_counter_after_call` (around line 137):
+
+```python
+def test_persisting_odds_client_get_event_odds_forwards_regions_and_team_names(tmp_path: Path) -> None:
+    """W199 (post-W99 lesson): regions/home_team/away_team must be forwarded
+    the same way markets already is -- W99 already found this exact wrapper
+    class silently dropping a newly-added get_odds() param (`date`) with no
+    test catching it until production crashed on it for real."""
+    store = FileCreditCounterStore(tmp_path / "counter.json")
+    counter = CreditCounter()
+    inner_client = MagicMock()
+    inner_client.get_event_odds.return_value = "team totals odds"
+
+    client = PersistingOddsClient(client=inner_client, counter=counter, store=store)
+    result = client.get_event_odds(
+        sport_key="soccer_epl", event_id="evt1", markets=("team_totals",),
+        regions=("uk", "us", "us2"), home_team="Arsenal", away_team="Everton",
+    )
+
+    assert result == "team totals odds"
+    inner_client.get_event_odds.assert_called_once_with(
+        sport_key="soccer_epl", event_id="evt1", markets=("team_totals",),
+        regions=("uk", "us", "us2"), home_team="Arsenal", away_team="Everton",
+    )
+```
+
+And right after `test_fallback_odds_client_get_event_odds_falls_back_the_same_way` (around line 191):
+
+```python
+def test_fallback_odds_client_get_event_odds_forwards_regions_and_team_names() -> None:
+    primary, secondary = MagicMock(), MagicMock()
+    primary.get_event_odds.return_value = None
+    secondary.get_event_odds.return_value = "team totals odds"
+
+    result = FallbackOddsClient([primary, secondary]).get_event_odds(
+        sport_key="soccer_epl", event_id="evt1", markets=("team_totals",),
+        regions=("uk", "us", "us2"), home_team="Arsenal", away_team="Everton",
+    )
+
+    assert result == "team totals odds"
+    secondary.get_event_odds.assert_called_once_with(
+        sport_key="soccer_epl", event_id="evt1", markets=("team_totals",),
+        regions=("uk", "us", "us2"), home_team="Arsenal", away_team="Everton",
+    )
+```
+
+Run: `/Users/tianqihuang/Documents/GitHub/FPAI/venv/bin/python -m pytest app/backend/tests/test_scheduler_wiring.py -v`
+Expected: all PASS, including the 2 new tests and every pre-existing one (both wrapper classes' new params default to `None`, so every existing call site that doesn't pass them is unaffected).
+
+Commit this amendment separately before continuing to Step 1:
+
+```bash
+git add app/backend/scheduler_wiring.py app/backend/tests/test_scheduler_wiring.py
+git commit -m "fix(app): forward regions/home_team/away_team through the odds-client wrappers (W199, pre-empts a W99-class bug)"
+```
 
 - [ ] **Step 1: Update the 3 existing tests whose `get_event_odds` call-count assertions this change affects**
 
