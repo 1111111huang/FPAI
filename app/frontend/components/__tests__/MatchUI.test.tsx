@@ -1616,7 +1616,7 @@ describe("MatchExplorerPage -- league section headers (direct user request)", ()
   });
 });
 
-describe("featureLabel (W233)", () => {
+describe("featureLabel (W235)", () => {
   const match = baseMatch({ home: "Brentford", away: "Chelsea" });
 
   it("names the actual away team for an _AWAY_ feature", () => {
@@ -1636,7 +1636,7 @@ describe("featureLabel (W233)", () => {
   });
 });
 
-describe("shapSummarySentence (W233)", () => {
+describe("shapSummarySentence (W235)", () => {
   const match = baseMatch({ home: "Brentford", away: "Chelsea" });
 
   it("names the top positive contributors and the strongest one against", () => {
@@ -1687,7 +1687,7 @@ describe("shapSummarySentence (W233)", () => {
   });
 });
 
-describe("WhyThisPickSection shap sentence (W233)", () => {
+describe("WhyThisPickSection shap sentence (W235)", () => {
   beforeEach(() => {
     vi.mocked(getCachedRecommendation).mockReset();
     vi.mocked(getStatus).mockReset().mockRejectedValue(new Error("no backend"));

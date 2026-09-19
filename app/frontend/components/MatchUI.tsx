@@ -2566,7 +2566,7 @@ export function featureLabel(name: string, match: Match): string {
   return `${stem}${windowSuffix}`;
 }
 
-/** W233 (direct user spec, 2026-09-18): a 1-2 sentence line composed
+/** W235 (direct user spec, 2026-09-18): a 1-2 sentence line composed
  * entirely from this candidate's own shap_contributions -- code-only, never
  * the LLM's prose. Sits directly above the ProbabilityTapeBar it explains,
  * not in its own section: the model-vs-market bar already IS the model's
