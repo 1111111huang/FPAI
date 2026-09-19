@@ -577,6 +577,26 @@ def run_agent(
         over = corners_odds.get("over_9.5")
         under = corners_odds.get("under_9.5")
         prompt += f" Bookmaker odds for total corners (over/under 9.5): over_9.5={over}, under_9.5={under}."
+    # W199: home_goals_odds/away_goals_odds threaded from eod_batch.py's
+    # team_totals fetch (live) or backtest.py's OddsPapi lookup (backtest/
+    # agent-train) -- same "populating match_info alone is a no-op if the
+    # model never sees it" precedent as total_goals_odds/btts_odds/corners_odds above.
+    home_goals_odds = match_info.get("home_goals_odds")
+    if home_goals_odds:
+        over = home_goals_odds.get("over_1.5")
+        under = home_goals_odds.get("under_1.5")
+        prompt += (
+            f" Bookmaker odds for {match_info['home_team']}'s own goals (over/under 1.5): "
+            f"over_1.5={over}, under_1.5={under}."
+        )
+    away_goals_odds = match_info.get("away_goals_odds")
+    if away_goals_odds:
+        over = away_goals_odds.get("over_1.5")
+        under = away_goals_odds.get("under_1.5")
+        prompt += (
+            f" Bookmaker odds for {match_info['away_team']}'s own goals (over/under 1.5): "
+            f"over_1.5={over}, under_1.5={under}."
+        )
 
     initial_state: AgentState = {
         "messages": [
