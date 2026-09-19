@@ -583,12 +583,14 @@ export function isActionable(match: Match): boolean {
 // total_goals already is -- but no live match-result source in this app
 // (Match["result"] itself) supplies corner counts yet, so in practice this
 // stays dormant on real live completed-match cards until that changes too.
-const RESOLVABLE_MARKETS = new Set(["result_3way", "btts", "total_goals", "total_corners"]);
+const RESOLVABLE_MARKETS = new Set(["result_3way", "btts", "total_goals", "total_corners", "home_goals", "away_goals"]);
 
 export type ActualOutcome = {
   result: "home" | "away" | "draw";
   btts: "yes" | "no";
   totalGoalsSide: "over_2.5" | "under_2.5";
+  homeGoalsSide: "over_1.5" | "under_1.5";
+  awayGoalsSide: "over_1.5" | "under_1.5";
   totalCorners?: number;
   totalCornersSide?: "over_9.5" | "under_9.5";
 };
@@ -600,6 +602,8 @@ export function buildActualOutcome(home: number, away: number, homeCorners?: num
     result,
     btts: home > 0 && away > 0 ? "yes" : "no",
     totalGoalsSide: totalGoals > 2 ? "over_2.5" : "under_2.5",
+    homeGoalsSide: home > 1 ? "over_1.5" : "under_1.5",
+    awayGoalsSide: away > 1 ? "over_1.5" : "under_1.5",
   };
   if (homeCorners !== undefined && awayCorners !== undefined) {
     const totalCorners = homeCorners + awayCorners;
@@ -618,6 +622,8 @@ export function marketCorrect(market: string, selection: string, actual: ActualO
   if (market === "result_3way") return selection === actual.result;
   if (market === "btts") return selection === actual.btts;
   if (market === "total_corners") return actual.totalCornersSide === undefined ? null : selection === actual.totalCornersSide;
+  if (market === "home_goals") return selection === actual.homeGoalsSide;
+  if (market === "away_goals") return selection === actual.awayGoalsSide;
   return selection === actual.totalGoalsSide; // market === "total_goals"
 }
 
@@ -2449,6 +2455,10 @@ const _MARKET_SELECTION_TITLE: Record<string, string> = {
   "total_goals:under_2.5": "Under 2.5",
   "total_corners:over_9.5": "Corners Over 9.5",
   "total_corners:under_9.5": "Corners Under 9.5",
+  "home_goals:over_1.5": "Over 1.5",
+  "home_goals:under_1.5": "Under 1.5",
+  "away_goals:over_1.5": "Over 1.5",
+  "away_goals:under_1.5": "Under 1.5",
 };
 function marketSelectionTitle(market: string, selection: string): string {
   const known = _MARKET_SELECTION_TITLE[`${market}:${selection}`];
@@ -2600,6 +2610,8 @@ const MARKET_LABEL: Record<string, { label: string; subtitle: string }> = {
   home_corners: { label: "Home Corners", subtitle: "Full Time" },
   away_corners: { label: "Away Corners", subtitle: "Full Time" },
   total_corners: { label: "Total Corners", subtitle: "Full Time" }, // A101
+  home_goals: { label: "Home Goals", subtitle: "Full Time" }, // W199
+  away_goals: { label: "Away Goals", subtitle: "Full Time" }, // W199
 };
 // W174: exported so AgentPerformanceDashboard.tsx can reuse the same
 // human-readable market names ("3-Way Result" instead of "result_3way")

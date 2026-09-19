@@ -16,24 +16,37 @@ import { MatchCard, buildActualOutcome, marketCorrect, type Match } from "../Mat
 
 describe("buildActualOutcome -- mirrors src/agent/market_resolution.py", () => {
   it("a home win", () => {
-    expect(buildActualOutcome(2, 1)).toEqual({ result: "home", btts: "yes", totalGoalsSide: "over_2.5" });
+    expect(buildActualOutcome(2, 1)).toEqual({
+      result: "home", btts: "yes", totalGoalsSide: "over_2.5",
+      homeGoalsSide: "over_1.5", awayGoalsSide: "under_1.5",
+    });
   });
 
   it("an away win with no goals conceded", () => {
-    expect(buildActualOutcome(0, 1)).toEqual({ result: "away", btts: "no", totalGoalsSide: "under_2.5" });
+    expect(buildActualOutcome(0, 1)).toEqual({
+      result: "away", btts: "no", totalGoalsSide: "under_2.5",
+      homeGoalsSide: "under_1.5", awayGoalsSide: "under_1.5",
+    });
   });
 
   it("a draw, both teams scoring, exactly on the 2.5 boundary", () => {
-    expect(buildActualOutcome(1, 1)).toEqual({ result: "draw", btts: "yes", totalGoalsSide: "under_2.5" });
+    expect(buildActualOutcome(1, 1)).toEqual({
+      result: "draw", btts: "yes", totalGoalsSide: "under_2.5",
+      homeGoalsSide: "under_1.5", awayGoalsSide: "under_1.5",
+    });
   });
 
   it("a 0-0 draw", () => {
-    expect(buildActualOutcome(0, 0)).toEqual({ result: "draw", btts: "no", totalGoalsSide: "under_2.5" });
+    expect(buildActualOutcome(0, 0)).toEqual({
+      result: "draw", btts: "no", totalGoalsSide: "under_2.5",
+      homeGoalsSide: "under_1.5", awayGoalsSide: "under_1.5",
+    });
   });
 
   it("A101: includes totalCorners/totalCornersSide when both corner counts are supplied", () => {
     expect(buildActualOutcome(2, 1, 6, 5)).toEqual({
       result: "home", btts: "yes", totalGoalsSide: "over_2.5",
+      homeGoalsSide: "over_1.5", awayGoalsSide: "under_1.5",
       totalCorners: 11, totalCornersSide: "over_9.5",
     });
   });
@@ -42,6 +55,18 @@ describe("buildActualOutcome -- mirrors src/agent/market_resolution.py", () => {
     const actual = buildActualOutcome(2, 1);
     expect(actual).not.toHaveProperty("totalCorners");
     expect(actual).not.toHaveProperty("totalCornersSide");
+  });
+
+  it("W199: includes homeGoalsSide/awayGoalsSide unconditionally (unlike total_corners, home/away goals are always known)", () => {
+    const actual = buildActualOutcome(2, 1);
+    expect(actual.homeGoalsSide).toBe("over_1.5");
+    expect(actual.awayGoalsSide).toBe("under_1.5");
+  });
+
+  it("W199: under_1.5 on exactly one goal", () => {
+    const actual = buildActualOutcome(1, 0);
+    expect(actual.homeGoalsSide).toBe("under_1.5");
+    expect(actual.awayGoalsSide).toBe("under_1.5");
   });
 });
 
@@ -82,6 +107,18 @@ describe("marketCorrect -- mirrors src/agent/market_resolution.py", () => {
 
   it("total_corners returns null when no corner counts were supplied -- live match results have none yet", () => {
     expect(marketCorrect("total_corners", "over_9.5", homeWin)).toBeNull();
+  });
+
+  it("W199: home_goals resolves against the actual side", () => {
+    const actual = buildActualOutcome(2, 1);
+    expect(marketCorrect("home_goals", "over_1.5", actual)).toBe(true);
+    expect(marketCorrect("home_goals", "under_1.5", actual)).toBe(false);
+  });
+
+  it("W199: away_goals resolves against the actual side", () => {
+    const actual = buildActualOutcome(2, 1);
+    expect(marketCorrect("away_goals", "under_1.5", actual)).toBe(true);
+    expect(marketCorrect("away_goals", "over_1.5", actual)).toBe(false);
   });
 });
 
