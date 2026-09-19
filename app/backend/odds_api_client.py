@@ -291,6 +291,10 @@ class OddsAPIClient:
     # fixture rather than per league -- gated by the same CreditCounter so
     # it degrades the same way (returns None, keep last-known/no secondary
     # odds) rather than a separate budget with its own failure mode.
+    # W199: `regions` overrides self._regions for this call only (team_totals
+    # needs a wider region set, e.g. us/us2, than totals/btts do). `home_team`/
+    # `away_team` are optional and only matter together -- passing both is what
+    # activates team_totals parsing in _normalize_secondary().
     def get_event_odds(
         self, sport_key: str, event_id: str, markets: tuple[str, ...] = ("totals", "btts"),
         regions: tuple[str, ...] | None = None, home_team: str | None = None, away_team: str | None = None,
