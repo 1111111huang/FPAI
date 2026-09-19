@@ -103,18 +103,27 @@ def _normalize(event: dict) -> NormalizedOdds:
 # already existed.
 _TOTAL_GOALS_LINE = 2.5
 
+# W199: team_totals per-team over/under line, same fixed-line convention as
+# _TOTAL_GOALS_LINE above.
+_TEAM_GOALS_LINE = 1.5
+
 
 @dataclass(frozen=True)
 class NormalizedSecondaryOdds:
-    """totals/btts odds for one fixture, fetched via the per-event endpoint
-    (W164) -- The Odds API doesn't serve these on the bulk /odds endpoint
-    (confirmed live: 422 "Markets not supported by this endpoint: btts").
-    None per field when no bookmaker priced that market for this fixture."""
+    """totals/btts/team_totals odds for one fixture, fetched via the
+    per-event endpoint (W164/W199) -- The Odds API doesn't serve these on
+    the bulk /odds endpoint (confirmed live: 422 "Markets not supported by
+    this endpoint"). None per field when no bookmaker priced that market
+    for this fixture."""
     total_goals: dict[str, float] | None  # {"over_2.5": .., "under_2.5": ..}
     btts: dict[str, float] | None  # {"yes": .., "no": ..}
+    home_goals: dict[str, float] | None = None  # {"over_1.5": .., "under_1.5": ..}
+    away_goals: dict[str, float] | None = None
 
 
-def _normalize_secondary(payload: dict) -> NormalizedSecondaryOdds:
+def _normalize_secondary(
+    payload: dict, home_team: str | None = None, away_team: str | None = None,
+) -> NormalizedSecondaryOdds:
     bookmakers = payload.get("bookmakers") or []
 
     total_goals = None
@@ -137,7 +146,22 @@ def _normalize_secondary(payload: dict) -> NormalizedSecondaryOdds:
         elif name == "No":
             btts = {**(btts or {}), "no": price}
 
-    return NormalizedSecondaryOdds(total_goals=total_goals, btts=btts)
+    home_goals = away_goals = None
+    if home_team and away_team:
+        team_totals_outcomes = _first_priced_outcomes(bookmakers, "team_totals")
+        for outcome in team_totals_outcomes or []:
+            if outcome.get("point") != _TEAM_GOALS_LINE:
+                continue
+            name, price, team = outcome.get("name"), outcome.get("price"), outcome.get("description")
+            key = "over_1.5" if name == "Over" else "under_1.5" if name == "Under" else None
+            if key is None:
+                continue
+            if team == home_team:
+                home_goals = {**(home_goals or {}), key: price}
+            elif team == away_team:
+                away_goals = {**(away_goals or {}), key: price}
+
+    return NormalizedSecondaryOdds(total_goals=total_goals, btts=btts, home_goals=home_goals, away_goals=away_goals)
 
 
 def _month_key(moment: datetime) -> str:
@@ -269,8 +293,10 @@ class OddsAPIClient:
     # odds) rather than a separate budget with its own failure mode.
     def get_event_odds(
         self, sport_key: str, event_id: str, markets: tuple[str, ...] = ("totals", "btts"),
+        regions: tuple[str, ...] | None = None, home_team: str | None = None, away_team: str | None = None,
     ) -> NormalizedSecondaryOdds | None:
-        cost = len(markets) * len(self._regions)
+        effective_regions = regions if regions is not None else self._regions
+        cost = len(markets) * len(effective_regions)
 
         if self._credit_counter.would_exceed(cost, self._credit_limit, self._safety_margin):
             LOGGER.warning(
@@ -284,7 +310,7 @@ class OddsAPIClient:
             f"{BASE_URL}/sports/{sport_key}/events/{event_id}/odds",
             params={
                 "apiKey": self._api_key,
-                "regions": ",".join(self._regions),
+                "regions": ",".join(effective_regions),
                 "markets": ",".join(markets),
                 "oddsFormat": "decimal",
             },
@@ -293,4 +319,4 @@ class OddsAPIClient:
         response.raise_for_status()
         self._credit_counter.record_usage(cost)
 
-        return _normalize_secondary(response.json())
+        return _normalize_secondary(response.json(), home_team=home_team, away_team=away_team)

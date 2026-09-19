@@ -387,3 +387,114 @@ def test_file_credit_counter_store_missing_file_starts_fresh(tmp_path: Path) -> 
     store = FileCreditCounterStore(tmp_path / "does_not_exist.json")
     counter = store.load(now_fn=lambda: datetime(2026, 7, 11, tzinfo=timezone.utc))
     assert counter.credits_used == 0
+
+
+def test_normalize_secondary_reads_team_totals_at_the_1_5_line() -> None:
+    """W199: team_totals outcomes are tagged per-team via a `description`
+    field (The Odds API's documented convention for other per-entity
+    markets) -- confirmed live in scripts/verify_odds_api_team_totals.py
+    before this was written. Matched against home_team/away_team the same
+    way _normalize()'s own h2h parsing matches by name."""
+    payload = {
+        "home_team": "Arsenal",
+        "away_team": "Everton",
+        "bookmakers": [
+            {"key": "draftkings", "markets": [
+                {"key": "team_totals", "outcomes": [
+                    {"name": "Over", "description": "Arsenal", "price": 1.83, "point": 1.5},
+                    {"name": "Under", "description": "Arsenal", "price": 1.95, "point": 1.5},
+                    {"name": "Over", "description": "Everton", "price": 2.20, "point": 1.5},
+                    {"name": "Under", "description": "Everton", "price": 1.65, "point": 1.5},
+                ]},
+            ]},
+        ],
+    }
+
+    result = _normalize_secondary(payload, home_team="Arsenal", away_team="Everton")
+
+    assert result.home_goals == {"over_1.5": 1.83, "under_1.5": 1.95}
+    assert result.away_goals == {"over_1.5": 2.20, "under_1.5": 1.65}
+
+
+def test_normalize_secondary_ignores_non_1_5_team_totals_lines() -> None:
+    payload = {
+        "home_team": "Arsenal", "away_team": "Everton",
+        "bookmakers": [{"markets": [{"key": "team_totals", "outcomes": [
+            {"name": "Over", "description": "Arsenal", "price": 1.4, "point": 2.5},
+            {"name": "Under", "description": "Arsenal", "price": 3.0, "point": 2.5},
+        ]}]}],
+    }
+
+    result = _normalize_secondary(payload, home_team="Arsenal", away_team="Everton")
+
+    assert result.home_goals is None
+
+
+def test_normalize_secondary_home_goals_none_when_home_team_not_supplied() -> None:
+    """team_totals parsing is skipped entirely (not a crash) when the
+    caller doesn't pass home_team/away_team -- existing totals/btts-only
+    callers pass neither."""
+    payload = {"bookmakers": [{"markets": [{"key": "team_totals", "outcomes": [
+        {"name": "Over", "description": "Arsenal", "price": 1.4, "point": 1.5},
+    ]}]}]}
+
+    result = _normalize_secondary(payload)
+
+    assert result.home_goals is None
+    assert result.away_goals is None
+
+
+def test_get_event_odds_regions_override_falls_back_to_client_default() -> None:
+    session = _mock_event_odds_session({"bookmakers": []})
+    counter = CreditCounter()
+    client = OddsAPIClient(api_key="my-key", credit_counter=counter, session=session, regions=("uk",))
+
+    client.get_event_odds(sport_key="soccer_epl", event_id="evt123")
+
+    assert session.get.call_args.kwargs["params"]["regions"] == "uk"
+
+
+def test_get_event_odds_regions_override_used_when_supplied() -> None:
+    """W199: team_totals needs a wider region set than totals/btts -- an
+    explicit override lets one client instance serve both without paying
+    the wider cost on every call."""
+    session = _mock_event_odds_session({"bookmakers": []})
+    counter = CreditCounter()
+    client = OddsAPIClient(api_key="my-key", credit_counter=counter, session=session, regions=("uk",))
+
+    client.get_event_odds(
+        sport_key="soccer_epl", event_id="evt123", markets=("team_totals",), regions=("uk", "us", "us2"),
+    )
+
+    assert session.get.call_args.kwargs["params"]["regions"] == "uk,us,us2"
+    assert session.get.call_args.kwargs["params"]["markets"] == "team_totals"
+
+
+def test_get_event_odds_costs_by_the_override_regions_not_the_client_default() -> None:
+    session = _mock_event_odds_session({"bookmakers": []})
+    counter = CreditCounter(now_fn=lambda: datetime(2026, 7, 11, tzinfo=timezone.utc))
+    client = OddsAPIClient(api_key="fake-key", credit_counter=counter, session=session, regions=("uk",))
+
+    client.get_event_odds(sport_key="soccer_epl", event_id="evt123", markets=("team_totals",), regions=("uk", "us", "us2"))
+
+    assert counter.credits_used == 3  # 1 market x 3 regions, not 1 x 1
+
+
+def test_get_event_odds_passes_home_and_away_team_through_to_normalize_secondary() -> None:
+    payload = {
+        "home_team": "Arsenal", "away_team": "Everton",
+        "bookmakers": [{"markets": [{"key": "team_totals", "outcomes": [
+            {"name": "Over", "description": "Arsenal", "price": 1.83, "point": 1.5},
+            {"name": "Under", "description": "Arsenal", "price": 1.95, "point": 1.5},
+        ]}]}],
+    }
+    session = _mock_event_odds_session(payload)
+    counter = CreditCounter()
+    client = OddsAPIClient(api_key="my-key", credit_counter=counter, session=session)
+
+    result = client.get_event_odds(
+        sport_key="soccer_epl", event_id="evt123", markets=("team_totals",),
+        regions=("uk", "us", "us2"), home_team="Arsenal", away_team="Everton",
+    )
+
+    assert result.home_goals == {"over_1.5": 1.83, "under_1.5": 1.95}
