@@ -18,7 +18,7 @@ from typing import Any
 # total_goals' own fixed 2.5 convention) via the OddsPapi odds pull (A100),
 # so it's resolvable the same way total_goals already is -- when the actual
 # outcome supplies corner counts at all (see build_actual_outcome).
-RESOLVABLE_MARKETS = {"result_3way", "btts", "total_goals", "total_corners"}
+RESOLVABLE_MARKETS = {"result_3way", "btts", "total_goals", "total_corners", "home_goals", "away_goals"}
 
 
 def market_correct(market_rec: dict[str, Any], actual: dict[str, Any]) -> bool | None:
@@ -44,6 +44,10 @@ def market_correct(market_rec: dict[str, Any], actual: dict[str, Any]) -> bool |
     if market == "total_corners":
         side = actual.get("total_corners_side")
         return None if side is None else selection == side
+    if market == "home_goals":
+        return selection == actual["home_goals_side"]
+    if market == "away_goals":
+        return selection == actual["away_goals_side"]
     return selection == actual["total_goals_side"]  # market == "total_goals"
 
 
@@ -76,6 +80,8 @@ def build_actual_outcome(
         "btts": "yes" if (home_goals > 0 and away_goals > 0) else "no",
         "total_goals": total_goals,
         "total_goals_side": "over_2.5" if total_goals > 2 else "under_2.5",
+        "home_goals_side": "over_1.5" if home_goals > 1 else "under_1.5",
+        "away_goals_side": "over_1.5" if away_goals > 1 else "under_1.5",
     }
     if home_corners is not None and away_corners is not None:
         total_corners = int(home_corners) + int(away_corners)

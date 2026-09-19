@@ -21,7 +21,9 @@ def test_resolvable_markets_excludes_per_side_corners_but_includes_total():
     programmatically resolvable the same way total_goals already is."""
     assert "home_corners" not in RESOLVABLE_MARKETS
     assert "away_corners" not in RESOLVABLE_MARKETS
-    assert RESOLVABLE_MARKETS == {"result_3way", "btts", "total_goals", "total_corners"}
+    assert RESOLVABLE_MARKETS == {
+        "result_3way", "btts", "total_goals", "total_corners", "home_goals", "away_goals",
+    }
 
 
 def test_build_actual_outcome_home_win():
@@ -120,6 +122,40 @@ def test_resolve_recommendation_pick_returns_none_when_pick_not_in_candidates():
     candidates = [{"market": "result_3way", "selection": "home", "value_edge": 0.02}]
     pick = {"market": "btts", "selection": "yes"}
     assert resolve_recommendation_pick(candidates, pick) is None
+
+
+def test_resolvable_markets_includes_home_and_away_goals():
+    assert RESOLVABLE_MARKETS == {
+        "result_3way", "btts", "total_goals", "total_corners", "home_goals", "away_goals",
+    }
+
+
+def test_build_actual_outcome_includes_home_and_away_goals_side_unconditionally():
+    """Unlike total_corners (optional -- not every settlement source has
+    corner counts), home_goals/away_goals_side is unconditional: home_goals
+    and away_goals are this function's own required positional params, so
+    there's no missing-data case to guard against."""
+    actual = build_actual_outcome(2, 1)
+    assert actual["home_goals_side"] == "over_1.5"
+    assert actual["away_goals_side"] == "under_1.5"
+
+
+def test_build_actual_outcome_home_goals_side_under_on_exactly_one():
+    actual = build_actual_outcome(1, 0)
+    assert actual["home_goals_side"] == "under_1.5"
+    assert actual["away_goals_side"] == "under_1.5"
+
+
+def test_market_correct_home_goals():
+    actual = build_actual_outcome(2, 1)
+    assert market_correct({"market": "home_goals", "selection": "over_1.5"}, actual) is True
+    assert market_correct({"market": "home_goals", "selection": "under_1.5"}, actual) is False
+
+
+def test_market_correct_away_goals():
+    actual = build_actual_outcome(2, 1)
+    assert market_correct({"market": "away_goals", "selection": "under_1.5"}, actual) is True
+    assert market_correct({"market": "away_goals", "selection": "over_1.5"}, actual) is False
 
 
 def test_resolve_recommendation_pick_tolerates_malformed_raw_data_instead_of_crashing():
