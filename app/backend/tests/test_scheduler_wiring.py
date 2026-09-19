@@ -144,8 +144,34 @@ def test_persisting_odds_client_get_event_odds_saves_counter_after_call(tmp_path
     result = client.get_event_odds(sport_key="soccer_epl", event_id="evt1")
 
     assert result == "secondary odds"
-    inner_client.get_event_odds.assert_called_once_with(sport_key="soccer_epl", event_id="evt1", markets=("totals", "btts"))
+    inner_client.get_event_odds.assert_called_once_with(
+        sport_key="soccer_epl", event_id="evt1", markets=("totals", "btts"),
+        regions=None, home_team=None, away_team=None,
+    )
     assert (tmp_path / "counter.json").exists()
+
+
+def test_persisting_odds_client_get_event_odds_forwards_regions_and_team_names(tmp_path: Path) -> None:
+    """W199 (post-W99 lesson): regions/home_team/away_team must be forwarded
+    the same way markets already is -- W99 already found this exact wrapper
+    class silently dropping a newly-added get_odds() param (`date`) with no
+    test catching it until production crashed on it for real."""
+    store = FileCreditCounterStore(tmp_path / "counter.json")
+    counter = CreditCounter()
+    inner_client = MagicMock()
+    inner_client.get_event_odds.return_value = "team totals odds"
+
+    client = PersistingOddsClient(client=inner_client, counter=counter, store=store)
+    result = client.get_event_odds(
+        sport_key="soccer_epl", event_id="evt1", markets=("team_totals",),
+        regions=("uk", "us", "us2"), home_team="Arsenal", away_team="Everton",
+    )
+
+    assert result == "team totals odds"
+    inner_client.get_event_odds.assert_called_once_with(
+        sport_key="soccer_epl", event_id="evt1", markets=("team_totals",),
+        regions=("uk", "us", "us2"), home_team="Arsenal", away_team="Everton",
+    )
 
 
 def test_fallback_odds_client_uses_first_client_when_it_succeeds() -> None:
@@ -199,7 +225,27 @@ def test_fallback_odds_client_get_event_odds_falls_back_the_same_way() -> None:
     result = FallbackOddsClient([primary, secondary]).get_event_odds(sport_key="soccer_epl", event_id="evt1")
 
     assert result == "secondary event odds"
-    secondary.get_event_odds.assert_called_once_with(sport_key="soccer_epl", event_id="evt1", markets=("totals", "btts"))
+    secondary.get_event_odds.assert_called_once_with(
+        sport_key="soccer_epl", event_id="evt1", markets=("totals", "btts"),
+        regions=None, home_team=None, away_team=None,
+    )
+
+
+def test_fallback_odds_client_get_event_odds_forwards_regions_and_team_names() -> None:
+    primary, secondary = MagicMock(), MagicMock()
+    primary.get_event_odds.return_value = None
+    secondary.get_event_odds.return_value = "team totals odds"
+
+    result = FallbackOddsClient([primary, secondary]).get_event_odds(
+        sport_key="soccer_epl", event_id="evt1", markets=("team_totals",),
+        regions=("uk", "us", "us2"), home_team="Arsenal", away_team="Everton",
+    )
+
+    assert result == "team totals odds"
+    secondary.get_event_odds.assert_called_once_with(
+        sport_key="soccer_epl", event_id="evt1", markets=("team_totals",),
+        regions=("uk", "us", "us2"), home_team="Arsenal", away_team="Everton",
+    )
 
 
 def test_register_eod_job_generates_recommendations_and_schedules_t30(tmp_path: Path) -> None:

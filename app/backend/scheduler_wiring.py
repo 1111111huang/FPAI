@@ -102,12 +102,22 @@ class PersistingOddsClient:
         self._store.save(self._counter)
         return result
 
-    def get_event_odds(self, sport_key: str, event_id: str, markets: tuple[str, ...] = ("totals", "btts")):
-        # W164: same persist-after-call contract as get_odds() above --
+    def get_event_odds(
+        self, sport_key: str, event_id: str, markets: tuple[str, ...] = ("totals", "btts"),
+        regions: tuple[str, ...] | None = None, home_team: str | None = None, away_team: str | None = None,
+    ):
+        # W164/W199: same persist-after-call contract as get_odds() above --
         # self._client here is OddsAPIClient specifically (not
         # HistoricalOddsClient, which has no per-event odds concept at all;
         # build_odds_client() only ever wraps OddsAPIClient in this class).
-        result = self._client.get_event_odds(sport_key=sport_key, event_id=event_id, markets=markets)
+        # W199 (post-W99 lesson): regions/home_team/away_team must be
+        # forwarded too, not just markets -- the exact same "wrapper drops a
+        # newly-added param, crashes the first time production actually
+        # calls it" bug W99 already found for get_odds()'s own `date` param.
+        result = self._client.get_event_odds(
+            sport_key=sport_key, event_id=event_id, markets=markets,
+            regions=regions, home_team=home_team, away_team=away_team,
+        )
         self._store.save(self._counter)
         return result
 
@@ -140,9 +150,15 @@ class FallbackOddsClient:
     def get_odds(self, sport_key: str = "soccer_epl", date: str | None = None):
         return self._try_each_client(lambda client: client.get_odds(sport_key=sport_key, date=date), "get_odds")
 
-    def get_event_odds(self, sport_key: str, event_id: str, markets: tuple[str, ...] = ("totals", "btts")):
+    def get_event_odds(
+        self, sport_key: str, event_id: str, markets: tuple[str, ...] = ("totals", "btts"),
+        regions: tuple[str, ...] | None = None, home_team: str | None = None, away_team: str | None = None,
+    ):
         return self._try_each_client(
-            lambda client: client.get_event_odds(sport_key=sport_key, event_id=event_id, markets=markets),
+            lambda client: client.get_event_odds(
+                sport_key=sport_key, event_id=event_id, markets=markets,
+                regions=regions, home_team=home_team, away_team=away_team,
+            ),
             "get_event_odds",
         )
 
