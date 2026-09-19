@@ -337,9 +337,16 @@ def test_explanation_untouched_when_pick_is_not_switched():
     assert rec["explanation"] == ["The draw is well-supported by both teams' recent head-to-head record."]
 
 
-def test_does_not_switch_when_pick_is_not_a_direct_bet():
-    """Scoped to a currently-direct_bet pick only -- a no_bet/conditional
-    pick has nothing to compare a 'certain edge in hand' against."""
+def test_switches_no_bet_pick_to_eligible_conditional():
+    """Direct-user-reported bug (2026-09-19): a match whose chosen pick
+    downgraded to no_bet still had a real, guardrail-validated conditional
+    candidate (btts:yes) sitting unused in `candidates` -- overall stayed
+    'no_bet' ("Oddsey does not recommend a bet") while the table showed
+    that candidate as an actionable 'Conditional -- wait for a better
+    price' row. Since conditional outranks no_bet (_RANK_TO_OVERALL) and
+    no_bet has no certain edge to protect, any eligible conditional should
+    become the pick -- no probability threshold needed, unlike the
+    direct_bet case."""
     no_bet_pick = {**_DRAW, "recommendation_type": "no_bet", "value_edge": -0.1}
     data = {
         **_VALID, "overall": "no_bet",
@@ -349,4 +356,38 @@ def test_does_not_switch_when_pick_is_not_a_direct_bet():
 
     rec = extract_recommendation(_wrap_json(data))
 
-    assert rec["overall"] != "direct_bet"
+    assert rec["recommendation_pick"] == {"market": "btts", "selection": "yes"}
+    assert rec["overall"] == "conditional"
+    assert any("draw" in note and "btts" in note for note in rec["limitations"])
+
+
+def test_switches_dangling_pick_to_eligible_conditional():
+    """Same as above but `recommendation_pick` itself is dangling (names a
+    market/selection absent from candidates) -- resolve_recommendation_pick
+    returns None, not a no_bet candidate. Must be treated the same as an
+    ordinary no_bet: nothing actionable currently named, so an eligible
+    conditional still gets promoted."""
+    data = {
+        **_VALID, "overall": "no_bet",
+        "candidates": [_BTTS_CONDITIONAL],
+        "recommendation_pick": {"market": "total_corners", "selection": "over_9.5"},
+    }
+
+    rec = extract_recommendation(_wrap_json(data))
+
+    assert rec["recommendation_pick"] == {"market": "btts", "selection": "yes"}
+    assert rec["overall"] == "conditional"
+
+
+def test_no_bet_pick_stays_no_bet_when_no_eligible_conditional_exists():
+    no_bet_pick = {**_DRAW, "recommendation_type": "no_bet", "value_edge": -0.1}
+    data = {
+        **_VALID, "overall": "no_bet",
+        "candidates": [no_bet_pick],
+        "recommendation_pick": {"market": "result_3way", "selection": "draw"},
+    }
+
+    rec = extract_recommendation(_wrap_json(data))
+
+    assert rec["recommendation_pick"] is None
+    assert rec["overall"] == "no_bet"

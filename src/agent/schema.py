@@ -561,17 +561,30 @@ def _prefer_higher_probability_conditional_pick(data: dict) -> dict:
     win probability is far higher, even though its edge is smaller and it
     isn't bettable at the current price at all.
 
-    Runs near the end of the pipeline: only reconsiders `recommendation_pick`
-    when it currently resolves to a 'direct_bet' candidate (the LLM's own
-    choice, already past every other guardrail including A91's self-
-    consistency check) -- finds every OTHER candidate that is 'conditional'
-    and in _CONDITIONAL_ELIGIBLE_MARKETS (A54's restriction still applies:
-    waiting only makes sense for those markets), and switches the pick to
-    whichever one has the single HIGHEST ml_probability, but only if that
-    beats the current direct_bet's own ml_probability. A no-op when the
-    resolved pick isn't 'direct_bet', when no eligible 'conditional'
-    candidate exists, or when none beats the current pick's probability --
-    the certain, already-qualifying direct_bet stands in every other case.
+    Runs near the end of the pipeline: reconsiders `recommendation_pick`
+    when it currently resolves to a 'direct_bet' candidate OR to nothing
+    actionable at all ('no_bet', dangling, or null -- the LLM's own choice,
+    already past every other guardrail including A91's self-consistency
+    check) -- finds every OTHER candidate that is 'conditional' and in
+    _CONDITIONAL_ELIGIBLE_MARKETS (A54's restriction still applies: waiting
+    only makes sense for those markets), and switches the pick to whichever
+    one has the single HIGHEST ml_probability. Direct-user-reported bug
+    (2026-09-19): a match can have a real, guardrail-validated conditional
+    candidate (e.g. btts:yes, "wait for 1.92+") sitting in the candidates
+    array while `overall` stayed 'no_bet' -- the pick this function reads
+    (`recommendation_pick`) never named that candidate, so the top-line
+    banner said "Oddsey does not recommend a bet" directly above a table
+    row telling the user to wait for a better price. `_RANK_TO_OVERALL`
+    already ranks conditional above no_bet, so there was no real edge being
+    protected by leaving it capped -- unlike the direct_bet case below,
+    'no_bet' has no certain edge in hand to weigh against, so any eligible
+    conditional beats it outright, no ml_probability comparison needed. The
+    direct_bet case keeps its own comparison: switching away from an
+    already-qualifying, certain edge for an uncertain future one is only
+    worth it when the conditional candidate is a more likely winner. A
+    no-op when the resolved pick is itself 'conditional' (nothing to
+    reconsider), when no eligible 'conditional' candidate exists, or --
+    direct_bet case only -- when none beats the current pick's probability.
 
     Must run AFTER _downgrade_recommendation_below_top_composite_score
     (A91): that check validates the LLM's own self-consistency against its
@@ -593,7 +606,8 @@ def _prefer_higher_probability_conditional_pick(data: dict) -> dict:
     pick = data.get("recommendation_pick")
     candidates = data.get("candidates") or []
     current = resolve_recommendation_pick(candidates, pick)
-    if current is None or current["recommendation_type"] != "direct_bet":
+    current_type = current["recommendation_type"] if current is not None else "no_bet"
+    if current_type not in ("direct_bet", "no_bet"):
         return data
 
     eligible_conditionals = [
@@ -606,15 +620,23 @@ def _prefer_higher_probability_conditional_pick(data: dict) -> dict:
         return data
 
     best = max(eligible_conditionals, key=lambda c: c["ml_probability"])
-    if best["ml_probability"] <= current["ml_probability"]:
+    if current_type == "direct_bet" and best["ml_probability"] <= current["ml_probability"]:
         return data
 
+    if current is None:
+        current_desc = "no candidate (no_bet)"
+        switch_reason = "no recommendation at all"
+    else:
+        current_desc = f"{current['market']!r}/{current['selection']!r} ({current_type}, ml_probability {current['ml_probability']})"
+        switch_reason = (
+            "a much more likely winner worth waiting on, even though it isn't bettable at the current price"
+            if current_type == "direct_bet"
+            else "no recommendation at all"
+        )
     data["recommendation_pick"] = {"market": best["market"], "selection": best["selection"]}
     switch_note = (
-        f"Switched the recommendation from {current['market']!r}/{current['selection']!r} (direct_bet, "
-        f"ml_probability {current['ml_probability']}) to {best['market']!r}/{best['selection']!r} "
-        f"(conditional, ml_probability {best['ml_probability']}) -- a much more likely winner worth "
-        "waiting on, even though it isn't bettable at the current price."
+        f"Switched the recommendation from {current_desc} to {best['market']!r}/{best['selection']!r} "
+        f"(conditional, ml_probability {best['ml_probability']}) -- {switch_reason}."
     )
     limitations = list(data.get("limitations") or [])
     limitations.append(switch_note)

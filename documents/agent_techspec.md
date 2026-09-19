@@ -1363,6 +1363,14 @@ Direct user clarification once this was raised: overriding an already-qualifying
 
 Full record: `documents/agent_user_stories.md` A112.
 
+### 35.2 Follow-up: the `no_bet` Case Had the Same Gap the `direct_bet` Case Already Closed (direct user bug report, 2026-09-19)
+
+Live UI screenshot: Osasuna v Rayo Vallecano, `overall` `no_bet` ("Oddsey does not recommend a bet on this match right now"), while the per-market table showed `btts/yes` as `conditional` ("Needs 1.92+ to clear edge") — a real, guardrail-validated candidate the top-line banner directly contradicted. Root cause: `_prefer_higher_probability_conditional_pick()` (§35.1) only reconsidered `recommendation_pick` when it currently resolved to a `direct_bet` candidate; when it resolved to `no_bet` (or didn't resolve at all — a dangling or null pick), the function no-opped and `_resolve_recommendation_pick()` discarded the pointer entirely (`data["recommendation_pick"] = None; data["overall"] = "no_bet"`), even though `_RANK_TO_OVERALL` already ranks `conditional` above `no_bet` and an eligible conditional candidate sat right there in `candidates`.
+
+**Fix.** Same function, broadened guard: now reconsiders the pick when it resolves to `direct_bet` **or** `no_bet`/nothing (`current_type not in ("direct_bet", "no_bet"): return data`, `current_type` defaulting to `"no_bet"` when `current` is `None`). The `direct_bet` branch keeps its original probability-comparison guard unchanged (only switch away from a certain edge in hand when the conditional alternative is a more likely winner — §35.1's own reasoning stands). The `no_bet` branch skips that comparison entirely: `no_bet` has no certain edge to protect, so any eligible conditional (`_CONDITIONAL_ELIGIBLE_MARKETS`, market-highest `ml_probability` on ties among several) outranks it outright. `switch_note`/rebuilt `explanation` handle a `None` current pick (`"no candidate (no_bet)"` in the note) the same way the `direct_bet` case already handled a real one.
+
+**Verification.** `tests/test_agent_live_wait_conditional.py`: the old `test_does_not_switch_when_pick_is_not_a_direct_bet` asserted the wrong thing after this fix (a weak `!= "direct_bet"` check that would have silently passed either way) — replaced with `test_switches_no_bet_pick_to_eligible_conditional` (the exact reported scenario), `test_switches_dangling_pick_to_eligible_conditional` (pick names a market/selection absent from candidates), and `test_no_bet_pick_stays_no_bet_when_no_eligible_conditional_exists` (no-op preserved when nothing eligible exists). 22 tests, all passing. Full suite: 1113 passed, 1 skipped, zero regressions.
+
 ---
 
 ## 36. "Why This Pick" Structured Reasoning Fields (A113, 2026-09-17)
