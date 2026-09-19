@@ -11,7 +11,8 @@ __pycache__/
 data/raw/football_data/*.csv
 data/*.db
 data/agent_snapshots/
-data/oddspapi_snapshots/
+data/oddspapi_snapshots/*
+!data/oddspapi_snapshots/*_line_map.json
 reports/agent_backtest/
 reports/agent_train/
 reports/agent_experiments/
