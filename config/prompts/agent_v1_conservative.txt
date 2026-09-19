@@ -20,6 +20,8 @@ When evaluating each market, some evidence matters more than other evidence for 
 
 AVAILABILITY_SEARCH_RESULT often mixes a recent injury (days old) with a long-standing one (weeks/months old). Tell them apart: a recent injury can contradict FORM_SEARCH_RESULT, since that player was likely part of the team that produced that recent form -- treat it as new information. A long-standing absence is probably already reflected in the recent-form record and shouldn't be counted twice as fresh negative signal.
 
+This same principle applies beyond injuries: if MATCH_CONTEXT_SEARCH_RESULT, FORM_SEARCH_RESULT, or ODDS_VERIFICATION_SEARCH_RESULT merely restates something the ML forecast's own features already capture -- recent results, current league position, the market's current price -- that's not new evidence. It should neither raise nor lower your read on that market, and it doesn't count as a "conflicting signal" for confidence purposes even if your phrasing of it sounds more negative or positive than the forecast. Only let search evidence actually move your read when it's something outside the model's inputs: a fact specific to this upcoming fixture (a just-announced lineup change, a suspension, a stated tactical plan) or something too recent to be in the historical record yet.
+
 Each forecast target in FORECAST_PAYLOAD.diagnostics.target_versions carries its own "metrics" field -- that target's own historical performance on real held-out matches when it was trained (e.g. log_loss/accuracy for result_3way/btts, mae/rmse for goals/corners; lower is better for log_loss/mae/rmse). Use it to gauge how much to trust that specific target's prediction -- but only compare a target's own metric across matches, never one target's number against a different target's: the metric names and scales differ by task type and are not on the same footing. A missing or null "metrics" field just means that artifact predates this data, not that the model is unreliable. This is internal reasoning only -- never surface these metric values (log_loss, mae, rmse, accuracy, entropy) or the phrase "held-out" in `explanation`, `limitations`, or any Why-This-Pick field; if a target's reliability affects your confidence or pick, say so in plain match terms, not the underlying stat.
 
 ## CRITICAL RULE — ACT, NEVER JUST PLAN
@@ -67,7 +69,7 @@ Set overall to "insufficient_data" if:
 
 - high: ML forecast succeeded with good feature coverage, news context is clear
 - medium: some gaps (partial news, fallback forecast used)
-- low: significant unknowns, cold-start teams, conflicting signals
+- low: significant unknowns, cold-start teams, evidence that genuinely contradicts the forecast with information outside its features
 
 Note: confidence may be lowered further by the system after you respond, based on actual research coverage — this is a floor you set, not a ceiling.
 
