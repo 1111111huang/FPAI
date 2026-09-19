@@ -335,7 +335,8 @@ def test_secondary_odds_fetched_and_threaded_into_match_info_and_odds_dedup_key(
     with patch("app.backend.recommendations.run_agent", side_effect=_capture):
         result = refresh_match_at_t30(_fixture(), odds_client=odds_client, cache=cache, config=config, date_str=_future_date(1))
 
-    odds_client.get_event_odds.assert_called_once_with(sport_key="soccer_epl", event_id="evt1")
+    assert odds_client.get_event_odds.call_count == 2
+    odds_client.get_event_odds.assert_any_call(sport_key="soccer_epl", event_id="evt1")
     assert result.outcome == "refreshed"
     assert captured_match_info["total_goals_odds"] == {"over_2.5": 1.9, "under_2.5": 1.95}
     assert captured_match_info["btts_odds"] == {"yes": 1.7, "no": 2.1}
@@ -359,6 +360,7 @@ def test_secondary_odds_reused_from_cache_not_refetched_when_h2h_unchanged(tmp_p
         odds={
             "home": 1.8, "draw": 3.6, "away": 4.5,
             "total_goals": {"over_2.5": 1.9, "under_2.5": 1.95}, "btts": {"yes": 1.7, "no": 2.1},
+            "home_goals": {"over_1.5": 1.6, "under_1.5": 2.2}, "away_goals": {"over_1.5": 2.5, "under_1.5": 1.5},
         },
         recommendation=_RECOMMENDATION, triggered_by="scheduled",
     )
