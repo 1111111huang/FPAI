@@ -49,6 +49,8 @@ def _wrap_json(data: dict) -> str:
         ("home_corners", "over_2.5"),
         ("away_corners", "over_2.5"),
         ("btts", "yes"),
+        ("home_goals", "over_1.5"),
+        ("away_goals", "over_1.5"),
     ],
 )
 def test_eligible_market_stays_conditional_after_a29_ceiling_downgrade(market, selection):
@@ -80,6 +82,8 @@ def test_eligible_market_stays_conditional_after_a29_ceiling_downgrade(market, s
         ("home_corners", "under_2.5"),
         ("away_corners", "under_2.5"),
         ("btts", "no"),
+        ("home_goals", "under_1.5"),
+        ("away_goals", "under_1.5"),
     ],
 )
 def test_ineligible_market_downgraded_to_no_bet_after_a29_downgrade(market, selection):

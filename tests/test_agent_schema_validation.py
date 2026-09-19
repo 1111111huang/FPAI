@@ -210,6 +210,19 @@ def test_total_corners_over_9_5_is_a_valid_market_and_selection():
     assert rec["candidates"][0]["selection"] == "over_9.5"
 
 
+@pytest.mark.parametrize("market", ["home_goals", "away_goals"])
+@pytest.mark.parametrize("selection", ["over_1.5", "under_1.5"])
+def test_home_away_goals_is_a_valid_market_and_selection(market, selection):
+    """Team-goals-total market (W199): a single team's own goal count,
+    fixed at the 1.5 line -- same fixed-line convention as total_goals'
+    2.5 and total_corners' 9.5."""
+    candidate = {**_VALID_CANDIDATE, "market": market, "selection": selection, "recommendation_type": "no_bet", "current_odds": None}
+    good = {**_VALID, "overall": "no_bet", "candidates": [candidate], "recommendation_pick": None}
+    rec = extract_recommendation(_wrap_json(good))
+    assert rec["candidates"][0]["market"] == market
+    assert rec["candidates"][0]["selection"] == selection
+
+
 def test_non_canonical_market_name_raises():
     """The agent has been observed calling result_3way "1X2" for one real
     fixture, and inventing markets entirely outside this schema for others
