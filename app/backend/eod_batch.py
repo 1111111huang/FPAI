@@ -363,20 +363,21 @@ async def run_eod_batch(
     # none of them -- fetch per distinct fixture date instead.
     fixture_dates = {_fixture_date(fixture) for fixture in fixtures}
     sport_key = ODDS_SPORT_KEY_BY_COMPETITION[league]
+    # W234/W237-follow-up: this batch's own fixture team names (already
+    # resolved to their canonical form) become the shared candidate pool for
+    # every vendor's own mapping -- lets odds_lookup()/oddspapi_fixture_lookup()
+    # bridge a club-type-prefix mismatch (e.g. "TSG Hoffenheim") that has no
+    # direct config/team_mapping.json entry yet. Computed unconditionally
+    # (not just when odds_client is set) since OddsPapi matching needs it too.
+    fixture_mapper = TeamNameMapper(mapping_path=str(_TEAM_MAPPING_PATH))
+    fixture_team_candidates = sorted({
+        fixture_mapper.map_team(name)
+        for fixture in fixtures
+        for name in (fixture.home_team, fixture.away_team)
+    })
     if odds_client is None:
         odds_by_teams_by_date: dict[str, dict] = {}
     else:
-        # W234: this batch's own fixture team names (already resolved to
-        # their canonical form) become the candidate pool for the odds
-        # side's own mapping -- lets odds_lookup() bridge a club-type-prefix
-        # mismatch (e.g. "TSG Hoffenheim") that has no direct
-        # config/team_mapping.json entry yet.
-        fixture_mapper = TeamNameMapper(mapping_path=str(_TEAM_MAPPING_PATH))
-        fixture_team_candidates = sorted({
-            fixture_mapper.map_team(name)
-            for fixture in fixtures
-            for name in (fixture.home_team, fixture.away_team)
-        })
         if fixture_dates <= {date_str}:
             odds_by_teams_by_date = {
                 date_str: odds_lookup(odds_client.get_odds(sport_key=sport_key) or [], fixture_team_candidates)
@@ -394,6 +395,7 @@ async def run_eod_batch(
     else:
         oddspapi_fixtures_by_teams = oddspapi_fixture_lookup(
             oddspapi_client.get_fixtures(tournament_id=LEAGUE_TOURNAMENT_IDS[league]) or [],
+            fixture_team_candidates,
         )
 
     agent_config_hash = compute_agent_config_hash(config)

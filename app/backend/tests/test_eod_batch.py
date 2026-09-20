@@ -656,6 +656,47 @@ def test_corners_odds_reused_from_cache_not_refetched_when_h2h_unchanged(tmp_pat
     assert result.unchanged == 1
 
 
+def test_corners_odds_matched_via_token_containment_for_club_type_prefix_mismatch(tmp_path: Path) -> None:
+    """W234's own fix (odds_lookup's candidates/use_token_match) should
+    apply to OddsPapi fixture matching too, not just The Odds API -- same
+    recurring club-type-prefix mismatch class (BUG-057/W191/W192/W234),
+    since OddsPapi spells clubs independently of both football-data.org and
+    The Odds API. Invented team names, not real clubs."""
+    fixtures_client = MagicMock()
+    fixtures_client.get_fixtures.return_value = [_fixture("m1", "Testopolis", "Rivertown")]
+    odds_client = _seeded_odds_client()
+    odds_client.get_odds.return_value = [
+        NormalizedOdds(
+            home_team="Testopolis", away_team="Rivertown", commence_time="2026-08-22T15:00:00Z",
+            home_odds=1.9, draw_odds=3.4, away_odds=4.2, event_id="evt1",
+        ),
+    ]
+    odds_client.get_event_odds.return_value = NormalizedSecondaryOdds(total_goals=None, btts=None)
+    oddspapi_client = MagicMock()
+    oddspapi_client.get_fixtures.return_value = [
+        OddsPapiFixture(fixture_id="777", home_team="FC Testopolis", away_team="Rivertown"),
+    ]
+    oddspapi_client.get_corners_odds.return_value = {"over_9.5": 1.9, "under_9.5": 1.95}
+    cache = RecommendationCache(db_path=tmp_path / "cache.db")
+    config = AgentConfig.default()
+    captured_match_info = {}
+
+    def _capture(match_info, config):
+        captured_match_info.update(match_info)
+        return _RECOMMENDATION
+
+    with patch("app.backend.recommendations.run_agent", side_effect=_capture):
+        asyncio.run(
+            run_eod_batch(
+                fixtures_client=fixtures_client, odds_client=odds_client, oddspapi_client=oddspapi_client,
+                cache=cache, config=config, schedule_t30=lambda f: None, date_str=_future_date(1),
+            )
+        )
+
+    oddspapi_client.get_corners_odds.assert_called_once_with("777")
+    assert captured_match_info["corners_odds"] == {"over_9.5": 1.9, "under_9.5": 1.95}
+
+
 def test_corners_odds_not_fetched_when_no_oddspapi_client_supplied(tmp_path: Path) -> None:
     """Default None -- production call sites that haven't wired OddsPapi in
     yet (or a league with no LEAGUE_TOURNAMENT_IDS entry) stay unaffected,

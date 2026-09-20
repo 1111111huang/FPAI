@@ -1479,4 +1479,10 @@ Direct user follow-up, after being handed the real math: 5 leagues' combined fix
 
 New tests: `test_scheduler_wiring.py` (7 — `PersistingOddsPapiClient` counter-persistence/arg-forwarding, `FallbackOddsPapiClient`'s success/exhausted/raises/all-fail paths for both `get_corners_odds` and `get_fixtures`), `test_sandbox_wiring.py` (3 — single-key returns the plain client not a 1-element fallback wrapper, multiple keys wire as a fallback chain in order, `_3` isn't defaulted to primary). Full suite: 1738 passed / 1 skipped, same 5 pre-existing/unrelated `test_fixtures_endpoint.py` failures.
 
+### 41.2 Fixture Matching Missed W234's Token-Containment Fallback (W238, same day)
+
+Direct user follow-up, prompted by a question about how reliable the OddsPapi fixture-matching step actually is. Investigation found `oddspapi_fixture_lookup()` (§41's own new function) only ever did a plain exact/accent-fold `TeamNameMapper.map_team()` lookup — the same recurring club-type-prefix mismatch class (`"TSG Hoffenheim"` vs. a bare `"Hoffenheim"`, BUG-057/W191/W192) that W234 already fixed for The Odds API's own `odds_lookup()` was silently left unfixed here, since `run_eod_batch()`'s `fixture_team_candidates` (the batch's own fixture-derived candidate pool that makes W234's token-containment matching possible) was computed only inside the `if odds_client is not None:` branch and never threaded into the new OddsPapi call at all — an oversight introduced by §41 itself, not a pre-existing gap.
+
+Fixed by moving `fixture_team_candidates`'s computation out of that branch (now unconditional in `run_eod_batch()`) and passing it to `oddspapi_fixture_lookup()` the same way it already goes to `odds_lookup()`. New regression test mirrors `test_odds_matched_via_token_containment_for_club_type_prefix_mismatch` exactly (invented team names, `"FC Testopolis"` vs. the fixture's bare `"Testopolis"`), watched failing first (`get_corners_odds` called 0 times) before the fix. Full suite: 1739 passed / 1 skipped, same 5 pre-existing/unrelated failures.
+
 Full record: `documents/app_user_stories.md` W236.
