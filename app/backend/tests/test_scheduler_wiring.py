@@ -26,6 +26,7 @@ from app.backend.scheduler_wiring import (
     EOD_HOUR,
     EOD_JOB_ID,
     FallbackOddsClient,
+    FallbackOddsPapiClient,
     LESSONS_HOUR,
     LESSONS_JOB_ID,
     LESSONS_WEEKLY_DAY_OF_WEEK,
@@ -33,6 +34,7 @@ from app.backend.scheduler_wiring import (
     LESSONS_WEEKLY_JOB_ID,
     LESSONS_WEEKLY_MINUTE,
     PersistingOddsClient,
+    PersistingOddsPapiClient,
     next_day_date_str,
     register_eod_job,
     register_lessons_job,
@@ -246,6 +248,83 @@ def test_fallback_odds_client_get_event_odds_forwards_regions_and_team_names() -
         sport_key="soccer_epl", event_id="evt1", markets=("team_totals",),
         regions=("uk", "us", "us2"), home_team="Arsenal", away_team="Everton",
     )
+
+
+def test_persisting_oddspapi_client_saves_counter_after_get_corners_odds(tmp_path: Path) -> None:
+    store = FileCreditCounterStore(tmp_path / "counter.json")
+    counter = CreditCounter()
+    inner_client = MagicMock()
+    inner_client.get_corners_odds.return_value = {"over_9.5": 1.9, "under_9.5": 1.95}
+
+    client = PersistingOddsPapiClient(client=inner_client, counter=counter, store=store)
+    result = client.get_corners_odds(fixture_id="555")
+
+    assert result == {"over_9.5": 1.9, "under_9.5": 1.95}
+    inner_client.get_corners_odds.assert_called_once_with(fixture_id="555")
+    assert (tmp_path / "counter.json").exists()
+
+
+def test_persisting_oddspapi_client_get_fixtures_forwards_args(tmp_path: Path) -> None:
+    store = FileCreditCounterStore(tmp_path / "counter.json")
+    counter = CreditCounter()
+    inner_client = MagicMock()
+    inner_client.get_fixtures.return_value = ["fixture"]
+
+    client = PersistingOddsPapiClient(client=inner_client, counter=counter, store=store)
+    result = client.get_fixtures(tournament_id=8, status_id=1)
+
+    assert result == ["fixture"]
+    inner_client.get_fixtures.assert_called_once_with(tournament_id=8, status_id=1)
+
+
+def test_fallback_oddspapi_client_uses_first_client_when_it_succeeds() -> None:
+    primary, secondary = MagicMock(), MagicMock()
+    primary.get_corners_odds.return_value = {"over_9.5": 1.9, "under_9.5": 1.95}
+
+    result = FallbackOddsPapiClient([primary, secondary]).get_corners_odds(fixture_id="555")
+
+    assert result == {"over_9.5": 1.9, "under_9.5": 1.95}
+    secondary.get_corners_odds.assert_not_called()
+
+
+def test_fallback_oddspapi_client_falls_back_when_first_client_is_locally_exhausted() -> None:
+    primary, secondary = MagicMock(), MagicMock()
+    primary.get_corners_odds.return_value = None  # local CreditCounter predicts exhaustion
+    secondary.get_corners_odds.return_value = {"over_9.5": 1.85, "under_9.5": 2.0}
+
+    result = FallbackOddsPapiClient([primary, secondary]).get_corners_odds(fixture_id="555")
+
+    assert result == {"over_9.5": 1.85, "under_9.5": 2.0}
+
+
+def test_fallback_oddspapi_client_falls_back_when_first_client_raises() -> None:
+    primary, secondary = MagicMock(), MagicMock()
+    primary.get_corners_odds.side_effect = requests.HTTPError("401 out of credits")
+    secondary.get_corners_odds.return_value = {"over_9.5": 1.85, "under_9.5": 2.0}
+
+    result = FallbackOddsPapiClient([primary, secondary]).get_corners_odds(fixture_id="555")
+
+    assert result == {"over_9.5": 1.85, "under_9.5": 2.0}
+
+
+def test_fallback_oddspapi_client_returns_none_when_every_client_fails() -> None:
+    primary, secondary = MagicMock(), MagicMock()
+    primary.get_corners_odds.return_value = None
+    secondary.get_corners_odds.side_effect = requests.ConnectionError("network down")
+
+    result = FallbackOddsPapiClient([primary, secondary]).get_corners_odds(fixture_id="555")
+
+    assert result is None
+
+
+def test_fallback_oddspapi_client_get_fixtures_falls_back_on_raise() -> None:
+    primary, secondary = MagicMock(), MagicMock()
+    primary.get_fixtures.side_effect = requests.HTTPError("401")
+    secondary.get_fixtures.return_value = ["fixture"]
+
+    result = FallbackOddsPapiClient([primary, secondary]).get_fixtures(tournament_id=8)
+
+    assert result == ["fixture"]
 
 
 def test_register_eod_job_generates_recommendations_and_schedules_t30(tmp_path: Path) -> None:

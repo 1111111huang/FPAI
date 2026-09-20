@@ -40,6 +40,8 @@ CREDIT_COUNTER_PATH = Path(__file__).parent.parent.parent / "data" / "odds_api_c
 CREDIT_COUNTER_PATH_2 = Path(__file__).parent.parent.parent / "data" / "odds_api_credit_counter_2.json"
 CREDIT_COUNTER_PATH_3 = Path(__file__).parent.parent.parent / "data" / "odds_api_credit_counter_3.json"
 CREDIT_COUNTER_PATH_ODDSPAPI = Path(__file__).parent.parent.parent / "data" / "oddspapi_credit_counter.json"
+CREDIT_COUNTER_PATH_ODDSPAPI_2 = Path(__file__).parent.parent.parent / "data" / "oddspapi_credit_counter_2.json"
+CREDIT_COUNTER_PATH_ODDSPAPI_3 = Path(__file__).parent.parent.parent / "data" / "oddspapi_credit_counter_3.json"
 EOD_JOB_ID = "eod_batch_generation"
 EOD_HOUR = 23
 EOD_MINUTE = 0
@@ -220,22 +222,66 @@ class PersistingOddsPapiClient:
         return result
 
 
-def build_oddspapi_client() -> OddsPapiClient | None:
+class FallbackOddsPapiClient:
+    """Same multi-key fallback contract as FallbackOddsClient above, one
+    PersistingOddsPapiClient per ODDSPAPI_API_KEY[_2/_3] env var -- moves to
+    the next key once one is exhausted (locally predicted, get_corners_odds()
+    returns None) or actually rejected by the API (a raised RequestException)."""
+
+    def __init__(self, clients: list[PersistingOddsPapiClient]) -> None:
+        self._clients = clients
+
+    def _try_each_client(self, call: Callable[[PersistingOddsPapiClient], object], op_name: str):
+        for i, client in enumerate(self._clients):
+            try:
+                result = call(client)
+            except requests.RequestException as exc:
+                LOGGER.warning("FallbackOddsPapiClient.%s: key #%d failed (%s) -- trying next key.", op_name, i + 1, exc)
+                continue
+            if result is not None:
+                return result
+            LOGGER.info("FallbackOddsPapiClient.%s: key #%d exhausted (local budget) -- trying next key.", op_name, i + 1)
+        return None
+
+    def get_fixtures(self, tournament_id: int, status_id: int = 1):
+        return self._try_each_client(
+            lambda client: client.get_fixtures(tournament_id=tournament_id, status_id=status_id), "get_fixtures",
+        )
+
+    def get_corners_odds(self, fixture_id: str):
+        return self._try_each_client(lambda client: client.get_corners_odds(fixture_id=fixture_id), "get_corners_odds")
+
+
+def _build_persisting_oddspapi_client(api_key: str, counter_path: Path) -> PersistingOddsPapiClient:
+    store = FileCreditCounterStore(counter_path)
+    counter = store.load()
+    return PersistingOddsPapiClient(client=OddsPapiClient(api_key=api_key, credit_counter=counter), counter=counter, store=store)
+
+
+def build_oddspapi_client() -> OddsPapiClient | FallbackOddsPapiClient | None:
     """None during sandbox mode (a live vendor call would fetch the wrong
     fixture set for a historical sandbox date -- there's no OddsPapi
     equivalent of HistoricalOddsClient, since corners has no historical
-    replay source at all, see agent_techspec.md S28) or when ODDSPAPI_API_KEY
-    isn't configured. ponytail: single key only, no ODDS_API_KEY_2/_3-style
-    fallback chain -- add one the same way if this budget is ever actually
-    observed running dry mid-month."""
+    replay source at all, see agent_techspec.md S28) or when no
+    ODDSPAPI_API_KEY* is configured.
+
+    ODDSPAPI_API_KEY_2/_3, when also set, are wired in as fallbacks in
+    order, each with its own CreditCounter file (mirrors build_odds_client()'s
+    ODDS_API_KEY_2/_3 pattern) -- unlike that one, _3 does NOT default to the
+    primary key when unset (that was a specific dev-convenience workaround
+    for BUG-056, not a general convention); an unset key here is simply
+    omitted."""
     if sandbox_date() is not None:
         return None
-    api_key = os.environ.get("ODDSPAPI_API_KEY", "")
-    if not api_key:
+    keys_and_paths = [
+        (os.environ.get("ODDSPAPI_API_KEY", ""), CREDIT_COUNTER_PATH_ODDSPAPI),
+        (os.environ.get("ODDSPAPI_API_KEY_2", ""), CREDIT_COUNTER_PATH_ODDSPAPI_2),
+        (os.environ.get("ODDSPAPI_API_KEY_3", ""), CREDIT_COUNTER_PATH_ODDSPAPI_3),
+    ]
+    clients = [_build_persisting_oddspapi_client(key, path) for key, path in keys_and_paths if key]
+    if not clients:
         return None
-    store = FileCreditCounterStore(CREDIT_COUNTER_PATH_ODDSPAPI)
-    counter = store.load()
-    return PersistingOddsPapiClient(client=OddsPapiClient(api_key=api_key, credit_counter=counter), counter=counter, store=store)
+    return clients[0] if len(clients) == 1 else FallbackOddsPapiClient(clients)
 
 
 def next_day_date_str(now_fn: Callable[[], datetime] = lambda: sandbox_now(NY_TZ)) -> str:

@@ -15,7 +15,7 @@ import pytest
 
 from app.backend import bets, main, recommendations
 from app.backend.historical_odds_client import HistoricalOddsClient
-from app.backend.scheduler_wiring import build_odds_client, build_oddspapi_client
+from app.backend.scheduler_wiring import FallbackOddsPapiClient, build_odds_client, build_oddspapi_client
 
 
 @pytest.fixture(autouse=True)
@@ -128,6 +128,8 @@ def test_build_oddspapi_client_returns_none_when_sandbox_active(monkeypatch) -> 
 def test_build_oddspapi_client_returns_none_when_no_api_key(monkeypatch) -> None:
     monkeypatch.delenv("SANDBOX_MODE", raising=False)
     monkeypatch.delenv("ODDSPAPI_API_KEY", raising=False)
+    monkeypatch.delenv("ODDSPAPI_API_KEY_2", raising=False)
+    monkeypatch.delenv("ODDSPAPI_API_KEY_3", raising=False)
 
     assert build_oddspapi_client() is None
 
@@ -135,10 +137,56 @@ def test_build_oddspapi_client_returns_none_when_no_api_key(monkeypatch) -> None
 def test_build_oddspapi_client_returns_live_client_when_configured(monkeypatch) -> None:
     monkeypatch.delenv("SANDBOX_MODE", raising=False)
     monkeypatch.setenv("ODDSPAPI_API_KEY", "fake-key")
+    monkeypatch.delenv("ODDSPAPI_API_KEY_2", raising=False)
+    monkeypatch.delenv("ODDSPAPI_API_KEY_3", raising=False)
 
     client = build_oddspapi_client()
 
     assert client is not None
+
+
+def _wired_oddspapi_api_keys(client) -> list[str]:
+    return [c._client._api_key for c in client._clients]
+
+
+def test_build_oddspapi_client_wires_a_single_key_without_fallback_wrapper(monkeypatch) -> None:
+    """A single configured key returns the plain OddsPapiClient directly,
+    not a 1-element FallbackOddsPapiClient -- mirrors build_odds_client()'s
+    own single-key shortcut."""
+    monkeypatch.delenv("SANDBOX_MODE", raising=False)
+    monkeypatch.setenv("ODDSPAPI_API_KEY", "primary-key")
+    monkeypatch.delenv("ODDSPAPI_API_KEY_2", raising=False)
+    monkeypatch.delenv("ODDSPAPI_API_KEY_3", raising=False)
+
+    client = build_oddspapi_client()
+
+    assert not isinstance(client, FallbackOddsPapiClient)
+    assert client._client._api_key == "primary-key"
+
+
+def test_build_oddspapi_client_wires_multiple_keys_as_fallback_chain(monkeypatch) -> None:
+    """Also proves ODDSPAPI_API_KEY_3, left unset here, is simply omitted --
+    not defaulted to the primary key the way ODDS_API_KEY_3 is (that was a
+    specific BUG-056 workaround, not a general convention)."""
+    monkeypatch.delenv("SANDBOX_MODE", raising=False)
+    monkeypatch.setenv("ODDSPAPI_API_KEY", "primary-key")
+    monkeypatch.setenv("ODDSPAPI_API_KEY_2", "secondary-key")
+    monkeypatch.delenv("ODDSPAPI_API_KEY_3", raising=False)
+
+    client = build_oddspapi_client()
+
+    assert _wired_oddspapi_api_keys(client) == ["primary-key", "secondary-key"]
+
+
+def test_build_oddspapi_client_honors_explicit_third_key(monkeypatch) -> None:
+    monkeypatch.delenv("SANDBOX_MODE", raising=False)
+    monkeypatch.setenv("ODDSPAPI_API_KEY", "primary-key")
+    monkeypatch.setenv("ODDSPAPI_API_KEY_2", "secondary-key")
+    monkeypatch.setenv("ODDSPAPI_API_KEY_3", "third-key")
+
+    client = build_oddspapi_client()
+
+    assert _wired_oddspapi_api_keys(client) == ["primary-key", "secondary-key", "third-key"]
 
 
 def test_sandbox_job_runs_db_path_lives_under_app_data_sandbox_not_app_backend_data() -> None:

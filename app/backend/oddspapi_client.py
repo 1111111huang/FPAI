@@ -15,10 +15,11 @@ OddsAPIClient's CreditCounter pattern exactly (app/backend/odds_api_client.py),
 just against OddsPapi's own 250-req/month free-tier budget instead of The
 Odds API's 500.
 
-ponytail: single API key, no multi-key fallback chain (unlike ODDS_API_KEY/
-_2/_3) -- that complexity was added to OddsAPIClient reactively, after real
-quota exhaustion was observed. Add a fallback here the same way if/when this
-budget actually runs out in production.
+W236 follow-up: multi-key fallback (ODDSPAPI_API_KEY_2/_3), mirroring
+OddsAPIClient's own ODDS_API_KEY_2/_3 chain, lives in scheduler_wiring.py's
+FallbackOddsPapiClient -- this module itself (OddsPapiClient) still only
+ever knows about one key; the fallback is a wrapper around several
+instances of it, same separation OddsAPIClient/FallbackOddsClient keep.
 """
 
 from __future__ import annotations
