@@ -21,6 +21,7 @@ from app.backend.agent_config_hash import compute_agent_config_hash
 from app.backend.eod_batch import already_fresh, run_eod_batch
 from app.backend.football_data_client import NormalizedMatch
 from app.backend.odds_api_client import NormalizedOdds, NormalizedSecondaryOdds
+from app.backend.oddspapi_client import OddsPapiFixture
 from app.backend.recommendation_cache import RecommendationCache
 from src.agent.agent_config import AgentConfig
 
@@ -570,6 +571,116 @@ def test_team_totals_odds_fetched_with_wider_regions_and_threaded_into_match_inf
     cached = cache.get_latest("m1", _future_date(1), agent_config_hash)
     assert cached.odds["home_goals"] == {"over_1.5": 1.6, "under_1.5": 2.2}
     assert cached.odds["away_goals"] == {"over_1.5": 2.5, "under_1.5": 1.5}
+
+
+def _seeded_oddspapi_client(fixture_id: str = "999") -> MagicMock:
+    oddspapi_client = MagicMock()
+    oddspapi_client.get_fixtures.return_value = [
+        OddsPapiFixture(fixture_id=fixture_id, home_team="Arsenal", away_team="Everton"),
+    ]
+    oddspapi_client.get_corners_odds.return_value = {"over_9.5": 1.9, "under_9.5": 1.95}
+    return oddspapi_client
+
+
+def test_corners_odds_fetched_via_oddspapi_and_threaded_into_match_info(tmp_path: Path) -> None:
+    """total_corners is the one market OddsAPIClient can't carry at all
+    (agent_techspec.md S28) -- OddsPapi is a second, independent live vendor,
+    matched to the fixture by its own team-name spelling via the same
+    TeamNameMapper convention BUG-015 already established for The Odds API."""
+    fixtures_client = MagicMock()
+    fixtures_client.get_fixtures.return_value = [_fixture("m1", "Arsenal", "Everton")]
+    odds_client = _seeded_odds_client()
+    odds_client.get_event_odds.return_value = NormalizedSecondaryOdds(total_goals=None, btts=None)
+    oddspapi_client = _seeded_oddspapi_client()
+    cache = RecommendationCache(db_path=tmp_path / "cache.db")
+    config = AgentConfig.default()
+    captured_match_info = {}
+
+    def _capture(match_info, config):
+        captured_match_info.update(match_info)
+        return _RECOMMENDATION
+
+    with patch("app.backend.recommendations.run_agent", side_effect=_capture):
+        asyncio.run(
+            run_eod_batch(
+                fixtures_client=fixtures_client, odds_client=odds_client, oddspapi_client=oddspapi_client,
+                cache=cache, config=config, schedule_t30=lambda f: None, date_str=_future_date(1),
+            )
+        )
+
+    oddspapi_client.get_corners_odds.assert_called_once_with("999")
+    assert captured_match_info["corners_odds"] == {"over_9.5": 1.9, "under_9.5": 1.95}
+
+    agent_config_hash = compute_agent_config_hash(config)
+    cached = cache.get_latest("m1", _future_date(1), agent_config_hash)
+    assert cached.odds["corners"] == {"over_9.5": 1.9, "under_9.5": 1.95}
+
+
+def test_corners_odds_reused_from_cache_not_refetched_when_h2h_unchanged(tmp_path: Path) -> None:
+    """Same credit-conserving contract as total_goals/btts (W164a) --
+    OddsPapi's budget is much smaller (250/month free tier), so paying for
+    a fresh corners call on every pass regardless of already_fresh() would
+    exhaust it even faster."""
+    fixtures_client = MagicMock()
+    fixtures_client.get_fixtures.return_value = [_fixture("m1", "Arsenal", "Everton")]
+    odds_client = _seeded_odds_client()
+    odds_client.get_event_odds.return_value = NormalizedSecondaryOdds(total_goals=None, btts=None)
+    oddspapi_client = _seeded_oddspapi_client()
+    cache = RecommendationCache(db_path=tmp_path / "cache.db")
+    config = AgentConfig.default()
+    agent_config_hash = compute_agent_config_hash(config)
+    cache.record_generation(
+        match_id="m1", date=_future_date(1), agent_config_hash=agent_config_hash,
+        odds={
+            "home": 1.8, "draw": 3.6, "away": 4.5,
+            "total_goals": None, "btts": None, "home_goals": None, "away_goals": None,
+            "corners": {"over_9.5": 1.85, "under_9.5": 2.0},
+        },
+        recommendation=_RECOMMENDATION, triggered_by="scheduled",
+    )
+    captured_match_info = {}
+
+    def _capture(match_info, config):
+        captured_match_info.update(match_info)
+        return _RECOMMENDATION
+
+    with patch("app.backend.recommendations.run_agent", side_effect=_capture):
+        result = asyncio.run(
+            run_eod_batch(
+                fixtures_client=fixtures_client, odds_client=odds_client, oddspapi_client=oddspapi_client,
+                cache=cache, config=config, schedule_t30=lambda f: None, date_str=_future_date(1),
+            )
+        )
+
+    oddspapi_client.get_corners_odds.assert_not_called()
+    assert result.unchanged == 1
+
+
+def test_corners_odds_not_fetched_when_no_oddspapi_client_supplied(tmp_path: Path) -> None:
+    """Default None -- production call sites that haven't wired OddsPapi in
+    yet (or a league with no LEAGUE_TOURNAMENT_IDS entry) stay unaffected,
+    same graceful-degrade contract as odds_client=None today."""
+    fixtures_client = MagicMock()
+    fixtures_client.get_fixtures.return_value = [_fixture("m1", "Arsenal", "Everton")]
+    odds_client = _seeded_odds_client()
+    odds_client.get_event_odds.return_value = NormalizedSecondaryOdds(total_goals=None, btts=None)
+    cache = RecommendationCache(db_path=tmp_path / "cache.db")
+    config = AgentConfig.default()
+    captured_match_info = {}
+
+    def _capture(match_info, config):
+        captured_match_info.update(match_info)
+        return _RECOMMENDATION
+
+    with patch("app.backend.recommendations.run_agent", side_effect=_capture):
+        asyncio.run(
+            run_eod_batch(
+                fixtures_client=fixtures_client, odds_client=odds_client,
+                cache=cache, config=config, schedule_t30=lambda f: None, date_str=_future_date(1),
+            )
+        )
+
+    assert "corners_odds" not in captured_match_info
 
 
 def test_odds_matched_via_canonical_team_name_despite_provider_spelling_differences(tmp_path: Path) -> None:

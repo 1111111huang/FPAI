@@ -15,7 +15,7 @@ import pytest
 
 from app.backend import bets, main, recommendations
 from app.backend.historical_odds_client import HistoricalOddsClient
-from app.backend.scheduler_wiring import build_odds_client
+from app.backend.scheduler_wiring import build_odds_client, build_oddspapi_client
 
 
 @pytest.fixture(autouse=True)
@@ -111,6 +111,34 @@ def test_build_odds_client_honors_explicit_odds_api_key_3(monkeypatch) -> None:
     client = build_odds_client()
 
     assert _wired_api_keys(client) == ["primary-key", "secondary-key", "third-key"]
+
+
+def test_build_oddspapi_client_returns_none_when_sandbox_active(monkeypatch) -> None:
+    """No OddsPapi equivalent of HistoricalOddsClient exists -- corners has
+    no historical replay source at all (agent_techspec.md S28) -- so a live
+    vendor call would just fetch the wrong (real, current) fixture set for a
+    historical sandbox date."""
+    monkeypatch.setenv("SANDBOX_MODE", "1")
+    monkeypatch.setenv("SANDBOX_DATE", "2026-03-01")
+    monkeypatch.setenv("ODDSPAPI_API_KEY", "fake-key")
+
+    assert build_oddspapi_client() is None
+
+
+def test_build_oddspapi_client_returns_none_when_no_api_key(monkeypatch) -> None:
+    monkeypatch.delenv("SANDBOX_MODE", raising=False)
+    monkeypatch.delenv("ODDSPAPI_API_KEY", raising=False)
+
+    assert build_oddspapi_client() is None
+
+
+def test_build_oddspapi_client_returns_live_client_when_configured(monkeypatch) -> None:
+    monkeypatch.delenv("SANDBOX_MODE", raising=False)
+    monkeypatch.setenv("ODDSPAPI_API_KEY", "fake-key")
+
+    client = build_oddspapi_client()
+
+    assert client is not None
 
 
 def test_sandbox_job_runs_db_path_lives_under_app_data_sandbox_not_app_backend_data() -> None:

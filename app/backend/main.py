@@ -53,7 +53,9 @@ from app.backend.recommendation_stats import compute_recommendation_stats
 from app.backend.bet_stats import compute_bet_stats
 from app.backend.recommendations import MatchRecommendationOut, RecommendationRequest, validate_and_degrade
 from app.backend.scheduler import JobRunLog, RecoverableScheduler
-from app.backend.scheduler_wiring import build_odds_client, build_schedule_t30, register_eod_job, register_lessons_job
+from app.backend.scheduler_wiring import (
+    build_odds_client, build_oddspapi_client, build_schedule_t30, register_eod_job, register_lessons_job,
+)
 from app.backend.settlement import settle_open_bets
 from app.backend.users import UserStore
 from src.agent.agent_config import AgentConfig
@@ -401,7 +403,7 @@ async def _pregenerate_recommendations(
             result = await eod_batch.run_eod_batch(
                 fixtures_client=get_fixtures_client(), odds_client=odds_client, cache=cache, config=config,
                 schedule_t30=schedule_t30, date_str=resolved_date_from, fixtures=league_fixtures, league=league,
-                concurrency=concurrency, force=force,
+                concurrency=concurrency, force=force, oddspapi_client=build_oddspapi_client(),
             )
         except Exception:
             LOGGER.warning("Pregenerate: batch failed for league=%s -- other leagues unaffected.", league, exc_info=True)
@@ -457,6 +459,7 @@ async def lifespan(app: FastAPI):
             serie_a_fixtures_client=get_serie_a_fixtures_client(),
             bundesliga_fixtures_client=get_bundesliga_fixtures_client(),
             ligue1_fixtures_client=get_ligue1_fixtures_client(),
+            oddspapi_client=build_oddspapi_client(),
         )
         register_lessons_job(
             scheduler,

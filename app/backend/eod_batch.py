@@ -40,6 +40,7 @@ from app.backend import recommendations
 from app.backend.agent_config_hash import compute_agent_config_hash
 from app.backend.football_data_client import FootballDataClient, NormalizedMatch
 from app.backend.odds_api_client import NormalizedOdds, OddsAPIClient
+from app.backend.oddspapi_client import LEAGUE_TOURNAMENT_IDS, OddsPapiClient, OddsPapiFixture
 from app.backend.football_data_competition_codes import FOOTBALL_DATA_CODE_BY_LEAGUE
 from app.backend.odds_sport_keys import ODDS_SPORT_KEY_BY_COMPETITION
 from app.backend.recommendation_cache import RecommendationCache
@@ -92,6 +93,29 @@ def odds_lookup(
         ): o
         for o in odds_events
     }
+
+
+def oddspapi_fixture_lookup(
+    oddspapi_fixtures: list[OddsPapiFixture], candidates: Iterable[str] | None = None
+) -> dict[tuple[str, str], str]:
+    """OddsPapi's own live-fixture list, mapped by canonical team names to
+    its fixture_id -- same TeamNameMapper/candidates convention odds_lookup()
+    (above) already uses for The Odds API, since OddsPapi spells clubs
+    independently too."""
+    mapper = TeamNameMapper(mapping_path=str(_TEAM_MAPPING_PATH))
+    return {
+        (mapper.map_team(f.home_team, candidates, use_token_match=True),
+         mapper.map_team(f.away_team, candidates, use_token_match=True)): f.fixture_id
+        for f in oddspapi_fixtures
+    }
+
+
+def matched_oddspapi_fixture_id(
+    fixture: NormalizedMatch, oddspapi_fixtures_by_teams: dict[tuple[str, str], str]
+) -> str | None:
+    mapper = TeamNameMapper(mapping_path=str(_TEAM_MAPPING_PATH))
+    key = (mapper.map_team(fixture.home_team), mapper.map_team(fixture.away_team))
+    return oddspapi_fixtures_by_teams.get(key)
 
 
 def already_fresh(
@@ -171,6 +195,8 @@ def add_secondary_odds(
     agent_config_hash: str,
     sport_key: str,
     odds_by_teams: dict[tuple[str, str], NormalizedOdds],
+    oddspapi_client: OddsPapiClient | None = None,
+    oddspapi_fixtures_by_teams: dict[tuple[str, str], str] | None = None,
 ) -> None:
     """W164/W164a/W199, shared by run_eod_batch (below) and t30_refresh.py's
     refresh_match_at_t30. Fetches totals/btts AND (W199) team_totals
@@ -178,9 +204,10 @@ def add_secondary_odds(
     each with its own independent cache-reuse tracking -- a cache row that
     predates W199 has total_goals/btts keys but no home_goals/away_goals
     key, so team_totals gets its own one-time backfill fetch even when
-    totals/btts are reused unchanged from cache.
+    totals/btts are reused unchanged from cache. Same independent-tracking
+    treatment for corners (total_corners, OddsPapi) below.
 
-    Folds total_goals/btts (and home_goals/away_goals) odds into
+    Folds total_goals/btts (and home_goals/away_goals, corners) odds into
     `match_info` (so the LLM prompt sees them, graph.py) and into `odds`
     (so already_fresh()'s dedup/freshness check also reacts to a
     secondary-market price move, not just a h2h move) -- reusing the prior
@@ -189,7 +216,14 @@ def add_secondary_odds(
     fetching fresh only when h2h moved or nothing's cached yet. Mutates
     both `match_info` and `odds` in place; caller must already have set
     `match_info["odds"] = odds` and `odds` must already be the matched h2h
-    dict (match_odds()'s return)."""
+    dict (match_odds()'s return).
+
+    `oddspapi_client`/`oddspapi_fixtures_by_teams` are independent of
+    `odds_client` -- OddsPapi is the only vendor confirmed to carry
+    total_corners at all (agent_techspec.md S28), on its own, much smaller
+    (250/month) credit budget. Both default None, so callers that haven't
+    wired OddsPapi in stay unaffected and corners is simply omitted, same
+    as today."""
     cached_entry = cache.get_latest(fixture.match_id, fixture_date, agent_config_hash)
     h2h_unchanged = cached_entry is not None and {
         k: cached_entry.odds.get(k) for k in ("home", "draw", "away")
@@ -242,6 +276,20 @@ def add_secondary_odds(
                 odds["home_goals"] = team_totals.home_goals
                 odds["away_goals"] = team_totals.away_goals
 
+    already_checked_corners = cached_entry is not None and "corners" in cached_entry.odds
+    if h2h_unchanged and already_checked_corners:
+        if cached_entry.odds.get("corners"):
+            match_info["corners_odds"] = cached_entry.odds["corners"]
+        odds["corners"] = cached_entry.odds.get("corners")
+    else:
+        get_corners_odds = getattr(oddspapi_client, "get_corners_odds", None)
+        fixture_id = matched_oddspapi_fixture_id(fixture, oddspapi_fixtures_by_teams or {})
+        if get_corners_odds is not None and fixture_id is not None:
+            corners = get_corners_odds(fixture_id)
+            if corners:
+                match_info["corners_odds"] = corners
+                odds["corners"] = corners
+
 
 async def run_eod_batch(
     fixtures_client: FootballDataClient,
@@ -255,6 +303,7 @@ async def run_eod_batch(
     on_progress: Callable[[NormalizedMatch, str], None] | None = None,
     league: str = LEAGUE_CODE,
     force: bool = False,
+    oddspapi_client: OddsPapiClient | None = None,
 ) -> EodBatchResult:
     """W62: `league` (defaults to `LEAGUE_CODE`/"E0", preserving every
     existing caller's exact behavior unchanged) tags every generated
@@ -340,6 +389,13 @@ async def run_eod_batch(
                 for fixture_date in fixture_dates
             }
 
+    if oddspapi_client is None or league not in LEAGUE_TOURNAMENT_IDS:
+        oddspapi_fixtures_by_teams: dict[tuple[str, str], str] = {}
+    else:
+        oddspapi_fixtures_by_teams = oddspapi_fixture_lookup(
+            oddspapi_client.get_fixtures(tournament_id=LEAGUE_TOURNAMENT_IDS[league]) or [],
+        )
+
     agent_config_hash = compute_agent_config_hash(config)
     semaphore = asyncio.Semaphore(concurrency)
     result = EodBatchResult(fixtures=list(fixtures))
@@ -368,6 +424,7 @@ async def run_eod_batch(
             add_secondary_odds(
                 match_info, odds, odds_client, cache, fixture, fixture_date,
                 agent_config_hash, sport_key, odds_by_teams,
+                oddspapi_client=oddspapi_client, oddspapi_fixtures_by_teams=oddspapi_fixtures_by_teams,
             )
 
         # W151: a prior pass (boot pregenerate, or tonight's own EOD run

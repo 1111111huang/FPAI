@@ -20,6 +20,7 @@ from app.backend.football_data_client import FootballDataClient, NormalizedMatch
 from app.backend.historical_odds_client import HistoricalOddsClient
 from app.backend.live_lessons import auto_judge_live_lessons, commit_lesson_batches, prepare_lesson_batches
 from app.backend.odds_api_client import CreditCounter, FileCreditCounterStore, OddsAPIClient
+from app.backend.oddspapi_client import OddsPapiClient
 from app.backend.recommendation_cache import RecommendationCache
 from app.backend.recommendation_outcomes import RecommendationOutcomeStore, resolve_pending_recommendations
 from app.backend.scheduler import NY_TZ, RecoverableScheduler
@@ -38,6 +39,7 @@ LOGGER = get_logger(__name__)
 CREDIT_COUNTER_PATH = Path(__file__).parent.parent.parent / "data" / "odds_api_credit_counter.json"
 CREDIT_COUNTER_PATH_2 = Path(__file__).parent.parent.parent / "data" / "odds_api_credit_counter_2.json"
 CREDIT_COUNTER_PATH_3 = Path(__file__).parent.parent.parent / "data" / "odds_api_credit_counter_3.json"
+CREDIT_COUNTER_PATH_ODDSPAPI = Path(__file__).parent.parent.parent / "data" / "oddspapi_credit_counter.json"
 EOD_JOB_ID = "eod_batch_generation"
 EOD_HOUR = 23
 EOD_MINUTE = 0
@@ -200,6 +202,42 @@ def build_odds_client() -> OddsAPIClient | HistoricalOddsClient | FallbackOddsCl
     return clients[0] if len(clients) == 1 else FallbackOddsClient(clients)
 
 
+class PersistingOddsPapiClient:
+    """Same persist-after-call contract as PersistingOddsClient above, for
+    OddsPapiClient's own (much smaller, 250/month) credit budget."""
+
+    def __init__(self, client: OddsPapiClient, counter: CreditCounter, store: FileCreditCounterStore) -> None:
+        self._client = client
+        self._counter = counter
+        self._store = store
+
+    def get_fixtures(self, tournament_id: int, status_id: int = 1):
+        return self._client.get_fixtures(tournament_id=tournament_id, status_id=status_id)
+
+    def get_corners_odds(self, fixture_id: str):
+        result = self._client.get_corners_odds(fixture_id=fixture_id)
+        self._store.save(self._counter)
+        return result
+
+
+def build_oddspapi_client() -> OddsPapiClient | None:
+    """None during sandbox mode (a live vendor call would fetch the wrong
+    fixture set for a historical sandbox date -- there's no OddsPapi
+    equivalent of HistoricalOddsClient, since corners has no historical
+    replay source at all, see agent_techspec.md S28) or when ODDSPAPI_API_KEY
+    isn't configured. ponytail: single key only, no ODDS_API_KEY_2/_3-style
+    fallback chain -- add one the same way if this budget is ever actually
+    observed running dry mid-month."""
+    if sandbox_date() is not None:
+        return None
+    api_key = os.environ.get("ODDSPAPI_API_KEY", "")
+    if not api_key:
+        return None
+    store = FileCreditCounterStore(CREDIT_COUNTER_PATH_ODDSPAPI)
+    counter = store.load()
+    return PersistingOddsPapiClient(client=OddsPapiClient(api_key=api_key, credit_counter=counter), counter=counter, store=store)
+
+
 def next_day_date_str(now_fn: Callable[[], datetime] = lambda: sandbox_now(NY_TZ)) -> str:
     """Tomorrow's date in America/New_York, as the EOD job (fired at 23:00
     NY time) needs the *next* day's fixtures, not today's."""
@@ -290,6 +328,7 @@ def register_eod_job(
     serie_a_fixtures_client: FootballDataClient | None = None,
     bundesliga_fixtures_client: FootballDataClient | None = None,
     ligue1_fixtures_client: FootballDataClient | None = None,
+    oddspapi_client: OddsPapiClient | None = None,
 ) -> None:
     """Registers the daily EOD batch job (W09) on the given scheduler.
     RecoverableScheduler.schedule_daily itself handles the restart/catch-up
@@ -338,6 +377,7 @@ def register_eod_job(
                 run_eod_batch(
                     fixtures_client=fixtures_client, odds_client=odds_client, cache=cache, config=config,
                     schedule_t30=schedule_t30, date_str=date_str, fixtures=fixtures, league=league,
+                    oddspapi_client=oddspapi_client,
                 )
             )
 
