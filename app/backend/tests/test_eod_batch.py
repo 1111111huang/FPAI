@@ -409,9 +409,11 @@ def test_secondary_odds_reused_from_cache_not_refetched_when_h2h_unchanged(tmp_p
     """W164a: get_event_odds() costs real Odds-API credits per call --
     confirmed live it was being paid on every pass, for every fixture,
     regardless of whether already_fresh() was about to skip generation
-    anyway. Once a real check has already happened (cached row's odds carry
-    a total_goals/btts key, even null) and h2h hasn't moved since, reuse
-    that snapshot instead of paying for a fresh one."""
+    anyway. Once a real price has already been cached and h2h hasn't moved
+    since, reuse that snapshot instead of paying for a fresh one -- but (see
+    the eod_batch.py fix this test's sibling below covers) a *null* result
+    must NOT count as "already checked" the same way, or a market a book
+    simply hadn't posted yet at cache time gets stuck unrecoverable."""
     fixtures_client = MagicMock()
     fixtures_client.get_fixtures.return_value = [_fixture("m1", "Arsenal", "Everton")]
     odds_client = _seeded_odds_client()
@@ -444,6 +446,61 @@ def test_secondary_odds_reused_from_cache_not_refetched_when_h2h_unchanged(tmp_p
     odds_client.get_event_odds.assert_not_called()
     assert result.unchanged == 1  # h2h AND secondary both matched the prior row -> already_fresh() short-circuits
     assert result.generated == 0
+
+
+def test_team_totals_retried_after_a_previously_cached_null(tmp_path: Path) -> None:
+    """A book that hadn't posted team_totals yet at the time of an earlier
+    pass caches home_goals=away_goals=None. h2h staying unchanged must not
+    read that null as "already checked, nothing to do" forever -- confirmed
+    live (2026-09-19): I1/D1/F1 fixtures stuck this way while The Odds API
+    demonstrably had real team_totals prices by the time of a later regen."""
+    fixtures_client = MagicMock()
+    fixtures_client.get_fixtures.return_value = [_fixture("m1", "Arsenal", "Everton")]
+    odds_client = _seeded_odds_client()  # same h2h as the pre-existing cache row below
+    # total_goals/btts are real cached values (unlike home_goals/away_goals
+    # below), so they're reused from cache and never refetched -- only the
+    # team_totals call actually fires, hence a single return_value covering it.
+    odds_client.get_event_odds.return_value = NormalizedSecondaryOdds(
+        total_goals=None, btts=None,
+        home_goals={"over_1.5": 1.6, "under_1.5": 2.2}, away_goals={"over_1.5": 2.5, "under_1.5": 1.5},
+    )
+    cache = RecommendationCache(db_path=tmp_path / "cache.db")
+    config = AgentConfig.default()
+    agent_config_hash = compute_agent_config_hash(config)
+    cache.record_generation(
+        match_id="m1", date=_future_date(1), agent_config_hash=agent_config_hash,
+        odds={
+            "home": 1.8, "draw": 3.6, "away": 4.5,
+            "total_goals": {"over_2.5": 1.9, "under_2.5": 1.95}, "btts": {"yes": 1.7, "no": 2.1},
+            "home_goals": None, "away_goals": None,  # W199's book hadn't posted a line yet on the earlier pass
+        },
+        recommendation=_RECOMMENDATION, triggered_by="scheduled",
+    )
+    captured_match_info = {}
+
+    def _capture(match_info, config):
+        captured_match_info.update(match_info)
+        return _RECOMMENDATION
+
+    with patch("app.backend.recommendations.run_agent", side_effect=_capture):
+        asyncio.run(
+            run_eod_batch(
+                fixtures_client=fixtures_client, odds_client=odds_client, cache=cache, config=config,
+                schedule_t30=lambda f: None, date_str=_future_date(1),
+            )
+        )
+
+    odds_client.get_event_odds.assert_any_call(
+        sport_key="soccer_epl", event_id="evt1", markets=("team_totals",),
+        regions=("uk", "us", "us2"), home_team="Arsenal", away_team="Everton",
+    )
+    assert captured_match_info["home_goals_odds"] == {"over_1.5": 1.6, "under_1.5": 2.2}
+    assert captured_match_info["away_goals_odds"] == {"over_1.5": 2.5, "under_1.5": 1.5}
+
+    agent_config_hash = compute_agent_config_hash(config)
+    cached = cache.get_latest("m1", _future_date(1), agent_config_hash)
+    assert cached.odds["home_goals"] == {"over_1.5": 1.6, "under_1.5": 2.2}
+    assert cached.odds["away_goals"] == {"over_1.5": 2.5, "under_1.5": 1.5}
 
 
 def test_secondary_odds_refetched_when_h2h_odds_moved(tmp_path: Path) -> None:

@@ -228,11 +228,21 @@ def add_secondary_odds(
     h2h_unchanged = cached_entry is not None and {
         k: cached_entry.odds.get(k) for k in ("home", "draw", "away")
     } == odds
+    # Truthy check, not just key presence: a book that hasn't posted this
+    # secondary market yet (common this far out from kickoff, more common
+    # still for team_totals/corners than for totals/btts) makes the fetch
+    # below cache an explicit None. Key-presence alone would then read that
+    # None as "already checked" forever, since h2h staying unchanged never
+    # forces a re-check -- permanently blocking a retry even once the book
+    # actually posts a price. Confirmed live (2026-09-19): I1/D1/F1 fixtures
+    # stuck on a cached home_goals/away_goals=None from an early EOD run,
+    # while The Odds API demonstrably had real team_totals prices by the
+    # time of a later regen -- this fixture just never got asked again.
     already_checked_secondary = cached_entry is not None and (
-        "total_goals" in cached_entry.odds or "btts" in cached_entry.odds
+        cached_entry.odds.get("total_goals") or cached_entry.odds.get("btts")
     )
     already_checked_team_totals = cached_entry is not None and (
-        "home_goals" in cached_entry.odds or "away_goals" in cached_entry.odds
+        cached_entry.odds.get("home_goals") or cached_entry.odds.get("away_goals")
     )
     odds_event = matched_odds_event(fixture, odds_by_teams)
     get_event_odds = getattr(odds_client, "get_event_odds", None)
@@ -276,7 +286,7 @@ def add_secondary_odds(
                 odds["home_goals"] = team_totals.home_goals
                 odds["away_goals"] = team_totals.away_goals
 
-    already_checked_corners = cached_entry is not None and "corners" in cached_entry.odds
+    already_checked_corners = cached_entry is not None and bool(cached_entry.odds.get("corners"))
     if h2h_unchanged and already_checked_corners:
         if cached_entry.odds.get("corners"):
             match_info["corners_odds"] = cached_entry.odds["corners"]
