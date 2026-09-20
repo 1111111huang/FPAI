@@ -288,6 +288,25 @@ def test_dangling_pick_is_dropped_and_overall_capped_to_no_bet():
     assert result.overall == "no_bet"
 
 
+def test_home_away_goals_candidate_is_not_dropped_as_malformed():
+    """W199 added home_goals/away_goals (over_1.5/under_1.5) to
+    src/agent/schema.py's own market/selection Literal on the day it
+    shipped, but this file's MarketCandidateOut/RecommendationPickOut kept
+    the pre-W199 vocabulary -- so every home/away-goals candidate the agent
+    produced was silently dropped here as "malformed data from the agent"
+    and could never become the recommendation_pick, even with a real edge."""
+    candidate = {**_VALID_CANDIDATE, "market": "home_goals", "selection": "over_1.5"}
+    raw = {
+        **_VALID_RAW,
+        "candidates": [candidate],
+        "recommendation_pick": {"market": "home_goals", "selection": "over_1.5"},
+    }
+    result = validate_and_degrade(raw)
+    assert result.invalid_market_count == 0
+    assert len(result.candidates) == 1
+    assert result.recommendation_pick == RecommendationPickOut(market="home_goals", selection="over_1.5")
+
+
 def test_pick_pointing_at_a_candidate_that_failed_validation_is_also_dropped():
     """The picked candidate itself is malformed (fails MarketCandidateOut
     validation, gets omitted from `candidates`) -- the pick must not survive

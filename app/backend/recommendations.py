@@ -282,6 +282,8 @@ _SHAP_POSITIVE_SELECTION: dict[str, str] = {
     "total_corners": "over_9.5",
     "home_corners": "over_9.5",
     "away_corners": "over_9.5",
+    "home_goals": "over_1.5",
+    "away_goals": "over_1.5",
 }
 
 
@@ -409,13 +411,23 @@ class ShapContributionOut(BaseModel):
 class MarketCandidateOut(BaseModel):
     # Constrained to the same vocabulary config/prompts/agent_v1.txt already
     # specifies to the LLM (result_3way/btts/total_goals/home_corners/
-    # away_corners, home/draw/away/yes/no/over_2.5/under_2.5) -- previously
-    # plain `str`, so a non-canonical name the agent invented (observed live:
-    # "1X2" for what should be result_3way, "Asian Handicap", team names used
-    # as a selection) passed validation instead of being dropped like any
-    # other malformed market.
-    market: Literal["result_3way", "btts", "total_goals", "home_corners", "away_corners", "total_corners"]
-    selection: Literal["home", "draw", "away", "yes", "no", "over_2.5", "under_2.5", "over_9.5", "under_9.5"]
+    # away_corners/total_corners/home_goals/away_goals, home/draw/away/yes/no/
+    # over_2.5/under_2.5/etc) -- previously plain `str`, so a non-canonical
+    # name the agent invented (observed live: "1X2" for what should be
+    # result_3way, "Asian Handicap", team names used as a selection) passed
+    # validation instead of being dropped like any other malformed market.
+    # home_goals/away_goals added alongside src/agent/schema.py's own W199
+    # Literal -- that file got the new market on day one, this one didn't,
+    # so every home/away-goals candidate the agent produced was silently
+    # dropped here as "malformed data from the agent" until this fix.
+    market: Literal[
+        "result_3way", "btts", "total_goals", "home_corners", "away_corners", "total_corners",
+        "home_goals", "away_goals",
+    ]
+    selection: Literal[
+        "home", "draw", "away", "yes", "no", "over_2.5", "under_2.5", "over_9.5", "under_9.5",
+        "over_1.5", "under_1.5",
+    ]
     recommendation_type: str
     current_odds: float | None
     # BUG-032: defaulted for the same reason as src/agent/schema.py's
@@ -455,8 +467,14 @@ class MarketCandidateOut(BaseModel):
 
 
 class RecommendationPickOut(BaseModel):
-    market: Literal["result_3way", "btts", "total_goals", "home_corners", "away_corners", "total_corners"]
-    selection: Literal["home", "draw", "away", "yes", "no", "over_2.5", "under_2.5", "over_9.5", "under_9.5"]
+    market: Literal[
+        "result_3way", "btts", "total_goals", "home_corners", "away_corners", "total_corners",
+        "home_goals", "away_goals",
+    ]
+    selection: Literal[
+        "home", "draw", "away", "yes", "no", "over_2.5", "under_2.5", "over_9.5", "under_9.5",
+        "over_1.5", "under_1.5",
+    ]
 
 
 class MatchRecommendationOut(BaseModel):
