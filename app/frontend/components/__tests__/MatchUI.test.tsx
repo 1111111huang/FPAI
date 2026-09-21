@@ -1409,6 +1409,36 @@ describe("MatchAnalysisPage -- cache-first load (W47)", () => {
     expect(screen.queryByText(/to clear edge/)).not.toBeInTheDocument();
   });
 
+  it("direct user report (2026-09-20): a second market independently qualifying as direct_bet doesn't read as a second pick", async () => {
+    // Leverkusen vs RB Leipzig: result_3way/home and away_goals/under_1.5
+    // both independently carried recommendation_type "direct_bet", but only
+    // away_goals/under_1.5 (higher composite_score) was recommendation_pick.
+    // The table must show exactly one "Direct Bet" badge (the highlighted
+    // pick row) and label the other qualifying row distinctly.
+    vi.mocked(getCachedRecommendation).mockResolvedValue(
+      makeRecommendation({
+        overall: "direct_bet",
+        candidates: [
+          {
+            market: "result_3way", selection: "home", recommendation_type: "direct_bet",
+            current_odds: 1.95, min_odds: 0, ml_probability: 0.612, implied_probability: 0.513, value_edge: 0.1,
+          },
+          {
+            market: "away_goals", selection: "under_1.5", recommendation_type: "direct_bet",
+            current_odds: 1.82, min_odds: 0, ml_probability: 0.691, implied_probability: 0.549, value_edge: 0.141,
+          },
+        ],
+        recommendation_pick: { market: "away_goals", selection: "under_1.5" },
+      })
+    );
+
+    render(<MatchAnalysisPage id="m1" home="Leverkusen" away="RB Leipzig" date="2026-09-20" />);
+
+    await screen.findByText("away_goals · under_1.5");
+    expect(screen.getAllByText("Direct Bet")).toHaveLength(1);
+    expect(screen.getByText("Also Qualifies")).toBeInTheDocument();
+  });
+
   it("W210 follow-up (W115 re-enable): renders a Log bet control for a direct_bet, non-anomalous market", async () => {
     // Default the session to authenticated so the real "Log bet" trigger
     // renders (not LogBetButton's unauthenticated "Sign in to log this

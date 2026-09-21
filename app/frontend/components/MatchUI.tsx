@@ -794,16 +794,38 @@ function HitBadge({ hit }: { hit: boolean }) {
   );
 }
 
-export function StatusBadge({ status, size = "sm" }: { status: Overall; size?: "sm" | "lg" }) {
+export function StatusBadge({
+  status,
+  size = "sm",
+  isThePick = true,
+}: {
+  status: Overall;
+  size?: "sm" | "lg";
+  // Direct user report (2026-09-20): Leverkusen vs RB Leipzig showed 2
+  // "Direct Bet" badges in the Model Probabilities table. Each market's
+  // recommendation_type is the agent's own independent per-market verdict,
+  // but only one candidate (the composite_score-ranked highest) becomes the
+  // match's actual recommendation_pick -- a second market independently
+  // clearing the same bar reads, worded identically, as a second official
+  // recommendation. isThePick=false (ProbabilityRow's non-highlighted rows
+  // only) relabels a direct_bet/conditional badge to make clear it's a
+  // secondary signal, not the match's pick. Every other call site (a match
+  // card, or a table's own highlighted/shown row) describes a single
+  // resolved verdict already and keeps the default.
+  isThePick?: boolean;
+}) {
   const s = STATUS_META[status];
   const pad = size === "lg" ? "px-3 py-1.5 text-sm" : "px-2 py-0.5 text-[11px]";
+  const secondary = !isThePick && status !== "no_bet" && status !== "insufficient_data";
   return (
     <span
-      title={s.explain}
-      className={`inline-flex items-center gap-1.5 rounded-md border ${s.ring} ${s.fill} ${s.text} ${pad} font-medium`}
+      title={secondary ? `${s.explain} This market isn't the match's top pick -- see the highlighted row.` : s.explain}
+      className={`inline-flex items-center gap-1.5 rounded-md border ${s.ring} ${s.fill} ${s.text} ${pad} font-medium ${
+        secondary ? "opacity-60" : ""
+      }`}
     >
       {s.icon}
-      {s.label}
+      {secondary ? "Also Qualifies" : s.label}
     </span>
   );
 }
@@ -2370,7 +2392,7 @@ function ProbabilityRow({
         </span>
       ) : (
         <span className="justify-self-end">
-          <StatusBadge status={m.recommendationType} />
+          <StatusBadge status={m.recommendationType} isThePick={highlighted} />
         </span>
       )}
       {/* W210 follow-up (2026-09-14): re-enabled -- see Task 3's
