@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timezone
+import threading
 import time
 from typing import TYPE_CHECKING, Callable
 
@@ -129,6 +130,21 @@ class FootballDataClient:
         # included) omits this and keeps calling the live API on every
         # get_results(), completely unchanged.
         self._results_cache = results_cache
+        # Found live (2026-09-21): the singleton client in main.py is shared
+        # across every football-data.org-covered league AND every caller
+        # that can fire at boot -- the scheduler's own EOD/lessons catch-up
+        # (each on its own daemon thread, scheduler.py's _run_and_mark) and
+        # _pregenerate_recommendations (run_in_threadpool worker threads),
+        # all racing the same 10-req/minute budget concurrently. _RateLimiter
+        # is purely reactive (only learns "exhausted" from a response's own
+        # headers), so several threads can each pass wait_if_needed() before
+        # any of them has gotten a response back, all fire at once, and blow
+        # the budget before the limiter ever gets a chance to react -- a 429.
+        # Serializing actual outbound requests through this lock closes that:
+        # only one call is ever in flight, so every subsequent call (whichever
+        # thread makes it) always sees the freshest known remaining-budget
+        # before deciding whether to wait.
+        self._request_lock = threading.Lock()
 
     def get_fixtures(
         self, competition_code: str = "PL", date_from: str | None = None, date_to: str | None = None,
@@ -212,19 +228,36 @@ class FootballDataClient:
         if date_to:
             params["dateTo"] = date_to
 
-        if not blocking and self._rate_limiter.would_block():
-            raise RateLimitWouldBlock(
-                f"Rate limit exhausted for {competition_code}; skipping non-blocking call rather than waiting."
-            )
-        self._rate_limiter.wait_if_needed()
-        response = self._session.get(
-            f"{BASE_URL}/competitions/{competition_code}/matches",
-            headers={"X-Auth-Token": self._api_key},
-            params=params,
-            timeout=10,
-        )
-        self._rate_limiter.update_from_headers(response.headers)
-        response.raise_for_status()
+        # blocking=False must never wait on another thread's in-flight call
+        # either -- that call may itself be sleeping inside wait_if_needed()
+        # for up to a minute, which would defeat RateLimitWouldBlock's whole
+        # purpose (see its own docstring). Treat "lock held elsewhere" the
+        # same as "budget exhausted": fail fast instead of waiting.
+        if not blocking:
+            if not self._request_lock.acquire(blocking=False):
+                raise RateLimitWouldBlock(
+                    f"Another request is already in flight for {competition_code}; "
+                    "skipping non-blocking call rather than waiting."
+                )
+        else:
+            self._request_lock.acquire()
 
-        payload = response.json()
-        return [_normalize(match) for match in payload.get("matches", [])]
+        try:
+            if not blocking and self._rate_limiter.would_block():
+                raise RateLimitWouldBlock(
+                    f"Rate limit exhausted for {competition_code}; skipping non-blocking call rather than waiting."
+                )
+            self._rate_limiter.wait_if_needed()
+            response = self._session.get(
+                f"{BASE_URL}/competitions/{competition_code}/matches",
+                headers={"X-Auth-Token": self._api_key},
+                params=params,
+                timeout=10,
+            )
+            self._rate_limiter.update_from_headers(response.headers)
+            response.raise_for_status()
+
+            payload = response.json()
+            return [_normalize(match) for match in payload.get("matches", [])]
+        finally:
+            self._request_lock.release()

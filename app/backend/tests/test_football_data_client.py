@@ -228,6 +228,51 @@ def test_get_fixtures_status_filter_includes_live() -> None:
     assert "LIVE" in session.get.call_args.kwargs["params"]["status"].split(",")
 
 
+def test_concurrent_call_serializes_and_blocking_false_fails_fast_while_in_flight() -> None:
+    """Found live (2026-09-21): boot-time EOD/lessons catch-up (each on its
+    own daemon thread) and pregenerate (threadpool workers) all share the
+    singleton client and can call it concurrently. Before this fix, each
+    thread's would_block()/wait_if_needed() check ran against whatever the
+    limiter last knew *before* any of them got a response back, so several
+    threads could all pass the check and fire at once -- a real 429. This
+    proves calls are now serialized: a blocking=False call made while
+    another request is genuinely in flight fails fast (RateLimitWouldBlock)
+    instead of racing it, matching blocking=False's own no-hang contract."""
+    import threading
+
+    started = threading.Event()
+    release = threading.Event()
+
+    def slow_get(*args, **kwargs):
+        started.set()
+        release.wait(timeout=2)
+        response = MagicMock()
+        response.status_code = 200
+        response.headers = {}
+        response.json.return_value = {"count": 0, "matches": []}
+        response.raise_for_status.return_value = None
+        return response
+
+    session = MagicMock()
+    session.get.side_effect = slow_get
+    client = FootballDataClient(api_key="fake-key", session=session)
+
+    in_flight_result: list = []
+    thread = threading.Thread(
+        target=lambda: in_flight_result.append(client.get_fixtures(competition_code="PL"))
+    )
+    thread.start()
+    assert started.wait(timeout=2), "first call never reached the network"
+
+    with pytest.raises(RateLimitWouldBlock):
+        client.get_results(date_from="2026-08-22", date_to="2026-08-22", blocking=False)
+
+    release.set()
+    thread.join(timeout=2)
+    assert in_flight_result == [[]]
+    assert session.get.call_count == 1
+
+
 def test_get_fixtures_status_filter_includes_timed() -> None:
     """Bug found live (2026-08-14): football-data.org marks near-term
     fixtures with a confirmed kickoff time as status=TIMED, not SCHEDULED
