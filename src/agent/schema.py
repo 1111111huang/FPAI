@@ -854,6 +854,70 @@ def _downgrade_recommendation_below_top_composite_score(data: dict) -> dict:
     return data
 
 
+def _downgrade_pick_dominated_by_another_candidate(data: dict) -> dict:
+    """Direct user finding (2026-09-20): composite_score is the LLM's own
+    self-report with no fixed formula (see
+    _downgrade_recommendation_below_top_composite_score's own docstring) --
+    that function only catches self-contradiction WITHIN the composite_score
+    column itself (a rejected candidate self-rating higher than the pick),
+    never a contradiction between composite_score and the ml_probability/
+    value_edge numbers it's supposed to summarize. Two matches in the same
+    batch showed exactly that gap: Parma vs Genoa picked result_3way/away
+    (ml=0.450, edge=+0.050) over total_goals/over_2.5 (ml=0.546, edge=+0.120)
+    -- the rejected candidate had BOTH higher probability AND higher edge,
+    yet a lower self-reported composite_score. Bournemouth vs Liverpool
+    picked result_3way/away (ml=0.533, edge=+0.079) over btts/no (ml=0.554,
+    edge=+0.184) -- same shape. Neither is the prompt's own legitimate
+    "smaller edge, materially higher probability" tradeoff (agent_v1.txt's
+    Value Calculation section) -- that's a genuine judgment call when one
+    metric is higher and the other lower. Strict dominance on BOTH axes has
+    no such judgment call to make, regardless of what composite_score is
+    supposed to mean or what formula anyone uses for it.
+
+    Downgrades to no_bet -- same downgrade-only convention as every other
+    guardrail in this file, including composite_score's own check just
+    above. Never auto-promotes the dominating candidate: that candidate was
+    never itself vetted as the LLM's actual pick, and its own `reason`/
+    team_evidence/the_read text was written to justify a different market,
+    not to stand in as if the LLM had chosen it.
+
+    Only compares against still-eligible (non-no_bet) candidates, same
+    filter as the composite_score check -- an already-disqualified
+    candidate was never a real alternative. Order relative to that check
+    doesn't matter (each independently re-resolves the current pick), but
+    this runs immediately after it so both composite_score-column checks
+    live together before _prefer_higher_probability_conditional_pick, which
+    reacts to either downgrade the same way it reacts to any other."""
+    pick = data.get("recommendation_pick")
+    candidates = data.get("candidates") or []
+    resolved = resolve_recommendation_pick(candidates, pick)
+    if resolved is None or resolved["recommendation_type"] == "no_bet":
+        return data
+
+    dominators = [
+        c for c in candidates
+        if c is not resolved and c["recommendation_type"] != "no_bet"
+        and c["ml_probability"] > resolved["ml_probability"]
+        and c["value_edge"] > resolved["value_edge"]
+    ]
+    if not dominators:
+        return data
+
+    top = max(dominators, key=lambda c: (c["ml_probability"], c["value_edge"]))
+    original_type = resolved["recommendation_type"]
+    resolved["recommendation_type"] = "no_bet"
+    limitations = list(data.get("limitations") or [])
+    limitations.append(
+        f"Downgraded {resolved['market']!r}/{resolved['selection']!r} from {original_type!r} to "
+        f"no_bet: {top['market']!r}/{top['selection']!r} has both a higher ml_probability "
+        f"({top['ml_probability']} vs {resolved['ml_probability']}) and a higher value_edge "
+        f"({top['value_edge']} vs {resolved['value_edge']}) -- strictly dominates the pick "
+        "regardless of self-reported composite_score."
+    )
+    data["limitations"] = limitations
+    return data
+
+
 def reported_teams(match_field: dict) -> tuple[str, str] | None:
     """The two team names the agent's own `match` field claims this
     recommendation is about, tolerating the `home`/`away` key spelling the
@@ -1004,6 +1068,7 @@ def extract_recommendation(
         )
         data = _compute_target_odds(data, min_value_edge)
         data = _downgrade_recommendation_below_top_composite_score(data)
+        data = _downgrade_pick_dominated_by_another_candidate(data)
         data = _prefer_higher_probability_conditional_pick(data)
         data = _resolve_recommendation_pick(data)
         data = _attach_unit_bet_multiplier(data)
