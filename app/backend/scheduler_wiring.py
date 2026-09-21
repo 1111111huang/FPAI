@@ -149,6 +149,15 @@ class FallbackOddsClient:
             if result is not None:
                 return result
             LOGGER.info("FallbackOddsClient.%s: key #%d exhausted (local budget) -- trying next key.", op_name, i + 1)
+        # W250: the per-key client's own "skipping call" warning fires on
+        # every one of these attempts and, read alone, looks like the app
+        # just gave up -- this is the one place that's actually true, so it's
+        # the one place that says so, at WARNING (not the per-key loop's INFO)
+        # so it survives a warning-level-only log filter.
+        LOGGER.warning(
+            "FallbackOddsClient.%s: all %d configured key(s) exhausted or failed -- keeping last-known odds.",
+            op_name, len(self._clients),
+        )
         return None
 
     def get_odds(self, sport_key: str = "soccer_epl", date: str | None = None):
@@ -241,6 +250,11 @@ class FallbackOddsPapiClient:
             if result is not None:
                 return result
             LOGGER.info("FallbackOddsPapiClient.%s: key #%d exhausted (local budget) -- trying next key.", op_name, i + 1)
+        # W250: same rationale as FallbackOddsClient's own final log, above.
+        LOGGER.warning(
+            "FallbackOddsPapiClient.%s: all %d configured key(s) exhausted or failed -- keeping last-known odds.",
+            op_name, len(self._clients),
+        )
         return None
 
     def get_fixtures(self, tournament_id: int, status_id: int = 1):

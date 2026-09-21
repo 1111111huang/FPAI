@@ -216,6 +216,33 @@ def test_fallback_odds_client_returns_none_when_every_client_fails() -> None:
     assert result is None
 
 
+def test_fallback_odds_client_logs_a_final_warning_only_once_every_key_is_exhausted(caplog) -> None:
+    """W250: found live -- OddsAPIClient's own "skipping call" warning fires
+    on every exhausted key and, read in isolation, looks identical whether
+    a fallback key rescues the call or not, making a genuinely working
+    fallback chain indistinguishable in the logs from a fully-exhausted one.
+    This is the one place that can say "keeping last-known odds" truthfully
+    -- at WARNING, so it survives a warning-level-only log filter -- and it
+    must NOT fire when a later key actually rescues the call."""
+    import logging
+
+    primary, secondary = MagicMock(), MagicMock()
+    primary.get_odds.return_value = None
+    secondary.get_odds.return_value = ["secondary odds"]
+
+    with caplog.at_level(logging.WARNING):
+        rescued = FallbackOddsClient([primary, secondary]).get_odds()
+    assert rescued == ["secondary odds"]
+    assert "exhausted or failed" not in caplog.text
+
+    caplog.clear()
+    secondary.get_odds.return_value = None
+    with caplog.at_level(logging.WARNING):
+        exhausted = FallbackOddsClient([primary, secondary]).get_odds()
+    assert exhausted is None
+    assert "all 2 configured key(s) exhausted or failed" in caplog.text
+
+
 def test_fallback_odds_client_get_event_odds_falls_back_the_same_way() -> None:
     """W164: get_event_odds() shares _try_each_client with get_odds() --
     one test proving the shared plumbing forwards args/falls back correctly

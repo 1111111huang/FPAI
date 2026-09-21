@@ -263,9 +263,17 @@ class OddsAPIClient:
         cost = len(self._markets) * len(self._regions)
 
         if self._credit_counter.would_exceed(cost, self._credit_limit, self._safety_margin):
+            # W250: this class has no idea whether it's called directly (a
+            # single-key deployment, where "keeping last-known odds" is
+            # accurate) or wrapped by FallbackOddsClient (scheduler_wiring.py),
+            # which tries the next configured key immediately on a None
+            # return -- claiming finality here was misleading in the
+            # multi-key case (found live: read as "the backend gave up"
+            # when it was actually one hop into a working fallback chain).
+            # FallbackOddsClient._try_each_client logs the real outcome.
             LOGGER.warning(
-                "OddsAPIClient: skipping call, would cross safety margin "
-                "(used=%d cost=%d limit=%d safety_margin=%d) -- keeping last-known odds.",
+                "OddsAPIClient: skipping call for this key, would cross safety margin "
+                "(used=%d cost=%d limit=%d safety_margin=%d).",
                 self._credit_counter.credits_used, cost, self._credit_limit, self._safety_margin,
             )
             return None
