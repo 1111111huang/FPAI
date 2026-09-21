@@ -24,6 +24,8 @@ instances of it, same separation OddsAPIClient/FallbackOddsClient keep.
 
 from __future__ import annotations
 
+import threading
+import time
 from dataclasses import dataclass
 
 import requests
@@ -34,6 +36,36 @@ from src.utils.logger import get_logger
 LOGGER = get_logger(__name__)
 
 BASE_URL = "https://api.oddspapi.io"
+
+# Confirmed live (2026-09-20): OddsPapi enforces a real per-endpoint rate
+# limit, completely independent of the monthly credit quota -- a 429 with
+# {"code": "RATE_LIMITED", "details": "Please wait 1.52 seconds before
+# making another request to /v4/fixtures.", "retryMs": 1520}. eod_batch.py's
+# asyncio.gather() starts every fixture in a league at once, and
+# add_secondary_odds() has no await point of its own, so its OddsPapi calls
+# previously fired back-to-back with zero delay between them -- easily
+# faster than the vendor allows, tripping the limit even with plenty of
+# monthly credits left. The one-off historical backfill script
+# (scripts/pull_oddspapi_btts_corners.py) already knew to add its own
+# time.sleep(5.0) between every call for this exact reason; that protection
+# was never carried into this live path.
+#
+# Global, not per-key: the vendor's error message doesn't say whether the
+# limit is per-key or per-IP, and a global throttle is correct either way
+# (just possibly more conservative than strictly required if it's per-key).
+# A small margin over the vendor's own observed 1.52s.
+_MIN_REQUEST_INTERVAL_SECONDS = 1.6
+_throttle_lock = threading.Lock()
+_last_request_at = 0.0
+
+
+def _throttle_oddspapi_request() -> None:
+    global _last_request_at
+    with _throttle_lock:
+        wait = _MIN_REQUEST_INTERVAL_SECONDS - (time.monotonic() - _last_request_at)
+        if wait > 0:
+            time.sleep(wait)
+        _last_request_at = time.monotonic()
 
 # Confirmed live via /v4/tournaments?sportId=10 (scripts/pull_oddspapi_btts_corners.py).
 LEAGUE_TOURNAMENT_IDS = {
@@ -113,11 +145,23 @@ class OddsPapiClient:
         # Fixture discovery is (almost) free -- confirmed live,
         # scripts/pull_oddspapi_btts_corners.py's own investigation notes --
         # so it isn't gated by CreditCounter like get_corners_odds() below.
+        _throttle_oddspapi_request()
         response = self._session.get(
             f"{BASE_URL}/v4/fixtures",
             params={"apiKey": self._api_key, "tournamentId": tournament_id, "statusId": status_id},
             timeout=10,
         )
+        # Confirmed live (2026-09-20): a 404 here can genuinely mean "no
+        # fixtures match this query right now" (error code FIXTURE_NOT_FOUND,
+        # e.g. a league with nothing currently scheduled), not a real
+        # failure -- that's a normal, expected result, not an exception.
+        if response.status_code == 404:
+            try:
+                error_code = response.json().get("error", {}).get("code")
+            except ValueError:
+                error_code = None
+            if error_code == "FIXTURE_NOT_FOUND":
+                return []
         response.raise_for_status()
         return _parse_fixtures(response.json())
 
@@ -132,6 +176,7 @@ class OddsPapiClient:
             )
             return None
 
+        _throttle_oddspapi_request()
         response = self._session.get(
             f"{BASE_URL}/v4/odds",
             params={"apiKey": self._api_key, "fixtureId": fixture_id, "bookmakers": "pinnacle"},
