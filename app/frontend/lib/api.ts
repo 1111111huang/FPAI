@@ -32,17 +32,38 @@ function apiFetch(path: string, init: RequestInit = {}): Promise<Response> {
   return fetch(`${API_BASE}${path}`, { ...init, headers });
 }
 
+// Direct user report: switching between pages feels laggy. Every page mount
+// re-fetches fixtures/recommendations/status from scratch with no reuse --
+// AppShell, DashboardPage and MatchExplorerPage each call getFixtures() on
+// their own, and navigating back to a page you just left re-fetches
+// everything again. A short-TTL in-memory cache, keyed by request path, lets
+// a page revisited within a few seconds render instantly from the last
+// response instead of blocking on a fresh round trip -- 15s balances that
+// against odds/predictions actually moving (a T-30 refresh or regen), and
+// is short enough that no page ever shows meaningfully stale data.
+const READ_CACHE_TTL_MS = 15_000;
+const readCache = new Map<string, { data: unknown; expires: number }>();
+
+async function cachedGet<T>(path: string, errorMessage: string): Promise<T> {
+  const cached = readCache.get(path);
+  if (cached && cached.expires > Date.now()) return cached.data as T;
+
+  const response = await apiFetch(path);
+  if (!response.ok) {
+    throw new ApiError(`${errorMessage} (${response.status})`, response.status);
+  }
+  const data = (await response.json()) as T;
+  readCache.set(path, { data, expires: Date.now() + READ_CACHE_TTL_MS });
+  return data;
+}
+
 export async function getFixtures(dateFrom?: string, dateTo?: string): Promise<Fixture[]> {
   const params = new URLSearchParams();
   if (dateFrom) params.set("date_from", dateFrom);
   if (dateTo) params.set("date_to", dateTo);
   const query = params.toString();
 
-  const response = await apiFetch(`/api/fixtures${query ? `?${query}` : ""}`);
-  if (!response.ok) {
-    throw new ApiError(`Failed to load fixtures (${response.status})`, response.status);
-  }
-  return response.json();
+  return cachedGet<Fixture[]>(`/api/fixtures${query ? `?${query}` : ""}`, "Failed to load fixtures");
 }
 
 export type RecommendationRequestBody = {
@@ -66,24 +87,40 @@ export async function generateRecommendation(
   if (!response.ok) {
     throw new ApiError(`Failed to generate recommendation (${response.status})`, response.status);
   }
+  // A regenerate-now must be reflected immediately, not shadowed by whatever
+  // getCachedRecommendation() cached up to READ_CACHE_TTL_MS ago for this
+  // same match/date.
+  if (body.match_id) {
+    readCache.delete(`/api/recommendations/${encodeURIComponent(body.match_id)}?date=${encodeURIComponent(body.date)}`);
+  }
   return response.json();
 }
 
 /** Cache-only read (W11) -- never triggers a live agent call. Returns null on
  * a 404 (nothing generated yet for this match/date), throws on any other
- * failure. */
+ * failure. Doesn't go through cachedGet(): a 404 is a valid "nothing yet"
+ * result here, not an error to throw, so it needs its own read-cache
+ * handling (still the same shared `readCache` map/TTL) rather than
+ * cachedGet()'s throw-on-!ok contract. */
 export async function getCachedRecommendation(
   matchId: string,
   date: string
 ): Promise<MatchRecommendationOut | null> {
-  const response = await apiFetch(
-    `/api/recommendations/${encodeURIComponent(matchId)}?date=${encodeURIComponent(date)}`
-  );
-  if (response.status === 404) return null;
+  const path = `/api/recommendations/${encodeURIComponent(matchId)}?date=${encodeURIComponent(date)}`;
+  const cached = readCache.get(path);
+  if (cached && cached.expires > Date.now()) return cached.data as MatchRecommendationOut | null;
+
+  const response = await apiFetch(path);
+  if (response.status === 404) {
+    readCache.set(path, { data: null, expires: Date.now() + READ_CACHE_TTL_MS });
+    return null;
+  }
   if (!response.ok) {
     throw new ApiError(`Failed to load cached recommendation (${response.status})`, response.status);
   }
-  return response.json();
+  const data: MatchRecommendationOut = await response.json();
+  readCache.set(path, { data, expires: Date.now() + READ_CACHE_TTL_MS });
+  return data;
 }
 
 /** W12: logs a bet with every field but stake locked to the given
@@ -196,20 +233,12 @@ export async function getBetStats(): Promise<BetStats> {
 
 /** W17: data staleness + current model selections. */
 export async function getStatus(): Promise<StatusResponse> {
-  const response = await apiFetch(`/api/status`);
-  if (!response.ok) {
-    throw new ApiError(`Failed to load status (${response.status})`, response.status);
-  }
-  return response.json();
+  return cachedGet<StatusResponse>(`/api/status`, "Failed to load status");
 }
 
 /** W27: introspects whether sandbox mode is active and, if so, the as-of date. */
 export async function getSandboxStatus(): Promise<SandboxStatus> {
-  const response = await apiFetch(`/api/sandbox/status`);
-  if (!response.ok) {
-    throw new ApiError(`Failed to load sandbox status (${response.status})`, response.status);
-  }
-  return response.json();
+  return cachedGet<SandboxStatus>(`/api/sandbox/status`, "Failed to load sandbox status");
 }
 
 /** W172: local-only diagnostics dashboard -- not called from any nav-linked
