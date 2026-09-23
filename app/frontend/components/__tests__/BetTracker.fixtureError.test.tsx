@@ -13,6 +13,7 @@ import { describe, expect, it, vi, beforeEach } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { BetTrackerPage } from "../BetTracker";
+import { dateString } from "../MatchUI";
 
 // W52: vi.mock("@/lib/api") without a factory (BetTracker.race.test.tsx's
 // approach) automocks ApiError into a mock constructor that doesn't behave
@@ -108,8 +109,9 @@ describe("ManualBetForm surfaces a visible error when the fixture fetch fails (W
   });
 
   it("W211: searches 30 days back through 90 days forward, not forward-only -- a bet couldn't otherwise be logged against a match that already kicked off", async () => {
-    const now = new Date();
-    const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
+    // W40: America/New_York's calendar day, not the test runner's own
+    // ambient timezone.
+    const today = dateString(new Date(), false);
     vi.mocked(getFixtures).mockResolvedValue([]);
 
     render(<BetTrackerPage />);

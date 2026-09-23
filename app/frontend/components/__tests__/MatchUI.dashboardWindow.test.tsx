@@ -11,11 +11,25 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { DashboardPage, __resetDashboardMatchesCacheForTests } from "../MatchUI";
+import { DashboardPage, dateString, __resetDashboardMatchesCacheForTests } from "../MatchUI";
 import { getCachedRecommendation, getFixtures, getSandboxStatus } from "@/lib/api";
 import type { Fixture, MatchRecommendationOut } from "@/lib/types";
 
 vi.mock("@/lib/api");
+
+// W40: builds a real UTC instant that's unambiguously still "today" in
+// America/New_York, for any hourOffset in [0, 11] -- unlike naively
+// appending a bare "THH:00:00" to a Y-M-D string (parsed as the *test
+// runner's own ambient local time*, which can land on the wrong side of
+// Eastern midnight under a non-Eastern TZ env value, defeating the point
+// of testing this at all). Anchored at UTC noon + hourOffset, same
+// same-Eastern-day-regardless-of-DST reasoning as addDays' own anchor
+// (MatchUI.tsx) -- 12:00-23:00 UTC is always still Eastern's same
+// calendar day whether it's EST (UTC-5) or EDT (UTC-4).
+function todayAtHour(todayYmd: string, hourOffset: number): string {
+  const [year, month, day] = todayYmd.split("-").map(Number);
+  return new Date(Date.UTC(year, month - 1, day, 12 + hourOffset)).toISOString();
+}
 
 function fixture(id: string, utcDate: string, overrides: Partial<Fixture> = {}): Fixture {
   return {
@@ -42,11 +56,12 @@ describe("Dashboard always shows the next 10 matches (date-grouped, not today-on
   });
 
   it("queries a single 90-day-forward window (not a same-day-only query)", async () => {
-    // Local date, not .toISOString() -- outside sandbox mode, asOf is a
-    // real browser instant and "today" means the viewer's own local
-    // calendar day (dayDiff's own established convention, MatchUI.tsx).
+    // W40: America/New_York's calendar day, not the test runner's own
+    // ambient timezone -- dateString() is the same canonical helper the
+    // component itself calls (MatchUI.tsx), so this stays correct under
+    // any TZ env value, not just one that happens to match Eastern.
     const now = new Date();
-    const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
+    const today = dateString(now, false);
     vi.mocked(getFixtures).mockResolvedValue([]);
 
     render(<DashboardPage />);
@@ -143,11 +158,11 @@ describe("Dashboard always shows the next 10 matches (date-grouped, not today-on
 
   it("direct user request: shows ALL of today's matches even past 10, trimming only later days", async () => {
     const now = new Date();
-    const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
+    const today = dateString(now, false);
 
     // 12 matches today (over the old cap of 10) plus 2 tomorrow -- none of
     // tomorrow's should render, since today alone already fills every slot.
-    const todays = Array.from({ length: 12 }, (_, i) => fixture(`today-${i}`, `${today}T${String(i).padStart(2, "0")}:00:00`));
+    const todays = Array.from({ length: 12 }, (_, i) => fixture(`today-${i}`, todayAtHour(today, i)));
     const tomorrow = new Date(now.getTime() + 24 * 60 * 60 * 1000).toISOString();
     const laterFixtures = [fixture("later-0", tomorrow), fixture("later-1", tomorrow)];
     vi.mocked(getFixtures).mockResolvedValue([...todays, ...laterFixtures]);
@@ -162,9 +177,9 @@ describe("Dashboard always shows the next 10 matches (date-grouped, not today-on
 
   it("direct user request: today's matches (under 10) leave the remaining slots for later days", async () => {
     const now = new Date();
-    const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
+    const today = dateString(now, false);
 
-    const todays = Array.from({ length: 3 }, (_, i) => fixture(`today-${i}`, `${today}T${String(i).padStart(2, "0")}:00:00`));
+    const todays = Array.from({ length: 3 }, (_, i) => fixture(`today-${i}`, todayAtHour(today, i)));
     // 9 later fixtures, only 7 of which should fit (10 - 3 today).
     const laterFixtures = Array.from({ length: 9 }, (_, i) => {
       const d = new Date(now.getTime() + (i + 1) * 24 * 60 * 60 * 1000);

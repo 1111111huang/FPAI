@@ -19,7 +19,7 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { DashboardPage, MatchExplorerPage, __resetDashboardMatchesCacheForTests } from "../MatchUI";
+import { DashboardPage, MatchExplorerPage, dateString, __resetDashboardMatchesCacheForTests } from "../MatchUI";
 import { generateRecommendation, getCachedRecommendation, getFixtures, getSandboxStatus } from "@/lib/api";
 import type { Fixture, MatchRecommendationOut } from "@/lib/types";
 
@@ -69,11 +69,11 @@ describe("Dashboard initial-list precompute visibility (W53)", () => {
   });
 
   it("a precomputed (cache-hit) fixture in the initial list renders its recommendation with no click", async () => {
-    // Local date, not .toISOString() -- outside sandbox mode, asOf is a
-    // real browser instant and "today" means the viewer's own local
-    // calendar day (dayDiff's own established convention, MatchUI.tsx).
+    // W40: America/New_York's calendar day (dateString, the canonical
+    // helper MatchUI.tsx's own components call), not the test runner's own
+    // ambient timezone.
     const now = new Date();
-    const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
+    const today = dateString(now, false);
     const f = fixture("precomputed-match", `${today}T15:00:00Z`, "Arsenal", "Everton");
     vi.mocked(getFixtures).mockImplementation(async (from, to) => (from === today ? [f] : []));
     const cachedRec = makeRecommendation({ explanation: ["precomputed explanation"] });
@@ -94,11 +94,11 @@ describe("Dashboard initial-list precompute visibility (W53)", () => {
   });
 
   it("a cache-miss fixture in the initial list still renders 'Not yet generated', and clicking it still triggers the existing generateRecommendation fallback", async () => {
-    // Local date, not .toISOString() -- outside sandbox mode, asOf is a
-    // real browser instant and "today" means the viewer's own local
-    // calendar day (dayDiff's own established convention, MatchUI.tsx).
+    // W40: America/New_York's calendar day (dateString, the canonical
+    // helper MatchUI.tsx's own components call), not the test runner's own
+    // ambient timezone.
     const now = new Date();
-    const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
+    const today = dateString(now, false);
     const f = fixture("uncached-match", `${today}T15:00:00Z`, "Arsenal", "Everton");
     vi.mocked(getFixtures).mockImplementation(async (from, to) => (from === today ? [f] : []));
     vi.mocked(getCachedRecommendation).mockResolvedValue(null);
@@ -138,11 +138,11 @@ describe("Dashboard initial-list precompute visibility (W53)", () => {
   });
 
   it("resolves the cache check concurrently across the whole initial list, not one match at a time", async () => {
-    // Local date, not .toISOString() -- outside sandbox mode, asOf is a
-    // real browser instant and "today" means the viewer's own local
-    // calendar day (dayDiff's own established convention, MatchUI.tsx).
+    // W40: America/New_York's calendar day (dateString, the canonical
+    // helper MatchUI.tsx's own components call), not the test runner's own
+    // ambient timezone.
     const now = new Date();
-    const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
+    const today = dateString(now, false);
     const fixtures = [
       fixture("match-a", `${today}T15:00:00Z`, "Arsenal", "Everton"),
       fixture("match-b", `${today}T17:00:00Z`, "Chelsea", "Fulham"),
@@ -194,11 +194,11 @@ describe("Match Explorer initial render is not blocked by the bulk cache check (
   });
 
   it("renders the fixture list immediately (before any cache-check promise resolves), then patches a precomputed recommendation in once it resolves", async () => {
-    // Local date, not .toISOString() -- outside sandbox mode, asOf is a
-    // real browser instant and "today" means the viewer's own local
-    // calendar day (dayDiff's own established convention, MatchUI.tsx).
+    // W40: America/New_York's calendar day (dateString, the canonical
+    // helper MatchUI.tsx's own components call), not the test runner's own
+    // ambient timezone.
     const now = new Date();
-    const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
+    const today = dateString(now, false);
     const f = fixture("explorer-match", `${today}T15:00:00Z`, "Arsenal", "Everton");
     vi.mocked(getFixtures).mockResolvedValue([f]);
 

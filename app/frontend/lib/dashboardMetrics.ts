@@ -162,11 +162,15 @@ export type DateGroup = { dateKey: string; label: string; matches: Match[] };
  * sandbox-mode midnight-UTC kickoff doesn't roll to the wrong weekday for a
  * non-UTC viewer -- the same class of bug W48/W71 already fixed elsewhere. */
 function formatDateGroupLabel(iso: string, sandboxMode: boolean): string {
+  // W40: an omitted timeZone falls back to the runtime's own ambient
+  // default -- correct for nobody but a viewer physically in US Eastern.
+  // Pinned explicitly, same canonical zone dayDiff/dateString/addDays use
+  // (MatchUI.tsx) for every other "today" computation in this app.
   return new Intl.DateTimeFormat(undefined, {
     weekday: "short",
     month: "short",
     day: "numeric",
-    ...(sandboxMode ? { timeZone: "UTC" } : {}),
+    timeZone: sandboxMode ? "UTC" : "America/New_York",
   }).format(new Date(iso));
 }
 

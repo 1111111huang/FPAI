@@ -11,6 +11,7 @@ import { afterEach, describe, expect, it, test, vi, beforeEach } from "vitest";
 
 import {
   applyRecommendation,
+  dateString,
   featureLabel,
   fixtureToMatch,
   LeagueBadge,
@@ -1633,8 +1634,9 @@ describe("MatchExplorerPage -- league section headers (direct user request)", ()
   });
 
   it("W211: queries 30 days back through 90 days forward, not forward-only -- a match that already kicked off must still be searchable", async () => {
-    const now = new Date();
-    const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
+    // W40: America/New_York's calendar day, not the test runner's own
+    // ambient timezone.
+    const today = dateString(new Date(), false);
     vi.mocked(getFixtures).mockResolvedValue([]);
 
     render(<MatchExplorerPage />);

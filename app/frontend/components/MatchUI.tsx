@@ -330,6 +330,25 @@ export function formatKickoff(iso: string): string {
   return d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
 }
 
+// W40 (2026-09-22): "today" for this single-user app is always America/New_York
+// (the backend has been Eastern-Time-anchored throughout, NY_TZ in
+// app/backend/scheduler.py) -- the frontend's non-sandbox branches below used
+// to read Date's own local getters instead, which silently use the *viewer's*
+// ambient browser timezone. Harmless for a viewer physically in US Eastern,
+// wrong for anyone else (a same-day fixture rolling to "yesterday"/"tomorrow").
+// Intl.DateTimeFormat with an explicit timeZone is unaffected by the runtime's
+// own default zone (confirmed via a TZ-env-var-swept test), unlike Date's own
+// getFullYear()/getMonth()/getDate().
+const EASTERN_DATE_PARTS_FORMATTER = new Intl.DateTimeFormat("en-CA", {
+  timeZone: "America/New_York", year: "numeric", month: "2-digit", day: "2-digit",
+});
+
+export function easternDateParts(date: Date): { year: number; month: number; day: number } {
+  const parts: Record<string, string> = {};
+  for (const p of EASTERN_DATE_PARTS_FORMATTER.formatToParts(date)) parts[p.type] = p.value;
+  return { year: Number(parts.year), month: Number(parts.month) - 1, day: Number(parts.day) };
+}
+
 // Shared date-only (whole-day) diff between an ISO kickoff and asOf, in the
 // direction (kickoff day) - (asOf day) -- positive means the kickoff is
 // after asOf. asOf's meaning depends on sandboxMode, and the two are not
@@ -338,11 +357,11 @@ export function formatKickoff(iso: string): string {
 // getters would misread it by a day in non-UTC-zero timezones (the same bug
 // class already fixed in Dashboard/Match Explorer's own asOf consumption),
 // so UTC getters are required here. Outside sandbox mode, asOf is a real
-// new Date() instant, and the viewer's own local calendar day is what
-// "today" means for a human reading this -- reading it via UTC getters
-// there would wrongly relabel "today" as "yesterday" for roughly half the
-// day, every day, for any non-UTC viewer (the exact frame-mismatch class
-// this branch keeps re-deriving; caught by review before this shipped).
+// new Date() instant, and America/New_York's calendar day is what "today"
+// means project-wide (W40) -- reading it via the viewer's own ambient local
+// getters there would wrongly relabel "today" as "yesterday"/"tomorrow" for
+// any non-Eastern viewer (the exact frame-mismatch class this branch keeps
+// re-deriving; caught by review before this shipped).
 // Don't unify these into one getter choice -- the branch is load-bearing,
 // not incidental. Extracted (W48) so formatDay's relative-day label and
 // fixtureToMatch's sandbox-future-fixture check share one implementation of
@@ -357,12 +376,18 @@ export function dayDiff(iso: string, asOf: Date, sandboxMode: boolean): number {
   // negative-UTC-offset timezone, which can flip isFutureInSandbox's
   // result (W48's leak guard) for that fixture. Confirmed via direct
   // reproduction during W71's code review, not a theoretical concern.
-  const dOnly = sandboxMode
-    ? new Date(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate())
-    : new Date(date.getFullYear(), date.getMonth(), date.getDate());
-  const tOnly = sandboxMode
-    ? new Date(asOf.getUTCFullYear(), asOf.getUTCMonth(), asOf.getUTCDate())
-    : new Date(asOf.getFullYear(), asOf.getMonth(), asOf.getDate());
+  const dParts = sandboxMode
+    ? { year: date.getUTCFullYear(), month: date.getUTCMonth(), day: date.getUTCDate() }
+    : easternDateParts(date);
+  const tParts = sandboxMode
+    ? { year: asOf.getUTCFullYear(), month: asOf.getUTCMonth(), day: asOf.getUTCDate() }
+    : easternDateParts(asOf);
+  // Date.UTC (not the local constructor) so the resulting millisecond diff
+  // is unambiguous regardless of the runtime's own default timezone/DST --
+  // both timestamps are midnight-anchored in the *same* synthetic frame,
+  // only their Y/M/D inputs differ by which real-world zone produced them.
+  const dOnly = new Date(Date.UTC(dParts.year, dParts.month, dParts.day));
+  const tOnly = new Date(Date.UTC(tParts.year, tParts.month, tParts.day));
   return Math.round((dOnly.getTime() - tOnly.getTime()) / 86_400_000);
 }
 
@@ -406,17 +431,28 @@ export function matchStatusLabel(kickoffIso: string, isCompleted: boolean, asOf:
 // viewer in a positive-UTC-offset timezone.
 export function dateString(d: Date, sandboxMode: boolean): string {
   if (sandboxMode) return d.toISOString().slice(0, 10);
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, "0");
-  const day = String(d.getDate()).padStart(2, "0");
-  return `${y}-${m}-${day}`;
+  const { year, month, day } = easternDateParts(d);
+  return `${year}-${String(month + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
 }
 
 export function addDays(d: Date, days: number, sandboxMode: boolean): Date {
-  const copy = new Date(d);
-  if (sandboxMode) copy.setUTCDate(copy.getUTCDate() + days);
-  else copy.setDate(copy.getDate() + days);
-  return copy;
+  if (sandboxMode) {
+    const copy = new Date(d);
+    copy.setUTCDate(copy.getUTCDate() + days);
+    return copy;
+  }
+  // Eastern-Time-anchored, not the runtime's own local setDate() -- immune
+  // to the ambient-timezone bug W40 fixes elsewhere in this file. Anchored
+  // at UTC NOON, not midnight: America/New_York is UTC-4/-5, so UTC
+  // midnight of a given Y-M-D actually falls in Eastern's *previous*
+  // calendar day -- feeding that back through dateString()/easternDateParts
+  // (every real call site immediately does) would silently return the day
+  // before the one just computed. Noon UTC is always still Eastern's same
+  // day regardless of DST (EST: 07:00 ET, EDT: 08:00 ET), so this round-trips
+  // correctly through easternDateParts either way -- caught by this file's
+  // own multi-TZ test before it could ship as a real off-by-one.
+  const { year, month, day } = easternDateParts(d);
+  return new Date(Date.UTC(year, month, day + days, 12));
 }
 
 // ---------------------------------------------------------------------------

@@ -20,7 +20,7 @@
  */
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
-import { DashboardPage, MatchExplorerPage, __resetDashboardMatchesCacheForTests } from "../MatchUI";
+import { DashboardPage, MatchExplorerPage, dateString, addDays, __resetDashboardMatchesCacheForTests } from "../MatchUI";
 import { getFixtures, getSandboxStatus } from "@/lib/api";
 import type { Fixture } from "@/lib/types";
 
@@ -57,11 +57,11 @@ describe("fixture-fetch race guard (W42)", () => {
   });
 
   it("Dashboard: a stale real-clock response landing after the correct sandbox response does not overwrite it", async () => {
-    // Local date, not .toISOString() -- outside sandbox mode, asOf is a
-    // real browser instant and "today" means the viewer's own local
-    // calendar day (dayDiff's own established convention, MatchUI.tsx).
+    // W40: America/New_York's calendar day (dateString, the canonical
+    // helper MatchUI.tsx's own components call), not the test runner's own
+    // ambient timezone.
     const now = new Date();
-    const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
+    const today = dateString(now, false);
     const sandboxDate = "2025-03-05";
 
     const staleFixtures = [fixture("real-clock-fixture")];
@@ -102,16 +102,14 @@ describe("fixture-fetch race guard (W42)", () => {
   });
 
   it("Match Explorer: a stale real-clock response landing after the correct sandbox response does not overwrite it", async () => {
-    // Local date, not .toISOString() -- outside sandbox mode, asOf is a
-    // real browser instant and "today" means the viewer's own local
-    // calendar day (dayDiff's own established convention, MatchUI.tsx).
+    // W40: America/New_York's calendar day, via the same dateString/addDays
+    // helpers the component itself calls, not the test runner's own
+    // ambient timezone.
     // W211: Match Explorer's window now starts 30 days *before* asOf, not
     // on asOf itself -- these are the actual `from` values getFixtures is
     // called with, not asOf/as_of themselves.
     const now = new Date();
-    const todayFrom = new Date(now);
-    todayFrom.setDate(todayFrom.getDate() - 30);
-    const today = `${todayFrom.getFullYear()}-${String(todayFrom.getMonth() + 1).padStart(2, "0")}-${String(todayFrom.getDate()).padStart(2, "0")}`;
+    const today = dateString(addDays(now, -30, false), false);
     const sandboxDate = "2025-03-05";
     const sandboxFrom = "2025-02-03"; // 2025-03-05 - 30 days
     const sandboxWindowEnd = "2025-06-03"; // 2025-03-05 + 90 days
