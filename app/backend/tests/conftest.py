@@ -6,13 +6,21 @@ own test files establish that convention); this fixture makes a violation
 fail loudly with a clear message instead of silently hanging or flaking in
 CI, rather than relying on every future test remembering to mock.
 
-A test that must make a real call (there are none today) opts in via
-@pytest.mark.live -- registered below so pytest doesn't warn about an
-unknown marker.
+A test that must make a real call opts in via @pytest.mark.live --
+registered below so pytest doesn't warn about an unknown marker. W41
+(2026-09-22): the marker itself only controlled the network-block bypass
+above -- nothing actually excluded a live-marked test from a normal `pytest`
+run (confirmed live: test_scheduler_live_fire.py's real-wall-clock test ran
+by default with no opt-in flag, the exact opposite of the "excluded from
+the default fast run" contract W41 itself documents). Skipped below unless
+RUN_LIVE_TESTS is truthy, same opt-in-by-env-var shape as this project's
+other real-call gates (e.g. scripts that check for an API key before
+calling out) -- run explicitly via `RUN_LIVE_TESTS=1 pytest -m live`.
 """
 
 from __future__ import annotations
 
+import os
 import socket
 
 import pytest
@@ -20,8 +28,17 @@ import pytest
 
 def pytest_configure(config: pytest.Config) -> None:
     config.addinivalue_line(
-        "markers", "live: allow real network calls for this test (opt-in; none of this suite's tests need it today)"
+        "markers", "live: allow real network/wall-clock calls for this test (opt-in, skipped by default -- see module docstring)"
     )
+
+
+def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
+    if os.environ.get("RUN_LIVE_TESTS"):
+        return
+    skip_live = pytest.mark.skip(reason="live test -- set RUN_LIVE_TESTS=1 to run")
+    for item in items:
+        if item.get_closest_marker("live"):
+            item.add_marker(skip_live)
 
 
 def _blocked(*args, **kwargs):
