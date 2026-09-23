@@ -106,7 +106,7 @@ def test_get_fixtures_sends_correct_url_and_params_and_costs_no_credit() -> None
     assert url == "https://api.oddspapi.io/v4/fixtures"
     assert params["apiKey"] == "my-key"
     assert params["tournamentId"] == 8
-    assert params["statusId"] == 1
+    assert params["statusId"] == 0  # W200: 1 returns zero fixtures live, always -- see oddspapi_client.py
     assert len(fixtures) == 2
     assert counter.credits_used == 0
 

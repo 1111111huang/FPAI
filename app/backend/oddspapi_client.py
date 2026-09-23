@@ -141,7 +141,20 @@ class OddsPapiClient:
         self._credit_limit = credit_limit
         self._safety_margin = safety_margin
 
-    def get_fixtures(self, tournament_id: int, status_id: int = 1) -> list[OddsPapiFixture]:
+    def get_fixtures(self, tournament_id: int, status_id: int = 0) -> list[OddsPapiFixture]:
+        # W200 (2026-09-22): default was statusId=1, which OddsPapi's live
+        # API returns literally zero rows for, for every league, always
+        # (confirmed via a direct /v4/fixtures call, statusId in {0,1,2,3}
+        # -- 0 alone returned real fixtures, all with statusName="Pre-Game").
+        # 1 is presumably "Live/In-Play" -- never true for tomorrow's
+        # not-yet-started fixtures, which is the only thing eod_batch.py
+        # ever asks this for. This silently zeroed every OddsPapi fixture
+        # lookup since W236 shipped (2026-09-19): total_corners has had no
+        # real live odds this whole time, not just "thin coverage" as W236's
+        # own credit-budget caveat assumed. statusId=2/3 (used correctly by
+        # scripts/pull_oddspapi_btts_corners.py for historical fixtures) are
+        # unaffected by this default and untouched here.
+        #
         # Fixture discovery is (almost) free -- confirmed live,
         # scripts/pull_oddspapi_btts_corners.py's own investigation notes --
         # so it isn't gated by CreditCounter like get_corners_odds() below.

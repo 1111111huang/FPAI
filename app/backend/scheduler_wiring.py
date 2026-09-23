@@ -222,7 +222,7 @@ class PersistingOddsPapiClient:
         self._counter = counter
         self._store = store
 
-    def get_fixtures(self, tournament_id: int, status_id: int = 1):
+    def get_fixtures(self, tournament_id: int, status_id: int = 0):
         return self._client.get_fixtures(tournament_id=tournament_id, status_id=status_id)
 
     def get_corners_odds(self, fixture_id: str):
@@ -257,7 +257,7 @@ class FallbackOddsPapiClient:
         )
         return None
 
-    def get_fixtures(self, tournament_id: int, status_id: int = 1):
+    def get_fixtures(self, tournament_id: int, status_id: int = 0):
         return self._try_each_client(
             lambda client: client.get_fixtures(tournament_id=tournament_id, status_id=status_id), "get_fixtures",
         )
