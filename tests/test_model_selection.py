@@ -15,7 +15,8 @@ import yaml
 
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
-from src.utils.model_selection import ModelSelector, missing_features
+from src.utils.model_selection import ModelSelector, _primary_metric_for_target, missing_features
+from src.utils.real_edge_gate import RealEdgeResult
 
 
 def test_missing_features_returns_only_uncomputable_names() -> None:
@@ -108,3 +109,83 @@ def test_select_for_target_context_backfills_feature_subset_from_metadata(tmp_pa
     assert result["feature_subset"] == ["OFF_HOME_FTHG_R5", "MKT_IMPLIED_HOME"], (
         f"Expected feature_subset backfilled from .metadata.json, got {result.get('feature_subset')}"
     )
+
+
+def _selector_with_one_eligible_run(tmp_path: Path, target_name: str, model_type: str = "xgboost") -> ModelSelector:
+    model_dir = tmp_path / "models"
+    model_dir.mkdir()
+    artifact_name = f"{target_name}_dummy_v1_20260922.joblib"
+    (model_dir / artifact_name).write_bytes(b"fake")
+
+    selector = ModelSelector(config_path=tmp_path / "model_selection.yaml", model_dir=model_dir, computable_features=None)
+    selector.client = MagicMock()
+    selector.client.search_experiments.return_value = [MagicMock(experiment_id="1")]
+    run = _make_run("run1", model_type, 0.5, artifact_name)
+    run.data.metrics = {_primary_metric_for_target(target_name): 0.5}
+    selector.client.search_runs.side_effect = [
+        [run],  # optuna
+        [],  # final
+    ]
+    return selector
+
+
+def test_select_for_target_context_refuses_promotion_when_real_edge_gate_fails(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """US#205: result_3way/btts/total_goals must not be promoted on a good
+    offline metric alone -- a failing leak-free real-edge check refuses the
+    promotion, the exact gap that let US#172 ship undetected."""
+    selector = _selector_with_one_eligible_run(tmp_path, "btts")
+    monkeypatch.setattr(
+        "src.utils.model_selection.check_real_edge",
+        lambda *args, **kwargs: RealEdgeResult("fail", "pooled real edge -12.0% on 40 qualifying bets", -0.12, 40),
+    )
+
+    result = selector._select_for_target_context(
+        target_name="btts", context="E0", current_entry={}, min_improvement=0.005, dry_run=False,
+    )
+
+    assert result is None, "Promotion must be refused when the real-edge gate fails"
+
+
+def test_select_for_target_context_promotes_when_real_edge_gate_passes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    selector = _selector_with_one_eligible_run(tmp_path, "btts")
+    monkeypatch.setattr(
+        "src.utils.model_selection.check_real_edge",
+        lambda *args, **kwargs: RealEdgeResult("pass", "pooled real edge +8.0% on 40 qualifying bets", 0.08, 40),
+    )
+
+    result = selector._select_for_target_context(
+        target_name="btts", context="E0", current_entry={}, min_improvement=0.005, dry_run=False,
+    )
+
+    assert result is not None, "Promotion must proceed when the real-edge gate passes"
+
+
+def test_select_for_target_context_promotes_when_real_edge_gate_inconclusive(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Not enough real-odds coverage to judge shouldn't block a promotion the
+    offline metric already supports -- only an active failure should."""
+    selector = _selector_with_one_eligible_run(tmp_path, "total_goals")
+    monkeypatch.setattr(
+        "src.utils.model_selection.check_real_edge",
+        lambda *args, **kwargs: RealEdgeResult("inconclusive", "only 4 qualifying bets", None, 4),
+    )
+
+    result = selector._select_for_target_context(
+        target_name="total_goals", context="E0", current_entry={}, min_improvement=0.005, dry_run=False,
+    )
+
+    assert result is not None
+
+
+def test_select_for_target_context_skips_gate_for_ungated_targets(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    selector = _selector_with_one_eligible_run(tmp_path, "home_goals")
+
+    def _boom(*args, **kwargs):
+        raise AssertionError("check_real_edge must not be called for a target outside REAL_EDGE_GATED_TARGETS")
+
+    monkeypatch.setattr("src.utils.model_selection.check_real_edge", _boom)
+
+    result = selector._select_for_target_context(
+        target_name="home_goals", context="E0", current_entry={}, min_improvement=0.005, dry_run=False,
+    )
+
+    assert result is not None

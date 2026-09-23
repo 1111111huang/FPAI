@@ -14,6 +14,7 @@ from src.logic.competition_registry import DEFAULT_REGISTRY_PATH, list_context_k
 from src.logic.target_registry import INACTIVE_DEFAULT_TARGETS, list_target_definitions, get_target_definition
 from src.utils.logger import get_logger
 from src.utils.mlflow_config import configure_mlflow_tracking
+from src.utils.real_edge_gate import REAL_EDGE_GATED_TARGETS, check_real_edge
 
 LOGGER = get_logger(__name__)
 
@@ -307,6 +308,27 @@ class ModelSelector:
                     f"missing from live feature pipeline: {gaps}"
                 )
                 return None
+
+        # US#205: result_3way/btts/total_goals have each independently shipped a
+        # promotion that cleanly passed the offline metric above and then measurably
+        # lost money live (US#172/173, US#192, US#193) -- nothing before this line
+        # would have caught any of them. Retrain leak-free and check the candidate's
+        # own qualifying-bet predictions against real market outcomes before writing
+        # it to model_selection.yaml. See documents/systematic_practices.md A1 and
+        # .claude/skills/promoting-a-model.
+        if target_name in REAL_EDGE_GATED_TARGETS:
+            gate = check_real_edge(target_name, context, feature_subset, new_entry["model_type"])
+            if gate.status == "fail":
+                LOGGER.error(
+                    "Refusing to promote target=%s context=%s run_id=%s: real-edge gate failed -- %s",
+                    target_name, context, best["run_id"], gate.detail,
+                )
+                print(
+                    f"  REFUSED: {target_name} [{context}] | run={best['run_id'][:8]} | "
+                    f"real-edge gate failed: {gate.detail}"
+                )
+                return None
+            print(f"  real-edge gate [{target_name}/{context}]: {gate.status} -- {gate.detail}")
 
         action = "[DRY RUN] Would select" if dry_run else "Selected"
         LOGGER.info(
