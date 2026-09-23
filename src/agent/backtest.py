@@ -411,3 +411,96 @@ class BacktestHarness:
     ) -> list[BacktestRecord]:
         matches = self.load_matches(from_date, to_date, league=league, sample=sample, split=split, test_fraction=test_fraction)
         return [process_match_row(row, self.config) for _, row in matches.iterrows()]
+
+
+# A124 (2026-09-22): BUG-036/W96's model_selection.yaml fingerprint check
+# only ever covered the live-serving sandbox replay cache -- this corpus,
+# the one every reported backtest/train ROI number is computed from, was
+# left deliberately unfingerprinted ("meant to stay pinned regardless of
+# later model changes"). Net effect: a reported ROI number can silently
+# reflect whatever model was live at *record* time, months ago, with
+# nothing surfacing that mismatch to whoever reads the report. Not a
+# blocking check -- a snapshot corpus is legitimately meant to be pinned,
+# re-recording it is a deliberate, separate decision -- just visibility so
+# a stale-vs-fresh ROI number isn't misread as "the currently-promoted
+# model's real performance."
+def check_model_staleness(records: list[BacktestRecord], config_path: str = "config.yaml") -> dict[str, Any]:
+    """For each record's own recorded forecast_payload.diagnostics.target_versions
+    (present only when capture_state=True was used to build these records),
+    compares the snapshotted artifact filename against config/model_selection.yaml's
+    CURRENTLY-promoted model_path for that (context, target) -- context is the
+    record's own league, matching model_selection.yaml's own context keys
+    (e.g. "E0") directly, no translation needed.
+
+    Returns a summary dict: total matches checked, how many have at least one
+    stale target, and a per-(context, target) breakdown of stale/fresh counts
+    plus which artifact is recorded vs. currently promoted -- everything a
+    caller needs to print a real diagnostic without re-deriving any of it."""
+    import yaml
+
+    with open(config_path, encoding="utf-8") as fh:
+        config = yaml.safe_load(fh) or {}
+    contexts = config.get("contexts", {})
+
+    checked = 0
+    stale_matches = 0
+    breakdown: dict[tuple[str, str], dict[str, Any]] = {}
+
+    for record in records:
+        # `.get(key, {})` alone isn't enough -- a present key explicitly set
+        # to None (a real shape: forecast_node returns {"forecast_payload":
+        # payload} where payload can itself be None) returns None, not the
+        # default, and crashes the next .get() in the chain. `or {}` after
+        # each step handles both "key absent" and "key present but None".
+        forecast_payload = (record.full_state or {}).get("forecast_payload") or {}
+        diagnostics = forecast_payload.get("diagnostics") or {}
+        target_versions = diagnostics.get("target_versions") or {}
+        if not target_versions:
+            continue
+        checked += 1
+        match_is_stale = False
+        for target, version_info in target_versions.items():
+            recorded_artifact = version_info.get("artifact")
+            if not recorded_artifact:
+                continue
+            current_entry = contexts.get(record.league, {}).get(target)
+            current_artifact = Path(current_entry["model_path"]).name if current_entry else None
+            key = (record.league, target)
+            entry = breakdown.setdefault(key, {
+                "current_artifact": current_artifact, "fresh": 0, "stale": 0, "stale_artifacts_seen": set(),
+            })
+            if current_artifact is not None and recorded_artifact != current_artifact:
+                entry["stale"] += 1
+                entry["stale_artifacts_seen"].add(recorded_artifact)
+                match_is_stale = True
+            else:
+                entry["fresh"] += 1
+        if match_is_stale:
+            stale_matches += 1
+
+    for entry in breakdown.values():
+        entry["stale_artifacts_seen"] = sorted(entry["stale_artifacts_seen"])
+
+    return {
+        "matches_checked": checked,
+        "matches_with_a_stale_target": stale_matches,
+        "by_context_target": {f"{ctx}/{target}": info for (ctx, target), info in sorted(breakdown.items())},
+    }
+
+
+def print_staleness_summary(staleness: dict[str, Any]) -> None:
+    """Shared print body for agent-backtest/agent-train's identical A124
+    staleness report -- so the two call sites can't drift out of sync,
+    same reasoning as process_match_row's own module docstring."""
+    if not staleness["matches_checked"]:
+        return
+    print(
+        f"\nModel staleness check: {staleness['matches_with_a_stale_target']}/{staleness['matches_checked']} "
+        f"matches have at least one target whose recorded model no longer matches what's currently promoted."
+    )
+    for key, info in staleness["by_context_target"].items():
+        if info["stale"]:
+            print(
+                f"  {key}: {info['stale']}/{info['stale'] + info['fresh']} stale "
+                f"(recorded {info['stale_artifacts_seen']}, currently promoted {info['current_artifact']})"
+            )

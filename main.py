@@ -1563,6 +1563,13 @@ def run_agent_backtest(
     path = save_report(report, cfg)
     print(f"\nReport saved to {path}")
 
+    # A124: non-blocking visibility into whether this ROI number reflects
+    # the currently-promoted model or a stale snapshot recorded against an
+    # earlier one -- doesn't change the report or the number itself.
+    from src.agent.backtest import check_model_staleness, print_staleness_summary
+
+    print_staleness_summary(check_model_staleness(records))
+
     run_id = uuid.uuid4().hex
     with harness.db.connection() as conn:
         from src.agent.lessons import create_lessons_tables
@@ -1763,6 +1770,11 @@ def run_agent_train(
     print_report(report)
     path = save_report(report, cfg, base_dir="reports/agent_train")
     print(f"\nReport saved to {path}")
+
+    # A124: same non-blocking staleness visibility as agent-backtest.
+    from src.agent.backtest import check_model_staleness, print_staleness_summary
+
+    print_staleness_summary(check_model_staleness(records))
 
     run_id = uuid.uuid4().hex
     with harness.db.connection() as conn:
