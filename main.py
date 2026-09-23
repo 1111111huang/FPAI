@@ -1963,6 +1963,19 @@ def run_status(db_manager: DuckDBManager) -> None:
                 metric_name = info.get("metric_name", "?")
                 selected_at = info.get("selected_at", "?")
                 print(f"    {tgt:<22} {model_type:<18} {metric_name}={metric_val}  selected={selected_at}")
+                # US#206: non-blocking visibility into whether this promoted
+                # model's own recorded feature list still fully resolves
+                # against today's live master schema -- a column renamed or
+                # removed since training is a real, silent risk (does NOT
+                # catch BUG-070's own dead-column gap, a different, narrower
+                # class where the name is still present but the data isn't).
+                feature_subset = info.get("feature_subset")
+                if feature_subset:
+                    from src.models.model_manager import check_feature_schema_drift
+
+                    drifted = check_feature_schema_drift(feature_subset)
+                    if drifted:
+                        print(f"      SCHEMA DRIFT: {len(drifted)} recorded feature(s) no longer in schema.yaml: {drifted}")
 
 
 def main() -> None:

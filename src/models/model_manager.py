@@ -146,6 +146,29 @@ def build_artifact_filename(target_name: str, competition_id: str | None, model_
     return f"{target_name}{competition_tag}_{model_prefix}_v1_{date_tag}.joblib"
 
 
+def check_feature_schema_drift(feature_names: list[str], schema_path: str = "config/schema.yaml") -> list[str]:
+    """US#206: which of a promoted model's own recorded feature_names are no
+    longer present in the live master feature list (config/schema.yaml's
+    training_setup.selected_features) -- a column renamed or removed since
+    this model was trained. Doesn't detect a feature whose computation
+    *logic* silently changed under an unchanged name (would need hashing
+    each feature function's own source, out of scope), and does NOT catch
+    BUG-070's own dead-column gap either -- those columns are still present
+    by name in schema.yaml, just universally NaN-valued; a genuinely
+    different, narrower class of drift (name removed/renamed entirely) than
+    BUG-070's (name present, data quality silently degraded). Empty list
+    means no drift detected; every recorded name still resolves.
+
+    Deliberately a plain function, not a ModelManager method -- this only
+    needs to read schema.yaml, not construct a full ModelManager (which
+    needs a model instance, competition_id, DB connection) just to check
+    one list against another."""
+    with open(schema_path, encoding="utf-8") as fh:
+        schema = yaml.safe_load(fh) or {}
+    current = set(schema.get("training_setup", {}).get("selected_features") or [])
+    return [name for name in feature_names if name not in current]
+
+
 class ModelManager:
     """Handle training data preparation, model evaluation, and model versioning."""
 
@@ -498,7 +521,20 @@ class ModelManager:
             "task_type": self.target_definition.task_type,
             "classes": list(self.target_definition.classes),
             "model_type": self.model.__class__.__name__,
-            "feature_schema_version": self.mlflow_tags.get("feature_version", "v1"),
+            # US#206: a real content hash of the feature set actually used for
+            # this training run, not the static "v1" literal every model
+            # (regardless of feature set) used to record -- self.mlflow_tags'
+            # own "feature_version" was itself always a hardcoded "v1" from
+            # every experiment YAML (experiments/*.yaml), never truly
+            # versioned. Two models trained on genuinely different feature
+            # sets now get different values here, a direct equality check
+            # instead of a number nobody ever incremented. Doesn't hash
+            # computation *logic* or data *quality* (would need hashing each
+            # feature function's own source, or the actual computed values --
+            # out of scope, and wouldn't have caught BUG-070's NaN-valued-but-
+            # still-named columns either) -- catches column added/removed/
+            # renamed drift specifically, see check_feature_schema_drift().
+            "feature_schema_version": data_fingerprint({"selected_features": sorted(feature_names)}),
             "feature_names": feature_names,
             "artifact_path": str(model_path),
             "artifact_name": model_path.name,
