@@ -13,6 +13,16 @@ from src.utils.logger import get_logger
 
 LOGGER = get_logger(__name__)
 
+# W198 (2026-09-22): a team can have real raw_matches rows that are years
+# stale -- e.g. a club relegated out of a tracked competition long ago, then
+# fictionally listed as "current season" by a fixtures vendor. 400 days
+# covers any normal in-season/off-season gap (a team playing every season
+# straight through never goes 400 days between matches in the same
+# competition) while still catching a team that's been gone at least a full
+# season -- picked to be a round number safely above football's ~3-4 month
+# off-season, not backtested/tuned.
+_MAX_STALE_HISTORY_DAYS = 400
+
 
 def remove_margin(
     home_odds: pd.Series | float,
@@ -1076,9 +1086,38 @@ class FeatureFactory:
         # only catches sparse/missing individual feature values for a team that
         # does have some history. Checked here (against the raw, unfiltered
         # fetch) before any cold-start imputation runs.
-        home_has_history = bool(((raw_df["home_team"] == home_norm) | (raw_df["away_team"] == home_norm)).any())
-        away_has_history = bool(((raw_df["home_team"] == away_norm) | (raw_df["away_team"] == away_norm)).any())
-        unknown_team = not home_has_history or not away_has_history
+        home_mask = (raw_df["home_team"] == home_norm) | (raw_df["away_team"] == home_norm)
+        away_mask = (raw_df["home_team"] == away_norm) | (raw_df["away_team"] == away_norm)
+        home_has_history = bool(home_mask.any())
+        away_has_history = bool(away_mask.any())
+
+        # W198 (2026-09-22): found live -- football-data.org listed "Real
+        # Racing Club de Santander"/"Malaga"/"La Coruna" as current-season
+        # La Liga fixtures despite football-data.co.uk's own current-season
+        # CSV (raw_matches' real source) never tracking them there this
+        # season. Malaga/La Coruna both DO have real raw_matches rows (so
+        # the zero-history check above didn't catch them) -- but every row
+        # dates to 2016-2018, their actual last season in this competition.
+        # Without this check they were silently treated as fully "known"
+        # (feature_completeness ~0.92), computing rolling-window features
+        # from an 8-year-old roster/era with no relationship to today's
+        # team -- confirmed to have already reached a live direct_bet
+        # recommendation on that basis before this was found.
+        match_date_ts = pd.Timestamp(match_date)
+        home_stale = home_has_history and (match_date_ts - raw_df.loc[home_mask, "date"].max()).days > _MAX_STALE_HISTORY_DAYS
+        away_stale = away_has_history and (match_date_ts - raw_df.loc[away_mask, "date"].max()).days > _MAX_STALE_HISTORY_DAYS
+        unknown_team = not home_has_history or not away_has_history or home_stale or away_stale
+
+        # A flag alone isn't the fix -- a stale team's own rows must also be
+        # dropped from the rolling-feature input, the same way a genuinely
+        # zero-history team already has none, so its rolling features come
+        # back NaN (then cold-start imputed) instead of silently reflecting
+        # an 8-year-old roster/era. The other side's real, fresh rows (if
+        # any) are untouched.
+        if home_stale:
+            raw_df = raw_df[~((raw_df["home_team"] == home_norm) | (raw_df["away_team"] == home_norm))]
+        if away_stale:
+            raw_df = raw_df[~((raw_df["home_team"] == away_norm) | (raw_df["away_team"] == away_norm))]
 
         if raw_df.empty:
             # No history — build empty history, synthetic row only; cold-start imputation covers NaNs
