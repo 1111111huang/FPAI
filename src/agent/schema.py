@@ -310,6 +310,42 @@ def _downgrade_direct_bet_below_draw_value_edge_floor(data: dict, min_value_edge
     return data
 
 
+def _downgrade_direct_bet_btts_no(data: dict) -> dict:
+    """US#210 (2026-09-22): btts/no has a real, severe, negative real edge in
+    all 5 leagues (-10% to -35% on qualifying bets), confirmed on the actual
+    promoted models via the leak-free US#205 gate. Three independent
+    training-time fixes were tried and ruled out with real held-out
+    evidence -- calibration (a freshly-fit, held-out-gated calibrator was
+    itself rejected by its own out-of-sample check), recency weighting
+    (every time_decay_half_life_days from 0 to 730 days left the real edge
+    unchanged), and class-balance weighting (every sample_weight_alpha from
+    0.0 to 1.0 left it unchanged too, ruling out the result_3way/draw-style
+    overcorrection this shares no root cause with). Root cause: the raw
+    model's btts probability barely leaves a ~0.47-0.55 band regardless of
+    the match, so whenever the market confidently prices 'yes' the model's
+    near-constant ~50% output mechanically clears the value_edge floor on
+    'no' without ever having real countervailing signal -- a feature/
+    information gap (team news/injuries the market has and this project's
+    features don't), not a tunable parameter. A real fix needs new features
+    (US#175/US#208), so this is a flat, unconditional suppression like
+    BUG-013's null-odds downgrade, not a config-gated floor like the retired
+    result_3way/draw one above -- there's no threshold to tune here."""
+    limitations = list(data.get("limitations") or [])
+    for candidate in data.get("candidates", []):
+        if candidate["recommendation_type"] != "direct_bet":
+            continue
+        if candidate["market"] != "btts" or candidate["selection"] != "no":
+            continue
+        candidate["recommendation_type"] = "no_bet"
+        limitations.append(
+            "Downgraded 'btts'/'no' from direct_bet to no_bet: suppressed project-wide (US#210) -- "
+            "real edge measured severely negative in all 5 leagues with calibration, recency, and "
+            "class-weighting all ruled out as fixes."
+        )
+    data["limitations"] = limitations
+    return data
+
+
 def _downgrade_direct_bet_with_null_odds(data: dict) -> dict:
     """BUG-013: recommendation_type='direct_bet' requires a non-null
     current_odds -- downgrade to 'no_bet' (the only other value valid for this
@@ -1058,6 +1094,7 @@ def extract_recommendation(
 
         data = _downgrade_direct_bet_below_value_edge_floor(data, min_value_edge)
         data = _downgrade_direct_bet_below_draw_value_edge_floor(data, min_value_edge_result_3way_draw)
+        data = _downgrade_direct_bet_btts_no(data)
         data = _downgrade_direct_bet_with_null_odds(data)
         data = _downgrade_direct_bet_outside_odds_bounds(data, min_odds_threshold, max_odds_threshold)
         data = _restrict_conditional_to_eligible_markets(data)

@@ -81,7 +81,11 @@ def test_eligible_market_stays_conditional_after_a29_ceiling_downgrade(market, s
         ("total_goals", "under_2.5"),
         ("home_corners", "under_2.5"),
         ("away_corners", "under_2.5"),
-        ("btts", "no"),
+        # btts/no deliberately excluded here (was previously listed): US#210
+        # now suppresses it unconditionally, earlier in the downgrade chain,
+        # before this scenario's initial "direct_bet" candidate could ever
+        # reach A29's conditional-eligibility check -- see
+        # test_agent_btts_no_suppression.py for that behavior instead.
         ("home_goals", "under_1.5"),
         ("away_goals", "under_1.5"),
     ],

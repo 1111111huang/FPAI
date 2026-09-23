@@ -105,6 +105,29 @@ def test_resolve_model_type_leaves_genuinely_unknown_strings_unchanged() -> None
     assert _resolve_model_type("not_a_real_model_type") == "not_a_real_model_type"
 
 
+def test_check_real_edge_passes_sample_weight_alpha_through_to_model_manager(monkeypatch) -> None:
+    """US#210: sample_weight_alpha must actually reach ModelManager -- omitted
+    (None) it must NOT override ModelManager's own 1.0 default."""
+    import src.utils.real_edge_gate as real_edge_gate
+
+    captured = {}
+
+    class _FakeManager:
+        def __init__(self, **kwargs):
+            captured["kwargs"] = kwargs
+            self.db_manager = None
+
+        def prepare_training_data(self):
+            raise RuntimeError("stop before training -- only checking constructor kwargs")
+
+    monkeypatch.setattr(real_edge_gate, "ModelManager", _FakeManager)
+    check_real_edge("btts", "I1", ["f"], "xgboost", sample_weight_alpha=0.5)
+    assert captured["kwargs"]["sample_weight_alpha"] == 0.5
+
+    check_real_edge("btts", "I1", ["f"], "xgboost")
+    assert "sample_weight_alpha" not in captured["kwargs"]
+
+
 def test_train_only_predictions_applies_time_decay_to_sample_weight() -> None:
     """Regression test: found live (2026-09-22) while sweeping half-lives for
     I1 btts that every half-life produced byte-identical predictions --

@@ -16,7 +16,11 @@ _HOME = {
     "value_edge": 0.07, "composite_score": 0.4, "reason": "Modest edge, high uncertainty.",
 }
 _BTTS = {
-    "market": "btts", "selection": "no", "recommendation_type": "direct_bet",
+    # selection="yes", not "no": US#210 unconditionally suppresses btts/no
+    # direct_bet regardless of composite_score, which would trip this
+    # fixture's own guardrail before the self-consistency logic under test
+    # ever ran.
+    "market": "btts", "selection": "yes", "recommendation_type": "direct_bet",
     "current_odds": 2.2, "min_odds": 1.8, "ml_probability": 0.6, "implied_probability": 0.45,
     "value_edge": 0.15, "composite_score": 0.8, "reason": "Large edge with strong hit probability.",
 }
@@ -36,9 +40,9 @@ def _wrap_json(data: dict) -> str:
 
 
 def test_pick_with_the_top_composite_score_is_unaffected():
-    data = {**_BASE, "candidates": [_HOME, _BTTS], "recommendation_pick": {"market": "btts", "selection": "no"}}
+    data = {**_BASE, "candidates": [_HOME, _BTTS], "recommendation_pick": {"market": "btts", "selection": "yes"}}
     rec = extract_recommendation(_wrap_json(data))
-    assert rec["recommendation_pick"] == {"market": "btts", "selection": "no"}
+    assert rec["recommendation_pick"] == {"market": "btts", "selection": "yes"}
     assert rec["overall"] == "direct_bet"
 
 

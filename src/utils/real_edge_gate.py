@@ -254,6 +254,7 @@ def check_real_edge(
     model_type: str,
     config_path: str = "config.yaml",
     time_decay_half_life_days: float | None = None,
+    sample_weight_alpha: float | None = None,
 ) -> RealEdgeResult:
     """Leak-free real-edge check for a promotion candidate. Only gates the
     three targets with a documented real-edge history (REAL_EDGE_GATED_TARGETS);
@@ -266,7 +267,16 @@ def check_real_edge(
     all, so a freshly-trained select-best-models candidate never has one, but
     re-validating an already-live hand-promoted model needs to reproduce its
     actual training config, not silently fall back to the undecayed default
-    and report on a materially different model than what's really serving."""
+    and report on a materially different model than what's really serving.
+
+    sample_weight_alpha (added 2026-09-22, US#210 investigation): every btts
+    model in every league has only ever trained at the ModelManager default
+    (alpha=1.0, full 'balanced' class weighting) -- unlike result_3way, whose
+    identical full-balancing default was found (US#172) to overcorrect its
+    minority class (draw) into a new over-prediction bug, requiring a
+    per-league dampened alpha. btts:no is the minority class in every league
+    (yes base rate 50-67%) and never got the equivalent check. None (the
+    default here) preserves ModelManager's own default of 1.0."""
     if target_name not in REAL_EDGE_GATED_TARGETS:
         return RealEdgeResult("pass", "not a real-edge-gated target", None, 0)
 
@@ -276,7 +286,7 @@ def check_real_edge(
         return RealEdgeResult("inconclusive", f"can't rebuild model_type {model_type!r} for the gate: {exc}", None, 0)
 
     try:
-        mgr = ModelManager(
+        mgr_kwargs = dict(
             model=model,
             config_path=config_path,
             target_config={"target": target_name},
@@ -285,6 +295,9 @@ def check_real_edge(
             competition_id=context,
             time_decay_half_life_days=time_decay_half_life_days,
         )
+        if sample_weight_alpha is not None:
+            mgr_kwargs["sample_weight_alpha"] = sample_weight_alpha
+        mgr = ModelManager(**mgr_kwargs)
         X_test, y_test, test_meta = _train_only_predictions(mgr, model)
     except Exception as exc:  # noqa: BLE001 -- any data/training failure here should degrade to inconclusive, not crash promotion
         LOGGER.warning("Real-edge gate could not train a leak-free candidate for %s/%s: %s", target_name, context, exc)
