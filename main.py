@@ -271,6 +271,12 @@ def _build_parser() -> argparse.ArgumentParser:
     fotmob_parser.add_argument("--to_season", type=int, default=None, help="Last season start year to fetch.")
     fotmob_parser.add_argument("--delay", type=float, default=1.0, help="Polite delay in seconds between requests.")
 
+    # refresh-market-values (A126)
+    market_values_parser = subparsers.add_parser(
+        "refresh-market-values", help="Refresh Transfermarkt market values for every player already known to this project (A126)."
+    )
+    market_values_parser.add_argument("--delay", type=float, default=1.0, help="Polite delay in seconds between requests.")
+
     # fetch-lineups (US#101)
     lineup_p = subparsers.add_parser("fetch-lineups", help="Fetch FotMob pre-match lineups into match_lineups table")
     lineup_p.add_argument("--date-from", required=True, help="Start date YYYY-MM-DD (inclusive)")
@@ -563,6 +569,50 @@ def run_fetch_fotmob(
     LOGGER.info(
         "FotMob upsert | matched=%d | unmatched=%d | players=%d | rows=%d",
         result["matched"], result["unmatched"], result["players_upserted"], result["rows_upserted"],
+    )
+
+
+def run_refresh_market_values(app_settings: AppSettings, db_manager: DuckDBManager, delay: float = 1.0) -> None:
+    """A126: refresh Transfermarkt market values for every player already
+    known to this project (raw_player_match_stats/player_dim), via the REEP
+    crosswalk."""
+    from datetime import date
+
+    import pandas as pd
+
+    from src.ingestion.transfermarkt.fetcher import fetch_market_value
+    from src.ingestion.transfermarkt.merge import insert_market_value_snapshot
+    from src.ingestion.transfermarkt.reep_crosswalk import load_reep_crosswalk
+
+    with db_manager.connection(read_only=True) as conn:
+        known_fotmob_ids = conn.execute("SELECT DISTINCT player_id FROM player_dim").fetchdf()["player_id"].tolist()
+    if not known_fotmob_ids:
+        LOGGER.info("refresh-market-values: no players in player_dim yet -- nothing to refresh.")
+        return
+
+    crosswalk = load_reep_crosswalk()
+    scoped = crosswalk[crosswalk["fotmob_player_id"].isin(known_fotmob_ids)].reset_index(drop=True)
+    unmapped = len(known_fotmob_ids) - len(scoped)
+    if unmapped:
+        LOGGER.info(
+            "refresh-market-values: %d of %d known players have no REEP crosswalk entry -- skipped, not an error.",
+            unmapped, len(known_fotmob_ids),
+        )
+
+    rows = []
+    for _, row in scoped.iterrows():
+        value = fetch_market_value(int(row["transfermarkt_player_id"]), delay=delay)
+        if value is not None:
+            rows.append({
+                "fotmob_player_id": row["fotmob_player_id"],
+                "transfermarkt_player_id": row["transfermarkt_player_id"],
+                "market_value_eur": value,
+            })
+
+    n = insert_market_value_snapshot(pd.DataFrame(rows), db_manager, snapshot_date=date.today().isoformat())
+    LOGGER.info(
+        "refresh-market-values complete | players_scoped=%d | values_fetched=%d | rows_inserted=%d",
+        len(scoped), len(rows), n,
     )
 
 
@@ -2121,6 +2171,8 @@ def main() -> None:
             app_settings, db_manager,
             league=str(args.league), from_season=args.from_season, to_season=args.to_season, delay=float(args.delay),
         )
+    elif args.command == "refresh-market-values":
+        run_refresh_market_values(app_settings, db_manager, delay=float(args.delay))
     elif args.command == "fetch-lineups":
         run_fetch_lineups(
             db_manager,
