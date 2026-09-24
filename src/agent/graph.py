@@ -533,7 +533,22 @@ def run_agent(
         config = AgentConfig.default()
     if tools is None:
         from src.agent.tools import get_default_tools
-        tools = get_default_tools()
+
+        extra_tools = []
+        try:
+            from src.agent.player_rating_tool import build_player_rating_tool
+            from src.utils.db_manager import DuckDBManager
+
+            extra_tools.append(build_player_rating_tool(
+                DuckDBManager(),
+                home_team=match_info["home_team"],
+                away_team=match_info["away_team"],
+                as_of_date=match_info["date"],
+            ))
+        except Exception:
+            _LOG.warning("Could not build get_player_rating tool for this match -- proceeding without it.", exc_info=True)
+
+        tools = get_default_tools(extra_tools=extra_tools)
 
     system_prompt = _load_system_prompt(config)
     if extra_system_instructions:

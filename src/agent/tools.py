@@ -408,9 +408,14 @@ def forecast_international(
     )
 
 
-def get_default_tools() -> list:
+def get_default_tools(extra_tools: list | None = None) -> list:
     """A31: forecast_league, forecast_international, and resolve_competition are
     no longer LLM-callable -- they're invoked directly by the deterministic
     pipeline nodes in src/agent/pipeline.py before the LLM ever runs. Only
-    web_search remains available for the LLM's own optional follow-up digging."""
-    return [web_search]
+    web_search remains available for the LLM's own optional follow-up digging.
+
+    A126: extra_tools lets a caller (graph.py's run_agent()) add match-scoped
+    tools built fresh per call, e.g. get_player_rating -- kept as an explicit
+    param rather than this module reaching into DB/match state itself, so
+    tools.py stays free of per-match context."""
+    return [web_search, *(extra_tools or [])]
