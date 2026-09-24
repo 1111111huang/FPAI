@@ -138,6 +138,10 @@ class SweepRunner:
 
         stage = str(config.get("sweep_stage", "broad")).strip().lower()
         version = str(config.get("version", "v1")).strip().lower()
+        # BUG-071: context was only ever used for an MLflow tag below, never
+        # passed to ModelManager -- every sweep, regardless of this config
+        # key, silently trained against ModelManager's own "E0" default.
+        context = str(config.get("context", "E0"))
         resolved_experiment_name = self.experiment_name or forecast_experiment_name(
             self.definition.name,
             model_type,
@@ -180,6 +184,7 @@ class SweepRunner:
                         "league": str(config.get("league", "all")),
                         "sweep_stage": stage,
                         "experiment_version": version,
+                        "context": context,
                     }
                 )
                 extra_tags = config.get("tags", {})
@@ -193,6 +198,8 @@ class SweepRunner:
                     test_season=str(config.get("test_season", "time_split")),
                     feature_version=str(config.get("feature_schema_version", "v1")),
                     target_config={"target": self.definition.name},
+                    context=context,
+                    competition_id=context,
                 )
                 X_train, X_val, X_test, y_train, y_val, y_test, _ = manager.prepare_training_data()
                 eval_set = [(X_val, y_val)] if isinstance(model, (XGBoostModel, XGBoostRegressorModel)) else None
@@ -299,6 +306,11 @@ class OptunaRunner:
         )
         primary_metric = self.definition.primary_metric
         direction = config.get("direction") or ("minimize" if primary_metric in {"log_loss", "mae", "rmse"} else "maximize")
+        # BUG-071: same gap as SweepRunner.run() -- context was tagged on
+        # the MLflow run below but never passed to ModelManager, so every
+        # Optuna sweep silently trained against ModelManager's own "E0"
+        # default regardless of this config key.
+        context = str(config.get("context", "E0"))
 
         LOGGER.info(
             "Optuna sweep | experiment=%s | target=%s | model=%s | trials=%d | metric=%s | direction=%s | pruning=%s",
@@ -349,6 +361,8 @@ class OptunaRunner:
                     test_season=str(config.get("test_season", "time_split")),
                     feature_version=str(config.get("feature_schema_version", "v1")),
                     target_config={"target": self.definition.name},
+                    context=context,
+                    competition_id=context,
                 )
                 X_train, X_val, X_test, y_train, y_val, y_test, _ = manager.prepare_training_data()
                 eval_set = [(X_val, y_val)] if isinstance(model, (XGBoostModel, XGBoostRegressorModel)) else None
