@@ -657,16 +657,31 @@ def test_build_for_match_includes_squad_and_luck_columns(tmp_path: Path) -> None
         conn.execute(
             """
             CREATE TABLE raw_player_match_stats (
-                match_id TEXT, team_name TEXT, xg FLOAT, xa FLOAT, rating FLOAT,
+                match_id TEXT, team_name TEXT, player_id BIGINT, xg FLOAT, xa FLOAT, rating FLOAT,
                 goals INTEGER, assists INTEGER
             )
             """
         )
         conn.executemany(
-            "INSERT INTO raw_player_match_stats VALUES (?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO raw_player_match_stats VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
             [
-                ("m1", "Arsenal", 0.6, 0.2, 7.0, 2, 1),
-                ("m1", "Everton", 0.4, 0.1, 6.5, 1, 0),
+                ("m1", "Arsenal", 1, 0.6, 0.2, 7.0, 2, 1),
+                ("m1", "Everton", 2, 0.4, 0.1, 6.5, 1, 0),
+            ],
+        )
+        conn.execute(
+            """
+            CREATE TABLE player_market_values (
+                fotmob_player_id BIGINT, transfermarkt_player_id BIGINT,
+                snapshot_date TEXT, market_value_eur BIGINT
+            )
+            """
+        )
+        conn.executemany(
+            "INSERT INTO player_market_values VALUES (?, ?, ?, ?)",
+            [
+                (1, 100, "2025-08-01", 30_000_000),
+                (2, 200, "2025-08-01", 10_000_000),
             ],
         )
 
@@ -683,6 +698,8 @@ def test_build_for_match_includes_squad_and_luck_columns(tmp_path: Path) -> None
         "SQUAD_AWAY_XG_MEAN_R3", "SQUAD_AWAY_XG_MEAN_R5",
         "SQUAD_AWAY_XA_MEAN_R3", "SQUAD_AWAY_XA_MEAN_R5",
         "SQUAD_AWAY_RATING_MEAN_R3", "SQUAD_AWAY_RATING_MEAN_R5",
+        "SQUAD_HOME_MKT_VALUE_MEAN_R3", "SQUAD_HOME_MKT_VALUE_MEAN_R5",
+        "SQUAD_AWAY_MKT_VALUE_MEAN_R3", "SQUAD_AWAY_MKT_VALUE_MEAN_R5",
         "LUCK_HOME_BURNOUT_R5", "LUCK_AWAY_BURNOUT_R5",
     ]
     for col in expected_new_columns:

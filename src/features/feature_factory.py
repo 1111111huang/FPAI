@@ -338,6 +338,11 @@ class FeatureFactory:
         if not squad.empty:
             features = features.merge(squad, on="match_id", how="left")
 
+        # US#208: squad-level rolling market value (skipped when raw_player_match_stats or player_market_values absent)
+        squad_mkt_value = self._compute_squad_market_value_features(raw_df)
+        if not squad_mkt_value.empty:
+            features = features.merge(squad_mkt_value, on="match_id", how="left")
+
         # US#106: team-level luck burnout (skipped when raw_player_match_stats absent)
         luck = self._compute_luck_burnout_features(raw_df)
         if not luck.empty:
@@ -1333,6 +1338,9 @@ class FeatureFactory:
         squad = self._compute_squad_features(combined)
         if not squad.empty:
             features = features.merge(squad, on="match_id", how="left")
+        squad_mkt_value = self._compute_squad_market_value_features(combined)
+        if not squad_mkt_value.empty:
+            features = features.merge(squad_mkt_value, on="match_id", how="left")
         luck = self._compute_luck_burnout_features(combined)
         if not luck.empty:
             features = features.merge(luck, on="match_id", how="left")
@@ -1513,6 +1521,138 @@ class FeatureFactory:
             return joined.rename(columns=rename_map)[
                 ["match_id"] + list(rename_map.values())
             ]
+
+        home_feats = _join_side("HOME")
+        away_feats = _join_side("AWAY")
+        return home_feats.merge(away_feats, on="match_id", how="left")
+
+    def _compute_squad_market_value_features(self, raw_df: pd.DataFrame) -> pd.DataFrame:
+        """Query raw_player_match_stats + player_market_values and delegate
+        to the pure rolling helper (US#208 Phase 2). Returns empty (match_id
+        only) when either table doesn't exist yet -- same degradation
+        contract as _compute_squad_features."""
+        try:
+            with self.db_manager.connection(read_only=True) as conn:
+                player_df = conn.execute(
+                    "SELECT match_id, team_name, player_id FROM raw_player_match_stats"
+                ).fetchdf()
+                values_df = conn.execute(
+                    "SELECT fotmob_player_id, snapshot_date, market_value_eur FROM player_market_values"
+                ).fetchdf()
+        except duckdb.CatalogException:
+            return pd.DataFrame(columns=["match_id"])
+        return self._squad_market_value_rolling_from_data(player_df, values_df, raw_df)
+
+    @staticmethod
+    def _squad_market_value_rolling_from_data(
+        player_df: pd.DataFrame, values_df: pd.DataFrame, raw_df: pd.DataFrame
+    ) -> pd.DataFrame:
+        """Aggregate per-match player market values to rolling squad-level
+        features -- SQUAD_HOME/AWAY_MKT_VALUE_MEAN_R3/R5, the market-value
+        analog of _squad_rolling_from_data's SQUAD_*_RATING_MEAN_R3/R5.
+
+        Point-in-time correctness (the load-bearing requirement, design
+        spec): each player-match row is joined to the LATEST
+        player_market_values snapshot dated at-or-before that match's own
+        date via pd.merge_asof(direction="backward") -- never a later
+        snapshot, the same lookahead-bias class of bug W179 already had to
+        fix for closing-line odds features.
+
+        Args:
+            player_df: Rows from raw_player_match_stats (match_id,
+                team_name, player_id). FotMob-abbreviated team names are
+                normalised via standardize_team_name before joining.
+            values_df: Rows from player_market_values (fotmob_player_id,
+                snapshot_date, market_value_eur) -- every dated snapshot,
+                not pre-filtered to "latest".
+            raw_df: Rows from raw_matches (match_id, date, home_team,
+                away_team) with already-canonical team names.
+
+        Returns:
+            DataFrame keyed by match_id with 4 SQUAD_*_MKT_VALUE_MEAN_R3/R5
+            columns, one row per match. Returns a single-column match_id
+            DataFrame (empty) when player_df is empty.
+        """
+        from src.utils.helpers import standardize_team_name
+
+        if player_df.empty:
+            return pd.DataFrame(columns=["match_id"])
+
+        match_info = raw_df[["match_id", "date", "home_team", "away_team"]].copy()
+        match_info["date"] = pd.to_datetime(match_info["date"]).astype("datetime64[us]")
+
+        player_df = player_df.copy()
+        # Found live: some historical rows have a null player_id (a real
+        # data-quality gap) -- merge_asof's by= key can't contain nulls at
+        # all and raises, so these rows simply can't be matched to any
+        # market value and are dropped, not assumed away.
+        player_df = player_df[player_df["player_id"].notna()]
+        if player_df.empty:
+            return pd.DataFrame(columns=["match_id"])
+        player_df["player_id"] = player_df["player_id"].astype("int64")
+        player_df["team_std"] = player_df["team_name"].map(standardize_team_name)
+        player_df = player_df.merge(match_info[["match_id", "date"]], on="match_id", how="left")
+        # Found live: a handful of raw_player_match_stats rows reference a
+        # match_id that isn't in raw_matches at all (orphaned historical
+        # data) -- the left-join above leaves date as NaT for those, which
+        # merge_asof also rejects outright. Drop them, same "can't be
+        # matched" reasoning as the null player_id filter above.
+        player_df = player_df[player_df["date"].notna()]
+        if player_df.empty:
+            return pd.DataFrame(columns=["match_id"])
+
+        values = values_df.copy()
+        # Explicit dtype (not just pd.to_datetime's own default resolution):
+        # found live that DuckDB-sourced raw_matches.date comes back as
+        # datetime64[us] while an independently-loaded snapshot_date column
+        # can resolve to datetime64[ns] -- merge_asof raises on that
+        # mismatch rather than coercing, so both sides must agree explicitly.
+        values["snapshot_date"] = pd.to_datetime(values["snapshot_date"]).astype("datetime64[us]")
+        values = values.sort_values("snapshot_date")
+
+        # Point-in-time as-of join: for each player-match row, the latest
+        # snapshot dated at-or-before that match's own date.
+        player_df = player_df.sort_values("date")
+        resolved = pd.merge_asof(
+            player_df, values,
+            left_on="date", right_on="snapshot_date",
+            left_by="player_id", right_by="fotmob_player_id",
+            direction="backward",
+        )
+
+        agg = (
+            resolved.groupby(["match_id", "team_std"])
+            .agg(squad_mkt_value=("market_value_eur", "mean"))
+            .reset_index()
+        )
+
+        home_timeline = match_info[["match_id", "date", "home_team"]].rename(columns={"home_team": "team_std"})
+        away_timeline = match_info[["match_id", "date", "away_team"]].rename(columns={"away_team": "team_std"})
+        timeline = pd.concat([home_timeline, away_timeline], ignore_index=True)
+        timeline = timeline.merge(agg[["match_id", "team_std", "squad_mkt_value"]], on=["match_id", "team_std"], how="left")
+        timeline = timeline.sort_values(["team_std", "date", "match_id"]).reset_index(drop=True)
+
+        for window in [3, 5]:
+            col = f"_squad_mkt_value_r{window}"
+            timeline[col] = timeline.groupby("team_std")["squad_mkt_value"].transform(
+                lambda s, w=window: s.shift(1).rolling(w, min_periods=1).mean()
+            )
+
+        stat_cols = ["_squad_mkt_value_r3", "_squad_mkt_value_r5"]
+
+        def _join_side(side: str) -> pd.DataFrame:
+            rename_map = {
+                "_squad_mkt_value_r3": f"SQUAD_{side}_MKT_VALUE_MEAN_R3",
+                "_squad_mkt_value_r5": f"SQUAD_{side}_MKT_VALUE_MEAN_R5",
+            }
+            team_col = "home_team" if side == "HOME" else "away_team"
+            joined = match_info.merge(
+                timeline[["match_id", "team_std"] + stat_cols],
+                left_on=["match_id", team_col],
+                right_on=["match_id", "team_std"],
+                how="left",
+            )
+            return joined.rename(columns=rename_map)[["match_id"] + list(rename_map.values())]
 
         home_feats = _join_side("HOME")
         away_feats = _join_side("AWAY")

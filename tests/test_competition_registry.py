@@ -288,7 +288,7 @@ def test_sweden_feature_set_is_superset_of_general_purpose_features() -> None:
 def test_e0_still_resolves_full_167_features_after_sweden_registration() -> None:
     # Regression: registering a second competition_specific competition must
     # not change E0's own resolved feature set.
-    assert len(_selected_features_for("E0")) == 181  # US#174 (+6 DC_) = 175 + 6 + US#178 (+6 DC_CORNER_) = 181 + 6 -- US#179 (-6 MKT_LINE_MOVE/DISAGREEMENT, train/serve skew) = 187 - 6
+    assert len(_selected_features_for("E0")) == 185  # US#174 (+6 DC_) = 175 + 6 + US#178 (+6 DC_CORNER_) = 181 + 6 -- US#179 (-6 MKT_LINE_MOVE/DISAGREEMENT, train/serve skew) = 187 - 6 + US#208 (+4 SQUAD_*_MKT_VALUE_MEAN) = 181 + 4
 
 
 def test_sweden_available_targets_exclude_corners() -> None:
@@ -356,7 +356,7 @@ def test_la_liga_feature_set_is_superset_of_general_purpose_features() -> None:
 def test_e0_and_sweden_still_resolve_unchanged_after_la_liga_registration() -> None:
     # Regression: registering a third competition_specific competition must
     # not change E0's or Sweden's own resolved feature sets.
-    assert len(_selected_features_for("E0")) == 181  # US#174 (+6 DC_) = 175 + 6 + US#178 (+6 DC_CORNER_) = 181 + 6 -- US#179 (-6 MKT_LINE_MOVE/DISAGREEMENT, train/serve skew) = 187 - 6
+    assert len(_selected_features_for("E0")) == 185  # US#174 (+6 DC_) = 175 + 6 + US#178 (+6 DC_CORNER_) = 181 + 6 -- US#179 (-6 MKT_LINE_MOVE/DISAGREEMENT, train/serve skew) = 187 - 6 + US#208 (+4 SQUAD_*_MKT_VALUE_MEAN) = 181 + 4
     assert len(_selected_features_for("SWE")) == 86  # US#174 (+6 DC_) = 80 + 6 + US#178 (+6 DC_CORNER_) = 86 + 6 -- US#179 (-6) = 92 - 6
 
 
@@ -439,6 +439,6 @@ def test_e0_sweden_and_la_liga_still_resolve_unchanged_after_new_league_registra
     # Regression: registering three more competition_specific competitions
     # must not change any previously-registered competition's own resolved
     # feature set.
-    assert len(_selected_features_for("E0")) == 181  # US#174 (+6 DC_) = 175 + 6 + US#178 (+6 DC_CORNER_) = 181 + 6 -- US#179 (-6 MKT_LINE_MOVE/DISAGREEMENT, train/serve skew) = 187 - 6
+    assert len(_selected_features_for("E0")) == 185  # US#174 (+6 DC_) = 175 + 6 + US#178 (+6 DC_CORNER_) = 181 + 6 -- US#179 (-6 MKT_LINE_MOVE/DISAGREEMENT, train/serve skew) = 187 - 6 + US#208 (+4 SQUAD_*_MKT_VALUE_MEAN) = 181 + 4
     assert len(_selected_features_for("SWE")) == 86  # US#174 (+6 DC_) = 80 + 6 + US#178 (+6 DC_CORNER_) = 86 + 6 -- US#179 (-6) = 92 - 6
     assert len(_selected_features_for("SP1")) == len(_selected_features_for("I1"))

@@ -1,0 +1,43 @@
+context: D1
+experiment_family: forecast_target
+feature_schema_version: v1
+fixed_params:
+  early_stopping_rounds: 50
+  eval_metric: rmse
+  n_jobs: -1
+  objective: reg:squarederror
+  random_state: 42
+  tree_method: hist
+grid_search:
+  colsample_bytree:
+  - 0.75
+  - 0.85
+  learning_rate:
+  - 0.03
+  - 0.05
+  - 0.08
+  max_depth:
+  - 3
+  - 4
+  - 5
+  min_child_weight:
+  - 3
+  - 5
+  n_estimators:
+  - 400
+  - 500
+  - 600
+  reg_lambda:
+  - 1.0
+  - 2.0
+  subsample:
+  - 0.75
+  - 0.85
+league: D1
+model_type: xgb_regressor
+sweep_stage: narrow
+tags:
+  experiment_methodology: target_model_narrow_grid
+  split_policy: chronological_70_15_15
+test_season: time_split
+version: v1
