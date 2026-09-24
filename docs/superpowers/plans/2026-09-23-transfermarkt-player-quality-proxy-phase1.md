@@ -1,6 +1,6 @@
 # Player-Quality Proxy — Phase 1 (A126) Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
 
 **Goal:** Build the shared player-market-value ingestion/crosswalk layer and the `get_player_rating` agent tool, retiring A121's `web_search`-based FIFA-rating workaround (ticket A126). Phase 2 (the `SQUAD_MKT_VALUE_MEAN_*` ML feature, US#208) is a separate, later plan per the design spec's own sequencing.
 
@@ -23,7 +23,7 @@
 
 REEP (`github.com/withqwerty/reep`, CC0) publishes `data/people.csv` — confirmed columns include `type`, `name`, `key_fotmob`, `key_transfermarkt` (both float-cast numeric IDs, NaN when a provider has no entry for that person). We only need `type == "player"` rows where both IDs are present.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```python
 # tests/test_transfermarkt_reep_crosswalk.py
@@ -62,12 +62,12 @@ def test_load_reep_crosswalk_keeps_only_players_with_both_ids():
     assert crosswalk.to_dict("records") == [{"fotmob_player_id": 162549, "transfermarkt_player_id": 96148}]
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `pytest tests/test_transfermarkt_reep_crosswalk.py -v`
 Expected: FAIL — `ModuleNotFoundError: No module named 'src.ingestion.transfermarkt'`
 
-- [ ] **Step 3: Write minimal implementation**
+- [x] **Step 3: Write minimal implementation**
 
 ```python
 # src/ingestion/transfermarkt/reep_crosswalk.py
@@ -115,12 +115,12 @@ def load_reep_crosswalk(url: str = REEP_PEOPLE_CSV_URL) -> pd.DataFrame:
     )
 ```
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `pytest tests/test_transfermarkt_reep_crosswalk.py -v`
 Expected: PASS
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/ingestion/transfermarkt/__init__.py src/ingestion/transfermarkt/reep_crosswalk.py tests/test_transfermarkt_reep_crosswalk.py
@@ -137,7 +137,7 @@ git commit -m "feat(ingestion): load REEP FotMob<->Transfermarkt player crosswal
 
 Per the design spec, this table is **append-only** (a new row set per refresh run, stamped `snapshot_date`, never overwritten) — the natural key is `(fotmob_player_id, snapshot_date)`, not a plain upsert key on `fotmob_player_id` alone. This is deliberately unlike `fotmob/merge.py`'s `ON CONFLICT ... DO UPDATE` shape.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```python
 # tests/test_transfermarkt_merge.py
@@ -198,12 +198,12 @@ def test_insert_market_value_snapshot_never_overwrites_an_earlier_snapshot(tmp_p
     assert dates == [("2026-08-01",), ("2026-09-23",)]
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `pytest tests/test_transfermarkt_merge.py -v`
 Expected: FAIL — `ModuleNotFoundError: No module named 'src.ingestion.transfermarkt.merge'`
 
-- [ ] **Step 3: Write minimal implementation**
+- [x] **Step 3: Write minimal implementation**
 
 ```python
 # src/ingestion/transfermarkt/merge.py
@@ -276,12 +276,12 @@ def insert_market_value_snapshot(values_df: pd.DataFrame, db_manager: "DuckDBMan
     return len(to_insert)
 ```
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `pytest tests/test_transfermarkt_merge.py -v`
 Expected: PASS, both tests
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/ingestion/transfermarkt/merge.py tests/test_transfermarkt_merge.py
@@ -298,7 +298,7 @@ git commit -m "feat(ingestion): dated-snapshot player_market_values table (A126)
 
 Confirmed live: `GET https://www.transfermarkt.com/<any-slug>/profil/spieler/<transfermarkt_id>` (redirects to the canonical slug, plain `requests` follows redirects by default) returns the player's profile page. Market value text lives in `soup.find(class_="data-header__market-value-wrapper")`, e.g. `"€ 220.00 m Last update: 22/07/2026"` — not every player has one (confirmed live on a lower-profile player), which is a real, non-error case to degrade on.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 ```python
 # tests/test_transfermarkt_fetcher.py
@@ -357,12 +357,12 @@ def test_fetch_market_value_returns_none_when_no_value_listed():
     assert result is None
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `pytest tests/test_transfermarkt_fetcher.py -v`
 Expected: FAIL — `ModuleNotFoundError: No module named 'src.ingestion.transfermarkt.fetcher'`
 
-- [ ] **Step 3: Write minimal implementation**
+- [x] **Step 3: Write minimal implementation**
 
 ```python
 # src/ingestion/transfermarkt/fetcher.py
@@ -425,17 +425,17 @@ def fetch_market_value(transfermarkt_id: int, delay: float = 1.0) -> int | None:
     return _parse_market_value_eur(wrapper.get_text(" ", strip=True))
 ```
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `pytest tests/test_transfermarkt_fetcher.py -v`
 Expected: PASS, all 5 tests
 
-- [ ] **Step 5: Manual smoke test (not automated — real network)**
+- [x] **Step 5: Manual smoke test (not automated — real network)**
 
 Run: `python3 -c "from src.ingestion.transfermarkt.fetcher import fetch_market_value; print(fetch_market_value(418560))"`
 Expected: `220000000` (Erling Haaland's real current market value, or whatever it's since changed to — a plausible int in the hundreds-of-millions range, not `None` or an exception).
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add src/ingestion/transfermarkt/fetcher.py tests/test_transfermarkt_fetcher.py
@@ -451,7 +451,7 @@ git commit -m "feat(ingestion): fetch Transfermarkt player market values (A126)"
 
 Wires Tasks 1-3 together: pull the players already in `raw_player_match_stats` (via `player_dim`, this project's own known-player scope, per the design spec), resolve their Transfermarkt IDs via the crosswalk, fetch market values one at a time (politely rate-limited), insert today's snapshot.
 
-- [ ] **Step 1: Write the handler function**
+- [x] **Step 1: Write the handler function**
 
 Add near the other `run_fetch_*` functions (e.g. after `run_fetch_fotmob`, following the same lazy-import-inside-the-handler convention `main.py`'s own module comment describes):
 
@@ -491,7 +491,7 @@ def run_refresh_market_values(app_settings: AppSettings, db_manager: DuckDBManag
 
 (`LOGGER` here is `main.py`'s own module-level logger, already defined at the top of the file — reuse it, don't add a second one.)
 
-- [ ] **Step 2: Register the subparser**
+- [x] **Step 2: Register the subparser**
 
 Add alongside the other `fetch-*`/`refresh-*` subparsers (near `fetch-fotmob`'s registration):
 
@@ -502,7 +502,7 @@ market_values_parser = subparsers.add_parser(
 market_values_parser.add_argument("--delay", type=float, default=1.0, help="Polite delay in seconds between requests.")
 ```
 
-- [ ] **Step 3: Wire the dispatch**
+- [x] **Step 3: Wire the dispatch**
 
 Add alongside the other `elif args.command == "fetch-fotmob":` branch:
 
@@ -511,12 +511,12 @@ elif args.command == "refresh-market-values":
     run_refresh_market_values(app_settings, db_manager, delay=float(args.delay))
 ```
 
-- [ ] **Step 4: Manual smoke test**
+- [x] **Step 4: Manual smoke test**
 
 Run: `python main.py refresh-market-values`
 Expected: logs `refresh-market-values complete | players_scoped=<N> | values_fetched=<M> | rows_inserted=<M>`, no traceback. `M <= N` is expected (some scoped players have no listed market value).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add main.py
@@ -533,7 +533,7 @@ git commit -m "feat(cli): add refresh-market-values subcommand (A126)"
 
 Pure matching logic, no DB/agent dependency — kept separate from Task 6's tool wiring so it's independently testable, per the design spec's own 4-layer breakdown (exact -> accent-fold -> surname -> fuzzy), each independently verifiable.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 ```python
 # tests/test_player_matching.py
@@ -578,12 +578,12 @@ def test_no_plausible_match_returns_none():
     assert match_player_name("Someone Totally Unrelated", _ROSTER) is None
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `pytest tests/test_player_matching.py -v`
 Expected: FAIL — `ModuleNotFoundError: No module named 'src.agent.player_matching'`
 
-- [ ] **Step 3: Write minimal implementation**
+- [x] **Step 3: Write minimal implementation**
 
 ```python
 # src/agent/player_matching.py
@@ -639,12 +639,12 @@ def match_player_name(query: str, roster: list[str]) -> str | None:
     return None
 ```
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `pytest tests/test_player_matching.py -v`
 Expected: PASS, all 6 tests. If `test_fuzzy_fallback_match` fails because `difflib` also returns the correct answer as a *second*, lower-ranked candidate for a typo this small, tighten to `n=1` — re-run and confirm before moving on rather than guessing at the fix.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/agent/player_matching.py tests/test_player_matching.py
@@ -660,7 +660,7 @@ git commit -m "feat(agent): layered player-name matcher for get_player_rating (A
 - Modify: `src/agent/graph.py` (`run_agent`, around lines 535-536 per current source)
 - Test: `tests/test_player_rating_tool.py`
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 ```python
 # tests/test_player_rating_tool.py
@@ -778,12 +778,12 @@ def test_tool_never_reads_a_snapshot_dated_after_as_of_date(tmp_path: Path):
     assert result == {"matched": True, "market_value_eur": 220000000}
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `pytest tests/test_player_rating_tool.py -v`
 Expected: FAIL — `ModuleNotFoundError: No module named 'src.agent.player_rating_tool'`
 
-- [ ] **Step 3: Write minimal implementation**
+- [x] **Step 3: Write minimal implementation**
 
 ```python
 # src/agent/player_rating_tool.py
@@ -884,12 +884,12 @@ def build_player_rating_tool(db_manager: "DuckDBManager", home_team: str, away_t
     return get_player_rating
 ```
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `pytest tests/test_player_rating_tool.py -v`
 Expected: PASS, all 5 tests
 
-- [ ] **Step 5: Wire into `get_default_tools()` and `run_agent()`**
+- [x] **Step 5: Wire into `get_default_tools()` and `run_agent()`**
 
 In `src/agent/tools.py`, change `get_default_tools()`'s signature to optionally accept a pre-built extra tool (keeps this file from needing to know about `DuckDBManager`/match context directly):
 
@@ -932,12 +932,12 @@ In `src/agent/graph.py`'s `run_agent()`, right where `tools = get_default_tools(
 
 (`LOGGER` must already exist at module level in `graph.py` — confirm before pasting; if it's named differently there, use the existing name rather than introducing a second logger.) The try/except here matters: a crosswalk/DB hiccup for this one match must degrade to "no player-rating tool this match" (the LLM just won't have it available), never crash the whole recommendation.
 
-- [ ] **Step 6: Run the full agent test suite to check for regressions**
+- [x] **Step 6: Run the full agent test suite to check for regressions**
 
 Run: `pytest tests/test_agent_tools_snapshot.py tests/test_agent_graph*.py -v`
 Expected: all pass, no new failures. If any existing test calls `get_default_tools()` expecting exactly `[web_search]`, update its assertion to `get_default_tools() == [web_search]` (the no-`extra_tools`-arg case is unchanged) rather than loosening the test.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add src/agent/player_rating_tool.py src/agent/tools.py src/agent/graph.py tests/test_player_rating_tool.py
@@ -955,7 +955,7 @@ git commit -m "feat(agent): add get_player_rating tool, built per-match (A126)"
 - Modify: `config/prompts/agent_v1_conservative.txt`
 - Test: `tests/test_agent_prompt_thresholds.py` (extend existing file)
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Add to `tests/test_agent_prompt_thresholds.py` (following whatever pattern the existing A118-122 "instruction present in all 4 files" checks there already use — read the file first to match its exact helper/loop style before adding this):
 
@@ -967,12 +967,12 @@ def test_get_player_rating_instruction_present_in_all_4_postures():
         assert "FIFA / EA Sports FC card" not in text  # A121's old web_search instruction must be gone
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `pytest tests/test_agent_prompt_thresholds.py::test_get_player_rating_instruction_present_in_all_4_postures -v`
 Expected: FAIL — `assert "get_player_rating" in text` fails (not yet present)
 
-- [ ] **Step 3: Update all 4 prompt files**
+- [x] **Step 3: Update all 4 prompt files**
 
 In each of the 4 files, replace the current A121 sentence:
 
@@ -982,12 +982,12 @@ with:
 
 > "If the evidence already gathered doesn't make the replacement's quality clear and it materially affects a market you are close to recommending, call get_player_rating for both the missing player and their likely replacement and compare market_value_eur as a rough quality-gap proxy -- a small gap means the absence probably costs little, a large one means it is a genuine downgrade. This is a structured tool call, not a web_search, so it doesn't count against your one optional web_search budget."
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `pytest tests/test_agent_prompt_thresholds.py -v`
 Expected: PASS, including every pre-existing test in this file (no regression to the other posture checks already there)
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add config/prompts/agent_v1.txt config/prompts/agent_v1_aggressive.txt config/prompts/agent_v1_balanced.txt config/prompts/agent_v1_conservative.txt tests/test_agent_prompt_thresholds.py
@@ -1001,18 +1001,18 @@ git commit -m "feat(agent): retire A121 web_search FIFA-rating workaround for ge
 **Files:**
 - Modify: `documents/agent_user_stories.md` (A126 status)
 
-- [ ] **Step 1: Run the full test suite**
+- [x] **Step 1: Run the full test suite**
 
 Run: `pytest tests/ app/backend/tests/ scripts/ -q`
 Expected: PASS, same pre-existing skip/failure count as before this plan (no new failures) -- baseline for this worktree is 1 pre-existing unrelated failure (`tests/test_prepare_training_data_league_scoping.py::test_international_context_pools_e0_and_swe_against_real_registry`) plus whatever `app/backend/tests/`/`scripts/` show given this worktree has no real local `data/fpai_core.db` (gitignored, never populated here) -- several `app/backend/tests/` fixture/dashboard tests fail against an empty DB for that reason alone, unrelated to this plan; don't fix them here. If any test run leaves behind stub `data/*.db` files, move them out of `data/` afterward (one at a time -- a bulk `rm -rf`/wildcard `mv` gets blocked by the sandbox's destructive-action guard) so they don't turn later `pytest.skip("Real database not available")` checks into real errors.
 
-- [ ] **Step 2: Update A126's status**
+- [x] **Step 2: Update A126's status**
 
 In `documents/agent_user_stories.md`, change A126's status column from `future` to `completed (2026-09-23)`, and append to its own row text (after the existing "Full design: ..." sentence):
 
 > "**Implemented (2026-09-23):** `src/ingestion/transfermarkt/` (reep_crosswalk.py, fetcher.py, merge.py), `main.py refresh-market-values`, and the per-match `get_player_rating` tool (`src/agent/player_rating_tool.py`, wired into `graph.py`'s `run_agent()`) all shipped, TDD, full suite green (excluding this worktree's own missing-real-local-DB gaps, unrelated). **Data source changed mid-implementation**: the design spec originally called for SoFIFA ability ratings, but sofifa.com's Cloudflare bot protection blocks a plain `requests` fetch (confirmed live), and the only real workaround (`soccerdata`/`seleniumbase`, needing a real local Chrome install) created a dependency conflict with `google-genai`/`langgraph-sdk`'s `websockets` requirement in this project's shared venv -- a real risk to the live agent stack. **User-confirmed pivot to Transfermarkt market values** instead: same `requests`-only pattern as every other ingestion module here, no new dependency, no Cloudflare problem, tested live. Full history in `docs/superpowers/specs/2026-09-22-player-quality-proxy-design.md`'s 2026-09-23 revision note. Underlying signal is now `market_value_eur` (transfer-market perception), not an EA FC-style ability rating -- same underlying purpose (player-quality/depth proxy), different flavor."
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add documents/agent_user_stories.md
