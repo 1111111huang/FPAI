@@ -54,7 +54,8 @@ from app.backend.bet_stats import compute_bet_stats
 from app.backend.recommendations import MatchRecommendationOut, RecommendationRequest, validate_and_degrade
 from app.backend.scheduler import JobRunLog, RecoverableScheduler
 from app.backend.scheduler_wiring import (
-    build_odds_client, build_oddspapi_client, build_schedule_t30, register_eod_job, register_lessons_job,
+    build_odds_client, build_oddspapi_client, build_schedule_t30, register_data_refresh_job, register_eod_job,
+    register_lessons_job,
 )
 from app.backend.settlement import settle_open_bets
 from app.backend.users import UserStore
@@ -461,6 +462,12 @@ async def lifespan(app: FastAPI):
             ligue1_fixtures_client=get_ligue1_fixtures_client(),
             oddspapi_client=build_oddspapi_client(),
         )
+        # W247: automated daily replacement for the manual
+        # POST /api/admin/trigger-data-refresh endpoint -- production's
+        # raw_matches was found live going 17-130 days stale per league
+        # with nothing refreshing it (see scheduler_wiring.py's
+        # register_data_refresh_job docstring).
+        register_data_refresh_job(scheduler)
         register_lessons_job(
             scheduler,
             cache=recommendations.get_cache(),

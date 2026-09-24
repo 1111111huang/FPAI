@@ -11,6 +11,8 @@ from collections import Counter
 from datetime import datetime, timedelta
 import os
 from pathlib import Path
+import subprocess
+import sys
 from typing import Callable
 
 import requests
@@ -59,6 +61,17 @@ LESSONS_WEEKLY_JOB_ID = "weekly_live_lesson_review"
 LESSONS_WEEKLY_DAY_OF_WEEK = 6  # Sunday (0=Monday..6=Sunday)
 LESSONS_WEEKLY_HOUR = 6
 LESSONS_WEEKLY_MINUTE = 10
+
+# W247: daily (not weekly) since matches land on any day of the week for
+# these leagues (midweek cup/rescheduled fixtures, not just weekend
+# rounds) -- a fixed weekly day can go stale the moment a match lands
+# right after that day's run. Scheduled at 04:00 ET: after EOD_HOUR's
+# 23:00 batch and well before LESSONS_HOUR's 06:00 daily job, so lessons/
+# EOD both see same-day-fresh raw_matches by the time they run.
+DATA_REFRESH_JOB_ID = "daily_data_refresh"
+DATA_REFRESH_HOUR = 4
+DATA_REFRESH_MINUTE = 0
+_REPO_ROOT = Path(__file__).parent.parent.parent
 
 # W62/W81/W140: every competition_specific league (match_info.py's
 # COMPETITION_ALLOWLIST) the nightly EOD batch/T-30 refresh knows how to
@@ -442,6 +455,51 @@ def register_eod_job(
             )
 
     scheduler.schedule_daily(EOD_JOB_ID, _eod_job, hour=EOD_HOUR, minute=EOD_MINUTE)
+
+
+def register_data_refresh_job(
+    scheduler: RecoverableScheduler,
+    leagues: tuple[str, ...] = COMPETITIONS,
+    hour: int = DATA_REFRESH_HOUR,
+    minute: int = DATA_REFRESH_MINUTE,
+) -> None:
+    """W247: automated daily replacement for the manual admin trigger
+    (`POST /api/admin/trigger-data-refresh`, `main.py`'s `trigger_data_refresh`)
+    -- production's `raw_matches` was found live going 17-130 days stale
+    per league with nothing refreshing it. Launches the exact same
+    subprocess command that endpoint already uses (`main.py refresh-data
+    --league <L>`, a genuinely separate OS process -- see that endpoint's
+    own docstring for why this never imports main.py's `run_refresh_data`
+    in-process: main.py's top-level mlflow/Optuna imports would otherwise
+    load into this always-running web server).
+
+    Leagues are run sequentially, not concurrently: they all write to the
+    same `data/fpai_core.db`, and a second writer racing the first would
+    hit DuckDB's exclusive file lock. One league's launch failure (or
+    non-zero exit) is logged and skipped, same "one failure doesn't block
+    the rest" contract as register_eod_job's own per-competition try/except
+    -- the job still gets marked ran for the day, so a transient failure
+    (e.g. Understat down) doesn't retry-loop forever; tomorrow's run tries
+    again naturally."""
+
+    def _data_refresh_job() -> None:
+        enabled = set(list_display_enabled_competition_ids())
+        for league in leagues:
+            if league not in enabled:
+                continue
+            try:
+                process = subprocess.Popen(
+                    [sys.executable, "main.py", "refresh-data", "--league", league],
+                    cwd=_REPO_ROOT,
+                )
+                returncode = process.wait()
+            except Exception:
+                LOGGER.warning("Daily data refresh: league=%s failed to launch -- skipping.", league, exc_info=True)
+                continue
+            if returncode != 0:
+                LOGGER.warning("Daily data refresh: league=%s exited with code %d.", league, returncode)
+
+    scheduler.schedule_daily(DATA_REFRESH_JOB_ID, _data_refresh_job, hour=hour, minute=minute)
 
 
 def register_lessons_job(

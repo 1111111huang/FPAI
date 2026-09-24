@@ -23,6 +23,9 @@ from app.backend.recommendation_cache import RecommendationCache
 from app.backend.recommendation_outcomes import RecommendationOutcomeStore
 from app.backend.scheduler import NY_TZ, JobRunLog, RecoverableScheduler
 from app.backend.scheduler_wiring import (
+    DATA_REFRESH_HOUR,
+    DATA_REFRESH_JOB_ID,
+    DATA_REFRESH_MINUTE,
     EOD_HOUR,
     EOD_JOB_ID,
     FallbackOddsClient,
@@ -36,6 +39,7 @@ from app.backend.scheduler_wiring import (
     PersistingOddsClient,
     PersistingOddsPapiClient,
     next_day_date_str,
+    register_data_refresh_job,
     register_eod_job,
     register_lessons_job,
     t30_run_at,
@@ -835,3 +839,69 @@ def test_register_lessons_job_degrades_to_stats_only_when_llm_build_fails(tmp_pa
         rows = conn.execute("SELECT status FROM agent_lessons").fetchall()
     assert len(rows) == 1
     assert rows[0][0] == "pending"  # auto-judge never ran (llm_invoke=None -> no-op)
+
+
+def test_register_data_refresh_job_launches_a_subprocess_per_enabled_league(tmp_path: Path) -> None:
+    """W247: the daily automated replacement for the manual
+    POST /api/admin/trigger-data-refresh endpoint -- same subprocess
+    launch (main.py refresh-data --league <L>), one per configured league,
+    run sequentially (not concurrently) since they all write to the same
+    DuckDB file and a concurrent second writer would hit its exclusive
+    file lock."""
+    run_log = JobRunLog(db_path=tmp_path / "job_runs.db")
+    now = datetime(_FUTURE_DAY.year, _FUTURE_DAY.month, _FUTURE_DAY.day, DATA_REFRESH_HOUR, DATA_REFRESH_MINUTE + 5, tzinfo=NY_TZ)
+    scheduler = RecoverableScheduler(run_log=run_log, now_fn=lambda: now)
+
+    mock_process = MagicMock()
+    mock_process.wait.return_value = 0
+    with patch("app.backend.scheduler_wiring.subprocess.Popen", return_value=mock_process) as mock_popen:
+        register_data_refresh_job(scheduler, leagues=("E0", "SP1"))
+        assert _wait_until(lambda: run_log.has_run(DATA_REFRESH_JOB_ID, _FUTURE_DAY_STR))
+
+    assert mock_popen.call_count == 2
+    leagues_seen = []
+    for call in mock_popen.call_args_list:
+        command = call.args[0]
+        assert "refresh-data" in command and "--league" in command
+        leagues_seen.append(command[command.index("--league") + 1])
+    assert leagues_seen == ["E0", "SP1"]
+    assert mock_process.wait.call_count == 2
+
+
+def test_register_data_refresh_job_skips_a_display_disabled_league(tmp_path: Path) -> None:
+    run_log = JobRunLog(db_path=tmp_path / "job_runs.db")
+    now = datetime(_FUTURE_DAY.year, _FUTURE_DAY.month, _FUTURE_DAY.day, DATA_REFRESH_HOUR, DATA_REFRESH_MINUTE + 5, tzinfo=NY_TZ)
+    scheduler = RecoverableScheduler(run_log=run_log, now_fn=lambda: now)
+
+    mock_process = MagicMock()
+    mock_process.wait.return_value = 0
+    with patch("app.backend.scheduler_wiring.subprocess.Popen", return_value=mock_process) as mock_popen, patch(
+        "app.backend.scheduler_wiring.list_display_enabled_competition_ids", return_value=["E0"]
+    ):
+        register_data_refresh_job(scheduler, leagues=("E0", "SP1"))
+        assert _wait_until(lambda: run_log.has_run(DATA_REFRESH_JOB_ID, _FUTURE_DAY_STR))
+
+    assert mock_popen.call_count == 1
+    assert "E0" in mock_popen.call_args.args[0]
+
+
+def test_register_data_refresh_job_continues_after_one_leagues_subprocess_fails_to_launch(tmp_path: Path) -> None:
+    """One league's Popen() call raising (e.g. FileNotFoundError) must not
+    stop the rest of the leagues from being attempted, and must not stop
+    the overall job from being marked as ran -- same "one failure doesn't
+    block the others" contract as register_eod_job's own per-competition
+    try/except."""
+    run_log = JobRunLog(db_path=tmp_path / "job_runs.db")
+    now = datetime(_FUTURE_DAY.year, _FUTURE_DAY.month, _FUTURE_DAY.day, DATA_REFRESH_HOUR, DATA_REFRESH_MINUTE + 5, tzinfo=NY_TZ)
+    scheduler = RecoverableScheduler(run_log=run_log, now_fn=lambda: now)
+
+    mock_process = MagicMock()
+    mock_process.wait.return_value = 0
+    with patch(
+        "app.backend.scheduler_wiring.subprocess.Popen", side_effect=[OSError("boom"), mock_process]
+    ) as mock_popen:
+        register_data_refresh_job(scheduler, leagues=("E0", "SP1"))
+        assert _wait_until(lambda: run_log.has_run(DATA_REFRESH_JOB_ID, _FUTURE_DAY_STR))
+
+    assert mock_popen.call_count == 2
+    assert mock_process.wait.call_count == 1
