@@ -88,3 +88,12 @@ def test_prompt_discloses_the_self_consistency_downgrade():
     it, rather than it being an unexplained trap."""
     text = _load_system_prompt(_BASE)
     assert "highest among your other still-eligible" in text
+
+
+def test_get_player_rating_instruction_present_in_all_4_postures():
+    """A126: retires A121's web_search-based FIFA-rating workaround in
+    favor of the structured get_player_rating tool call."""
+    for version in ("v1", "v1_aggressive", "v1_balanced", "v1_conservative"):
+        text = _load_system_prompt(replace(_BASE, system_prompt_version=version))
+        assert "get_player_rating" in text
+        assert "FIFA / EA Sports FC card" not in text
