@@ -268,7 +268,13 @@ def reject_lesson(conn: duckdb.DuckDBPyConnection, lesson_id: int, reviewer: str
     )
 
 
-def load_approved_lessons(conn: duckdb.DuckDBPyConnection, competition_id: str | None, tier: str) -> list[str]:
+def load_approved_lessons(
+    conn: duckdb.DuckDBPyConnection,
+    competition_id: str | None,
+    tier: str,
+    current_model_fingerprint: str | None,
+    current_agent_config_fingerprint: str | None,
+) -> list[str]:
     """Approved, distilled rule text (A44: rule_text, never the raw
     lesson_text -- the live agent's prompt should never see match-specific
     noise like team names/dates/stats, only the generalized rule a reviewer
@@ -282,6 +288,34 @@ def load_approved_lessons(conn: duckdb.DuckDBPyConnection, competition_id: str |
     recommendation runs must never fail just because train mode hasn't
     produced anything yet.
 
+    A127 staleness check, applied to every otherwise-matching row before
+    it's returned:
+    - agent_config_fingerprint mismatch (stored value, including a NULL
+      pre-migration one, != current_agent_config_fingerprint) ALWAYS
+      disqualifies -- a config change (prompt version, thresholds, ...)
+      can change what's safe to inject regardless of the ML model.
+    - model_fingerprint mismatch disqualifies UNLESS the row's own
+      survives_model_change=True.
+    - A disqualified row is excluded from the returned set immediately
+      (fail-safe: a stale lesson is never injected, regardless of what
+      happens next) and, best-effort, flipped to 'needs_review' with the
+      mismatch reason(s) recorded in auto_decision_reasoning. The flip is
+      skipped (never raised) when `conn` is opened read_only=True --
+      pipeline.py's lessons_node (live serving) and
+      app/backend/live_lessons.py's auto_judge_live_lessons (its own
+      conflict-check lookup) both use a read-only connection here by
+      design; the exclusion above already gives the fail-safe guarantee
+      either way, so the persisted flip (a nice-to-have audit signal) is
+      simply deferred to whichever caller next holds a writable connection
+      for this same row.
+
+    current_model_fingerprint may be None (an unrecognized competition_id
+    has no model_selection.yaml entry at all, see compute_model_fingerprint)
+    -- that still correctly mismatches any real stored value via plain
+    Python inequality, and also correctly matches another NULL/None stored
+    value, which is what you want: two "no model registered" states are
+    the same state, not a mismatch.
+
     W185 code-quality follow-up: auto_judge_live_lessons' weekly grouped
     judge approves an entire group of N pending candidates together via N
     separate approve_lesson calls, all given the SAME rule_text -- without
@@ -294,7 +328,8 @@ def load_approved_lessons(conn: duckdb.DuckDBPyConnection, competition_id: str |
     try:
         rows = conn.execute(
             """
-            SELECT rule_text FROM agent_lessons
+            SELECT id, rule_text, model_fingerprint, agent_config_fingerprint, survives_model_change
+            FROM agent_lessons
             WHERE status = 'approved'
               AND rule_text IS NOT NULL
               AND ((scope = 'competition' AND competition_id = ?)
@@ -305,12 +340,27 @@ def load_approved_lessons(conn: duckdb.DuckDBPyConnection, competition_id: str |
         ).fetchall()
     except duckdb.CatalogException:
         return []
+
     seen: set[str] = set()
     deduped: list[str] = []
-    for row in rows:
-        if row[0] not in seen:
-            seen.add(row[0])
-            deduped.append(row[0])
+    for lesson_id, rule_text, stored_model_fp, stored_config_fp, survives in rows:
+        reasons = []
+        if stored_config_fp != current_agent_config_fingerprint:
+            reasons.append("agent_config_fingerprint changed since approval")
+        if stored_model_fp != current_model_fingerprint and not survives:
+            reasons.append("model_fingerprint changed since approval")
+        if reasons:
+            try:
+                conn.execute(
+                    "UPDATE agent_lessons SET status = 'needs_review', auto_decision_reasoning = ? WHERE id = ?",
+                    ["; ".join(reasons), lesson_id],
+                )
+            except duckdb.InvalidInputException:
+                pass  # read-only connection -- exclusion below still applies; flip deferred to a writable caller
+            continue
+        if rule_text not in seen:
+            seen.add(rule_text)
+            deduped.append(rule_text)
     return deduped
 
 

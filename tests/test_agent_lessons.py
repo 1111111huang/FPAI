@@ -286,7 +286,7 @@ def test_load_approved_lessons_matches_competition_scope_only_for_same_competiti
     approve_lesson(conn, e0_id, "competition", "alice", "E0 rule")
     approve_lesson(conn, sp1_id, "competition", "alice", "SP1 rule")
 
-    result = load_approved_lessons(conn, "E0", "competition_specific")
+    result = load_approved_lessons(conn, "E0", "competition_specific", None, None)
     assert result == ["E0 rule"]
 
 
@@ -295,7 +295,7 @@ def test_load_approved_lessons_matches_tier_scope_regardless_of_competition():
     lesson_id = insert_lesson_candidate(conn, "tier lesson", "SWE_ALLS", "general_purpose", "m1")
     approve_lesson(conn, lesson_id, "tier", "alice", "tier rule")
 
-    result = load_approved_lessons(conn, "SOME_OTHER_LEAGUE", "general_purpose")
+    result = load_approved_lessons(conn, "SOME_OTHER_LEAGUE", "general_purpose", None, None)
     assert result == ["tier rule"]
 
 
@@ -313,7 +313,7 @@ def test_load_approved_lessons_dedupes_identical_rule_text_across_rows():
     approve_lesson(conn, id2, "competition", "agent-auto", "NEVER bet the draw as the only positive edge.")
     approve_lesson(conn, id3, "competition", "agent-auto", "ALWAYS check injury reports first.")
 
-    result = load_approved_lessons(conn, "E0", "competition_specific")
+    result = load_approved_lessons(conn, "E0", "competition_specific", None, None)
 
     assert result == ["NEVER bet the draw as the only positive edge.", "ALWAYS check injury reports first."]
 
@@ -330,7 +330,7 @@ def test_load_approved_lessons_excludes_approved_rows_with_null_rule_text():
         [legacy_id],
     )
 
-    result = load_approved_lessons(conn, "E0", "competition_specific")
+    result = load_approved_lessons(conn, "E0", "competition_specific", None, None)
     assert result == []
 
 
@@ -341,13 +341,13 @@ def test_load_approved_lessons_excludes_pending_and_rejected():
     reject_lesson(conn, rejected_id, "alice")
     # pending_id stays pending -- never approved
 
-    result = load_approved_lessons(conn, "E0", "competition_specific")
+    result = load_approved_lessons(conn, "E0", "competition_specific", None, None)
     assert result == []
 
 
 def test_load_approved_lessons_returns_empty_list_when_table_missing():
     conn = duckdb.connect(":memory:")  # create_lessons_tables() never called
-    assert load_approved_lessons(conn, "E0", "competition_specific") == []
+    assert load_approved_lessons(conn, "E0", "competition_specific", None, None) == []
 
 
 def test_load_approved_lessons_signature_has_no_status_override_parameter():
@@ -355,7 +355,108 @@ def test_load_approved_lessons_signature_has_no_status_override_parameter():
     pending/rejected lessons -- proven here by the function itself having no
     parameter that could select anything but the hardcoded status='approved'."""
     params = set(inspect.signature(load_approved_lessons).parameters)
-    assert params == {"conn", "competition_id", "tier"}
+    assert params == {
+        "conn", "competition_id", "tier",
+        "current_model_fingerprint", "current_agent_config_fingerprint",
+    }
+
+
+def _approve(conn, competition_id="E0", tier="competition_specific", model_fp="mfp1", config_fp="cfp1", survives=False):
+    lesson_id = insert_lesson_candidate(conn, "lesson text", competition_id, tier, "m1")
+    approve_lesson(
+        conn, lesson_id, "competition", "reviewer1", "NEVER do X.",
+        model_fingerprint=model_fp, agent_config_fingerprint=config_fp, survives_model_change=survives,
+    )
+    return lesson_id
+
+
+def test_load_approved_lessons_returns_the_rule_when_fingerprints_match():
+    conn = _conn()
+    _approve(conn)
+    result = load_approved_lessons(conn, "E0", "competition_specific", "mfp1", "cfp1")
+    assert result == ["NEVER do X."]
+
+
+def test_load_approved_lessons_excludes_and_flips_on_model_fingerprint_mismatch():
+    conn = _conn()
+    lesson_id = _approve(conn, model_fp="mfp-old", config_fp="cfp1", survives=False)
+
+    result = load_approved_lessons(conn, "E0", "competition_specific", "mfp-new", "cfp1")
+
+    assert result == []
+    row = conn.execute("SELECT status, auto_decision_reasoning FROM agent_lessons WHERE id = ?", [lesson_id]).fetchone()
+    assert row[0] == "needs_review"
+    assert "model_fingerprint" in row[1]
+
+
+def test_load_approved_lessons_keeps_a_lesson_that_survives_model_change():
+    conn = _conn()
+    _approve(conn, model_fp="mfp-old", config_fp="cfp1", survives=True)
+
+    result = load_approved_lessons(conn, "E0", "competition_specific", "mfp-new", "cfp1")
+
+    assert result == ["NEVER do X."]
+
+
+def test_load_approved_lessons_excludes_even_a_survivor_on_agent_config_mismatch():
+    conn = _conn()
+    lesson_id = _approve(conn, model_fp="mfp1", config_fp="cfp-old", survives=True)
+
+    result = load_approved_lessons(conn, "E0", "competition_specific", "mfp1", "cfp-new")
+
+    assert result == []
+    status = conn.execute("SELECT status FROM agent_lessons WHERE id = ?", [lesson_id]).fetchone()[0]
+    assert status == "needs_review"
+
+
+def test_load_approved_lessons_treats_a_null_stored_fingerprint_as_a_mismatch():
+    """Migration case: the 4 pre-A127 approved lessons have NULL fingerprints."""
+    conn = _conn()
+    lesson_id = insert_lesson_candidate(conn, "lesson text", "E0", "competition_specific", "m1")
+    approve_lesson(conn, lesson_id, "competition", "reviewer1", "NEVER do X.")  # no fingerprints -- pre-migration shape
+
+    result = load_approved_lessons(conn, "E0", "competition_specific", "mfp-anything", "cfp-anything")
+
+    assert result == []
+    status = conn.execute("SELECT status FROM agent_lessons WHERE id = ?", [lesson_id]).fetchone()[0]
+    assert status == "needs_review"
+
+
+def test_load_approved_lessons_does_not_raise_on_a_read_only_connection(tmp_path):
+    """lessons_node's own live-serving connection is read_only=True -- the
+    exclusion must still apply, and the flip attempt must not raise, only
+    be skipped."""
+    db_path = str(tmp_path / "test.db")
+    conn = duckdb.connect(db_path)
+    create_lessons_tables(conn)
+    lesson_id = insert_lesson_candidate(conn, "lesson text", "E0", "competition_specific", "m1")
+    approve_lesson(
+        conn, lesson_id, "competition", "reviewer1", "NEVER do X.",
+        model_fingerprint="mfp-old", agent_config_fingerprint="cfp1", survives_model_change=False,
+    )
+    conn.close()
+
+    ro_conn = duckdb.connect(db_path, read_only=True)
+    result = load_approved_lessons(ro_conn, "E0", "competition_specific", "mfp-new", "cfp1")
+    ro_conn.close()
+
+    assert result == []
+    # status flip was skipped (read-only), not raised -- reopen writable to confirm it's still 'approved'
+    rw_conn = duckdb.connect(db_path)
+    status = rw_conn.execute("SELECT status FROM agent_lessons WHERE id = ?", [lesson_id]).fetchone()[0]
+    assert status == "approved"
+
+
+def test_load_approved_lessons_still_dedupes_identical_rule_text_with_fingerprints():
+    conn = _conn()
+    for _ in range(2):
+        lesson_id = insert_lesson_candidate(conn, "lesson text", "E0", "competition_specific", "m1")
+        approve_lesson(
+            conn, lesson_id, "competition", "reviewer1", "NEVER do X.",
+            model_fingerprint="mfp1", agent_config_fingerprint="cfp1",
+        )
+    result = load_approved_lessons(conn, "E0", "competition_specific", "mfp1", "cfp1")
+    assert result == ["NEVER do X."]
 
 
 def test_extract_competition_scope_reads_competition_and_tier():
