@@ -14,6 +14,7 @@ import pandas as pd
 import yaml
 from xgboost import XGBClassifier, XGBRegressor
 
+from src.features.league_prior import compute_league_prior
 from src.forecast.schema import validate_forecast_payload
 from src.forecast.uncertainty import (
     normalized_entropy_uncertainty,
@@ -710,6 +711,23 @@ class ForecastService:
         feature_count = feature_frame.notna().sum().sum()
 
         # Impute column means for any remaining NaN (cold-start)
+        still_missing = [col for col in feature_frame.columns if feature_frame[col].isna().any()]
+        # US#153: a fully-cold-start match (two genuinely unseen teams) has
+        # nothing left in this call's own frame for FeatureFactory's
+        # per-competition mean to average -- that mean is itself NaN, which
+        # is exactly what reaches here. A real league-wide prior (the same
+        # per-column mean US#134 already computes elsewhere, just sourced
+        # from the persisted feature_store table instead of this single
+        # call's empty frame) is a far better fill than a flat 0.0.
+        # international never reaches here with anything but MKT_* columns
+        # (feature_factory.py already excludes those from cold-start
+        # imputation entirely -- a missing real market price has no
+        # meaningful "league prior" substitute), so this only applies to
+        # the league/competition_specific path.
+        if still_missing and effective_context != "international":
+            league_prior = compute_league_prior(self.db_manager, effective_context, still_missing)
+            for col, value in league_prior.items():
+                feature_frame[col] = feature_frame[col].fillna(value)
         for col in feature_frame.columns:
             if feature_frame[col].isna().any():
                 feature_frame[col] = feature_frame[col].fillna(0.0)
