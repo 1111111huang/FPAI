@@ -794,6 +794,38 @@ def test_judge_lesson_candidate_rejects_on_stringified_approve_false():
     assert decision.approve is False
 
 
+def test_judge_lesson_candidate_parses_survives_model_change_true():
+    def fake_invoke(prompt: str) -> str:
+        return '{"approve": true, "scope": "tier", "reasoning": "clear pattern", "survives_model_change": true}'
+
+    decision = judge_lesson_candidate("some lesson text", "E0", "competition_specific", fake_invoke)
+    assert decision.survives_model_change is True
+
+
+def test_judge_lesson_candidate_defaults_survives_model_change_false_when_absent():
+    def fake_invoke(prompt: str) -> str:
+        return '{"approve": true, "scope": "tier", "reasoning": "clear pattern"}'
+
+    decision = judge_lesson_candidate("some lesson text", "E0", "competition_specific", fake_invoke)
+    assert decision.survives_model_change is False
+
+
+def test_judge_lesson_candidate_defaults_survives_model_change_false_on_non_boolean():
+    def fake_invoke(prompt: str) -> str:
+        return '{"approve": true, "scope": "tier", "reasoning": "clear pattern", "survives_model_change": "yes"}'
+
+    decision = judge_lesson_candidate("some lesson text", "E0", "competition_specific", fake_invoke)
+    assert decision.survives_model_change is False
+
+
+def test_judge_lesson_candidate_defaults_survives_model_change_false_on_exception():
+    def fake_invoke(prompt: str) -> str:
+        raise RuntimeError("boom")
+
+    decision = judge_lesson_candidate("some lesson text", "E0", "competition_specific", fake_invoke)
+    assert decision.survives_model_change is False
+
+
 def test_generate_batch_lesson_text_handles_no_resolved_markets():
     records = [
         _FakeRecord(

@@ -363,6 +363,13 @@ class LessonDecision:
     approve: bool
     scope: str | None  # "competition" | "tier", only set when approve=True
     reasoning: str      # always set -- the audit trail (agent_lessons.auto_decision_reasoning)
+    # A127: does this lesson generalize across an ML-model swap (True) or is
+    # it tied to this specific model's current calibration quirk (False,
+    # the default)? Only ever meaningful when approve=True -- a rejected
+    # lesson never gets fingerprinted at all. Defaults False on any
+    # ambiguous/missing/non-boolean response or a raised exception -- same
+    # fail-closed posture as `approve` itself.
+    survives_model_change: bool = False
 
 
 def _parse_judge_json(raw: str) -> dict[str, Any]:
@@ -416,10 +423,14 @@ def judge_lesson_candidate(
         "Only approve if the pattern is clearly systematic, not noise from a small sample -- when in "
         "doubt, reject. If you approve, also decide scope: \"competition\" if the pattern is specific to "
         "this one competition, \"tier\" if it reflects something general enough to apply to every "
-        "competition of this tier.\n\n"
-        "Respond with exactly one JSON object, nothing else, with \"approve\" as a JSON boolean literal "
-        "(not a string): "
-        '{"approve": true|false, "scope": "competition"|"tier"|null, "reasoning": "one or two sentences"}'
+        "competition of this tier. Also decide (A127): would this rule still hold even if the "
+        "underlying ML forecasting model were retrained or replaced (a general reasoning/prompt-behavior "
+        "insight), or is it tied to this specific model's current calibration/output quirk and likely to "
+        "stop holding once that model changes?\n\n"
+        "Respond with exactly one JSON object, nothing else, with \"approve\" and \"survives_model_change\" "
+        "as JSON boolean literals (not strings): "
+        '{"approve": true|false, "scope": "competition"|"tier"|null, "reasoning": "one or two sentences", '
+        '"survives_model_change": true|false}'
     )
     try:
         parsed = _parse_judge_json(llm_invoke(prompt))
@@ -429,11 +440,19 @@ def judge_lesson_candidate(
         approve = parsed["approve"] is True
         scope = parsed.get("scope") if approve else None
         reasoning = str(parsed.get("reasoning") or "").strip() or "(no reasoning given)"
+        survives_model_change = parsed.get("survives_model_change") is True
         if approve and scope not in _VALID_SCOPES:
-            return LessonDecision(approve=False, scope=None, reasoning=f"invalid scope {scope!r} returned -- defaulting to reject")
-        return LessonDecision(approve=approve, scope=scope, reasoning=reasoning)
+            return LessonDecision(
+                approve=False, scope=None,
+                reasoning=f"invalid scope {scope!r} returned -- defaulting to reject",
+                survives_model_change=False,
+            )
+        return LessonDecision(approve=approve, scope=scope, reasoning=reasoning, survives_model_change=survives_model_change)
     except Exception as exc:
-        return LessonDecision(approve=False, scope=None, reasoning=f"judge call failed ({exc!r}) -- defaulting to reject")
+        return LessonDecision(
+            approve=False, scope=None, reasoning=f"judge call failed ({exc!r}) -- defaulting to reject",
+            survives_model_change=False,
+        )
 
 
 def extract_competition_scope(full_state: dict[str, Any]) -> tuple[str | None, str]:
