@@ -455,6 +455,43 @@ def judge_lesson_candidate(
         )
 
 
+def classify_lesson_sensitivity(
+    lesson_text: str, competition_id: str | None, tier: str, llm_invoke: Callable[[str], str],
+) -> bool:
+    """A127: does this APPROVED lesson generalize across an ML-model swap (a
+    reasoning/prompt-behavior insight, e.g. "a bench listing does not mean
+    injured") or is it tied to this specific model's current calibration
+    quirk (unlikely to still hold once that model is retrained/replaced)?
+
+    Called once per human `agent-lessons approve` action on a train-sourced
+    lesson (main.py's run_agent_lessons_approve) -- NOT called for
+    live-sourced lessons, which get the equivalent question folded into
+    judge_lesson_candidate's existing single JSON response instead, since
+    that call already runs before every live-sourced approval and a second
+    round-trip there would be pure waste.
+
+    Defaults to False (model-sensitive -- the conservative, re-review-me
+    default) on ANY failure, malformed JSON, or a non-boolean response --
+    same fail-closed posture as judge_lesson_candidate; never silently
+    assumes a lesson survives a model change it might not."""
+    prompt = (
+        f"A lesson was just approved for an automated betting agent evaluating {tier} matches "
+        f"(competition_id={competition_id!r}):\n\n{lesson_text}\n\n"
+        "Does this lesson reflect a general reasoning/prompt-behavior insight that would still hold "
+        "even if the underlying ML forecasting model were retrained or replaced (e.g. \"a bench "
+        "listing does not mean injured\")? Or is it tied to this specific model's current "
+        "calibration/output quirk, and likely to stop holding once that model changes?\n\n"
+        "Respond with exactly one JSON object, nothing else, with \"survives_model_change\" as a JSON "
+        "boolean literal (not a string): "
+        '{"survives_model_change": true|false, "reasoning": "one sentence"}'
+    )
+    try:
+        parsed = _parse_judge_json(llm_invoke(prompt))
+        return parsed.get("survives_model_change") is True
+    except Exception:
+        return False
+
+
 def extract_competition_scope(full_state: dict[str, Any]) -> tuple[str | None, str]:
     """(competition_id, tier) from an AgentState-shaped dict's
     competition_resolution block, defaulting tier to general_purpose when

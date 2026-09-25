@@ -11,6 +11,7 @@ from langchain_core.messages import AIMessage
 
 from src.agent.lessons import (
     approve_lesson,
+    classify_lesson_sensitivity,
     create_lessons_tables,
     extract_competition_scope,
     find_conflicting_rule,
@@ -824,6 +825,34 @@ def test_judge_lesson_candidate_defaults_survives_model_change_false_on_exceptio
 
     decision = judge_lesson_candidate("some lesson text", "E0", "competition_specific", fake_invoke)
     assert decision.survives_model_change is False
+
+
+def test_classify_lesson_sensitivity_true():
+    def fake_invoke(prompt: str) -> str:
+        return '{"survives_model_change": true, "reasoning": "pure reasoning insight"}'
+
+    assert classify_lesson_sensitivity("bench != injured", "E0", "competition_specific", fake_invoke) is True
+
+
+def test_classify_lesson_sensitivity_defaults_false_when_absent():
+    def fake_invoke(prompt: str) -> str:
+        return '{"reasoning": "no clear field"}'
+
+    assert classify_lesson_sensitivity("some lesson", "E0", "competition_specific", fake_invoke) is False
+
+
+def test_classify_lesson_sensitivity_defaults_false_on_exception():
+    def fake_invoke(prompt: str) -> str:
+        raise RuntimeError("boom")
+
+    assert classify_lesson_sensitivity("some lesson", "E0", "competition_specific", fake_invoke) is False
+
+
+def test_classify_lesson_sensitivity_defaults_false_on_non_boolean():
+    def fake_invoke(prompt: str) -> str:
+        return '{"survives_model_change": "true"}'
+
+    assert classify_lesson_sensitivity("some lesson", "E0", "competition_specific", fake_invoke) is False
 
 
 def test_generate_batch_lesson_text_handles_no_resolved_markets():
