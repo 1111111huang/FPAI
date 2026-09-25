@@ -17,6 +17,10 @@ reports/agent_backtest/
 reports/agent_train/
 reports/agent_experiments/
 
+# MLflow's local tracking DB -- regenerated locally, grows unbounded, and
+# has repeatedly bloated past GitHub's 100MB blob limit (2026-09-25).
+mlflow.db
+
 # 忽略 VS Code 配置
 .vscode/
 
