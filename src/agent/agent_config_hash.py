@@ -1,0 +1,36 @@
+"""Stable hash of an AgentConfig's tunable fields. Canonical location as of
+A127 -- src/agent (the agent engine) must not depend on app.backend (the web
+app depends on the engine, never the reverse; every other module in this
+directory already follows that direction). Originally lived at
+app/backend/agent_config_hash.py (W11, used as part of the recommendation
+cache key); that module now re-exports this one so every existing caller's
+import path stays unchanged. A127 needs this same value (agent_config_fingerprint)
+computed from inside src/agent/lessons.py, which cannot reach into app.backend."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+
+from src.agent.agent_config import AgentConfig
+
+
+def compute_agent_config_hash(config: AgentConfig) -> str:
+    payload = json.dumps(
+        {
+            "model": config.model,
+            "provider": config.provider,
+            "temperature": config.temperature,
+            "max_tool_calls": config.max_tool_calls,
+            "min_odds_threshold": config.min_odds_threshold,
+            "max_odds_threshold": config.max_odds_threshold,
+            "min_conditional_odds_threshold": config.min_conditional_odds_threshold,
+            "max_conditional_odds_threshold": config.max_conditional_odds_threshold,
+            "min_value_edge": config.min_value_edge,
+            "min_value_edge_result_3way_draw": config.min_value_edge_result_3way_draw,
+            "markets": config.markets,
+            "system_prompt_version": config.system_prompt_version,
+        },
+        sort_keys=True,
+    )
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]

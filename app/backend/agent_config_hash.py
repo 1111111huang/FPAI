@@ -1,32 +1,10 @@
-"""Stable hash of an AgentConfig's tunable fields (W11), used as part of the
-recommendation cache key -- a config change (model, prompt version,
-thresholds, ...) naturally produces a new cache key rather than colliding
-with entries generated under a different configuration."""
+"""Relocated to src/agent/agent_config_hash.py (A127) -- src/agent needed this
+value and must not be depended on by app.backend in reverse. Re-exported here
+so every existing caller (eod_batch.py, recommendation_cache.py, main.py,
+t30_refresh.py, ...) keeps working with no import-path change."""
 
 from __future__ import annotations
 
-import hashlib
-import json
+from src.agent.agent_config_hash import compute_agent_config_hash
 
-from src.agent.agent_config import AgentConfig
-
-
-def compute_agent_config_hash(config: AgentConfig) -> str:
-    payload = json.dumps(
-        {
-            "model": config.model,
-            "provider": config.provider,
-            "temperature": config.temperature,
-            "max_tool_calls": config.max_tool_calls,
-            "min_odds_threshold": config.min_odds_threshold,
-            "max_odds_threshold": config.max_odds_threshold,
-            "min_conditional_odds_threshold": config.min_conditional_odds_threshold,
-            "max_conditional_odds_threshold": config.max_conditional_odds_threshold,
-            "min_value_edge": config.min_value_edge,
-            "min_value_edge_result_3way_draw": config.min_value_edge_result_3way_draw,
-            "markets": config.markets,
-            "system_prompt_version": config.system_prompt_version,
-        },
-        sort_keys=True,
-    )
-    return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
+__all__ = ["compute_agent_config_hash"]
