@@ -506,6 +506,65 @@ def test_auto_judge_live_lessons_approves_a_good_candidate(tmp_path: Path) -> No
     assert row[4] == "Clear pattern."
 
 
+def test_auto_judge_live_lessons_stores_fingerprints_and_survives_flag(tmp_path: Path) -> None:
+    from src.agent.agent_config import AgentConfig
+
+    dm = _dm(tmp_path)
+    with dm.connection() as conn:
+        create_lessons_tables(conn)
+        lesson_id = insert_lesson_candidate(conn, "Live-sourced batch: strong pattern.", "E0", "competition_specific", "m1", source="live")
+
+    def fake_invoke(prompt: str) -> str:
+        if "deciding whether to promote" in prompt:
+            return (
+                '{"approve": true, "scope": "competition", "reasoning": "Clear pattern.", '
+                '"survives_model_change": true}'
+            )
+        if "Extract ONLY the single most programmatic" in prompt:
+            return "NEVER do X."
+        if "checking a new proposed rule" in prompt:
+            return "NONE"
+        raise AssertionError(f"unexpected prompt: {prompt}")
+
+    with patch("app.backend.live_lessons.compute_model_fingerprint", return_value="mfp1"), \
+         patch("app.backend.live_lessons.compute_agent_config_hash", return_value="cfp1"):
+        auto_judge_live_lessons(dm, fake_invoke, AgentConfig.default())
+
+    with dm.connection(read_only=True) as conn:
+        row = conn.execute(
+            "SELECT status, model_fingerprint, agent_config_fingerprint, survives_model_change "
+            "FROM agent_lessons WHERE id = ?", [lesson_id],
+        ).fetchone()
+    assert row == ("approved", "mfp1", "cfp1", True)
+
+
+def test_auto_judge_live_lessons_defaults_fingerprints_to_null_when_config_omitted(tmp_path: Path) -> None:
+    """config is optional -- every OTHER auto_judge_live_lessons test in this
+    file calls it with just (dm, fake_invoke), unrelated to A127 fingerprinting."""
+    dm = _dm(tmp_path)
+    with dm.connection() as conn:
+        create_lessons_tables(conn)
+        lesson_id = insert_lesson_candidate(conn, "Live-sourced batch: strong pattern.", "E0", "competition_specific", "m1", source="live")
+
+    def fake_invoke(prompt: str) -> str:
+        if "deciding whether to promote" in prompt:
+            return '{"approve": true, "scope": "competition", "reasoning": "Clear pattern."}'
+        if "Extract ONLY the single most programmatic" in prompt:
+            return "NEVER do X."
+        if "checking a new proposed rule" in prompt:
+            return "NONE"
+        raise AssertionError(f"unexpected prompt: {prompt}")
+
+    auto_judge_live_lessons(dm, fake_invoke)
+
+    with dm.connection(read_only=True) as conn:
+        row = conn.execute(
+            "SELECT status, agent_config_fingerprint FROM agent_lessons WHERE id = ?", [lesson_id],
+        ).fetchone()
+    assert row[0] == "approved"
+    assert row[1] is None
+
+
 def test_auto_judge_live_lessons_rejects_a_weak_candidate(tmp_path: Path) -> None:
     dm = _dm(tmp_path)
     with dm.connection() as conn:
@@ -529,8 +588,15 @@ def test_auto_judge_live_lessons_leaves_a_conflict_pending(tmp_path: Path) -> No
     with dm.connection() as conn:
         create_lessons_tables(conn)
         # An already-approved rule in the same scope to conflict with.
+        # survives_model_change=True (A127): this fixture's own model_fingerprint
+        # is left NULL, which -- correctly, per the staleness check -- would
+        # otherwise exclude it from load_approved_lessons' conflict-check set
+        # regardless of this test's real point (conflict detection).
         existing_id = insert_lesson_candidate(conn, "existing text", "E0", "competition_specific", "m0", source="train")
-        approve_lesson(conn, existing_id, scope="competition", reviewer="test", rule_text="ALWAYS bet result_3way when confident.")
+        approve_lesson(
+            conn, existing_id, scope="competition", reviewer="test",
+            rule_text="ALWAYS bet result_3way when confident.", survives_model_change=True,
+        )
         insert_lesson_candidate(conn, "Live-sourced batch: new pattern.", "E0", "competition_specific", "m1", source="live")
 
     def fake_invoke(prompt: str) -> str:
@@ -616,7 +682,11 @@ def test_auto_judge_live_lessons_isolates_a_conflict_check_failure_to_its_own_gr
     with dm.connection() as conn:
         create_lessons_tables(conn)
         existing_id = insert_lesson_candidate(conn, "existing text", "E0", "competition_specific", "m0", source="train")
-        approve_lesson(conn, existing_id, scope="competition", reviewer="test", rule_text="ALWAYS bet result_3way when confident.")
+        # survives_model_change=True (A127): see test_auto_judge_live_lessons_leaves_a_conflict_pending's comment.
+        approve_lesson(
+            conn, existing_id, scope="competition", reviewer="test",
+            rule_text="ALWAYS bet result_3way when confident.", survives_model_change=True,
+        )
         insert_lesson_candidate(conn, "Live-sourced batch: pattern A.", "E0", "competition_specific", "m1", source="live")
         insert_lesson_candidate(conn, "Live-sourced batch: pattern B.", "SP1", "competition_specific", "m2", source="live")
 

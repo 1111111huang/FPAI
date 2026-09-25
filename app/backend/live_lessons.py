@@ -26,7 +26,10 @@ from app.backend.recommendation_outcomes import (
     RecommendationOutcomeStore,
     resolve_pending_recommendations,
 )
+from src.agent.agent_config import AgentConfig
+from src.agent.agent_config_hash import compute_agent_config_hash
 from src.agent.backtest import BacktestRecord, load_match_stats
+from src.agent.lesson_fingerprint import compute_model_fingerprint
 from src.agent.lessons import (
     approve_lesson,
     find_conflicting_rule,
@@ -311,6 +314,7 @@ def _format_group_lesson_text(candidates: list[dict[str, Any]]) -> str:
 def auto_judge_live_lessons(
     duckdb_manager: DuckDBManager,
     llm_invoke: Callable[[str], str] | None,
+    config: AgentConfig | None = None,
 ) -> list[dict[str, Any]]:
     """2026-08-27 (W183-W185, superseding the 2026-08-26 per-candidate
     version): judges every still-pending source='live' candidate for a
@@ -338,7 +342,17 @@ def auto_judge_live_lessons(
     discarding another group's (or another row's) already-computed
     decision. Returns a list of dicts, one per underlying row (a group of
     N candidates contributes N entries, all sharing the same decision) --
-    {id, action, reasoning}."""
+    {id, action, reasoning}.
+
+    config (A127, optional): needed to compute this call's current
+    agent_config_fingerprint, stored on every row this function approves.
+    Always passed by scheduler_wiring.py's register_lessons_job in real
+    production use. Defaults to None so every pre-A127 test call site in
+    this file (none of which test fingerprinting) keeps working unmodified
+    -- None skips agent_config_fingerprint computation entirely and
+    approve_lesson falls back to its own pre-A127 None/False defaults, same
+    degrade-gracefully contract lessons_node uses for its own optional
+    config param."""
     if llm_invoke is None:
         return []
 
@@ -348,6 +362,8 @@ def auto_judge_live_lessons(
     groups: dict[tuple[str | None, str], list[dict[str, Any]]] = defaultdict(list)
     for candidate in pending:
         groups[(candidate["competition_id"], candidate["tier"])].append(candidate)
+
+    current_agent_config_fingerprint = compute_agent_config_hash(config) if config is not None else None
 
     results: list[dict[str, Any]] = []
     for (competition_id, tier), candidates in groups.items():
@@ -374,8 +390,11 @@ def auto_judge_live_lessons(
                 # whose conflict-check silently never ran is worse than
                 # deferring it, so this fails CLOSED to defer.
                 try:
+                    current_model_fingerprint = compute_model_fingerprint(competition_id)
                     with duckdb_manager.connection(read_only=True) as conn:
-                        existing_rules = load_approved_lessons(conn, competition_id, tier)
+                        existing_rules = load_approved_lessons(
+                            conn, competition_id, tier, current_model_fingerprint, current_agent_config_fingerprint,
+                        )
                     conflict = find_conflicting_rule(rule_text, existing_rules, llm_invoke)
                 except Exception as exc:
                     action = "defer"
@@ -393,6 +412,8 @@ def auto_judge_live_lessons(
             results.append({
                 "id": row_id, "action": action, "scope": scope,
                 "rule_text": rule_text, "reasoning": reasoning,
+                "competition_id": competition_id,
+                "survives_model_change": decision.survives_model_change,
             })
 
     with duckdb_manager.connection() as conn:
@@ -419,7 +440,12 @@ def auto_judge_live_lessons(
                     )
                     continue
                 if result["action"] == "approve":
-                    approve_lesson(conn, result["id"], result["scope"], reviewer="agent-auto", rule_text=result["rule_text"])
+                    approve_lesson(
+                        conn, result["id"], result["scope"], reviewer="agent-auto", rule_text=result["rule_text"],
+                        model_fingerprint=compute_model_fingerprint(result["competition_id"]),
+                        agent_config_fingerprint=current_agent_config_fingerprint,
+                        survives_model_change=result["survives_model_change"],
+                    )
                 elif result["action"] == "reject":
                     reject_lesson(conn, result["id"], reviewer="agent-auto")
                 # "defer" -- leave status as-is, just record the reasoning below.
