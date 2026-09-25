@@ -676,7 +676,7 @@ def sync_lessons(lessons: list[_LessonSyncItem]) -> dict:
 
 @app.get("/api/admin/lessons")
 def list_lessons(
-    status: Literal["pending", "approved", "rejected"] | None = None,
+    status: Literal["pending", "approved", "rejected", "needs_review"] | None = None,
     source: Literal["train", "live"] | None = None,
     limit: int = Query(50, ge=1, le=500),
 ) -> dict:
@@ -690,7 +690,13 @@ def list_lessons(
     deployment) needs a writable connection to run at all. status/source
     filter with plain SQL equality (both are already-columns, no derived
     logic); omitting either returns every value including legacy NULL
-    source rows (pre-2026-08-26 rows never had one set)."""
+    source rows (pre-2026-08-26 rows never had one set).
+
+    'needs_review' (A127) is a real, filterable status alongside the
+    original three -- a lesson the A127 staleness check disqualified at
+    read time (load_approved_lessons), awaiting re-review. run_id is
+    included so train-sourced rows are groupable/sortable client-side by
+    which agent-train run produced them."""
     from src.agent.lessons import create_lessons_tables
 
     db = DuckDBManager()
@@ -709,7 +715,7 @@ def list_lessons(
             f"""
             SELECT id, lesson_text, rule_text, status, competition_id, tier, scope,
                    source_match_id, source, created_at, reviewed_at, reviewer,
-                   auto_decision_reasoning
+                   auto_decision_reasoning, run_id
             FROM agent_lessons {where} ORDER BY created_at DESC LIMIT ?
             """,
             params,
@@ -717,7 +723,7 @@ def list_lessons(
     columns = (
         "id", "lesson_text", "rule_text", "status", "competition_id", "tier", "scope",
         "source_match_id", "source", "created_at", "reviewed_at", "reviewer",
-        "auto_decision_reasoning",
+        "auto_decision_reasoning", "run_id",
     )
     return {"lessons": [dict(zip(columns, row)) for row in rows]}
 

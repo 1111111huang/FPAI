@@ -82,6 +82,27 @@ def test_list_lessons_filters_by_status(tmp_path):
     assert lessons[0]["status"] == "rejected"
 
 
+def test_list_lessons_filters_by_needs_review_status_and_returns_run_id(tmp_path):
+    manager = _db_manager_for(tmp_path)
+    lesson_id = _seed_lesson(manager, source="train", status="needs_review")
+    with manager.connection() as conn:
+        conn.execute(
+            "UPDATE agent_lessons SET run_id = ?, auto_decision_reasoning = ? WHERE id = ?",
+            ["run-1", "model changed", lesson_id],
+        )
+
+    with patch("app.backend.main.DuckDBManager", return_value=manager):
+        with TestClient(app) as client:
+            response = client.get("/api/admin/lessons", params={"status": "needs_review"})
+
+    assert response.status_code == 200
+    lessons = response.json()["lessons"]
+    assert any(
+        l["id"] == lesson_id and l["run_id"] == "run-1" and l["auto_decision_reasoning"] == "model changed"
+        for l in lessons
+    )
+
+
 def test_list_lessons_filters_by_source(tmp_path):
     manager = _db_manager_for(tmp_path)
     _seed_lesson(manager, source="live", source_match_id="m1")
