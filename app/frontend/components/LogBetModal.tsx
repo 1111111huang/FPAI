@@ -181,6 +181,13 @@ export function LogBetModal({
             <p className="mt-1 text-sm text-ink-secondary">
               {homeTeam} v {awayTeam} · via The Odds API
             </p>
+            {/* W109: the only other place this framing exists is /bets' page
+                subtitle (BetTracker.tsx), invisible from this modal -- shared
+                by MatchCard, ProbabilityRow, and ManualBetForm, so one line
+                here covers all three click points at once. */}
+            <p className="mt-1 text-xs text-ink-secondary">
+              This logs a bet you've actually placed — not automatic hypothetical tracking.
+            </p>
           </div>
           <button type="button" onClick={onClose} aria-label="Close" className="text-ink-secondary hover:text-ink">
             <X size={20} />

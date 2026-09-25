@@ -25,6 +25,13 @@ describe("LogBetModal", () => {
     expect(container).toBeEmptyDOMElement();
   });
 
+  it("shows the tracking-not-placement disclaimer regardless of locked/editable mode", () => {
+    render(<LogBetModal {...baseProps} locked market="result_3way" selection="draw" odds={4.0} />);
+    expect(
+      screen.getByText("This logs a bet you've actually placed — not automatic hypothetical tracking.")
+    ).toBeInTheDocument();
+  });
+
   it("locked mode: shows Market/Pick/Odds as fixed text, not editable controls", () => {
     render(<LogBetModal {...baseProps} locked market="result_3way" selection="draw" odds={4.0} />);
 
