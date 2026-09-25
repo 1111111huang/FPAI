@@ -240,6 +240,31 @@ def test_approve_lesson_raises_for_unknown_id():
         approve_lesson(conn, 999, "competition", "alice", "NEVER do X.")
 
 
+def test_approve_lesson_stores_fingerprints_and_survives_flag():
+    conn = _conn()
+    lesson_id = insert_lesson_candidate(conn, "lesson text", "E0", "competition_specific", "m1")
+    approve_lesson(
+        conn, lesson_id, "competition", "reviewer1", "NEVER do X.",
+        model_fingerprint="mfp123", agent_config_fingerprint="cfp456", survives_model_change=True,
+    )
+    row = conn.execute(
+        "SELECT model_fingerprint, agent_config_fingerprint, survives_model_change FROM agent_lessons WHERE id = ?",
+        [lesson_id],
+    ).fetchone()
+    assert row == ("mfp123", "cfp456", True)
+
+
+def test_approve_lesson_defaults_fingerprints_to_null_and_survives_to_false():
+    conn = _conn()
+    lesson_id = insert_lesson_candidate(conn, "lesson text", "E0", "competition_specific", "m1")
+    approve_lesson(conn, lesson_id, "competition", "reviewer1", "NEVER do X.")
+    row = conn.execute(
+        "SELECT model_fingerprint, agent_config_fingerprint, survives_model_change FROM agent_lessons WHERE id = ?",
+        [lesson_id],
+    ).fetchone()
+    assert row == (None, None, False)
+
+
 def test_reject_lesson_sets_status_rejected():
     conn = _conn()
     lesson_id = insert_lesson_candidate(conn, "text", "E0", "competition_specific", "m1")

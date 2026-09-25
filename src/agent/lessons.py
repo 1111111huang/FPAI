@@ -176,7 +176,12 @@ def _require_lesson_exists(conn: duckdb.DuckDBPyConnection, lesson_id: int) -> N
         raise ValueError(f"No lesson with id={lesson_id}")
 
 
-def approve_lesson(conn: duckdb.DuckDBPyConnection, lesson_id: int, scope: str, reviewer: str, rule_text: str) -> None:
+def approve_lesson(
+    conn: duckdb.DuckDBPyConnection, lesson_id: int, scope: str, reviewer: str, rule_text: str,
+    model_fingerprint: str | None = None,
+    agent_config_fingerprint: str | None = None,
+    survives_model_change: bool = False,
+) -> None:
     """Approve a lesson, requiring the reviewer to pick a scope explicitly.
 
     scope='competition' pins the lesson to its recorded competition_id;
@@ -187,15 +192,37 @@ def approve_lesson(conn: duckdb.DuckDBPyConnection, lesson_id: int, scope: str, 
     only reads rule_text), which is a worse failure mode than forcing every
     approval to supply one. Callers (main.py's run_agent_lessons_approve)
     either take it from --rule or auto-distill via generate_rule_from_lesson
-    before calling this."""
+    before calling this.
+
+    model_fingerprint/agent_config_fingerprint/survives_model_change (A127):
+    captured HERE, at approval time -- not at insert/generation time. A
+    train-sourced lesson can sit pending for weeks; fingerprinting at insert
+    time would let it read as already-stale the instant it's approved.
+    Fingerprinting at approval time means "valid as of the model/config
+    active right now" -- exactly the guarantee a reviewer is actually
+    making. All three default to the pre-A127 behavior (NULL/False) for
+    app/backend/main.py's sync_lessons, which reproduces an
+    already-approved lesson from a different database and deliberately
+    does NOT carry over its origin's fingerprints (the target deployment
+    may run a different model) -- it lands with NULL fingerprints, which
+    load_approved_lessons() treats as an automatic mismatch, forcing a
+    fresh, correct re-approval on the target deployment."""
     if scope not in _VALID_SCOPES:
         raise ValueError(f"scope must be one of {_VALID_SCOPES}, got {scope!r}")
     if not rule_text or not rule_text.strip():
         raise ValueError("rule_text must be a non-empty string")
     _require_lesson_exists(conn, lesson_id)
     conn.execute(
-        "UPDATE agent_lessons SET status = 'approved', scope = ?, rule_text = ?, reviewed_at = ?, reviewer = ? WHERE id = ?",
-        [scope, rule_text.strip(), datetime.now(timezone.utc), reviewer, lesson_id],
+        """
+        UPDATE agent_lessons
+        SET status = 'approved', scope = ?, rule_text = ?, reviewed_at = ?, reviewer = ?,
+            model_fingerprint = ?, agent_config_fingerprint = ?, survives_model_change = ?
+        WHERE id = ?
+        """,
+        [
+            scope, rule_text.strip(), datetime.now(timezone.utc), reviewer,
+            model_fingerprint, agent_config_fingerprint, survives_model_change, lesson_id,
+        ],
     )
 
 
