@@ -8,9 +8,13 @@ from __future__ import annotations
 
 import json
 import re
+from typing import TYPE_CHECKING
 
 import duckdb
 from langchain_core.messages import HumanMessage
+
+if TYPE_CHECKING:
+    from src.agent.agent_config import AgentConfig
 
 _ODDS_NUMBER_PATTERN = re.compile(r"\b\d{1,2}\.\d{1,2}\b")
 
@@ -245,11 +249,23 @@ def forecast_node(state: dict, suppress_uncertainty: bool = False) -> dict:
     return {"forecast_payload": payload, "messages": [HumanMessage(content=evidence_message)]}
 
 
-def lessons_node(state: dict) -> dict:
+def lessons_node(state: dict, config: AgentConfig | None = None) -> dict:
     """A33: inject reviewer-approved lessons scoped to this match's
     competition/tier as a HumanMessage before the LLM's turn -- same
     injection pattern forecast_node uses for evidence (a node-returned
     "messages" list is appended via AgentState's add_messages reducer).
+
+    config (A127): the AgentConfig this run is using -- needed to compute
+    the CURRENT agent_config_fingerprint for load_approved_lessons' own
+    staleness check. Optional/None-defaulted so every pre-A127 direct call
+    of this function (existing unit tests that don't care about staleness)
+    keeps working -- when None, this node computes NO agent_config_fingerprint
+    and calls load_approved_lessons with agent_config_fingerprint=None (which
+    compares as a mismatch against ANY real stored, non-NULL fingerprint,
+    the same fail-safe posture as "we don't know, so don't trust it" -- it
+    does NOT silently skip the check). The real graph (graph.py's
+    build_graph) always passes it via a closure, mirroring
+    forecast_node_with_config.
 
     Gated on SnapshotStore mode == "live", OR mode == "replay" with
     allow_lessons_in_replay explicitly set (A41): outside those two cases
@@ -286,13 +302,19 @@ def lessons_node(state: dict) -> dict:
     if not (store.mode == "live" or (store.mode == "replay" and store.allow_lessons_in_replay)):
         return {}
 
+    from src.agent.agent_config_hash import compute_agent_config_hash
+    from src.agent.lesson_fingerprint import compute_model_fingerprint
     from src.agent.lessons import extract_competition_scope, load_approved_lessons
     from src.utils.db_manager import DuckDBManager
 
     competition_id, tier = extract_competition_scope(state)
+    current_model_fingerprint = compute_model_fingerprint(competition_id)
+    current_agent_config_fingerprint = compute_agent_config_hash(config) if config is not None else None
     try:
         with DuckDBManager().connection(read_only=True) as conn:
-            lessons = load_approved_lessons(conn, competition_id, tier)
+            lessons = load_approved_lessons(
+                conn, competition_id, tier, current_model_fingerprint, current_agent_config_fingerprint,
+            )
     except (duckdb.IOException, duckdb.ConnectionException):
         # BUG-065: ConnectionException (raised when a concurrent connection
         # to this same file is open with a different config -- this node's

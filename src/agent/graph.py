@@ -462,11 +462,14 @@ def build_graph(config: AgentConfig, tools: list):
     def forecast_node_with_config(state: AgentState) -> dict:
         return forecast_node(state, suppress_uncertainty=config.suppress_forecast_uncertainty)
 
+    def lessons_node_with_config(state: AgentState) -> dict:
+        return lessons_node(state, config=config)
+
     graph = StateGraph(AgentState)
     graph.add_node("resolve_competition", resolve_competition_node)
     graph.add_node("research", research_node)
     graph.add_node("forecast", forecast_node_with_config)
-    graph.add_node("lessons", lessons_node)
+    graph.add_node("lessons", lessons_node_with_config)
     graph.add_node("agent", agent_node)
     graph.add_node("tools", ToolNode(tools))
     graph.add_node("output", output_node)

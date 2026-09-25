@@ -497,6 +497,23 @@ def test_lessons_node_loads_approved_lessons_in_replay_with_allow_lessons_flag()
         agent_tools._snapshot_store.set_allow_lessons_in_replay(False)
 
 
+def test_lessons_node_threads_config_fingerprints_into_load_approved_lessons():
+    from src.agent.agent_config import AgentConfig
+    from src.agent.pipeline import lessons_node
+    from src.agent import tools as agent_tools
+
+    agent_tools._snapshot_store.set_mode("live")
+    config = AgentConfig.default()
+    with patch("src.agent.lessons.load_approved_lessons", return_value=[]) as mock_load, \
+         patch("src.utils.db_manager.DuckDBManager") as MockDB, \
+         patch("src.agent.lesson_fingerprint.compute_model_fingerprint", return_value="mfp1"), \
+         patch("src.agent.agent_config_hash.compute_agent_config_hash", return_value="cfp1"):
+        MockDB.return_value.connection.return_value.__enter__.return_value = MagicMock()
+        lessons_node({"competition_resolution": {"competition": "E0", "tier": "competition_specific"}}, config=config)
+
+    assert mock_load.call_args.args[1:] == ("E0", "competition_specific", "mfp1", "cfp1")
+
+
 def test_lessons_node_returns_empty_dict_when_db_file_does_not_exist(tmp_path):
     """Critical bug fix: duckdb.connect(..., read_only=True) raises
     duckdb.IOException (not duckdb.CatalogException) when the DB *file*
