@@ -352,6 +352,18 @@ def _build_parser() -> argparse.ArgumentParser:
     agent_recommend_parser.add_argument("--odds-a", type=float, default=None, help="Away win decimal odds from bookmaker")
     agent_recommend_parser.add_argument("--config", default=None, help="Path to agent_config.yaml (default: config/agent_config.yaml)")
 
+    # agent-batch (A18)
+    agent_batch_parser = subparsers.add_parser(
+        "agent-batch",
+        help="Run the agent over every upcoming league fixture in a weekend, ranked best value first",
+    )
+    agent_batch_parser.add_argument("--league", required=True, help="League code (e.g. E0, SP1, I1, D1, F1)")
+    agent_batch_parser.add_argument("--weekend", action="store_true", help="Use the next upcoming Saturday-Sunday (or the current one, if today falls in it)")
+    agent_batch_parser.add_argument("--from-date", default=None, help="Start date YYYY-MM-DD (inclusive). Overrides --weekend.")
+    agent_batch_parser.add_argument("--to-date", default=None, help="End date YYYY-MM-DD (inclusive). Overrides --weekend.")
+    agent_batch_parser.add_argument("--concurrency", type=int, default=5, help="Max concurrent agent runs")
+    agent_batch_parser.add_argument("--config", default=None, help="Path to agent_config.yaml (default: config/agent_config.yaml)")
+
     # agent-snapshot
     agent_snapshot_parser = subparsers.add_parser(
         "agent-snapshot",
@@ -368,6 +380,14 @@ def _build_parser() -> argparse.ArgumentParser:
              "web_search/resolve_competition recordings unchanged and only re-invoking forecast_league/"
              "forecast_international live. Use after retraining a model to refresh a snapshot corpus's "
              "forecasts without re-spending Tavily quota on unchanged historical research.",
+    )
+    agent_snapshot_parser.add_argument(
+        "--backfill-missing", action="store_true",
+        help="Reprocess every match in range (including already-complete ones), replaying every "
+             "existing web_search/resolve_competition/forecast recording unchanged and only "
+             "live-fetching+recording a web_search query this match doesn't have yet. Use after a "
+             "research_node change adds a new deterministic query (e.g. A115) that older recordings "
+             "predate -- cheaper than a full re-record since only the new query is ever fetched live.",
     )
     agent_snapshot_parser.add_argument("--split", choices=["all", "train", "test"], default="all", help="Restrict recording to the agent's own stable train/test partition (A40) instead of every match in range.")
     agent_snapshot_parser.add_argument("--test-fraction", type=float, default=0.2, help="Fraction of matches (by match_id hash) treated as the 'test' split. Only used when --split != all.")
@@ -1393,6 +1413,143 @@ def run_agent_recommend(
     print(json.dumps(recommendation, indent=2))
 
 
+_OVERALL_RANK = {"direct_bet": 0, "conditional": 1, "no_bet": 2, "insufficient_data": 3}
+
+
+def _next_weekend(today):
+    """Saturday-Sunday of the next upcoming weekend, or the current one if
+    `today` already falls in it (Saturday or Sunday). `today` is a plain
+    date (no tz handling here) -- kept as a pure function of its input so
+    the weekend math is testable without mocking the clock."""
+    from datetime import timedelta
+    saturday = today + timedelta(days=(5 - today.weekday()) % 7)  # Monday=0 ... Saturday=5
+    return saturday, saturday + timedelta(days=1)
+
+
+def _picked_candidate(recommendation: dict) -> dict | None:
+    pick = recommendation.get("recommendation_pick")
+    if not pick:
+        return None
+    for candidate in recommendation.get("candidates", []):
+        if candidate["market"] == pick["market"] and candidate["selection"] == pick["selection"]:
+            return candidate
+    return None
+
+
+def run_agent_batch(
+    league: str,
+    weekend: bool,
+    from_date: str | None,
+    to_date: str | None,
+    config_path: str | None,
+    concurrency: int,
+) -> None:
+    """Weekend batch-recommendation CLI tool (A18): fetches every upcoming
+    fixture for a league over a date range and runs the live agent
+    (run_agent, same as agent-recommend) over each concurrently, printing a
+    ranked report -- best value bets first.
+
+    Deliberately does not touch W11's recommendation cache or schedule
+    W10's per-match refresh -- the 2026-07-11 decision keeps agent
+    invocation ownership split, so the app's own scheduler (W09/W10) never
+    calls into this and this never writes into the app's cache. That's why
+    this doesn't just call app/backend/eod_batch.py's run_eod_batch()
+    wholesale despite the heavy overlap in what it does -- that function is
+    inseparably wired to the cache and to scheduling T-30 jobs. Fixture/odds
+    fetching itself still reuses FootballDataClient, build_odds_client(),
+    and eod_batch's pure team-name-matching helpers (odds_lookup/match_odds)
+    rather than duplicating that logic.
+    """
+    import asyncio
+    import os
+    import sys
+    from datetime import datetime, timezone
+
+    from app.backend.eod_batch import match_odds, odds_lookup
+    from app.backend.football_data_client import FootballDataClient
+    from app.backend.football_data_competition_codes import FOOTBALL_DATA_CODE_BY_LEAGUE
+    from app.backend.odds_sport_keys import ODDS_SPORT_KEY_BY_COMPETITION
+    from app.backend.scheduler_wiring import build_odds_client
+    from src.agent.agent_config import AgentConfig
+    from src.agent.graph import run_agent
+
+    if league not in FOOTBALL_DATA_CODE_BY_LEAGUE:
+        print(f"[ERROR] --league {league!r} has no football-data.org fixture source configured "
+              f"(supported: {sorted(FOOTBALL_DATA_CODE_BY_LEAGUE)}).", file=sys.stderr)
+        sys.exit(1)
+
+    if from_date and to_date:
+        date_from, date_to = from_date, to_date
+    elif weekend:
+        saturday, sunday = _next_weekend(datetime.now(timezone.utc).date())
+        date_from, date_to = saturday.isoformat(), sunday.isoformat()
+    else:
+        print("[ERROR] Provide --weekend, or both --from-date and --to-date.", file=sys.stderr)
+        sys.exit(1)
+
+    cfg = AgentConfig.from_yaml(config_path) if config_path else AgentConfig.default()
+    fixtures_client = FootballDataClient(api_key=os.environ.get("FOOTBALL_DATA_API_KEY", ""))
+    fixtures = fixtures_client.get_fixtures(
+        competition_code=FOOTBALL_DATA_CODE_BY_LEAGUE[league], date_from=date_from, date_to=date_to,
+    )
+    if not fixtures:
+        print(f"No {league} fixtures found between {date_from} and {date_to}.")
+        return
+
+    odds_client = build_odds_client()
+    odds_by_teams = (
+        odds_lookup(odds_client.get_odds(sport_key=ODDS_SPORT_KEY_BY_COMPETITION[league]) or [])
+        if odds_client is not None else {}
+    )
+
+    async def _run_one(fixture, semaphore):
+        match_info = {
+            "home_team": fixture.home_team, "away_team": fixture.away_team,
+            "date": fixture.utc_date[:10], "league": league,
+        }
+        odds = match_odds(fixture, odds_by_teams)
+        if odds is not None:
+            match_info["odds"] = odds
+        async with semaphore:
+            try:
+                recommendation = await asyncio.to_thread(run_agent, match_info=match_info, config=cfg)
+            except Exception as exc:
+                print(f"  SKIP {fixture.home_team} v {fixture.away_team}: {exc}", file=sys.stderr)
+                return None
+        return fixture, recommendation
+
+    async def _run_all():
+        semaphore = asyncio.Semaphore(concurrency)
+        return await asyncio.gather(*[_run_one(fixture, semaphore) for fixture in fixtures])
+
+    print(f"Running agent over {len(fixtures)} {league} fixture(s) from {date_from} to {date_to} (concurrency={concurrency})...")
+    results = [r for r in asyncio.run(_run_all()) if r is not None]
+    skipped = len(fixtures) - len(results)
+
+    def _rank_key(item):
+        _, recommendation = item
+        candidate = _picked_candidate(recommendation)
+        edge = candidate["value_edge"] if candidate else 0.0
+        return (_OVERALL_RANK.get(recommendation.get("overall", "insufficient_data"), 3), -edge)
+
+    # A18 acceptance: grouped by date, direct_bet highlighted at the top of each group.
+    by_date: dict[str, list] = {}
+    for fixture, recommendation in results:
+        by_date.setdefault(fixture.utc_date[:10], []).append((fixture, recommendation))
+
+    print(f"\n=== {league} weekend report: {date_from} to {date_to} "
+          f"({len(results)}/{len(fixtures)} evaluated, {skipped} skipped) ===\n")
+    for fixture_date in sorted(by_date):
+        print(f"-- {fixture_date} --")
+        for fixture, recommendation in sorted(by_date[fixture_date], key=_rank_key):
+            candidate = _picked_candidate(recommendation)
+            pick_str = f"{candidate['market']}/{candidate['selection']}" if candidate else "-"
+            edge_str = f"{candidate['value_edge']:+.1%}" if candidate else "n/a"
+            overall = recommendation.get("overall", "?")
+            print(f"[{overall:<15}] {fixture.home_team} v {fixture.away_team} -- {pick_str} edge={edge_str}")
+        print()
+
+
 def run_agent_snapshot(
     from_date: str,
     to_date: str,
@@ -1400,6 +1557,7 @@ def run_agent_snapshot(
     config_path: str | None,
     dry_run: bool,
     refresh_model: bool = False,
+    backfill_missing: bool = False,
     split: str = "all",
     test_fraction: float = 0.2,
 ) -> None:
@@ -1416,6 +1574,19 @@ def run_agent_snapshot(
     recording at all will error cleanly (same per-match error handling as
     the normal path) -- refresh only makes sense on top of an
     already-recorded corpus.
+
+    backfill_missing (A56/A115): also reprocesses already-complete matches,
+    but the other way around from refresh_model -- resolve_competition/
+    forecast stay frozen (pure replay), and web_search is put in
+    "record_missing" mode (SnapshotStore), which replays any key this match
+    already has and only live-fetches+records a key it doesn't. Exists
+    because research_node can grow a new deterministic query (A115 added a
+    third one) that every corpus recorded before that change simply never
+    captured -- replay's normal hard-fail-on-any-missing-key behavior then
+    makes the *entire* match unreplayable, not just the new query, discovered
+    live when A56's E0 backtest skipped 82/82 matches. Can be combined with
+    refresh_model (both are reprocess-existing-matches modes, targeting
+    different tools) or used alone.
 
     A97: config_path is accepted for CLI backward compatibility but unused
     -- run_deterministic_pipeline never touches the LLM, so there's no
@@ -1452,18 +1623,23 @@ def run_agent_snapshot(
         is_test = matches["match_id"].apply(lambda m: match_in_test_split(m, test_fraction))
         matches = matches[is_test if split == "test" else ~is_test].reset_index(drop=True)
 
+    reprocess_existing = refresh_model or backfill_missing
     base_dir = DEFAULT_BASE_DIR
     to_process = []
     skipped = 0
     for _, row in matches.iterrows():
         marker = league_base_dir(row["league"], base_dir=base_dir) / row["match_id"] / "_complete.json"
-        if marker.exists() and not refresh_model:
+        if marker.exists() and not reprocess_existing:
             skipped += 1
             continue
         to_process.append(row)
 
-    if refresh_model:
+    if refresh_model and backfill_missing:
+        print(f"Matches in range: {len(matches)} | refreshing all (forecast re-run, missing web_search queries backfilled)")
+    elif refresh_model:
         print(f"Matches in range: {len(matches)} | refreshing all (forecast only, research reused)")
+    elif backfill_missing:
+        print(f"Matches in range: {len(matches)} | backfilling all (missing web_search queries only, existing recordings reused)")
     else:
         print(f"Matches in range: {len(matches)} | already complete: {skipped} | to process: {len(to_process)}")
     if dry_run:
@@ -1481,13 +1657,21 @@ def run_agent_snapshot(
             match_info["odds"] = {"home": row["odds_h"], "draw": row["odds_d"], "away": row["odds_a"]}
 
         match_base_dir = league_base_dir(row["league"], base_dir=base_dir)
-        if refresh_model:
-            # replay: frozen web_search/resolve_competition, no new Tavily
-            # calls. forecast_league/forecast_international overridden to
-            # record: live-invoke the (new) model, overwrite just those files.
+        if reprocess_existing:
+            # replay by default; forecast_league/forecast_international
+            # overridden to record when refreshing the model (live-invoke,
+            # overwrite just those files), web_search overridden to
+            # record_missing when backfilling (replay a key this match
+            # already has, live-fetch+record only one it doesn't).
+            overrides: dict[str, str] = {}
+            if refresh_model:
+                overrides["forecast_league"] = "record"
+                overrides["forecast_international"] = "record"
+            if backfill_missing:
+                overrides["web_search"] = "record_missing"
             agent_tools.configure_snapshot_store(
                 "replay", match_id=match_id, match_date=date_str, base_dir=match_base_dir,
-                tool_mode_overrides={"forecast_league": "record", "forecast_international": "record"},
+                tool_mode_overrides=overrides,
             )
         else:
             agent_tools.configure_snapshot_store("record", match_id=match_id, match_date=date_str, base_dir=match_base_dir)
@@ -1734,7 +1918,7 @@ def _write_train_artifacts(
         for record, competition_id, tier in scoped:
             reasoning_trace = serialize_agent_messages(record.full_state.get("messages", []))
             lesson_text = generate_match_reflection(record, reasoning_trace, llm_invoke, record.match_stats)
-            insert_lesson_candidate(conn, lesson_text, competition_id, tier, record.match_id)
+            insert_lesson_candidate(conn, lesson_text, competition_id, tier, record.match_id, run_id=run_id)
             lessons_written += 1
         return lessons_written, telemetry_written
 
@@ -1762,7 +1946,7 @@ def _write_train_artifacts(
         if not lesson_text:
             lesson_text = generate_batch_lesson_text(current_batch)
         match_ids = ",".join(r.match_id for r in current_batch)
-        insert_lesson_candidate(conn, lesson_text, competition_id, tier, match_ids)
+        insert_lesson_candidate(conn, lesson_text, competition_id, tier, match_ids, run_id=run_id)
         lessons_written += 1
 
     for record, competition_id, tier in scoped:
@@ -1860,12 +2044,23 @@ def run_agent_lessons_approve(
     this one time (mirrors A43/A44's fallback philosophy). If the check
     *succeeds and finds a real conflict*, this fails closed -- refuses to
     approve unless force=True, since a silently-approved contradiction is
-    exactly what this story exists to prevent."""
+    exactly what this story exists to prevent.
+
+    A127: after distillation/conflict-checking succeeds, this also runs
+    classify_lesson_sensitivity (one more LLM call, reusing the llm_invoke
+    already built above for distillation/conflict-checking -- no new
+    client construction) and computes this lesson's CURRENT
+    model_fingerprint/agent_config_fingerprint, both stored on approval.
+    See src/agent/lessons.py::approve_lesson's own docstring for why
+    fingerprinting happens here, at approval time, not at insert time."""
     import getpass
 
     from src.agent.agent_config import AgentConfig
+    from src.agent.agent_config_hash import compute_agent_config_hash
+    from src.agent.lesson_fingerprint import compute_model_fingerprint
     from src.agent.lessons import (
-        approve_lesson, create_lessons_tables, find_conflicting_rule, generate_rule_from_lesson, load_approved_lessons,
+        approve_lesson, classify_lesson_sensitivity, create_lessons_tables,
+        find_conflicting_rule, generate_rule_from_lesson, load_approved_lessons,
     )
     from src.utils.db_manager import DuckDBManager
 
@@ -1900,8 +2095,13 @@ def run_agent_lessons_approve(
         # -- unlike a naive "competition_id = ? OR tier = ?" match, which
         # would (wrongly) count e.g. an unrelated competition's own
         # competition-scoped rule as co-occurring just because it happens to
-        # share the same tier string.
-        existing_rules = load_approved_lessons(conn, competition_id, tier)
+        # share the same tier string. This approval's own about-to-be-stored
+        # fingerprints (A127) are also the right "current" values here: we
+        # want to check the new rule against whatever's ALREADY validly
+        # approved under today's model/config.
+        model_fingerprint = compute_model_fingerprint(competition_id)
+        agent_config_fingerprint = compute_agent_config_hash(cfg)
+        existing_rules = load_approved_lessons(conn, competition_id, tier, model_fingerprint, agent_config_fingerprint)
         try:
             conflict = find_conflicting_rule(rule_text, existing_rules, llm_invoke)
         except Exception as exc:
@@ -1915,8 +2115,14 @@ def run_agent_lessons_approve(
                 )
             print(f"  warning: approving despite detected conflict: {conflict}")
 
-        approve_lesson(conn, lesson_id, scope, reviewer or getpass.getuser(), rule_text)
-    print(f"Approved lesson {lesson_id} (scope={scope})")
+        survives_model_change = classify_lesson_sensitivity(lesson_text, competition_id, tier, llm_invoke)
+        approve_lesson(
+            conn, lesson_id, scope, reviewer or getpass.getuser(), rule_text,
+            model_fingerprint=model_fingerprint,
+            agent_config_fingerprint=agent_config_fingerprint,
+            survives_model_change=survives_model_change,
+        )
+    print(f"Approved lesson {lesson_id} (scope={scope}, survives_model_change={survives_model_change})")
 
 
 def run_agent_lessons_reject(lesson_id: int, reviewer: str | None) -> None:
@@ -2201,6 +2407,15 @@ def main() -> None:
             odds_d=args.odds_d,
             odds_a=args.odds_a,
         )
+    elif args.command == "agent-batch":
+        run_agent_batch(
+            league=args.league,
+            weekend=args.weekend,
+            from_date=args.from_date,
+            to_date=args.to_date,
+            config_path=args.config,
+            concurrency=args.concurrency,
+        )
     elif args.command == "agent-snapshot":
         run_agent_snapshot(
             from_date=args.from_date,
@@ -2209,6 +2424,7 @@ def main() -> None:
             config_path=args.config,
             dry_run=args.dry_run,
             refresh_model=args.refresh_model,
+            backfill_missing=args.backfill_missing,
             split=args.split,
             test_fraction=args.test_fraction,
         )

@@ -27,7 +27,8 @@ def test_run_agent_lessons_approve_sets_status_scope_and_rule_text():
     create_lessons_tables(conn)
     lesson_id = insert_lesson_candidate(conn, "WHEN evaluating E0...", "E0", "competition_specific", "m1")
 
-    with patch("src.utils.db_manager.DuckDBManager", return_value=_fake_db_manager(conn)):
+    with patch("src.utils.db_manager.DuckDBManager", return_value=_fake_db_manager(conn)), \
+         patch("src.agent.lessons.classify_lesson_sensitivity", return_value=False):
         run_agent_lessons_approve(lesson_id=lesson_id, scope="competition", reviewer="alice", rule="NEVER do X.")
 
     row = conn.execute(
@@ -43,7 +44,8 @@ def test_run_agent_lessons_approve_defaults_reviewer_to_current_user():
     create_lessons_tables(conn)
     lesson_id = insert_lesson_candidate(conn, "WHEN evaluating E0...", "E0", "competition_specific", "m1")
 
-    with patch("src.utils.db_manager.DuckDBManager", return_value=_fake_db_manager(conn)):
+    with patch("src.utils.db_manager.DuckDBManager", return_value=_fake_db_manager(conn)), \
+         patch("src.agent.lessons.classify_lesson_sensitivity", return_value=False):
         run_agent_lessons_approve(lesson_id=lesson_id, scope="tier", reviewer=None, rule="NEVER do X.")
 
     row = conn.execute("SELECT reviewer FROM agent_lessons WHERE id = ?", [lesson_id]).fetchone()
@@ -166,7 +168,8 @@ def test_run_agent_lessons_approve_only_compares_against_cooccurring_scopes():
     new_id = insert_lesson_candidate(conn, "WHEN evaluating E0...", "E0", "competition_specific", "m2")
 
     with patch("src.utils.db_manager.DuckDBManager", return_value=_fake_db_manager(conn)), \
-         patch("main._build_llm_invoke", return_value=lambda p: "NONE"):
+         patch("main._build_llm_invoke", return_value=lambda p: "NONE"), \
+         patch("src.agent.lessons.classify_lesson_sensitivity", return_value=False):
         run_agent_lessons_approve(lesson_id=other_id, scope="competition", reviewer="alice", rule="SP1 RULE.")
 
     calls = []
@@ -176,10 +179,34 @@ def test_run_agent_lessons_approve_only_compares_against_cooccurring_scopes():
         return "NONE"
 
     with patch("src.utils.db_manager.DuckDBManager", return_value=_fake_db_manager(conn)), \
-         patch("main._build_llm_invoke", return_value=spy_invoke):
+         patch("main._build_llm_invoke", return_value=spy_invoke), \
+         patch("src.agent.lessons.classify_lesson_sensitivity", return_value=False):
         run_agent_lessons_approve(lesson_id=new_id, scope="competition", reviewer="bob", rule="E0 RULE.")
 
-    assert calls == []  # find_conflicting_rule never invoked -- no co-occurring existing rules
+    # find_conflicting_rule's own real implementation short-circuits (never invokes
+    # the LLM) when existing_rules is empty -- classify_lesson_sensitivity is mocked
+    # above so this only tracks find_conflicting_rule's own behavior.
+    assert calls == []
+
+
+def test_run_agent_lessons_approve_stores_fingerprints_and_classification():
+    conn = duckdb.connect(":memory:")
+    create_lessons_tables(conn)
+    lesson_id = insert_lesson_candidate(conn, "lesson text", "E0", "competition_specific", "m1")
+
+    with patch("src.utils.db_manager.DuckDBManager", return_value=_fake_db_manager(conn)), \
+         patch("main._build_llm_invoke", return_value=lambda p: "n/a"), \
+         patch("src.agent.lessons.classify_lesson_sensitivity", return_value=True) as mock_classify, \
+         patch("src.agent.lesson_fingerprint.compute_model_fingerprint", return_value="mfp1"), \
+         patch("src.agent.agent_config_hash.compute_agent_config_hash", return_value="cfp1"):
+        run_agent_lessons_approve(lesson_id=lesson_id, scope="competition", reviewer="tester", rule="NEVER do X.")
+
+    row = conn.execute(
+        "SELECT model_fingerprint, agent_config_fingerprint, survives_model_change FROM agent_lessons WHERE id = ?",
+        [lesson_id],
+    ).fetchone()
+    assert row == ("mfp1", "cfp1", True)
+    mock_classify.assert_called_once()
 
 
 def test_run_agent_lessons_reject_sets_status_rejected():

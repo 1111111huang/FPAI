@@ -48,6 +48,42 @@ def test_write_train_artifacts_writes_one_lesson_and_telemetry_row_per_record():
     assert telemetry_row == ("m1", "run-1")
 
 
+def test_write_train_artifacts_threads_run_id_into_lesson_candidates():
+    """A127: agent_lessons.run_id groups one agent-train run's lesson
+    candidates for reviewer convenience."""
+    conn = duckdb.connect(":memory:")
+    record = _record(full_state={
+        "competition_resolution": {"competition": "E0", "tier": "competition_specific"},
+        "research_evidence": {"availability": "ok"},
+        "forecast_payload": {"result_3way": {}},
+    })
+
+    _write_train_artifacts(conn, [record], run_id="run-xyz")
+
+    stored_run_id = conn.execute("SELECT run_id FROM agent_lessons").fetchone()[0]
+    assert stored_run_id == "run-xyz"
+
+
+def test_write_train_artifacts_threads_run_id_for_batched_lesson_candidates():
+    """Same, for the batch_size>1 code path (a separate insert_lesson_candidate call site)."""
+    conn = duckdb.connect(":memory:")
+    records = [
+        _record(match_id="m1", full_state={
+            "competition_resolution": {"competition": "E0", "tier": "competition_specific"},
+            "research_evidence": {"availability": "ok"}, "forecast_payload": {"result_3way": {}},
+        }),
+        _record(match_id="m2", full_state={
+            "competition_resolution": {"competition": "E0", "tier": "competition_specific"},
+            "research_evidence": {"availability": "ok"}, "forecast_payload": {"result_3way": {}},
+        }),
+    ]
+
+    _write_train_artifacts(conn, records, run_id="run-batch-1", batch_size=2)
+
+    stored_run_id = conn.execute("SELECT run_id FROM agent_lessons").fetchone()[0]
+    assert stored_run_id == "run-batch-1"
+
+
 def test_write_telemetry_rows_shared_helper_writes_one_row_per_full_state_record():
     """A107: the extracted helper both _write_train_artifacts and
     run_agent_backtest now call -- exercised directly here."""
