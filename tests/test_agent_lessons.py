@@ -43,6 +43,8 @@ def test_create_lessons_tables_creates_both_tables():
         "id", "lesson_text", "status", "competition_id", "tier", "scope",
         "source_match_id", "created_at", "reviewed_at", "reviewer", "rule_text",
         "source", "auto_decision_reasoning",
+        # A127: lesson staleness/versioning
+        "run_id", "model_fingerprint", "agent_config_fingerprint", "survives_model_change",
     }
     assert telemetry_cols == {
         "match_id", "run_id", "competition_resolution", "research_evidence",
@@ -85,6 +87,20 @@ def test_insert_lesson_candidate_accepts_explicit_live_source():
     lesson_id = insert_lesson_candidate(conn, "text", "E0", "competition_specific", "m1", source="live")
     source = conn.execute("SELECT source FROM agent_lessons WHERE id = ?", [lesson_id]).fetchone()[0]
     assert source == "live"
+
+
+def test_insert_lesson_candidate_stores_run_id_for_train_rows():
+    conn = _conn()
+    lesson_id = insert_lesson_candidate(conn, "lesson text", "E0", "competition_specific", "m1", run_id="run-abc")
+    stored = conn.execute("SELECT run_id FROM agent_lessons WHERE id = ?", [lesson_id]).fetchone()[0]
+    assert stored == "run-abc"
+
+
+def test_insert_lesson_candidate_defaults_run_id_to_null():
+    conn = _conn()
+    lesson_id = insert_lesson_candidate(conn, "lesson text", "E0", "competition_specific", "m1", source="live")
+    stored = conn.execute("SELECT run_id FROM agent_lessons WHERE id = ?", [lesson_id]).fetchone()[0]
+    assert stored is None
 
 
 def test_list_pending_by_source_excludes_other_sources_and_null():

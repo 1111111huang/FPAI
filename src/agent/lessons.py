@@ -70,6 +70,22 @@ def create_lessons_tables(conn: duckdb.DuckDBPyConnection) -> None:
     # queries like list_pending_by_source() below, not just conventionally.
     conn.execute("ALTER TABLE agent_lessons ADD COLUMN IF NOT EXISTS source TEXT")
     conn.execute("ALTER TABLE agent_lessons ADD COLUMN IF NOT EXISTS auto_decision_reasoning TEXT")
+    # A127: lesson staleness/versioning. run_id groups one agent-train run's
+    # lessons for reviewer convenience (NULL for source='live' rows -- they
+    # already have a natural per-day grouping via live_lessons.py's own
+    # batching). model_fingerprint/agent_config_fingerprint/survives_model_change
+    # are populated at APPROVAL time, not insert time (see this story's plan
+    # doc, "Deviations" -- fingerprinting at insert time would let a
+    # slow-reviewed lesson go stale before it's ever approved). NULL on
+    # every pre-migration approved row -- load_approved_lessons() treats a
+    # NULL stored fingerprint as an automatic mismatch, so the 4 lessons
+    # that existed before this shipped all flip to needs_review the first
+    # time they're read after this migration runs; no separate backfill
+    # script needed at this volume.
+    conn.execute("ALTER TABLE agent_lessons ADD COLUMN IF NOT EXISTS run_id TEXT")
+    conn.execute("ALTER TABLE agent_lessons ADD COLUMN IF NOT EXISTS model_fingerprint TEXT")
+    conn.execute("ALTER TABLE agent_lessons ADD COLUMN IF NOT EXISTS agent_config_fingerprint TEXT")
+    conn.execute("ALTER TABLE agent_lessons ADD COLUMN IF NOT EXISTS survives_model_change BOOLEAN DEFAULT false")
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS agent_telemetry (
@@ -100,20 +116,24 @@ def insert_lesson_candidate(
     tier: str,
     source_match_id: str,
     source: str = "train",
+    run_id: str | None = None,
 ) -> int:
     """Insert a pending, unscoped lesson candidate. Returns its id.
 
     source: 'train' (default, preserves every pre-existing caller
     unchanged -- agent-train's own CLI path) or 'live'
     (app/backend/live_lessons.py's commit_lesson_batches, the only caller
-    that passes this explicitly)."""
+    that passes this explicitly).
+
+    run_id (A127): the agent-train run's UUID, for source='train' rows only
+    -- every other caller omits it and gets NULL, unchanged."""
     row = conn.execute(
         """
-        INSERT INTO agent_lessons (lesson_text, status, competition_id, tier, source_match_id, created_at, source)
-        VALUES (?, 'pending', ?, ?, ?, ?, ?)
+        INSERT INTO agent_lessons (lesson_text, status, competition_id, tier, source_match_id, created_at, source, run_id)
+        VALUES (?, 'pending', ?, ?, ?, ?, ?, ?)
         RETURNING id
         """,
-        [lesson_text, competition_id, tier, source_match_id, datetime.now(timezone.utc), source],
+        [lesson_text, competition_id, tier, source_match_id, datetime.now(timezone.utc), source, run_id],
     ).fetchone()
     return int(row[0])
 
