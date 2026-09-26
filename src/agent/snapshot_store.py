@@ -168,8 +168,41 @@ class SnapshotStore:
 
     @staticmethod
     def key_for(inputs: dict[str, Any]) -> str:
+        """Raw, byte-exact hash -- unchanged, still the only key format every
+        snapshot in the corpus was ever written under before canonicalization
+        existed. wrap() falls back to this after canonical_key_for() misses,
+        so every already-recorded file stays reachable with no migration."""
         canonical = json.dumps(inputs, sort_keys=True, default=str)
         return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+    @staticmethod
+    def _normalize_for_hashing(value: Any) -> Any:
+        """Collapses superficial variance the LLM can reintroduce between an
+        original recording and a later replay of the 'same' tool call, even
+        at temperature=0 (provider batching effects, agent_config.yaml's own
+        comment) -- whitespace/capitalization drift in free-form query text,
+        and float precision noise in a re-stated odds value. Does not attempt
+        to resolve a team referred to by a genuinely different name/alias
+        (e.g. "Man Utd" vs "Manchester United") inside free-form query text --
+        that would need parsing team names out of arbitrary LLM prose, a much
+        larger and less reliable undertaking than this scoped normalization."""
+        if isinstance(value, str):
+            return " ".join(value.split()).lower()
+        if isinstance(value, float):
+            return round(value, 4)
+        if isinstance(value, dict):
+            return {k: SnapshotStore._normalize_for_hashing(v) for k, v in value.items()}
+        if isinstance(value, list):
+            return [SnapshotStore._normalize_for_hashing(v) for v in value]
+        return value
+
+    @staticmethod
+    def canonical_key_for(inputs: dict[str, Any]) -> str:
+        """The primary key going forward: key_for(), but over normalized
+        inputs first. New recordings are always written under this key
+        (see wrap()) -- the corpus becomes more replay-resilient over time
+        as it's extended/re-recorded, with no bulk migration required."""
+        return SnapshotStore.key_for(SnapshotStore._normalize_for_hashing(inputs))
 
     def _path(self, tool: str, key: str) -> Path:
         match_id = self.match_id
@@ -185,35 +218,56 @@ class SnapshotStore:
             if mode == "live":
                 return fn(**kwargs)
 
-            key = self.key_for(kwargs)
-            path = self._path(tool, key)
+            # Canonicalization (whitespace/case/float-precision normalization,
+            # see _normalize_for_hashing) is the primary lookup -- tolerant of
+            # superficial LLM re-generation drift between the original
+            # recording and this replay. The raw, byte-exact key is checked
+            # second, purely for backward compatibility: every snapshot ever
+            # written before this existed is keyed that way, and staying
+            # readable via this fallback means the whole existing corpus
+            # never needs a bulk migration -- it organically moves onto the
+            # canonical key as matches get re-recorded/topped-up going
+            # forward, since every new write below always uses it.
+            canonical_key = self.canonical_key_for(kwargs)
+            canonical_path = self._path(tool, canonical_key)
+            raw_key = self.key_for(kwargs)
+            raw_path = self._path(tool, raw_key)
 
             if mode == "replay":
-                if not path.exists():
-                    raise SnapshotMissingError(tool, self.match_id, key)
-                payload = json.loads(path.read_text(encoding="utf-8"))
-                return payload["response"]
+                if canonical_path.exists():
+                    payload = json.loads(canonical_path.read_text(encoding="utf-8"))
+                    return payload["response"]
+                if raw_path.exists():
+                    payload = json.loads(raw_path.read_text(encoding="utf-8"))
+                    return payload["response"]
+                raise SnapshotMissingError(tool, self.match_id, canonical_key)
 
-            if mode == "record_missing" and path.exists():
+            if mode == "record_missing":
                 # BUG-072/A56: a key this exact match already has -- reuse it
                 # unchanged, same as replay, rather than re-fetching/re-billing
                 # a call whose recording is still perfectly valid.
-                payload = json.loads(path.read_text(encoding="utf-8"))
-                return payload["response"]
+                if canonical_path.exists():
+                    payload = json.loads(canonical_path.read_text(encoding="utf-8"))
+                    return payload["response"]
+                if raw_path.exists():
+                    payload = json.loads(raw_path.read_text(encoding="utf-8"))
+                    return payload["response"]
 
             # record (also reached by record_missing for a key with no
-            # existing file -- live-fetch and write it, same as pure record)
+            # existing file under either convention -- live-fetch and write
+            # it, same as pure record). Always written under the canonical
+            # key, never the raw one, so the corpus migrates onto it over time.
             response = fn(**kwargs)
             if isinstance(response, str) and response.startswith(_DEGRADED_RESPONSE_PREFIX):
-                raise SnapshotRecordingDegraded(tool, self.match_id, key, response)
-            path.parent.mkdir(parents=True, exist_ok=True)
+                raise SnapshotRecordingDegraded(tool, self.match_id, canonical_key, response)
+            canonical_path.parent.mkdir(parents=True, exist_ok=True)
             payload = {
                 "tool": tool,
                 "inputs": kwargs,
                 "response": response,
                 "recorded_at": datetime.now(timezone.utc).isoformat(),
             }
-            path.write_text(json.dumps(payload, indent=2, default=str), encoding="utf-8")
+            canonical_path.write_text(json.dumps(payload, indent=2, default=str), encoding="utf-8")
             return response
 
         return wrapped

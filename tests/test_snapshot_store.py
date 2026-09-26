@@ -103,6 +103,132 @@ def test_key_is_deterministic_regardless_of_kwarg_order(tmp_path):
     assert key_a == key_b
 
 
+# ---------------------------------------------------------------------------
+# Canonicalization: replay tolerant of superficial LLM tool-call argument
+# drift (whitespace, case, float precision) without invalidating the
+# existing raw-hash-keyed corpus (BUG-072 just re-backfilled it today).
+# ---------------------------------------------------------------------------
+
+def test_canonical_key_ignores_whitespace_and_case_differences():
+    store = SnapshotStore()
+    a = store.canonical_key_for({"query": "Man City  injury news"})
+    b = store.canonical_key_for({"query": "man city injury news"})
+    assert a == b
+
+
+def test_canonical_key_rounds_float_precision_noise():
+    store = SnapshotStore()
+    a = store.canonical_key_for({"odds": 1.8000000123})
+    b = store.canonical_key_for({"odds": 1.8})
+    assert a == b
+
+
+def test_canonical_key_still_distinguishes_genuinely_different_inputs():
+    store = SnapshotStore()
+    a = store.canonical_key_for({"query": "Man City injury news"})
+    b = store.canonical_key_for({"query": "Man City lineup news"})
+    assert a != b
+
+
+def test_canonical_key_differs_from_the_raw_key_for_non_canonical_input():
+    """Confirms canonicalization is actually doing something -- these two
+    keys must NOT collide for typical, non-canonical-form input, or every
+    assertion above would be trivially true for the wrong reason."""
+    store = SnapshotStore()
+    inputs = {"query": "Man City  injury news"}
+    assert store.canonical_key_for(inputs) != store.key_for(inputs)
+
+
+def test_record_writes_under_the_canonical_key(tmp_path):
+    """New recordings use the canonical key going forward, not the old raw
+    key -- the corpus organically becomes more replay-resilient as it's
+    extended, with no bulk migration needed."""
+    store = SnapshotStore(base_dir=tmp_path)
+    store.set_mode("record")
+    store.set_match("match-123")
+    inputs = {"query": "Man City  injury news"}
+
+    store.wrap("web_search", lambda **kw: "resp")(**inputs)
+
+    canonical_key = store.canonical_key_for(inputs)
+    assert (tmp_path / "match-123" / f"web_search_{canonical_key}.json").exists()
+
+
+def test_replay_matches_a_recording_despite_whitespace_and_case_drift(tmp_path):
+    """The concrete scenario this exists for: the LLM re-generates the same
+    semantic tool call with different capitalization/whitespace on a later
+    run (temperature=0 does not guarantee byte-identical output) -- replay
+    must still find the recording rather than raising SnapshotMissingError."""
+    record_store = SnapshotStore(base_dir=tmp_path)
+    record_store.set_mode("record")
+    record_store.set_match("match-123")
+    record_store.wrap("web_search", lambda **kw: "the-response")(query="Man City  injury news")
+
+    replay_store = SnapshotStore(base_dir=tmp_path)
+    replay_store.set_mode("replay")
+    replay_store.set_match("match-123")
+
+    def fail_if_called(**kwargs):
+        raise AssertionError("live function must not be called during replay")
+
+    result = replay_store.wrap("web_search", fail_if_called)(query="man city injury news")
+    assert result == "the-response"
+
+
+def test_replay_still_finds_a_pre_canonicalization_raw_keyed_recording(tmp_path):
+    """Backward compatibility: a snapshot file written before canonicalization
+    existed (keyed only by the raw, non-canonicalized hash -- exactly what
+    every match in the corpus BUG-072 just re-backfilled looks like on disk
+    today) must still replay correctly, with no migration or re-recording."""
+    store = SnapshotStore(base_dir=tmp_path)
+    inputs = {"query": "Man City  injury news"}
+    raw_key = store.key_for(inputs)
+    match_dir = tmp_path / "match-123"
+    match_dir.mkdir(parents=True)
+    (match_dir / f"web_search_{raw_key}.json").write_text(
+        json.dumps({"tool": "web_search", "inputs": inputs, "response": "old-response", "recorded_at": "x"}),
+        encoding="utf-8",
+    )
+
+    replay_store = SnapshotStore(base_dir=tmp_path)
+    replay_store.set_mode("replay")
+    replay_store.set_match("match-123")
+
+    def fail_if_called(**kwargs):
+        raise AssertionError("live function must not be called during replay")
+
+    # Same query, exact same phrasing as recorded -- canonical key differs
+    # from the raw key on disk, so this only succeeds via the fallback path.
+    result = replay_store.wrap("web_search", fail_if_called)(query="Man City  injury news")
+    assert result == "old-response"
+
+
+def test_record_missing_reuses_a_pre_canonicalization_raw_keyed_recording_without_live_fetch(tmp_path):
+    """record_missing's own 'do we already have this' check must also
+    consult the raw-key fallback -- otherwise every pre-canonicalization
+    recording would look 'missing' and get needlessly re-fetched (and
+    re-billed) the next time --backfill-missing runs over it."""
+    store = SnapshotStore(base_dir=tmp_path)
+    inputs = {"query": "Man City  injury news"}
+    raw_key = store.key_for(inputs)
+    match_dir = tmp_path / "match-123"
+    match_dir.mkdir(parents=True)
+    (match_dir / f"web_search_{raw_key}.json").write_text(
+        json.dumps({"tool": "web_search", "inputs": inputs, "response": "old-response", "recorded_at": "x"}),
+        encoding="utf-8",
+    )
+
+    backfill_store = SnapshotStore(base_dir=tmp_path)
+    backfill_store.set_mode("record_missing")
+    backfill_store.set_match("match-123")
+
+    def fail_if_called(**kwargs):
+        raise AssertionError("must reuse the existing raw-keyed recording, not live-fetch")
+
+    result = backfill_store.wrap("web_search", fail_if_called)(**inputs)
+    assert result == "old-response"
+
+
 def test_record_requires_match_id(tmp_path):
     store = SnapshotStore(base_dir=tmp_path)
     store.set_mode("record")
