@@ -7,7 +7,7 @@ import threading
 import pytest
 from langchain_core.runnables.config import ContextThreadPoolExecutor
 
-from src.agent.snapshot_store import SnapshotMissingError, SnapshotStore, league_base_dir
+from src.agent.snapshot_store import SnapshotMissingError, SnapshotRecordingDegraded, SnapshotStore, league_base_dir
 
 
 def test_league_base_dir_appends_uppercased_league(tmp_path):
@@ -180,6 +180,84 @@ def test_tool_mode_override_invalid_mode_raises(tmp_path):
     store = SnapshotStore(base_dir=tmp_path)
     with pytest.raises(ValueError, match="Unknown snapshot mode"):
         store.set_tool_mode_overrides({"forecast_league": "bogus"})
+
+
+def test_record_missing_mode_replays_an_existing_key_without_calling_fn(tmp_path):
+    """BUG-072/A56/A115 gap: research_node gained a new deterministic web_search
+    query that pre-A115 snapshot corpora never recorded, and replay mode's
+    hard-fail on ANY missing key made the whole match unreplayable even though
+    most of its keys were still fine. record_missing lets a partially-stale
+    match reuse every key it already has and only live-fetch the ones that
+    are new."""
+    store = SnapshotStore(base_dir=tmp_path)
+    store.set_mode("record")
+    store.set_match("match-123")
+    store.wrap("web_search", lambda **kw: "original-response")(query="existing query")
+
+    store.set_mode("record_missing")
+
+    def fail_if_called(**kwargs):
+        raise AssertionError("an existing key must replay, not call the live fn")
+
+    result = store.wrap("web_search", fail_if_called)(query="existing query")
+    assert result == "original-response"
+
+
+def test_record_missing_mode_records_a_new_key_live(tmp_path):
+    store = SnapshotStore(base_dir=tmp_path)
+    store.set_mode("record_missing")
+    store.set_match("match-123")
+    calls = []
+
+    def fn(**kwargs):
+        calls.append(kwargs)
+        return "new-response"
+
+    result = store.wrap("web_search", fn)(query="brand new query")
+    assert result == "new-response"
+    assert calls == [{"query": "brand new query"}]
+
+    files = list((tmp_path / "match-123").glob("web_search_*.json"))
+    assert len(files) == 1
+    payload = json.loads(files[0].read_text())
+    assert payload["response"] == "new-response"
+
+
+def test_record_mode_refuses_to_persist_a_degraded_sentinel_response(tmp_path):
+    """Real corruption found live (BUG-072, 2026-09-25): _web_search_impl
+    degrades to a 'TOOL_PERMANENTLY_UNAVAILABLE: ...' string when every API
+    key fails (network timeout, quota) instead of raising -- record mode was
+    happily writing that string to disk as if it were a genuine recorded
+    answer. Future replays then silently fed the LLM a fake 'tool
+    unavailable' message as real evidence forever, with no error anywhere.
+    Found 6 matches in D1's original corpus (recorded weeks ago) and 10
+    fresh ones from this session's own F1 backfill run already corrupted
+    this way."""
+    store = SnapshotStore(base_dir=tmp_path)
+    store.set_mode("record")
+    store.set_match("match-123")
+
+    def degraded_fn(**kwargs):
+        return "TOOL_PERMANENTLY_UNAVAILABLE: web_search failed (timeout). Do NOT call again."
+
+    with pytest.raises(SnapshotRecordingDegraded):
+        store.wrap("web_search", degraded_fn)(query="q")
+
+    assert list((tmp_path / "match-123").glob("web_search_*.json")) == []
+
+
+def test_record_missing_mode_refuses_to_persist_a_degraded_sentinel_response(tmp_path):
+    store = SnapshotStore(base_dir=tmp_path)
+    store.set_mode("record_missing")
+    store.set_match("match-123")
+
+    def degraded_fn(**kwargs):
+        return "TOOL_PERMANENTLY_UNAVAILABLE: web_search has no API key configured. Do NOT call again."
+
+    with pytest.raises(SnapshotRecordingDegraded):
+        store.wrap("web_search", degraded_fn)(query="q")
+
+    assert list((tmp_path / "match-123").glob("web_search_*.json")) == []
 
 
 def test_mode_and_match_propagate_into_context_thread_pool_executor(tmp_path):

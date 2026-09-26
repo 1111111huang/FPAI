@@ -36,11 +36,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Literal
 
-SnapshotMode = Literal["live", "record", "replay"]
+SnapshotMode = Literal["live", "record", "replay", "record_missing"]
 
 _DEFAULT_BASE_DIR = Path("data/agent_snapshots")
 DEFAULT_BASE_DIR = _DEFAULT_BASE_DIR
-_VALID_MODES = {"live", "record", "replay"}
+_VALID_MODES = {"live", "record", "replay", "record_missing"}
 
 
 def league_base_dir(league: str | None, base_dir: str | Path = _DEFAULT_BASE_DIR) -> Path:
@@ -64,6 +64,34 @@ class SnapshotMissingError(Exception):
         super().__init__(
             f"No snapshot found for tool={tool!r} match_id={match_id!r} key={key} "
             "(run agent-snapshot in record mode for this match first)"
+        )
+
+
+# Tools that degrade to a soft "unavailable" sentinel instead of raising when
+# every underlying attempt fails (e.g. _web_search_impl on a Tavily timeout/
+# quota exhaustion with both keys) prefix the string this way. That's the
+# right behavior for a *live* agent run (the LLM sees a clear stop signal),
+# but wrong for record/record_missing: persisting it would freeze a fake
+# "the tool is broken" answer into the corpus forever, indistinguishable on
+# replay from a genuine result.
+_DEGRADED_RESPONSE_PREFIX = "TOOL_PERMANENTLY_UNAVAILABLE"
+
+
+class SnapshotRecordingDegraded(Exception):
+    """Raised in record/record_missing mode when the live tool call itself
+    degraded to a soft sentinel instead of a real response, instead of
+    silently persisting that sentinel as the recorded answer (found live,
+    BUG-072 2026-09-25: 16 matches across D1/F1 already had this baked in --
+    6 from the original recording weeks earlier, 10 from a same-session
+    backfill run, both invisible until grepped for directly)."""
+
+    def __init__(self, tool: str, match_id: str | None, key: str, response: str):
+        self.tool = tool
+        self.match_id = match_id
+        self.key = key
+        super().__init__(
+            f"tool={tool!r} match_id={match_id!r} key={key} returned a degraded sentinel "
+            f"instead of a real response -- refusing to persist it: {response[:200]!r}"
         )
 
 
@@ -166,8 +194,18 @@ class SnapshotStore:
                 payload = json.loads(path.read_text(encoding="utf-8"))
                 return payload["response"]
 
-            # record
+            if mode == "record_missing" and path.exists():
+                # BUG-072/A56: a key this exact match already has -- reuse it
+                # unchanged, same as replay, rather than re-fetching/re-billing
+                # a call whose recording is still perfectly valid.
+                payload = json.loads(path.read_text(encoding="utf-8"))
+                return payload["response"]
+
+            # record (also reached by record_missing for a key with no
+            # existing file -- live-fetch and write it, same as pure record)
             response = fn(**kwargs)
+            if isinstance(response, str) and response.startswith(_DEGRADED_RESPONSE_PREFIX):
+                raise SnapshotRecordingDegraded(tool, self.match_id, key, response)
             path.parent.mkdir(parents=True, exist_ok=True)
             payload = {
                 "tool": tool,

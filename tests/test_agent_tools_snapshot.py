@@ -7,7 +7,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from src.agent import tools as agent_tools
-from src.agent.snapshot_store import SnapshotMissingError
+from src.agent.snapshot_store import SnapshotMissingError, SnapshotRecordingDegraded
 
 
 @pytest.fixture(autouse=True)
@@ -146,14 +146,17 @@ def test_web_search_both_keys_failing_degrades_instead_of_raising():
     assert instance.search.call_count == 2
 
 
-def test_web_search_unavailable_message_bypasses_snapshot_key_consistently():
-    # No TAVILY_API_KEY in this process env by default in CI; record mode without
-    # a key returns the fixed unavailable message both times — proves wrap() doesn't
-    # choke on the early-return path (no tavily call at all).
+def test_web_search_unavailable_message_refuses_to_be_recorded():
+    # No TAVILY_API_KEY in this process env by default in CI. Record mode
+    # used to silently write the degraded "unavailable" sentinel to disk as
+    # if it were a genuine answer (real corruption found live, BUG-072
+    # 2026-09-25 — 16 matches across D1/F1 had exactly this baked into their
+    # corpus, both from an original recording weeks earlier and from a
+    # same-session backfill run). It must now raise instead of persisting.
     agent_tools.configure_snapshot_store("record", match_id="m2")
     with patch.dict("os.environ", {}, clear=True):
-        result = agent_tools.web_search.invoke({"query": "x"})
-    assert "TOOL_PERMANENTLY_UNAVAILABLE" in result
+        with pytest.raises(SnapshotRecordingDegraded):
+            agent_tools.web_search.invoke({"query": "x"})
 
 
 class TestPostMatchResultFilter:

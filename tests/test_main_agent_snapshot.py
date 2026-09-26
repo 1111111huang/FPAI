@@ -133,6 +133,65 @@ def test_default_refresh_model_false_still_skips_and_uses_full_record():
 
 
 # ---------------------------------------------------------------------------
+# --backfill-missing (BUG-072/A56/A115): a corpus recorded before research_node
+# grew a new deterministic web_search query is otherwise permanently
+# unreplayable -- replay mode hard-fails on ANY missing key, so 100% of
+# matches skip even though only one of several web_search calls per match is
+# actually new. backfill_missing reprocesses already-complete matches,
+# replaying every existing key and live-fetching+recording only ones that
+# are missing.
+# ---------------------------------------------------------------------------
+
+def test_backfill_missing_reprocesses_already_complete_matches(tmp_path):
+    marker_dir = league_base_dir("SWE", base_dir=tmp_path) / "m1"
+    marker_dir.mkdir(parents=True)
+    (marker_dir / "_complete.json").write_text("{}")
+
+    fake_df = _fake_matches_df()
+    mock_conn = MagicMock()
+    mock_conn.execute.return_value.fetchdf.return_value = fake_df
+
+    with patch("src.utils.db_manager.DuckDBManager") as MockDB, \
+         patch("src.agent.graph.run_deterministic_pipeline", return_value={}) as mock_run, \
+         patch("src.agent.tools.configure_snapshot_store"), \
+         patch("main.DEFAULT_BASE_DIR", tmp_path):
+        MockDB.return_value.connection.return_value.__enter__.return_value = mock_conn
+
+        run_agent_snapshot(
+            from_date="2026-07-01", to_date="2026-07-02", league="SWE",
+            config_path=None, dry_run=False, backfill_missing=True,
+        )
+
+    mock_run.assert_called_once()
+
+
+def test_backfill_missing_uses_replay_with_web_search_overridden_to_record_missing(tmp_path):
+    fake_df = _fake_matches_df()
+    mock_conn = MagicMock()
+    mock_conn.execute.return_value.fetchdf.return_value = fake_df
+
+    with patch("src.utils.db_manager.DuckDBManager") as MockDB, \
+         patch("src.agent.graph.run_deterministic_pipeline", return_value={}), \
+         patch("src.agent.tools.configure_snapshot_store") as mock_configure, \
+         patch("main.DEFAULT_BASE_DIR", tmp_path):
+        MockDB.return_value.connection.return_value.__enter__.return_value = mock_conn
+
+        run_agent_snapshot(
+            from_date="2026-07-01", to_date="2026-07-02", league="SWE",
+            config_path=None, dry_run=False, backfill_missing=True,
+        )
+
+    backfill_call = mock_configure.call_args_list[0]
+    assert backfill_call.args[0] == "replay"
+    assert backfill_call.kwargs["tool_mode_overrides"] == {"web_search": "record_missing"}
+
+
+def test_default_backfill_missing_false_still_skips_and_uses_full_record():
+    import inspect
+    assert inspect.signature(run_agent_snapshot).parameters["backfill_missing"].default is False
+
+
+# ---------------------------------------------------------------------------
 # A111: --split lets recording target only the agent's own train or test
 # partition (BacktestHarness's match_in_test_split, A40) instead of always
 # recording every match in the date range -- needed so a snapshot-recording
