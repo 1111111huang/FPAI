@@ -578,3 +578,58 @@ def test_run_agent_backtest_writes_telemetry_rows_for_records_with_full_state():
     rows = fake_conn.execute("SELECT match_id, recommendation FROM agent_telemetry").fetchall()
     assert len(rows) == 1
     assert rows[0][0] == "m1"
+
+
+def test_run_agent_backtest_checks_staleness_against_the_real_model_selection_file():
+    """check_model_staleness()'s own default config_path ("config.yaml") is
+    the ML-engine's general project config, which has no "contexts" key at
+    all -- the real per-target promotions live in config/model_selection.yaml.
+    Without an explicit override here, the staleness check silently compares
+    against an empty {} forever, always reporting 0 stale regardless of
+    truth (found live: 100% of the real corpus was actually stale, but two
+    real agent-backtest runs both reported "0/9 stale" before this fix)."""
+    import duckdb
+
+    from main import run_agent_backtest
+
+    fake_conn = duckdb.connect(":memory:")
+    record = BacktestRecord(
+        match_id="m1", home_team="City", away_team="Arsenal", date="2025-03-01", league="E0",
+        recommendation={"overall": "no_bet", "confidence": "medium", "prediction_basis": "x", "limitations": []},
+        actual={"result": "home", "btts": "yes", "total_goals": 3, "total_goals_side": "over_2.5"},
+        market_results=[],
+        full_state={
+            "competition_resolution": {"competition": "E0", "tier": "competition_specific"},
+            "research_evidence": None, "forecast_payload": None, "messages": [],
+        },
+    )
+
+    class _FakeConnCtx:
+        def __enter__(self):
+            return fake_conn
+
+        def __exit__(self, *exc_info):
+            return False
+
+    class _FakeDB:
+        def connection(self):
+            return _FakeConnCtx()
+
+    class _FakeHarness:
+        def __init__(self, config=None):
+            self.db = _FakeDB()
+
+        def load_matches(self, *args, **kwargs):
+            return pd.DataFrame([{"match_id": "m1"}])
+
+    with patch("src.agent.backtest.BacktestHarness", _FakeHarness), \
+         patch("src.agent.backtest.process_match_row", return_value=record), \
+         patch("src.agent.evaluation.save_report", return_value="fake-report-path"), \
+         patch("src.agent.backtest.check_model_staleness", return_value={"matches_checked": 0}) as mock_staleness:
+        run_agent_backtest(
+            from_date="2025-01-01", to_date="2025-12-31", league="E0", stake_mode="flat",
+            sample=None, concurrency=1, config_path=None,
+        )
+
+    mock_staleness.assert_called_once()
+    assert mock_staleness.call_args.kwargs.get("config_path") == "config/model_selection.yaml"

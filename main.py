@@ -1800,9 +1800,16 @@ def run_agent_backtest(
     # A124: non-blocking visibility into whether this ROI number reflects
     # the currently-promoted model or a stale snapshot recorded against an
     # earlier one -- doesn't change the report or the number itself.
+    # config_path must be explicit: check_model_staleness()'s own default
+    # ("config.yaml") is the ML-engine's general project config, which has
+    # no "contexts" key at all -- the real per-target promotions live in
+    # config/model_selection.yaml. Found live: this omission made the check
+    # silently compare against an always-empty {}, reporting "0 stale"
+    # unconditionally regardless of truth (confirmed: 100% of the real
+    # corpus was actually stale when checked directly).
     from src.agent.backtest import check_model_staleness, print_staleness_summary
 
-    print_staleness_summary(check_model_staleness(records))
+    print_staleness_summary(check_model_staleness(records, config_path="config/model_selection.yaml"))
 
     run_id = uuid.uuid4().hex
     with harness.db.connection() as conn:
@@ -2005,10 +2012,11 @@ def run_agent_train(
     path = save_report(report, cfg, base_dir="reports/agent_train")
     print(f"\nReport saved to {path}")
 
-    # A124: same non-blocking staleness visibility as agent-backtest.
+    # A124: same non-blocking staleness visibility as agent-backtest. See
+    # that call site's own comment for why config_path must be explicit.
     from src.agent.backtest import check_model_staleness, print_staleness_summary
 
-    print_staleness_summary(check_model_staleness(records))
+    print_staleness_summary(check_model_staleness(records, config_path="config/model_selection.yaml"))
 
     run_id = uuid.uuid4().hex
     with harness.db.connection() as conn:
