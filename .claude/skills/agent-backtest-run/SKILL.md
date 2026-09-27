@@ -17,6 +17,10 @@ with exit code 0 and looked like a normal run from the outside:
    warning; the partial run's own +26.1% ROI was later cited as if it were a real,
    complete-sample number.
 
+It also anchors every run to this project's own established test-split corpus (A111)
+rather than an arbitrary date range, so results are actually comparable across runs
+(Step 1) instead of each backtest quietly measuring a different sample.
+
 This skill wraps a plain `agent-backtest` invocation with four things aimed squarely at
 those two failure modes, plus a real audit trail:
 
@@ -64,10 +68,48 @@ chunk's ROI as a headline number — pool bets across the whole run first (Step 
   captures a pipeline/prompt/schema code change; both existing hash mechanisms
   (`config_hash` in `src/agent/evaluation.py`, `agent_config_hash`) only ever hash
   `AgentConfig`'s YAML-sourced fields.
+- **The established test set (A111)**: `--split test --test-fraction 0.2` over each
+  league's own window from its ML-model chronological test boundary through the latest
+  available match date — this project's real accuracy/ROI baseline (540 matches, n≈229
+  bets, +23.9% pooled ROI, 2026-09-13, `documents/agent_user_stories.md` A111). Use this
+  corpus by default (Step 1) rather than an arbitrary date range, so a new run's numbers
+  are actually comparable to that baseline instead of measuring a different sample.
 
 ## Steps
 
-1. **Confirm the working tree is clean before spending anything.**
+1. **Resolve to the established test-split corpus (A111), not an arbitrary window.**
+   Unless the request explicitly asks for a different split (e.g. `--split train` for
+   lesson development, or `--split all` to deliberately include leakage-risk matches),
+   use `--split test --test-fraction 0.2` per league, with `--from-date` set to that
+   league's own ML-model chronological test boundary below and `--to-date` set to the
+   latest date with real match data:
+   ```bash
+   ./venv/bin/python3 -c "
+   import duckdb
+   con = duckdb.connect('data/fpai_core.db', read_only=True)
+   print(con.execute(\"SELECT MAX(date) FROM raw_matches WHERE league='<LEAGUE>'\").fetchone())
+   "
+   ```
+
+   | League | ML test-boundary (`--from-date`) |
+   |--------|-----------------------------------|
+   | E0  | 2025-01-04 |
+   | SP1 | 2025-01-17 |
+   | I1  | 2025-01-12 |
+   | D1  | 2025-01-17 |
+   | F1  | 2024-11-08 |
+
+   These dates were live-derived (2026-09-13, A111) from each league's then-promoted
+   models' own chronological 70/15/15 split (`src/models/model_manager.py::prepare_training_data`)
+   — the point past which that model never saw the match in training. Running against
+   this exact window is what makes a new run's ROI/hit-rate comparable to A111's own
+   540-match/229-bet baseline; an arbitrary date range instead produces a number that
+   isn't. If `config/model_selection.yaml`'s `selected_at` for a league's targets is
+   materially newer than 2026-09-13, treat this table as possibly stale rather than
+   trusting it silently (see Gotchas) — the true boundary moves whenever a league's
+   models get retrained on more recent data.
+
+   Then confirm the working tree is clean before spending anything:
    ```bash
    git status --short
    ```
@@ -187,3 +229,13 @@ chunk's ROI as a headline number — pool bets across the whole run first (Step 
   (weighted by bets placed) before reporting a headline ROI — a small chunk's ROI
   swinging wildly between two otherwise-identical runs is BUG-074's confirmed effect,
   not a chunk-sizing mistake.
+- **Step 1's per-league boundary-date table is a snapshot, not a permanent fact.** It
+  reflects the models promoted as of 2026-09-13 (A111). A league whose models have since
+  been retrained on more recent data has a *later* true boundary than the table shows —
+  trusting the stale (earlier) date would include matches the *current* model actually
+  did train on, which is real leakage, not just a smaller-than-necessary N. Cross-check
+  `config/model_selection.yaml`'s `selected_at` per target before trusting the table on
+  a league that's been retrained since 2026-09-13, rather than re-deriving it from
+  scratch every run (not worth automating for how rarely these leagues actually retrain)
+  — if it has been, re-derive the boundary the same way A111 did (the val-split start
+  date from that model's own chronological 70/15/15 split) before using this table.
