@@ -46,9 +46,16 @@ def fetch_market_value(transfermarkt_id: int, delay: float = 1.0) -> int | None:
     slug based on the numeric ID alone, and requests follows redirects by
     default."""
     url = f"https://www.transfermarkt.com/player/profil/spieler/{transfermarkt_id}"
-    response = requests.get(url, headers=_HEADERS, timeout=30)
-    response.raise_for_status()
-    time.sleep(delay)
+    try:
+        response = requests.get(url, headers=_HEADERS, timeout=30)
+        response.raise_for_status()
+    finally:
+        # The delay must run even when the request fails (403/429/timeout) --
+        # skipping it on failure turns a polite, rate-limited crawl into a
+        # zero-delay retry storm the moment ANY single request is blocked,
+        # which is exactly what escalated one 403 into a much broader
+        # rate-limit from Transfermarkt (confirmed live, 2026-09-28).
+        time.sleep(delay)
 
     soup = BeautifulSoup(response.text, "html.parser")
     wrapper = soup.find(class_="data-header__market-value-wrapper")

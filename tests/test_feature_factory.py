@@ -481,6 +481,10 @@ def test_poisson_decomposed_market_features(tmp_path: Path) -> None:
                 # over25_odds=None (missing) → all lambda features NaN
                 ("pm2", "E0", 1, "2025-08-22 20:00:00", "Team A", "Team C", 1, 0,
                  1.8, 3.4, 4.2, 1.8, 3.4, 4.2, None, None, 0.0, 1.9, 1.9),
+                # BUG-075: ah_line=+0.5 (AWAY favourite, home is the underdog) --
+                # away must get the boost and home the cut, the opposite of pm1.
+                ("pm3", "E0", 1, "2025-08-29 20:00:00", "Team D", "Team E", 0, 2,
+                 3.4, 3.4, 1.8, 3.4, 3.4, 1.8, 1.5, 2.5, 0.5, 1.9, 1.9),
             ],
         )
 
@@ -514,6 +518,21 @@ def test_poisson_decomposed_market_features(tmp_path: Path) -> None:
     for col in ["MKT_LAMBDA_TOTAL", "MKT_LAMBDA_HOME", "MKT_LAMBDA_AWAY",
                 "MKT_POISSON_BTTS_PROB", "MKT_LAMBDA_AH_DIFF"]:
         assert pd.isna(m2[col]), f"{col} should be NaN when over25_odds is missing"
+
+    # --- pm3 (BUG-075): ah_line=+0.5 means AWAY is favoured, home is the
+    # underdog -- the away side must get the boost and home the cut, the
+    # mirror image of pm1. Before the fix, abs(ah_line) meant home always
+    # got the boost regardless of sign, so this assertion fails on the
+    # pre-fix formula (home=1.5, away=0.5 instead of home=0.5, away=1.5).
+    m3 = features.loc[features["match_id"] == "pm3"].iloc[0]
+    lam3 = m3["MKT_LAMBDA_TOTAL"]
+    assert not pd.isna(lam3)
+    ah3 = 0.5
+    assert m3["MKT_LAMBDA_HOME"] == pytest.approx(max((lam3 - ah3) / 2.0, 0.0), abs=1e-4)
+    assert m3["MKT_LAMBDA_AWAY"] == pytest.approx((lam3 + ah3) / 2.0, abs=1e-4)
+    assert m3["MKT_LAMBDA_AWAY"] > m3["MKT_LAMBDA_HOME"], (
+        "away is the favourite (positive ah_line) and must get the higher lambda"
+    )
 
 
 def test_market_microstructure_line_move_and_disagreement(tmp_path: Path) -> None:

@@ -744,7 +744,14 @@ class FeatureFactory:
             df["MKT_AH_AWAY_ODDS"] = np.nan
 
         # US#76: Poisson lambda back-solved from P(Poisson(λ)≥3) = implied_over25_prob.
-        # Team-level lambdas via AH line: λ_home = (λ+|AH|)/2, λ_away = (λ-|AH|)/2.
+        # Team-level lambdas via AH line: λ_home = (λ+AH)/2, λ_away = (λ-AH)/2,
+        # signed (BUG-075) -- this project's AH_LINE convention is negative =
+        # home favored, positive = home underdog/away favored, so the SIGNED
+        # line (not its magnitude) determines which side gets the boost.
+        # Confirmed live: taking abs(AH_LINE) unconditionally credited "home"
+        # with the boost and "away" with the cut regardless of which side the
+        # line actually favored, inverting the split on ~28.7% of the corpus
+        # (every match where the away team was the market favorite).
         def _poisson_cdf2(lam: float) -> float:
             """P(Poisson(λ) ≤ 2) = e^-λ (1 + λ + λ²/2)."""
             return np.exp(-lam) * (1.0 + lam + lam * lam / 2.0)
@@ -763,16 +770,20 @@ class FeatureFactory:
         lambda_total = np.array([_solve_lambda(p) for p in p_over25_arr])
         df["MKT_LAMBDA_TOTAL"] = lambda_total
 
-        ah_abs = df["MKT_AH_LINE"].abs().to_numpy(dtype=float)
+        # AH_LINE convention (confirmed against real matches, BUG-075):
+        # negative = home favored (home should get the boost), positive =
+        # home underdog/away favored (away should get the boost) -- so home's
+        # boost is -AH_LINE/2 and away's is +AH_LINE/2, not the same sign for both.
+        ah_line_signed = df["MKT_AH_LINE"].to_numpy(dtype=float)
         lam_home = np.where(
-            np.isnan(lambda_total) | np.isnan(ah_abs),
+            np.isnan(lambda_total) | np.isnan(ah_line_signed),
             np.nan,
-            (lambda_total + ah_abs) / 2.0,
+            np.clip((lambda_total - ah_line_signed) / 2.0, 0.0, None),
         )
         lam_away = np.where(
-            np.isnan(lambda_total) | np.isnan(ah_abs),
+            np.isnan(lambda_total) | np.isnan(ah_line_signed),
             np.nan,
-            np.clip((lambda_total - ah_abs) / 2.0, 0.0, None),
+            np.clip((lambda_total + ah_line_signed) / 2.0, 0.0, None),
         )
         df["MKT_LAMBDA_HOME"] = lam_home
         df["MKT_LAMBDA_AWAY"] = lam_away
@@ -784,7 +795,9 @@ class FeatureFactory:
             (1.0 - np.exp(-lam_home)) * (1.0 - np.exp(-lam_away)),
         )
 
-        # Excess-goals signal: how much total scoring exceeds the handicap margin.
+        # Excess-goals signal: how much total scoring exceeds the handicap margin
+        # (magnitude only -- which side is favored is irrelevant to this one).
+        ah_abs = np.abs(ah_line_signed)
         df["MKT_LAMBDA_AH_DIFF"] = np.where(
             np.isnan(lambda_total) | np.isnan(ah_abs),
             np.nan,

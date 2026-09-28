@@ -620,8 +620,19 @@ def run_refresh_market_values(app_settings: AppSettings, db_manager: DuckDBManag
         )
 
     rows = []
+    errors = 0
     for _, row in scoped.iterrows():
-        value = fetch_market_value(int(row["transfermarkt_player_id"]), delay=delay)
+        try:
+            value = fetch_market_value(int(row["transfermarkt_player_id"]), delay=delay)
+        except Exception as exc:  # noqa: BLE001 -- a single blocked/failed request (403, timeout, etc.)
+            # must not kill the whole batch; skip and keep going, same
+            # per-item error tolerance as agent-snapshot/eod_batch elsewhere.
+            errors += 1
+            LOGGER.warning(
+                "refresh-market-values: skipping transfermarkt_id=%s after fetch error: %s",
+                row["transfermarkt_player_id"], exc,
+            )
+            continue
         if value is not None:
             rows.append({
                 "fotmob_player_id": row["fotmob_player_id"],
@@ -629,6 +640,8 @@ def run_refresh_market_values(app_settings: AppSettings, db_manager: DuckDBManag
                 "market_value_eur": value,
             })
 
+    if errors:
+        LOGGER.info("refresh-market-values: %d fetch errors (skipped), not fatal.", errors)
     n = insert_market_value_snapshot(pd.DataFrame(rows), db_manager, snapshot_date=date.today().isoformat())
     LOGGER.info(
         "refresh-market-values complete | players_scoped=%d | values_fetched=%d | rows_inserted=%d",

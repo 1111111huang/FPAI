@@ -200,11 +200,14 @@ training_setup:
   - SQUAD_AWAY_XA_MEAN_R5
   - SQUAD_AWAY_RATING_MEAN_R3
   - SQUAD_AWAY_RATING_MEAN_R5
-  # US#208: squad-level rolling market value (Transfermarkt, via A126's REEP crosswalk)
-  - SQUAD_HOME_MKT_VALUE_MEAN_R3
-  - SQUAD_HOME_MKT_VALUE_MEAN_R5
-  - SQUAD_AWAY_MKT_VALUE_MEAN_R3
-  - SQUAD_AWAY_MKT_VALUE_MEAN_R5
+  # US#208's SQUAD_HOME/AWAY_MKT_VALUE_MEAN_R3/R5 (Transfermarkt via A126's REEP
+  # crosswalk) removed here (BUG-076): player_market_values has 0 rows in this
+  # DB, so these 4 columns are structurally 100% NaN for every match, every
+  # league -- XGBoost silently tolerates them (contributes zero signal), but
+  # any strict-dropna model (rf_regressor) or a downstream consumer with its
+  # own narrower feature-row builder (SkellamResultModel, wrapping the
+  # promoted home_goals/away_goals) crashes outright on a live forecast.
+  # Restore once player_market_values is actually populated.
   - LUCK_HOME_BURNOUT_R5
   - LUCK_AWAY_BURNOUT_R5
   - XOC_HOME

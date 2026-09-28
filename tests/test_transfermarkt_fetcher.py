@@ -6,6 +6,9 @@ from pathlib import Path
 import sys
 from unittest.mock import MagicMock, patch
 
+import pytest
+import requests
+
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
 from src.ingestion.transfermarkt.fetcher import _parse_market_value_eur, fetch_market_value
@@ -51,3 +54,19 @@ def test_fetch_market_value_returns_none_when_no_value_listed():
         result = fetch_market_value(96148)
 
     assert result is None
+
+
+def test_fetch_market_value_still_sleeps_when_the_request_fails():
+    """A failed request (403/429/timeout) must still pay the delay -- skipping
+    it turns one blocked request into a zero-delay retry storm against the
+    remaining batch, which is what actually escalated a single 403 into a
+    broader Transfermarkt rate-limit live (2026-09-28). Confirmed RED against
+    the pre-fix code (time.sleep after raise_for_status, never reached)."""
+    resp = MagicMock()
+    resp.raise_for_status.side_effect = requests.exceptions.HTTPError("403 Client Error")
+    with patch("src.ingestion.transfermarkt.fetcher.requests.get", return_value=resp), \
+         patch("src.ingestion.transfermarkt.fetcher.time.sleep") as mock_sleep, \
+         pytest.raises(requests.exceptions.HTTPError):
+        fetch_market_value(418560, delay=1.5)
+
+    mock_sleep.assert_called_once_with(1.5)
