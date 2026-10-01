@@ -21,19 +21,25 @@ It also anchors every run to this project's own established test-split corpus (A
 rather than an arbitrary date range, so results are actually comparable across runs
 (Step 1) instead of each backtest quietly measuring a different sample.
 
-This skill wraps a plain `agent-backtest` invocation with four things aimed squarely at
+This skill wraps a plain `agent-backtest` invocation with five things aimed squarely at
 those two failure modes, plus a real audit trail:
 
-1. **Pre-chunk DeepSeek balance check** — a single call cannot be paused mid-flight to
+1. **A free pre-flight staleness check, before spending anything** (A128) — a model
+   promotion (CLI or hand-edited `model_selection.yaml` alike) invalidates every
+   recorded forecast for the targets it touched, and nothing currently re-checks this
+   automatically at promotion time. `agent-snapshot-staleness` scans the whole recorded
+   corpus off disk, no live run needed, so this is checked and fixed *before* the first
+   paid chunk rather than discovered inside one.
+2. **Pre-chunk DeepSeek balance check** — a single call cannot be paused mid-flight to
    re-check balance (no such hook exists in the CLI), so the run is split into chunks
    sized to the *current* balance, and balance is re-checked before every chunk, not
    just once at the start.
-2. **Per-chunk validation** — skip rate, the model-staleness line `agent-backtest`
-   already prints (fixed in BUG-073 — see Gotchas), and result plausibility, checked
-   after every chunk, not only at the end.
-3. **A hard stop on repeated invalid results** — mirrors `agent-train-experiment`'s own
-   Step 7 gate, reusing this project's own established A26 skip-rate thresholds.
-4. **A traceability manifest** — the git commit hash (the actual *code* version —
+3. **Per-chunk validation** — skip rate, the model-staleness line `agent-backtest`
+   already prints (fixed in BUG-073 — see Gotchas) as a backstop behind item 1, and
+   result plausibility, checked after every chunk, not only at the end.
+4. **A hard stop on repeated invalid results** — mirrors `agent-train-experiment`'s own
+   Step 8 gate, reusing this project's own established A26 skip-rate thresholds.
+5. **A traceability manifest** — the git commit hash (the actual *code* version —
    `config_hash`/`agent_config_hash` only ever hash `AgentConfig`'s YAML fields, never
    the pipeline/prompt code) plus `config/model_selection.yaml`'s contents at run time
    (the actual *model* version), written alongside the combined report.
@@ -45,7 +51,7 @@ as noise averaged out by test-set size. What this skill *does* guard is the
 deterministic-pipeline side: which snapshot gets matched on replay must stay reliable
 (canonicalization, A23, already fixed) and every chunk must be checked against the
 currently-promoted models before its numbers are trusted. Don't report a single small
-chunk's ROI as a headline number — pool bets across the whole run first (Step 6).
+chunk's ROI as a headline number — pool bets across the whole run first (Step 7).
 
 ## Definitions
 
@@ -60,9 +66,12 @@ chunk's ROI as a headline number — pool bets across the whole run first (Step 
   record of what a run actually cost, checked after the fact.
 - **Model staleness**: whether a match's recorded forecast reflects the currently
   promoted model (`config/model_selection.yaml`) or an older, since-replaced one.
-  `agent-backtest` already prints this automatically (`check_model_staleness` /
-  `print_staleness_summary`, `src/agent/backtest.py`) — no extra command needed, just
-  read the printed line (see Step 4).
+  `agent-backtest` prints a per-run check automatically (`check_model_staleness` /
+  `print_staleness_summary`, `src/agent/backtest.py`) — but that's *after* the chunk
+  already ran and got paid for. `python main.py agent-snapshot-staleness --league
+  <LEAGUE>` (A128) checks the whole recorded corpus for free, before spending
+  anything — run this first (Step 2), don't wait to discover staleness in a paid
+  chunk's printed report (Step 5 still checks it too, as a backstop).
 - **Agent version**: the git commit hash of the working tree at run time
   (`git rev-parse HEAD`) — confirmed via direct code read to be the only thing that
   captures a pipeline/prompt/schema code change; both existing hash mechanisms
@@ -116,7 +125,29 @@ chunk's ROI as a headline number — pool bets across the whole run first (Step 
    A report traced to "whatever the working tree happened to contain" isn't traceable —
    don't proceed on a dirty tree unless the user explicitly says otherwise.
 
-2. **Check DeepSeek balance and size the first chunk.**
+2. **Check snapshot staleness for this league before spending anything, and refresh if
+   needed.** This corpus has gone stale twice already this project's history (`BUG-073`,
+   then again after a same-day model retrain the very next day) — a model promotion
+   invalidates every recorded forecast for the targets it touched, and nothing currently
+   re-checks this automatically at promotion time. Check first, every run, not just when
+   something looks off:
+   ```bash
+   python main.py agent-snapshot-staleness --league <LEAGUE>
+   ```
+   If it reports any stale matches for this league, refresh before proceeding — this is
+   pure local ML inference (re-invokes `forecast_league`/`forecast_international` against
+   whichever model is currently promoted; replays `web_search`/`resolve_competition`
+   unchanged), so it costs no LLM/Tavily spend, only wall-clock time:
+   ```bash
+   ./venv/bin/python -m main agent-snapshot --refresh-model --split all --league <LEAGUE> \
+     --from-date <league's earliest recorded match date> --to-date <latest>
+   ```
+   Re-run the staleness check afterward to confirm 0 stale before moving to Step 3. Don't
+   skip this because a prior run "was probably fine" — the whole point is that a stale
+   corpus looks identical to a fresh one from the outside (same Gotcha as the balance/skip
+   failure modes below).
+
+3. **Check DeepSeek balance and size the first chunk.**
    ```bash
    python3 -c "
    import os, requests
@@ -134,7 +165,7 @@ chunk's ROI as a headline number — pool bets across the whole run first (Step 
    the remaining balance; never plan a chunk that would exhaust the account if the
    estimate runs 2x high (real precedent: A77's estimate was off by ~3.5x once).
 
-3. **Run one chunk — full output to a real file, never piped through `tail` directly.**
+4. **Run one chunk — full output to a real file, never piped through `tail` directly.**
    A `  SKIP <match_id>: <exc>` line is printed to stderr (`main.py`'s
    `_run_backtest_concurrent`), never logged, and unrecoverable once scrolled past
    (`agent-train-experiment`'s own hard-learned Gotcha — the identical risk applies
@@ -147,7 +178,7 @@ chunk's ROI as a headline number — pool bets across the whole run first (Step 
    tail -60 reports/agent_backtest/<...>.raw.log
    ```
 
-4. **Validate this chunk before spending on the next one.** All three checks, every
+5. **Validate this chunk before spending on the next one.** All three checks, every
    chunk, not just at the end:
    - **Skip rate**: `grep -c "^  SKIP " <raw log>` against the chunk's requested match
      count. Reuse this project's own A26 acceptance bar: **≤2 skips** on a small
@@ -155,12 +186,13 @@ chunk's ROI as a headline number — pool bets across the whole run first (Step 
      read the actual `SKIP <match_id>: <exc>` lines (the exception text says exactly
      what broke) — don't just note the count and continue.
    - **Model staleness**: read the `Model staleness check: N/M matches...` line the CLI
-     prints automatically. Any staleness at all: stop, run
-     `agent-snapshot --refresh-model` for the affected league (BUG-073's own
-     remediation), then re-run this chunk — don't mix a stale-model chunk in with fresh
-     ones. **No line printed at all** means `matches_checked` was 0 (no captured
-     diagnostics), not "confirmed fresh" — treat silence as "unable to verify," not as a
-     pass.
+     prints automatically. This should already read 0 given Step 2's pre-flight check —
+     any staleness here means either Step 2 was skipped or a promotion landed mid-run.
+     Either way: stop, run `agent-snapshot --refresh-model` for the affected league
+     (BUG-073's own remediation), then re-run this chunk — don't mix a stale-model chunk
+     in with fresh ones. **No line printed at all** means `matches_checked` was 0 (no
+     captured diagnostics), not "confirmed fresh" — treat silence as "unable to verify,"
+     not as a pass.
    - **Result plausibility**: from the printed report, `bet_frequency`/`hit_rate` should
      be in `[0, 1]`, `roi` not `NaN` or a suspicious flat value (e.g. every bet resolving
      identically usually means a market-resolution bug, not real signal), and
@@ -170,11 +202,11 @@ chunk's ROI as a headline number — pool bets across the whole run first (Step 
      chunks show unexplained staleness or implausible results, stop the whole run and
      investigate before spending on any further chunk.
 
-5. **Re-check balance before every subsequent chunk** (repeat Step 2) — not just once at
+6. **Re-check balance before every subsequent chunk** (repeat Step 3) — not just once at
    the start. This is the direct fix for A56's own incident: a chunk affordable at the
    start of a long session may not be by the fifth chunk.
 
-6. **Record the traceability manifest** alongside the combined report, one per run:
+7. **Record the traceability manifest** alongside the combined report, one per run:
    ```bash
    python3 -c "
    import subprocess, json, yaml, datetime
@@ -194,7 +226,7 @@ chunk's ROI as a headline number — pool bets across the whole run first (Step 
    This is what actually answers "which agent" and "which ML models" produced a report
    later — the report filename's `config_hash` alone cannot (Gotchas).
 
-7. **Report back**: per-chunk stats, the pooled ROI/hit-rate across all chunks (bet-count
+8. **Report back**: per-chunk stats, the pooled ROI/hit-rate across all chunks (bet-count
    weighted, not chunk-count weighted; label separately if any chunk differs materially
    in character — different date range, different split), the manifest file path, real
    spend reconciled against the DeepSeek Cost(CNY) dashboard, and a one-line reminder
@@ -213,7 +245,7 @@ chunk's ROI as a headline number — pool bets across the whole run first (Step 
 - **`check_model_staleness()` was silently broken until BUG-073 (fixed 2026-09-26/27)**
   — both real call sites defaulted to `config_path="config.yaml"` (no `contexts` key),
   so it reported "0 stale" unconditionally regardless of truth. A report predating that
-  fix's commit has a meaningless staleness line; check which commit produced it (Step 6)
+  fix's commit has a meaningless staleness line; check which commit produced it (Step 7)
   before trusting it.
 - **Balance-delta arithmetic is not reliable for cost tracking** — this project has
   already been burned twice (a UTC/CST bucketing error, an unexplained ~3.5x estimate
@@ -221,7 +253,7 @@ chunk's ROI as a headline number — pool bets across the whole run first (Step 
   own Cost(CNY) dashboard as the authoritative record of what a run actually cost.
 - **Never pipe a chunk's live run through `tail` directly** — identical risk to
   `agent-train-experiment`'s own hard-learned Gotcha: a `SKIP` line is stderr-only,
-  never logged, and unrecoverable once scrolled past. Always redirect to a file (Step 3).
+  never logged, and unrecoverable once scrolled past. Always redirect to a file (Step 4).
 - **home_corners/away_corners never resolve in any backtest** (`RESOLVABLE_MARKETS`
   structurally excludes them) — if a chunk placed such a bet, it's real spend that
   contributes nothing to the reported ROI/hit-rate. Not a bug to chase here.

@@ -10,22 +10,28 @@ description: Use when running a cost-aware agent-train experiment for a league �
 `agent-train` already writes results to DuckDB (`agent_telemetry`, `agent_lessons`), but
 neither table alone gives a reviewable per-match record of what happened in one run, and
 there's no built-in "what did we learn" summary. This skill wraps a single `agent-train`
-invocation with four things on top:
+invocation with five things on top:
 
-1. **Cost-aware defaults** — `--sample 100` (stratified by actual result, seeded, see
+1. **A free pre-flight staleness check, before spending anything** (A128) — a model
+   promotion (CLI or hand-edited `model_selection.yaml` alike) silently invalidates every
+   recorded forecast for the targets it touched, with nothing currently re-checking this
+   automatically at promotion time. `agent-snapshot-staleness` scans the recorded corpus
+   off disk for free; a lesson distilled from stale forecasts reflects a model that's no
+   longer live, wasting the run's real spend. See Step 2 below.
+2. **Cost-aware defaults** — `--sample 100` (stratified by actual result, seeded, see
    `src/agent/backtest.py::_stratified_sample`) instead of a full season, `--batch-size 1`
    (one lesson per match, the CLI's own default). At the measured Gemini rate (~$0.015
    CAD/match, `documents/agent_user_stories.md` A71/A72), a 100-match run costs ~$1.50 CAD.
-2. **A combined per-match experiment log** — one JSON file with league, sample size, batch
+3. **A combined per-match experiment log** — one JSON file with league, sample size, batch
    size, and for every match: the full recommendation, the lesson text (if one was written
    for that match), and the "thought process" (see Definitions below).
-3. **A summarized "popular lessons" readout** — read every `lesson_text` this run produced
+4. **A summarized "popular lessons" readout** — read every `lesson_text` this run produced
    and group them by recurring theme, most-frequent first. This is a reading/judgment step,
    not a deterministic script — do it directly, don't try to automate it with keyword
    matching.
-4. **A stop-on-repeated-data-issues gate** (A73) — if the popular-lessons read turns up one
+5. **A stop-on-repeated-data-issues gate** (A73) — if the popular-lessons read turns up one
    recurring *data/plumbing* complaint across a clear majority of matches, that's a bug
-   signal, not just a lesson to report. See Step 7 below; don't skip it.
+   signal, not just a lesson to report. See Step 8 below; don't skip it.
 
 **Why this gate exists (don't skip it):** A73 ran a full 100-sample SP1 experiment where
 96/99 lessons complained about missing `total_goals` odds — a full day after that exact
@@ -65,8 +71,9 @@ that's a genuine, useful comparison point, not duplication to clean up.
 
 1. **Resolve parameters.** Required: `league`. Defaults unless the request says otherwise:
    `sample=100`, `batch_size=1`, `split=all`, `config=config/agent_config.yaml` (the live
-   default — currently Gemini, A72). Resolve `--from-date`/`--to-date` to the league's full
-   season span (required flags even with `--sample`):
+   default — check its own `model`/`provider` fields directly rather than trusting a cached
+   assumption here; it has changed provider more than once). Resolve `--from-date`/`--to-date`
+   to the league's full season span (required flags even with `--sample`):
    ```
    ./venv/bin/python3 -c "
    import duckdb
@@ -74,13 +81,33 @@ that's a genuine, useful comparison point, not duplication to clean up.
    print(con.execute(\"SELECT MIN(date), MAX(date), COUNT(*) FROM raw_matches WHERE league='<LEAGUE>' AND date >= '2025-08-01'\").fetchone())
    "
    ```
-2. **State the cost estimate before running.** Real calibrated rate (2026-09-13, DeepSeek
+2. **Check snapshot staleness for this league before spending anything, and refresh if
+   needed.** A model promotion (CLI or hand-edited `model_selection.yaml` alike) silently
+   invalidates every recorded forecast for the targets it touched, and nothing currently
+   catches this automatically at promotion time — this project's snapshot corpus has gone
+   stale project-wide at least twice already for exactly this reason. Free to check, no
+   live run needed:
+   ```
+   python main.py agent-snapshot-staleness --league <LEAGUE>
+   ```
+   If it reports any stale matches for this league (or this run's `--split`), refresh
+   before proceeding — pure local ML inference (re-invokes `forecast_league`/
+   `forecast_international` against whichever model is currently promoted; replays
+   `web_search`/`resolve_competition` unchanged), no LLM/Tavily spend:
+   ```
+   ./venv/bin/python -m main agent-snapshot --refresh-model --split all --league <LEAGUE> \
+     --from-date <SEASON_START> --to-date <SEASON_END>
+   ```
+   Re-run the staleness check afterward to confirm 0 stale. A lesson distilled from stale
+   forecasts reflects a model that's no longer live — don't let this run's real spend go
+   toward lessons nobody can act on.
+3. **State the cost estimate before running.** Real calibrated rate (2026-09-13, DeepSeek
    Cost(CNY) dashboard, not balance-delta arithmetic): **~$0.02/match** for a plain call,
    roughly **2x that for `agent-train`** specifically (A109's per-match reflection call adds
    a second LLM invocation on top of the recommendation call) — budget `sample_size × ~$0.04
    USD` for `agent-train`, not the plain per-match rate. Re-check this figure periodically;
    it drifts with prompt/pipeline changes (A109, W202), not just provider pricing.
-3. **Run it — full output to a real file, never piped straight through `tail`:**
+4. **Run it — full output to a real file, never piped straight through `tail`:**
    ```
    ./venv/bin/python -m main agent-train --league <LEAGUE> --split all \
      --from-date <SEASON_START> --to-date <SEASON_END> \
@@ -91,29 +118,28 @@ that's a genuine, useful comparison point, not duplication to clean up.
    disk, unlike piping through `tail` directly. **Do not `| tail -N` the live command.** A
    `SKIP <match_id>: <exc>` line (`process_match_row`'s per-match try/except, printed to
    stderr, never routed through the logger) can appear anywhere during a long run, not just
-   near the end — piping straight through `tail` silently discards it before Step 4 or Step 7
+   near the end — piping straight through `tail` silently discards it before Step 5 or Step 8
    ever see it. This isn't hypothetical: A77 already lost 2 skips this way ("lost to my own
-   `tail -30` truncation, not investigated further"), and this exact skill's own prior Step 3
+   `tail -30` truncation, not investigated further"), and this exact skill's own prior Step 4
    command reproduced it again on a real E0 run (2026-09-13, 3/9 matches skipped, cause
    unrecoverable — had to re-run and pay for the same matches twice to see it).
-4. **Pull this run's rows.** `agent_telemetry` has `run_id` directly; `agent_lessons` does
-   not (see the hard-learned discipline in `agent_user_stories.md`'s A71/calibration
-   notes) — join by `source_match_id` against this run's telemetry match_ids, scoped by
-   `created_at` at/after the run's start time:
+5. **Pull this run's rows.** Both `agent_telemetry` and `agent_lessons` carry `run_id`
+   directly (verified live 2026-09-30 — query by it, don't fall back to the older
+   join-by-`source_match_id`-and-`created_at` workaround unless a specific row predates
+   that column):
    ```python
    import duckdb, json
    con = duckdb.connect("data/fpai_core.db", read_only=True)
    rows = con.execute(
        "SELECT match_id, recommendation FROM agent_telemetry WHERE run_id = ?", [run_id]
    ).fetchall()
-   match_ids = [r[0] for r in rows]
    lessons = con.execute(
-       f"SELECT source_match_id, lesson_text, created_at FROM agent_lessons "
-       f"WHERE source_match_id IN ({','.join(['?']*len(match_ids))}) AND created_at >= ?",
-       match_ids + [run_start_ts],
+       "SELECT id, lesson_text, source_match_id FROM agent_lessons WHERE run_id = ? ORDER BY id", [run_id]
    ).fetchall()
    ```
-5. **Write the combined log** to `reports/agent_experiments/<UTC timestamp>_<league>_sample<N>_batch<B>.json`:
+   Note for `--batch-size B > 1`: a batched lesson's `source_match_id` is a comma-joined
+   list of all `B` match_ids in that batch, not one match_id per row.
+6. **Write the combined log** to `reports/agent_experiments/<UTC timestamp>_<league>_sample<N>_batch<B>.json`:
    ```json
    {
      "league": "...", "sample_size": 100, "batch_size": 1, "split": "all",
@@ -129,21 +155,21 @@ that's a genuine, useful comparison point, not duplication to clean up.
      ]
    }
    ```
-6. **Summarize popular lessons.** Read every `lesson_text` in the log, group by recurring
+7. **Summarize popular lessons.** Read every `lesson_text` in the log, group by recurring
    theme (e.g. "stale/dated news evidence", "missing secondary-market odds", "high-entropy
    forecast flagged", "conflicting recent-form signals") and report the top themes ranked
    by frequency, with 1-2 representative quotes each — as prose in the response, not just
    left in the JSON file.
-7. **Stop-and-investigate gate.** First, check for outright skips before looking at lesson
-   themes — a skip is a harder failure than anything Step 6 can surface, since a skipped
-   match never reaches lesson-writing at all: `grep -c "^SKIP " <the raw log from Step 3>`
+8. **Stop-and-investigate gate.** First, check for outright skips before looking at lesson
+   themes — a skip is a harder failure than anything Step 7 can surface, since a skipped
+   match never reaches lesson-writing at all: `grep -c "^SKIP " <the raw log from Step 4>`
    against the number actually requested (`report_summary.matches_evaluated` short of the
    resolved sample size, or a printed `Skipped N/M matches` line). Any skip at all: read the
    actual `SKIP <match_id>: <exc>` lines (not just the count) from the raw log — the
    exception text says exactly what broke. Apply the same stop-and-investigate rule as below
    (documented/expected vs. a probable regression) before continuing.
 
-   Then look at the top theme from Step 6, among matches that *did* evaluate. Is it a *data/plumbing*
+   Then look at the top theme from Step 7, among matches that *did* evaluate. Is it a *data/plumbing*
    complaint (missing/null odds, stale or absent search evidence, a schema/field gap,
    duplicate or contradictory recorded data) rather than a model-judgment theme (declined on
    uncertainty, conflicting news, a borderline edge)? If so, and it appears in a clear
@@ -157,25 +183,25 @@ that's a genuine, useful comparison point, not duplication to clean up.
      before spending any more real API budget on more samples under the same broken input.
    - Report the finding to the user proactively, in the same response as the run's results
      — don't wait to be asked "why is this happening" (see Overview).
-8. **Report back**: the report_summary stats (matches_evaluated, bets_placed, roi,
-   hit_rate), the log file path, the popular-lessons summary, the Step 7 gate check result,
+9. **Report back**: the report_summary stats (matches_evaluated, bets_placed, roi,
+   hit_rate), the log file path, the popular-lessons summary, the Step 8 gate check result,
    and actual spend (sample × measured per-match rate) against budget.
 
 ## Gotchas
 
 - `--from-date`/`--to-date` are required by the CLI even when `--sample` does the real
   narrowing — always resolve the full season span first, don't guess it.
-- `agent_lessons` has no `run_id` column — never scope a query (or, worse, a DELETE) to it
-  by date/text guesswork alone; always join through `agent_telemetry`'s real `run_id` →
-  `match_id` first, exactly as step 4 does.
+- `agent_lessons` has its own `run_id` column (verified live 2026-09-30) — query it
+  directly (step 5), don't fall back to scoping by `source_match_id`/`created_at` guesswork
+  unless a specific row predates that column.
 - Don't clean up this run's rows afterward (see Overview) — that discipline exists for
   *calibration test* runs specifically, not for real experiment/lesson-generation runs like
   this one.
 - **Never pipe the live run through `tail` directly** (`... | tail -N`) — it discards
   `SKIP` lines (stderr, never logged) the moment they scroll past the window, and there is no
   way to recover them afterward short of re-running (and re-paying for) the exact same
-  matches. Always redirect to a real file first (Step 3), then read from that file.
+  matches. Always redirect to a real file first (Step 4), then read from that file.
 - A popular-lessons theme that's a *data* complaint (not a model-judgment one) and shows up
-  in most matches is a stop signal, not a reporting footnote (Step 7) — this is exactly what
+  in most matches is a stop signal, not a reporting footnote (Step 8) — this is exactly what
   A73 got wrong the first time: a whole run's spend happened before the pattern got
   investigated, and only because the user asked. Surface it unprompted next time.
