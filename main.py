@@ -392,6 +392,13 @@ def _build_parser() -> argparse.ArgumentParser:
     agent_snapshot_parser.add_argument("--split", choices=["all", "train", "test"], default="all", help="Restrict recording to the agent's own stable train/test partition (A40) instead of every match in range.")
     agent_snapshot_parser.add_argument("--test-fraction", type=float, default=0.2, help="Fraction of matches (by match_id hash) treated as the 'test' split. Only used when --split != all.")
 
+    # agent-snapshot-staleness (A128)
+    agent_snapshot_staleness_parser = subparsers.add_parser(
+        "agent-snapshot-staleness",
+        help="Report which recorded snapshots' forecasts no longer match the currently-promoted models",
+    )
+    agent_snapshot_staleness_parser.add_argument("--league", action="append", default=None, help="Restrict to one or more leagues (repeatable). Omit for every league found on disk.")
+
     # agent-backtest
     agent_backtest_parser = subparsers.add_parser(
         "agent-backtest",
@@ -423,6 +430,7 @@ def _build_parser() -> argparse.ArgumentParser:
     agent_train_parser.add_argument("--split", choices=["all", "train", "test"], default="all", help="Restrict to a stable train/test partition of the matched corpus (A40). Use 'train' so the critic never sees the held-out 'test' matches agent-backtest will later report on.")
     agent_train_parser.add_argument("--test-fraction", type=float, default=0.2, help="Fraction of matches (by match_id hash) reserved for the 'test' split. Only used when --split != all.")
     agent_train_parser.add_argument("--batch-size", type=int, default=1, help="Aggregate up to N same-competition/tier matches into one deterministic lesson candidate (A39) instead of one per match. Default 1 preserves the original one-row-per-match behavior.")
+    agent_train_parser.add_argument("--use-lessons", action="store_true", help="Load approved lessons during replay (A41), same mechanism agent-backtest uses. Unlike agent-backtest, NOT restricted to --split test -- agent-train's report isn't used as a leakage-sensitive ROI claim, it exists to generate fresh lesson candidates, so letting later rounds build on already-approved lessons (rather than re-discovering the same pattern) is the intended workflow, not a data leak. If you need a clean, unbiased ROI read on a lesson's real effect, use agent-backtest --split test --use-lessons instead.")
 
     # agent-lessons (A33)
     agent_lessons_parser = subparsers.add_parser(
@@ -1758,6 +1766,40 @@ async def _run_backtest_concurrent(
     return records
 
 
+def run_agent_snapshot_staleness(leagues: list[str] | None = None) -> dict:
+    """A128: on-demand corpus-wide staleness report -- reads every recorded
+    snapshot directly off disk (src.agent.snapshot_store.scan_corpus_staleness),
+    no live replay run needed. Use after any model promotion, CLI or
+    hand-edited model_selection.yaml alike (see .claude/skills/promoting-a-model
+    A9) -- a CLI promotion (select-best-models) auto-refreshes the leagues it
+    actually touches, but a hand-edit is invisible to that hook, so this is
+    the manual check for that path.
+
+    Returns the report dict (same shape as scan_corpus_staleness) for
+    programmatic callers; also prints a human-readable summary."""
+    from src.agent.snapshot_store import scan_corpus_staleness
+
+    report = scan_corpus_staleness(leagues=[lg.upper() for lg in leagues] if leagues else None)
+    if not report:
+        print("No recorded snapshots found.")
+        return report
+
+    total_checked = total_stale = 0
+    print("\nSnapshot corpus staleness (vs config/model_selection.yaml's current promotions):")
+    for league in sorted(report):
+        info = report[league]
+        total_checked += info["checked"]
+        total_stale += info["stale"]
+        print(f"  {league}: {info['stale']}/{info['checked']} stale")
+        for target, count in sorted(info["stale_by_target"].items(), key=lambda kv: -kv[1]):
+            print(f"    {target}: {count} stale")
+    print(f"\nTotal: {total_stale}/{total_checked} recorded matches stale on at least one target.")
+    if total_stale:
+        print("Refresh with: python main.py agent-snapshot --refresh-model --split all "
+              "--league <LEAGUE> --from-date <season start> --to-date <season end>")
+    return report
+
+
 def run_agent_backtest(
     from_date: str,
     to_date: str,
@@ -1992,12 +2034,24 @@ def run_agent_train(
     split: str = "all",
     test_fraction: float = 0.2,
     batch_size: int = 1,
+    use_lessons: bool = False,
 ) -> None:
     """Critic/train mode (A33): replay completed matches, score them the same
     way agent-backtest does, and additionally write one competition/tier-
     tagged lesson candidate (A39: per batch of up to batch_size matches,
     default 1 -- one per match, A33's original behavior) plus a raw-evidence
-    telemetry row per match."""
+    telemetry row per match.
+
+    use_lessons (direct user request, 2026-09-30): loads approved lessons
+    during replay, same mechanism as agent-backtest's --use-lessons (A41) --
+    but deliberately NOT restricted to --split test the way that one is.
+    agent-backtest's restriction exists because its report is used as a
+    leakage-sensitive ROI claim (evaluating a lesson against the very data
+    that shaped it inflates that number). agent-train's report is never used
+    that way -- this command's whole purpose is generating fresh lesson
+    candidates, and letting a later round build on already-approved lessons
+    (rather than re-discovering the same pattern every time) is the intended
+    iterative-refinement workflow, not a leak of the same kind."""
     import asyncio
     import uuid
 
@@ -2014,9 +2068,9 @@ def run_agent_train(
     cfg = AgentConfig.from_yaml(config_path) if config_path else AgentConfig.default()
     harness = BacktestHarness(config=cfg)
     matches = harness.load_matches(from_date, to_date, league=league, sample=sample, split=split, test_fraction=test_fraction)
-    print(f"Running train mode over {len(matches)} matches (concurrency={concurrency}, split={split}, batch_size={batch_size})...")
+    print(f"Running train mode over {len(matches)} matches (concurrency={concurrency}, split={split}, batch_size={batch_size}, use_lessons={use_lessons})...")
 
-    records = asyncio.run(_run_backtest_concurrent(matches, cfg, concurrency, capture_state=True))
+    records = asyncio.run(_run_backtest_concurrent(matches, cfg, concurrency, capture_state=True, allow_lessons_in_replay=use_lessons))
 
     stake_fn = simulate_kelly_stake if stake_mode == "kelly" else simulate_flat_stake
     bankroll_result = stake_fn(records)
@@ -2449,6 +2503,8 @@ def main() -> None:
             split=args.split,
             test_fraction=args.test_fraction,
         )
+    elif args.command == "agent-snapshot-staleness":
+        run_agent_snapshot_staleness(leagues=args.league)
     elif args.command == "agent-backtest":
         run_agent_backtest(
             from_date=args.from_date,
@@ -2474,6 +2530,7 @@ def main() -> None:
             split=args.split,
             test_fraction=args.test_fraction,
             batch_size=args.batch_size,
+            use_lessons=args.use_lessons,
         )
     elif args.command == "agent-lessons":
         if args.lessons_action == "approve":

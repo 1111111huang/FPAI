@@ -54,6 +54,84 @@ def league_base_dir(league: str | None, base_dir: str | Path = _DEFAULT_BASE_DIR
     return Path(base_dir) / safe_league
 
 
+def scan_corpus_staleness(
+    base_dir: str | Path = _DEFAULT_BASE_DIR,
+    model_selection_path: str | Path = "config/model_selection.yaml",
+    leagues: list[str] | None = None,
+) -> dict[str, Any]:
+    """A128: corpus-wide staleness scan -- reads every recorded match's own
+    frozen forecast_league_*.json (using the newest file per match, same
+    "what real replay would actually resolve" rule check_model_staleness's
+    BUG-073 fix established) and compares its embedded
+    diagnostics.target_versions artifact filename against what
+    model_selection.yaml currently promotes for that (league, target).
+
+    Unlike check_model_staleness (src/agent/backtest.py), this needs no live
+    replay run first -- it reads the corpus directly off disk, so it's cheap
+    enough to run standalone (a new CLI command) or automatically right
+    after a promotion (ModelSelector.run()'s auto-refresh, A128).
+
+    Returns {league: {"stale": int, "fresh": int, "checked": int,
+    "stale_by_target": {target: count}}}, one entry per league found on
+    disk (or just the requested `leagues`, if given -- skips a league with
+    no snapshot directory at all rather than erroring, since not every
+    registered context has ever been snapshotted)."""
+    import yaml
+
+    with open(model_selection_path, encoding="utf-8") as fh:
+        config = yaml.safe_load(fh) or {}
+    contexts = config.get("contexts", {})
+
+    def _current_artifact(league: str, target: str) -> str | None:
+        entry = contexts.get(league, {}).get(target)
+        if not entry or not entry.get("model_path"):
+            return None
+        return Path(entry["model_path"]).name
+
+    base = Path(base_dir)
+    league_dirs = (
+        [base / lg.upper() for lg in leagues]
+        if leagues
+        else [d for d in base.iterdir() if d.is_dir()]
+    )
+
+    report: dict[str, Any] = {}
+    for league_dir in sorted(league_dirs):
+        if not league_dir.is_dir():
+            continue
+        league = league_dir.name
+        checked = fresh = stale = 0
+        stale_by_target: dict[str, int] = {}
+        for match_dir in league_dir.iterdir():
+            if not match_dir.is_dir():
+                continue
+            fc_files = sorted(match_dir.glob("forecast_league_*.json"), key=lambda p: p.stat().st_mtime)
+            if not fc_files:
+                continue
+            try:
+                payload = json.loads(fc_files[-1].read_text(encoding="utf-8"))
+                target_versions = json.loads(payload["response"]).get("diagnostics", {}).get("target_versions", {})
+            except (json.JSONDecodeError, KeyError, OSError):
+                continue
+            if not target_versions:
+                continue
+            checked += 1
+            match_is_stale = False
+            for target, info in target_versions.items():
+                recorded = info.get("artifact") if isinstance(info, dict) else None
+                current = _current_artifact(league, target)
+                if recorded and current and recorded != current:
+                    match_is_stale = True
+                    stale_by_target[target] = stale_by_target.get(target, 0) + 1
+            if match_is_stale:
+                stale += 1
+            else:
+                fresh += 1
+        if checked:
+            report[league] = {"checked": checked, "fresh": fresh, "stale": stale, "stale_by_target": stale_by_target}
+    return report
+
+
 class SnapshotMissingError(Exception):
     """Raised in replay mode when no recorded snapshot exists for a tool call."""
 

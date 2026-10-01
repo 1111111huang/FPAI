@@ -311,3 +311,86 @@ def test_write_train_artifacts_batches_do_not_span_scope_boundary():
     assert lessons_written == 2  # never merged despite batch_size=5
     rows = conn.execute("SELECT competition_id, source_match_id FROM agent_lessons ORDER BY id").fetchall()
     assert rows == [("E0", "m1"), ("SP1", "m2")]
+
+
+def test_run_agent_train_threads_use_lessons_to_process_match_row():
+    """direct user request, 2026-09-30: agent-train can now load approved
+    lessons during replay too (previously backtest-only) -- confirms the
+    flag actually reaches process_match_row's allow_lessons_in_replay kwarg,
+    same mechanism agent-backtest already uses."""
+    import pandas as pd
+
+    from main import run_agent_train
+
+    record = _record(full_state={
+        "competition_resolution": {"competition": "E0", "tier": "competition_specific"},
+        "research_evidence": None, "forecast_payload": None, "messages": [],
+    })
+
+    class _FakeConnCtx:
+        def __enter__(self):
+            return duckdb.connect(":memory:")
+
+        def __exit__(self, *exc_info):
+            return False
+
+    class _FakeDB:
+        def connection(self):
+            return _FakeConnCtx()
+
+    class _FakeHarness:
+        def __init__(self, config=None):
+            self.db = _FakeDB()
+
+        def load_matches(self, *args, **kwargs):
+            return pd.DataFrame([{"match_id": "m1"}])
+
+    with patch("src.agent.backtest.BacktestHarness", _FakeHarness), \
+         patch("src.agent.backtest.process_match_row", return_value=record) as mock_process, \
+         patch("src.agent.evaluation.save_report", return_value="fake-report-path"):
+        run_agent_train(
+            from_date="2025-01-01", to_date="2025-12-31", league="E0", stake_mode="flat",
+            sample=None, concurrency=1, config_path=None, split="train", use_lessons=True,
+        )
+
+    assert mock_process.call_args.kwargs["allow_lessons_in_replay"] is True
+
+
+def test_run_agent_train_allows_use_lessons_without_split_test():
+    """Unlike agent-backtest's --use-lessons (restricted to --split test to
+    protect a leakage-sensitive ROI claim), agent-train's report is never
+    used that way -- --split train with --use-lessons must NOT raise."""
+    import pandas as pd
+
+    from main import run_agent_train
+
+    record = _record(full_state={
+        "competition_resolution": {"competition": "E0", "tier": "competition_specific"},
+        "research_evidence": None, "forecast_payload": None, "messages": [],
+    })
+
+    class _FakeConnCtx:
+        def __enter__(self):
+            return duckdb.connect(":memory:")
+
+        def __exit__(self, *exc_info):
+            return False
+
+    class _FakeDB:
+        def connection(self):
+            return _FakeConnCtx()
+
+    class _FakeHarness:
+        def __init__(self, config=None):
+            self.db = _FakeDB()
+
+        def load_matches(self, *args, **kwargs):
+            return pd.DataFrame([{"match_id": "m1"}])
+
+    with patch("src.agent.backtest.BacktestHarness", _FakeHarness), \
+         patch("src.agent.backtest.process_match_row", return_value=record), \
+         patch("src.agent.evaluation.save_report", return_value="fake-report-path"):
+        run_agent_train(
+            from_date="2025-01-01", to_date="2025-12-31", league="E0", stake_mode="flat",
+            sample=None, concurrency=1, config_path=None, split="train", use_lessons=True,
+        )

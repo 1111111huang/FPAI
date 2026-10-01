@@ -7,7 +7,13 @@ import threading
 import pytest
 from langchain_core.runnables.config import ContextThreadPoolExecutor
 
-from src.agent.snapshot_store import SnapshotMissingError, SnapshotRecordingDegraded, SnapshotStore, league_base_dir
+from src.agent.snapshot_store import (
+    SnapshotMissingError,
+    SnapshotRecordingDegraded,
+    SnapshotStore,
+    league_base_dir,
+    scan_corpus_staleness,
+)
 
 
 def test_league_base_dir_appends_uppercased_league(tmp_path):
@@ -406,3 +412,77 @@ def test_mode_and_match_propagate_into_context_thread_pool_executor(tmp_path):
         seen_mode, seen_match_id = list(executor.map(lambda _: (store.mode, store.match_id), [None]))[0]
 
     assert (seen_mode, seen_match_id) == ("record", "main-thread-match")
+
+
+def _write_forecast_snapshot(match_dir, filename, target_versions, mtime=None):
+    match_dir.mkdir(parents=True, exist_ok=True)
+    payload = {"tool": "forecast_league", "response": json.dumps({"diagnostics": {"target_versions": target_versions}})}
+    path = match_dir / filename
+    path.write_text(json.dumps(payload))
+    if mtime is not None:
+        import os
+        os.utime(path, (mtime, mtime))
+    return path
+
+
+def _write_model_selection(path, contexts):
+    import yaml
+    path.write_text(yaml.dump({"contexts": contexts}))
+
+
+def test_scan_corpus_staleness_flags_a_mismatched_artifact(tmp_path):
+    corpus = tmp_path / "snapshots"
+    _write_forecast_snapshot(
+        corpus / "E0" / "match-1", "forecast_league_a.json",
+        {"home_goals": {"artifact": "home_goals_v1_old.joblib"}},
+    )
+    model_selection = tmp_path / "model_selection.yaml"
+    _write_model_selection(model_selection, {"E0": {"home_goals": {"model_path": "models/home_goals_v1_new.joblib"}}})
+
+    report = scan_corpus_staleness(base_dir=corpus, model_selection_path=model_selection)
+
+    assert report["E0"] == {"checked": 1, "fresh": 0, "stale": 1, "stale_by_target": {"home_goals": 1}}
+
+
+def test_scan_corpus_staleness_treats_matching_artifact_as_fresh(tmp_path):
+    corpus = tmp_path / "snapshots"
+    _write_forecast_snapshot(
+        corpus / "E0" / "match-1", "forecast_league_a.json",
+        {"home_goals": {"artifact": "home_goals_v1_current.joblib"}},
+    )
+    model_selection = tmp_path / "model_selection.yaml"
+    _write_model_selection(model_selection, {"E0": {"home_goals": {"model_path": "models/home_goals_v1_current.joblib"}}})
+
+    report = scan_corpus_staleness(base_dir=corpus, model_selection_path=model_selection)
+
+    assert report["E0"] == {"checked": 1, "fresh": 1, "stale": 0, "stale_by_target": {}}
+
+
+def test_scan_corpus_staleness_uses_the_newest_forecast_file_per_match(tmp_path):
+    """A match refreshed after a promotion keeps its old forecast_league_*.json
+    file on disk alongside the new one (A124's own housekeeping note) -- the
+    scan must resolve the newest one, same as real replay would, not just
+    whichever glob() happens to list first."""
+    corpus = tmp_path / "snapshots"
+    match_dir = corpus / "E0" / "match-1"
+    _write_forecast_snapshot(match_dir, "forecast_league_old.json", {"home_goals": {"artifact": "stale.joblib"}}, mtime=1000)
+    _write_forecast_snapshot(match_dir, "forecast_league_new.json", {"home_goals": {"artifact": "current.joblib"}}, mtime=2000)
+    model_selection = tmp_path / "model_selection.yaml"
+    _write_model_selection(model_selection, {"E0": {"home_goals": {"model_path": "models/current.joblib"}}})
+
+    report = scan_corpus_staleness(base_dir=corpus, model_selection_path=model_selection)
+
+    assert report["E0"]["stale"] == 0
+    assert report["E0"]["fresh"] == 1
+
+
+def test_scan_corpus_staleness_leagues_filter_skips_unrequested_leagues(tmp_path):
+    corpus = tmp_path / "snapshots"
+    _write_forecast_snapshot(corpus / "E0" / "match-1", "forecast_league_a.json", {"home_goals": {"artifact": "x.joblib"}})
+    _write_forecast_snapshot(corpus / "D1" / "match-1", "forecast_league_a.json", {"home_goals": {"artifact": "x.joblib"}})
+    model_selection = tmp_path / "model_selection.yaml"
+    _write_model_selection(model_selection, {"E0": {"home_goals": {"model_path": "models/x.joblib"}}, "D1": {"home_goals": {"model_path": "models/x.joblib"}}})
+
+    report = scan_corpus_staleness(base_dir=corpus, model_selection_path=model_selection, leagues=["E0"])
+
+    assert list(report.keys()) == ["E0"]
