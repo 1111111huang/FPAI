@@ -259,6 +259,23 @@ class FeatureFactory:
         away_df["CTX_AWAY_REST_DAYS"] = (
             away_df.groupby("team")["date"].transform(lambda s: (s - s.shift(1)).dt.days)
         )
+        # W198 follow-up (2026-10-01): this bulk/offline path (used to build
+        # feature_store for training/backtesting) never got W198's stale-team
+        # fix -- only build_for_match's live single-match path drops a stale
+        # team's rows before computing rolling features. Here, a team with a
+        # multi-season gap in this competition (promoted back after years
+        # away, e.g. Sunderland) gets a nonsensical multi-year gap instead of
+        # NaN -- confirmed live, a real agent-backtest match with
+        # CTX_AWAY_REST_DAYS=3016 as the top SHAP driver of a losing
+        # total_goals pick. Mask to NaN using the same _MAX_STALE_HISTORY_DAYS
+        # threshold W198 already established; _apply_cold_start_imputation
+        # (below) fills it with the per-league average, same end state the
+        # live path already reaches via its row-drop.
+        # float("nan"), not pd.NA -- pd.NA upcasts an otherwise-float64 column
+        # to object dtype, which _apply_cold_start_imputation's is_float_dtype
+        # check would then silently skip (confirmed live).
+        home_df.loc[home_df["CTX_HOME_REST_DAYS"] > _MAX_STALE_HISTORY_DAYS, "CTX_HOME_REST_DAYS"] = float("nan")
+        away_df.loc[away_df["CTX_AWAY_REST_DAYS"] > _MAX_STALE_HISTORY_DAYS, "CTX_AWAY_REST_DAYS"] = float("nan")
 
         home_features = home_df[[col for col in home_df.columns if col.startswith(("OFF_", "DEF_", "DIS_", "CTX_"))] + ["match_id"]]
         away_features = away_df[[col for col in away_df.columns if col.startswith(("OFF_", "DEF_", "DIS_", "CTX_"))] + ["match_id"]]

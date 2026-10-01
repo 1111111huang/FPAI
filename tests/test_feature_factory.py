@@ -426,6 +426,46 @@ def test_rest_day_features_are_shifted_by_team_and_venue(tmp_path: Path) -> None
     assert third_match["CTX_AWAY_REST_DAYS"] == pytest.approx(12.0)
 
 
+def test_rest_days_masks_a_multi_season_gap_instead_of_the_raw_day_count(tmp_path: Path) -> None:
+    """W198 follow-up: a team returning after a multi-season absence (e.g.
+    promoted back up) must not get a literal multi-year rest-days value --
+    that's a stale-history artifact, not a real rest signal. Masked to NaN
+    (same _MAX_STALE_HISTORY_DAYS threshold W198 already uses for the live
+    single-match path) so cold-start imputation fills it with the league
+    average instead, the same end state the live path already reaches via
+    its own stale-row drop."""
+    db_path = tmp_path / "test_fpai.db"
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        yaml.safe_dump({"paths": {"database_path": str(db_path)}}),
+        encoding="utf-8",
+    )
+
+    with duckdb.connect(str(db_path)) as conn:
+        _create_raw_matches_table(conn)
+        _insert_raw_matches(
+            conn,
+            [
+                # Establishes a normal rest-days baseline for the league mean.
+                ("b1", "E0", 1, "2025-08-01 20:00:00", "Steady FC", "Other FC", 1, 0, 2.0, 3.2, 3.8, 2.0, 3.2, 3.8),
+                ("b2", "E0", 1, "2025-08-08 20:00:00", "Steady FC", "Other FC", 1, 1, 2.0, 3.2, 3.8, 2.0, 3.2, 3.8),
+                # "Promoted FC" last appeared years before returning -- a real
+                # relegation/promotion round-trip, not a genuine rest period.
+                ("g1", "E0", 1, "2019-05-01 20:00:00", "Promoted FC", "Other FC", 2, 1, 2.0, 3.2, 3.8, 2.0, 3.2, 3.8),
+                ("g2", "E0", 1, "2025-08-15 20:00:00", "Promoted FC", "Other FC", 1, 1, 2.0, 3.2, 3.8, 2.0, 3.2, 3.8),
+            ],
+        )
+
+    feature_factory = FeatureFactory(config_path=str(config_path))
+    features = feature_factory.compute_rolling_stats(window=5)
+    returning_match = features.loc[features["match_id"] == "g2"].iloc[0]
+
+    raw_gap_days = (pd.Timestamp("2025-08-15") - pd.Timestamp("2019-05-01")).days
+    assert raw_gap_days > 400  # sanity check this scenario actually exceeds the staleness threshold
+    assert returning_match["CTX_HOME_REST_DAYS"] < 400
+    assert returning_match["CTX_HOME_REST_DAYS"] != pytest.approx(raw_gap_days)
+
+
 def test_opp_adjusted_features_no_leakage(tmp_path: Path) -> None:
     """OPP_ADJ rolling for m6 must use only m1-m5 results, not m6's outcome."""
     db_path = tmp_path / "test_fpai.db"
