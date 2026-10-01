@@ -16,7 +16,7 @@ _TEAM_MAPPING_PATH = Path(__file__).resolve().parent.parent.parent / "config" / 
 
 
 class MarketCandidate(TypedDict):
-    market: Literal["result_3way", "btts", "total_goals", "home_corners", "away_corners", "total_corners", "home_goals", "away_goals"]
+    market: Literal["result_3way", "btts", "total_goals", "home_goals", "away_goals"]
     selection: Literal["home", "draw", "away", "yes", "no", "over_2.5", "under_2.5", "over_9.5", "under_9.5", "over_1.5", "under_1.5"]
     recommendation_type: Literal["direct_bet", "conditional", "no_bet"]
     current_odds: float
@@ -44,7 +44,7 @@ class MarketCandidate(TypedDict):
 
 
 class RecommendationPick(TypedDict):
-    market: Literal["result_3way", "btts", "total_goals", "home_corners", "away_corners", "total_corners", "home_goals", "away_goals"]
+    market: Literal["result_3way", "btts", "total_goals", "home_goals", "away_goals"]
     selection: Literal["home", "draw", "away", "yes", "no", "over_2.5", "under_2.5", "over_9.5", "under_9.5", "over_1.5", "under_1.5"]
 
 
@@ -111,7 +111,7 @@ class MarketCandidateModel(BaseModel):
     rejecting it (same as any other malformed market) is the safe choice for
     a betting app, not silently relabeling it."""
 
-    market: Literal["result_3way", "btts", "total_goals", "home_corners", "away_corners", "total_corners", "home_goals", "away_goals"]
+    market: Literal["result_3way", "btts", "total_goals", "home_goals", "away_goals"]
     selection: Literal["home", "draw", "away", "yes", "no", "over_2.5", "under_2.5", "over_9.5", "under_9.5", "over_1.5", "under_1.5"]
     recommendation_type: Literal["direct_bet", "conditional", "no_bet"]
     current_odds: float | None
@@ -153,7 +153,7 @@ class RecommendationPickModel(BaseModel):
     impossible for "the pick" and "its own listed numbers" to quietly
     disagree, since there's only ever one copy of the data."""
 
-    market: Literal["result_3way", "btts", "total_goals", "home_corners", "away_corners", "total_corners", "home_goals", "away_goals"]
+    market: Literal["result_3way", "btts", "total_goals", "home_goals", "away_goals"]
     selection: Literal["home", "draw", "away", "yes", "no", "over_2.5", "under_2.5", "over_9.5", "under_9.5", "over_1.5", "under_1.5"]
 
 
@@ -390,10 +390,7 @@ def _downgrade_direct_bet_outside_odds_bounds(
 
 _CONDITIONAL_ELIGIBLE_MARKETS = frozenset({
     ("total_goals", "over_2.5"),
-    ("home_corners", "over_2.5"),
-    ("away_corners", "over_2.5"),
     ("btts", "yes"),
-    ("total_corners", "over_9.5"),  # A101
     ("home_goals", "over_1.5"),  # W199
     ("away_goals", "over_1.5"),  # W199
 })

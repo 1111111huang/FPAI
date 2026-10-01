@@ -13,12 +13,14 @@ max_odds_threshold: 11.0
 min_conditional_odds_threshold: 1.5   # A66: decimal / roughly -200 American
 min_value_edge: 0.05
 
+# Descriptive only, not enforced (see config/agent_config.yaml's own comment
+# on this same key). home_corners/away_corners/total_corners removed
+# (2026-09-29, no real signal + ~68% ROI loss in backtesting).
 markets:
   - result_3way
   - btts
   - total_goals
-  - home_corners
-  - away_corners
-  - total_corners
+  - home_goals
+  - away_goals
 
 system_prompt_version: "v1"

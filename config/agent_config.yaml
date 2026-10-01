@@ -63,13 +63,21 @@ min_value_edge: 0.05            # model prob must exceed implied prob by at leas
 live_wait_min_odds: 1.6667      # decimal / -150 American
 live_wait_target_odds: 2.0      # decimal / +100 American -- must clear min_value_edge at this price
 
-# Markets the agent evaluates per match
+# Markets the agent evaluates per match -- descriptive only (config hash +
+# report metadata, src/agent/agent_config_hash.py / src/agent/evaluation.py),
+# NOT enforced: the real vocabulary the LLM is constrained to lives in the
+# prompt template's own schema instructions (config/prompts/agent_v1*.txt).
+# home_corners/away_corners/total_corners removed (direct user decision,
+# 2026-09-29): total_corners' own ML forecast carries no real discriminative
+# signal (probabilities cluster within +/-5pp of a coin flip across the whole
+# corpus) and the market lost ~68% ROI in backtesting; home_corners/away_corners
+# were already dead (never resolved in backtesting at all). All three dropped
+# from the prompt vocabulary and schema.py's Literal enum, not just this list.
 markets:
   - result_3way
   - btts
   - total_goals
-  - home_corners
-  - away_corners
-  - total_corners
+  - home_goals
+  - away_goals
 
 system_prompt_version: "v1"     # maps to config/prompts/agent_v1.txt

@@ -25,14 +25,16 @@ min_conditional_odds_threshold: 1.5   # decimal / roughly -200 American
 # See docs/superpowers/specs/2026-08-21-agent-risk-posture-design.md
 min_value_edge: 0.06            # model prob must exceed implied prob by at least this
 
-# Markets the agent evaluates per match
+# Markets the agent evaluates per match -- descriptive only, not enforced
+# (see config/agent_config.yaml's own comment on this same key).
+# home_corners/away_corners/total_corners removed (2026-09-29, no real signal
+# + ~68% ROI loss in backtesting) -- see config/agent_config.yaml for detail.
 markets:
   - result_3way
   - btts
   - total_goals
-  - home_corners
-  - away_corners
-  - total_corners
+  - home_goals
+  - away_goals
 
 # 2026-08-21: risk-posture variant -- conservative posture uses its own system prompt.
 # See docs/superpowers/specs/2026-08-21-agent-risk-posture-design.md

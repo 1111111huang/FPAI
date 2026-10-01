@@ -46,8 +46,6 @@ def _wrap_json(data: dict) -> str:
     "market,selection",
     [
         ("total_goals", "over_2.5"),
-        ("home_corners", "over_2.5"),
-        ("away_corners", "over_2.5"),
         ("btts", "yes"),
         ("home_goals", "over_1.5"),
         ("away_goals", "over_1.5"),
@@ -79,8 +77,6 @@ def test_eligible_market_stays_conditional_after_a29_ceiling_downgrade(market, s
         ("result_3way", "draw"),
         ("result_3way", "away"),
         ("total_goals", "under_2.5"),
-        ("home_corners", "under_2.5"),
-        ("away_corners", "under_2.5"),
         # btts/no deliberately excluded here (was previously listed): US#210
         # now suppresses it unconditionally, earlier in the downgrade chain,
         # before this scenario's initial "direct_bet" candidate could ever

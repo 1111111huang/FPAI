@@ -370,7 +370,7 @@ def test_switches_dangling_pick_to_eligible_conditional():
     data = {
         **_VALID, "overall": "no_bet",
         "candidates": [_BTTS_CONDITIONAL],
-        "recommendation_pick": {"market": "total_corners", "selection": "over_9.5"},
+        "recommendation_pick": {"market": "home_goals", "selection": "over_1.5"},
     }
 
     rec = extract_recommendation(_wrap_json(data))

@@ -195,21 +195,6 @@ def test_match_mismatch_check_is_skipped_when_teams_not_supplied():
     assert rec["match"]["home"] == "Manchester City"
 
 
-def test_total_corners_over_9_5_is_a_valid_market_and_selection():
-    """A101: total_corners (with the OddsPapi-pulled 9.5 line, A100) is now a
-    real recommendable market -- previously the schema only had
-    home_corners/away_corners (per-side, no numeric line), causing the LLM's
-    own attempt to recommend a total-corners price to fail validation
-    entirely (confirmed live: a real agent-train run, once corners_odds
-    started reaching the prompt, produced literal_error on exactly this
-    market/selection pair)."""
-    candidate = {**_VALID_CANDIDATE, "market": "total_corners", "selection": "over_9.5"}
-    good = {**_VALID, "candidates": [candidate], "recommendation_pick": {"market": "total_corners", "selection": "over_9.5"}}
-    rec = extract_recommendation(_wrap_json(good))
-    assert rec["candidates"][0]["market"] == "total_corners"
-    assert rec["candidates"][0]["selection"] == "over_9.5"
-
-
 @pytest.mark.parametrize("market", ["home_goals", "away_goals"])
 @pytest.mark.parametrize("selection", ["over_1.5", "under_1.5"])
 def test_home_away_goals_is_a_valid_market_and_selection(market, selection):
