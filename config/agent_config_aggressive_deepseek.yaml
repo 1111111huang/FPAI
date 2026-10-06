@@ -1,0 +1,63 @@
+# Betting agent configuration — all tunable knobs.
+# Swap model/provider to change the LLM tier without touching code.
+#
+# 2026-10-04: aggressive posture, DeepSeek variant. The original
+# config/agent_config_aggressive.yaml (2026-08-21 risk-posture design) still
+# points at provider: gemini / model: gemini-3.6-flash -- the project
+# switched away from that account on 2026-08-23 (A79, see
+# config/agent_config.yaml's own comment) after it hit RESOURCE_EXHAUSTED/
+# depleted credits, and its posture calibration (Tasks 3-5 of
+# docs/superpowers/plans/2026-08-21-agent-risk-posture.md) was never
+# actually run -- every checklist item there is unchecked, and the spec
+# itself calls min_value_edge/prompt wording "a starting guess"/"first-draft
+# text... not final". Using that file as-is for an aggressiveness A/B would
+# confound the test with a model swap (gemini vs deepseek-v4-pro, the model
+# every other number in this investigation -- the lesson corpus, the Sep27/29
+# backtests -- was measured on).
+#
+# This file isolates exactly the two levers the original design called the
+# real aggressiveness dial (prompt wording via system_prompt_version,
+# min_value_edge) plus suppress_forecast_uncertainty (2026-08-22 finding,
+# confirmed on DeepSeek specifically, not a Gemini artifact) -- everything
+# else (model, provider, odds bounds, markets) is copied verbatim from
+# config/agent_config.yaml so a bet-frequency/ROI delta can only be
+# attributed to those three fields, not a provider change too.
+model: "deepseek-v4-pro"
+provider: "deepseek"
+temperature: 0.0
+max_tool_calls: 3
+
+min_odds_threshold: 1.71
+max_odds_threshold: 4.0
+min_conditional_odds_threshold: 1.71
+max_conditional_odds_threshold: 4.0
+# Lowered from the default 0.05, and further than the original aggressive
+# preset's own 0.04 starting guess (direct user request, 2026-10-04) -- the
+# single biggest lever for raising bet frequency back up after the
+# goal-market lesson (id=2089) cut it ~3x (see fpai-goal-market-shotvolume-lesson
+# memory). Unvalidated like the rest of this posture -- this run IS the
+# calibration check.
+min_value_edge: 0.03
+
+live_wait_min_odds: 1.6667
+live_wait_target_odds: 2.0
+
+markets:
+  - result_3way
+  - btts
+  - total_goals
+  - home_goals
+  - away_goals
+
+# Reuses the existing (unvalidated-but-already-written) aggressive prompt --
+# config/prompts/agent_v1_aggressive.txt. Its thresholds are templated
+# ({{MIN_VALUE_EDGE}} etc., BUG-054), so this file's min_value_edge: 0.03
+# renders correctly without editing the prompt text itself.
+system_prompt_version: "v1_aggressive"
+
+# 2026-08-22 finding (root-caused on DeepSeek, not Gemini -- see original
+# config/agent_config_aggressive.yaml's own comment): DeepSeek cites the
+# forecast's entropy/uncertainty diagnostic as a reason to decline even a
+# qualifying value_edge, regardless of prompt wording. Stripped here so
+# there's no uncertainty label left to latch onto.
+suppress_forecast_uncertainty: true
