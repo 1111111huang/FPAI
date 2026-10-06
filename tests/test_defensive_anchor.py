@@ -166,6 +166,50 @@ def test_def_anchor_shift_is_applied():
 
 
 # ---------------------------------------------------------------------------
+# Test: a low-minute cameo must not dominate the per-90 rolling average
+# ---------------------------------------------------------------------------
+
+def test_def_anchor_excludes_low_minute_cameo_from_per90_extrapolation():
+    """Same shape as XOC's cameo bug: a defender who plays only a couple of
+    minutes but records a real interception/recovery must not have that
+    extrapolated to an absurd per-90 rate that then dominates the rolling
+    average (confirmed live: DEF_ANCHOR_HOME/AWAY reaching 185/98 against a
+    mean of ~9 project-wide, same unguarded `/ minutes_played * 90` shape
+    as XOC). The cameo's per-90 value must be excluded (NaN), not included."""
+    prior_raw1 = _raw_df("R1", "2024-01-01", "Arsenal", "Tottenham")
+    prior_raw2 = _raw_df("R2", "2024-01-08", "Arsenal", "Liverpool")
+    match_raw = _raw_df("R3", "2024-01-15", "Arsenal", "Chelsea")
+    raw = pd.concat([prior_raw1, prior_raw2, match_raw], ignore_index=True)
+
+    lineups = pd.DataFrame([
+        _lineup_row(300, 40, "Arsenal", "home", "DEF"),
+        _lineup_row(300, 50, "Chelsea", "away", "DEF"),
+    ])
+    stats = pd.DataFrame([
+        # R1: a real, full-minutes appearance -- def_rec_p90 = 1.0/90*90 = 1.0
+        _stats_row("R1", 40, "Arsenal", interceptions=1.0, recoveries=0.0, minutes_played=90),
+        # R2: a 2-minute cameo with a real interception -- would extrapolate
+        # to (3.0/2)*90 = 135.0 without a minimum-minutes floor.
+        _stats_row("R2", 40, "Arsenal", interceptions=3.0, recoveries=0.0, minutes_played=2),
+        _stats_row("R3", 40, "Arsenal", interceptions=1.0, recoveries=0.0, minutes_played=90),
+        _stats_row("R1", 50, "Chelsea", interceptions=1.0, recoveries=0.0, minutes_played=90),
+        _stats_row("R2", 50, "Chelsea", interceptions=1.0, recoveries=0.0, minutes_played=90),
+        _stats_row("R3", 50, "Chelsea", interceptions=1.0, recoveries=0.0, minutes_played=90),
+    ])
+
+    result = compute_defensive_anchor(lineups, stats, raw)
+    row = result[result["match_id"] == "R3"]
+    assert not row.empty
+    anchor_home = row["DEF_ANCHOR_HOME"].values[0]
+    # Rolling mean over R1 (1.0) and R2 (excluded, insufficient minutes) must
+    # be ~1.0 -- NOT ~68 (mean of 1.0 and the 135.0 cameo extrapolation).
+    assert anchor_home < 10.0, (
+        f"DEF_ANCHOR_HOME ({anchor_home}) should reflect only the real 1.0 "
+        f"appearance, not be inflated by the 2-minute cameo's extrapolation"
+    )
+
+
+# ---------------------------------------------------------------------------
 # Test 5: Output has DEF_ANCHOR_HOME and DEF_ANCHOR_AWAY columns
 # ---------------------------------------------------------------------------
 

@@ -466,6 +466,121 @@ def test_rest_days_masks_a_multi_season_gap_instead_of_the_raw_day_count(tmp_pat
     assert returning_match["CTX_HOME_REST_DAYS"] != pytest.approx(raw_gap_days)
 
 
+def _create_nonleague_matches_table(conn) -> None:
+    conn.execute(
+        """
+        CREATE TABLE fotmob_nonleague_matches (
+            team TEXT,
+            match_date TIMESTAMP,
+            PRIMARY KEY (team, match_date)
+        )
+        """
+    )
+
+
+def _insert_nonleague_matches(conn, rows: list[tuple[str, str]]) -> None:
+    conn.executemany(
+        "INSERT INTO fotmob_nonleague_matches (team, match_date) VALUES (?, ?)",
+        rows,
+    )
+
+
+def test_rest_days_reflect_a_nonleague_match_inserted_in_the_gap(tmp_path: Path) -> None:
+    """US#212: CTX_*_REST_DAYS must reflect a team's last match of ANY kind,
+    not just its last tracked-league match -- a cup/continental fixture
+    (sourced from FotMob's broader /api/data/matches payload, see
+    fotmob_nonleague_matches) falling inside a league gap should shorten the
+    computed rest days, same as it would in reality."""
+    db_path = tmp_path / "test_fpai.db"
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        yaml.safe_dump({"paths": {"database_path": str(db_path)}}),
+        encoding="utf-8",
+    )
+
+    with duckdb.connect(str(db_path)) as conn:
+        _create_raw_matches_table(conn)
+        _insert_raw_matches(
+            conn,
+            [
+                ("c1", "E0", 1, "2025-08-01 20:00:00", "Busy FC", "Other FC", 1, 0, 2.0, 3.2, 3.8, 2.0, 3.2, 3.8),
+                ("c2", "E0", 1, "2025-08-15 20:00:00", "Busy FC", "Other FC", 1, 1, 2.0, 3.2, 3.8, 2.0, 3.2, 3.8),
+            ],
+        )
+        _create_nonleague_matches_table(conn)
+        _insert_nonleague_matches(conn, [("Busy FC", "2025-08-12 20:00:00")])
+
+    feature_factory = FeatureFactory(config_path=str(config_path))
+    features = feature_factory.compute_rolling_stats(window=5)
+    second_match = features.loc[features["match_id"] == "c2"].iloc[0]
+
+    # Without the cup match: 14 days since c1. With it: 3 days since the cup tie.
+    assert second_match["CTX_HOME_REST_DAYS"] == pytest.approx(3.0)
+
+
+def test_rest_days_with_nonleague_dates_are_correct_across_multiple_interleaved_teams(tmp_path: Path) -> None:
+    """Regression for a real bug found against live data: _compute_rest_days
+    sorted its team/date panel by date (shuffling row order relative to the
+    team-grouped order add_rollings/add_ema already established), then
+    subtracted merge_asof's output -- which always returns a fresh 0..n-1
+    index -- against that shuffled-but-not-reset index. With only one team
+    (the original, smaller fixture) the indices happened to still coincide
+    and the bug passed unnoticed; with several teams whose home dates
+    interleave in calendar time, the original per-team index grouping no
+    longer matches sorted-by-date order, and the mismatch produced a
+    nonsensical multi-thousand-day "rest" value (confirmed live: -3132) by
+    silently pairing each row's date with an unrelated row's match. This
+    must hold correctly for every team independently once several are
+    interleaved, not just in isolation."""
+    db_path = tmp_path / "test_fpai.db"
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        yaml.safe_dump({"paths": {"database_path": str(db_path)}}),
+        encoding="utf-8",
+    )
+
+    with duckdb.connect(str(db_path)) as conn:
+        _create_raw_matches_table(conn)
+        _insert_raw_matches(
+            conn,
+            [
+                # Team A and Team B's home appearances interleave in calendar
+                # time, so sorting the combined panel by date alone (not by
+                # team-then-date) shuffles each team's rows relative to each
+                # other -- exactly the condition the bug needed to surface.
+                ("a1", "E0", 1, "2025-08-01 20:00:00", "Team A", "Opp", 1, 0, 2.0, 3.2, 3.8, 2.0, 3.2, 3.8),
+                ("b1", "E0", 1, "2025-08-03 20:00:00", "Team B", "Opp", 1, 0, 2.0, 3.2, 3.8, 2.0, 3.2, 3.8),
+                ("a2", "E0", 1, "2025-08-10 20:00:00", "Team A", "Opp", 1, 1, 2.0, 3.2, 3.8, 2.0, 3.2, 3.8),
+                ("b2", "E0", 1, "2025-08-12 20:00:00", "Team B", "Opp", 1, 1, 2.0, 3.2, 3.8, 2.0, 3.2, 3.8),
+                ("a3", "E0", 1, "2025-08-20 20:00:00", "Team A", "Opp", 0, 1, 2.0, 3.2, 3.8, 2.0, 3.2, 3.8),
+                ("b3", "E0", 1, "2025-08-22 20:00:00", "Team B", "Opp", 0, 1, 2.0, 3.2, 3.8, 2.0, 3.2, 3.8),
+            ],
+        )
+        _create_nonleague_matches_table(conn)
+        _insert_nonleague_matches(
+            conn,
+            [
+                ("Team A", "2025-08-17 20:00:00"),  # 3 days before a3 (08-20)
+                ("Team B", "2025-08-19 20:00:00"),  # 3 days before b3 (08-22)
+            ],
+        )
+
+    feature_factory = FeatureFactory(config_path=str(config_path))
+    features = feature_factory.compute_rolling_stats(window=5)
+
+    a3 = features.loc[features["match_id"] == "a3"].iloc[0]
+    b3 = features.loc[features["match_id"] == "b3"].iloc[0]
+    a2 = features.loc[features["match_id"] == "a2"].iloc[0]
+    b2 = features.loc[features["match_id"] == "b2"].iloc[0]
+
+    # Shortened by each team's own cup match, not the raw 10-day league gap.
+    assert a3["CTX_HOME_REST_DAYS"] == pytest.approx(3.0)
+    assert b3["CTX_HOME_REST_DAYS"] == pytest.approx(3.0)
+    # No non-league match in these earlier gaps -- plain league-only gap, unaffected.
+    assert a2["CTX_HOME_REST_DAYS"] == pytest.approx(9.0)
+    assert b2["CTX_HOME_REST_DAYS"] == pytest.approx(9.0)
+
+
 def test_opp_adjusted_features_no_leakage(tmp_path: Path) -> None:
     """OPP_ADJ rolling for m6 must use only m1-m5 results, not m6's outcome."""
     db_path = tmp_path / "test_fpai.db"

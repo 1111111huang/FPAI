@@ -374,12 +374,12 @@ contexts:
       - LINEUP_HOME_KEY_ATTACKER_MISSING
       - LINEUP_AWAY_KEY_ATTACKER_MISSING
       metric_name: test_mae
-      metric_value: 0.950528
-      mlflow_run_id: 3fe73f4ee82a4f05a32fa90ee7f3641f
-      model_path: models/away_goals_d1_xgboostregressor_v1_20260928.joblib
-      model_type: xgboost_regressor
-      previous_model_path: models/away_goals_d1_xgboostregressor_v1_20260816.joblib
-      selected_at: '2026-09-28T13:41:46Z'
+      metric_value: 0.952532
+      mlflow_run_id: a6cd2cc1536848afbb0ed78f0febc1ac
+      model_path: models/away_goals_d1_xgboostregressor_v1_20261002.joblib
+      model_type: xgboostregressor
+      previous_model_path: models/away_goals_d1_xgboostregressor_v1_20260928.joblib
+      selected_at: '2026-10-02T20:49:39Z'
     btts:
       feature_subset:
       - OFF_HOME_FTHG_R3
@@ -564,12 +564,12 @@ contexts:
       - LINEUP_HOME_KEY_ATTACKER_MISSING
       - LINEUP_AWAY_KEY_ATTACKER_MISSING
       metric_name: test_log_loss
-      metric_value: 0.685562
-      mlflow_run_id: 0e11a2ad5bc045c6a9d52b5db180d726
-      model_path: models/btts_d1_xgboost_v1_20260928.joblib
+      metric_value: 0.678394
+      mlflow_run_id: ae5b2205063943528f4526176cdf3b03
+      model_path: models/btts_d1_xgboost_v1_20261002.joblib
       model_type: xgboost
-      previous_model_path: models/btts_d1_xgboost_v1_20260924.joblib
-      selected_at: '2026-09-28T13:41:46Z'
+      previous_model_path: models/btts_d1_xgboost_v1_20261002.joblib
+      selected_at: '2026-10-02T20:55:30Z'
     home_corners:
       feature_subset:
       - OFF_HOME_FTHG_R3
@@ -944,20 +944,202 @@ contexts:
       - LINEUP_HOME_KEY_ATTACKER_MISSING
       - LINEUP_AWAY_KEY_ATTACKER_MISSING
       metric_name: test_mae
-      metric_value: 1.020787
-      mlflow_run_id: 5e14afb4cf5c464ebb3bc1e82a725986
-      model_path: models/home_goals_d1_xgboostregressor_v1_20260928.joblib
-      model_type: xgboost_regressor
-      previous_model_path: models/home_goals_d1_xgboostregressor_v1_20260905.joblib
-      selected_at: '2026-09-28T13:41:46Z'
+      metric_value: 1.020625
+      mlflow_run_id: 6680d93583ac42de9ce1678fab4f1b42
+      model_path: models/home_goals_d1_xgboostregressor_v1_20261002.joblib
+      model_type: xgboostregressor
+      previous_model_path: models/home_goals_d1_xgboostregressor_v1_20260928.joblib
+      selected_at: '2026-10-02T20:43:46Z'
     result_3way:
+      feature_subset:
+      - OFF_HOME_FTHG_R3
+      - OFF_HOME_FTHG_R5
+      - DEF_HOME_FTAG_R3
+      - DEF_HOME_FTAG_R5
+      - OFF_HOME_HS_R3
+      - OFF_HOME_HS_R5
+      - DEF_HOME_AS_R3
+      - DEF_HOME_AS_R5
+      - OFF_HOME_HST_R3
+      - OFF_HOME_HST_R5
+      - DEF_HOME_AST_R3
+      - DEF_HOME_AST_R5
+      - OFF_HOME_HC_R3
+      - OFF_HOME_HC_R5
+      - DEF_HOME_AC_R3
+      - DEF_HOME_AC_R5
+      - DIS_HOME_HY_R3
+      - DIS_HOME_HY_R5
+      - DIS_HOME_AY_R3
+      - DIS_HOME_AY_R5
+      - DIS_HOME_HR_R3
+      - DIS_HOME_HR_R5
+      - DIS_HOME_AR_R3
+      - DIS_HOME_AR_R5
+      - OFF_HOME_SHOT_ACCURACY_R3
+      - OFF_HOME_SHOT_ACCURACY_R5
+      - DIS_HOME_DISCIPLINE_SCORE_R3
+      - DIS_HOME_DISCIPLINE_SCORE_R5
+      - DEF_HOME_SAVE_RATE_R3
+      - DEF_HOME_SAVE_RATE_R5
+      - OFF_AWAY_FTAG_R3
+      - OFF_AWAY_FTAG_R5
+      - DEF_AWAY_FTHG_R3
+      - DEF_AWAY_FTHG_R5
+      - OFF_AWAY_AS_R3
+      - OFF_AWAY_AS_R5
+      - DEF_AWAY_HS_R3
+      - DEF_AWAY_HS_R5
+      - OFF_AWAY_AST_R3
+      - OFF_AWAY_AST_R5
+      - DEF_AWAY_HST_R3
+      - DEF_AWAY_HST_R5
+      - OFF_AWAY_AC_R3
+      - OFF_AWAY_AC_R5
+      - DEF_AWAY_HC_R3
+      - DEF_AWAY_HC_R5
+      - DIS_AWAY_AY_R3
+      - DIS_AWAY_AY_R5
+      - DIS_AWAY_HY_R3
+      - DIS_AWAY_HY_R5
+      - DIS_AWAY_AR_R3
+      - DIS_AWAY_AR_R5
+      - DIS_AWAY_HR_R3
+      - DIS_AWAY_HR_R5
+      - OFF_AWAY_SHOT_ACCURACY_R3
+      - OFF_AWAY_SHOT_ACCURACY_R5
+      - DIS_AWAY_DISCIPLINE_SCORE_R3
+      - DIS_AWAY_DISCIPLINE_SCORE_R5
+      - OFF_HOME_FTHG_EMA5
+      - DEF_HOME_FTAG_EMA5
+      - OFF_HOME_HST_EMA5
+      - OFF_AWAY_FTAG_EMA5
+      - DEF_AWAY_FTHG_EMA5
+      - OFF_AWAY_AST_EMA5
+      - CTX_HOME_REST_DAYS
+      - CTX_AWAY_REST_DAYS
+      - CTX_REST_DAYS_DIFF
+      - MKT_IMPLIED_HOME
+      - MKT_IMPLIED_DRAW
+      - MKT_IMPLIED_AWAY
+      - STRENGTH_Goal_Diff
+      - STRENGTH_SoT_Diff
+      - INTERACTION_ATTACK_GOALS_DIFF_R5
+      - INTERACTION_DEFENSE_GOALS_DIFF_R5
+      - INTERACTION_ATTACK_SOT_DIFF_R5
+      - EFFICIENCY_HOME_ATTACK_VS_AWAY_DEF_R5
+      - EFFICIENCY_AWAY_ATTACK_VS_HOME_DEF_R5
+      - EFFICIENCY_ATTACK_MATCHUP_DIFF_R5
+      - OPP_ADJ_HOME_GOALS_SCORED_R3
+      - OPP_ADJ_HOME_GOALS_SCORED_R5
+      - OPP_ADJ_HOME_GOALS_CONCEDED_R3
+      - OPP_ADJ_HOME_GOALS_CONCEDED_R5
+      - OPP_ADJ_HOME_CORNERS_SCORED_R3
+      - OPP_ADJ_HOME_CORNERS_SCORED_R5
+      - OPP_ADJ_HOME_CORNERS_CONCEDED_R3
+      - OPP_ADJ_HOME_CORNERS_CONCEDED_R5
+      - OPP_ADJ_HOME_SOT_SCORED_R3
+      - OPP_ADJ_HOME_SOT_SCORED_R5
+      - OPP_ADJ_AWAY_GOALS_SCORED_R3
+      - OPP_ADJ_AWAY_GOALS_SCORED_R5
+      - OPP_ADJ_AWAY_GOALS_CONCEDED_R3
+      - OPP_ADJ_AWAY_GOALS_CONCEDED_R5
+      - OPP_ADJ_AWAY_CORNERS_SCORED_R3
+      - OPP_ADJ_AWAY_CORNERS_SCORED_R5
+      - OPP_ADJ_AWAY_CORNERS_CONCEDED_R3
+      - OPP_ADJ_AWAY_CORNERS_CONCEDED_R5
+      - OPP_ADJ_AWAY_SOT_SCORED_R3
+      - OPP_ADJ_AWAY_SOT_SCORED_R5
+      - OPP_ADJ_GOAL_MATCHUP_HOME_R3
+      - OPP_ADJ_GOAL_MATCHUP_HOME_R5
+      - OPP_ADJ_GOAL_MATCHUP_AWAY_R3
+      - OPP_ADJ_GOAL_MATCHUP_AWAY_R5
+      - OPP_ADJ_CORNER_MATCHUP_HOME_R3
+      - OPP_ADJ_CORNER_MATCHUP_HOME_R5
+      - OPP_ADJ_CORNER_MATCHUP_AWAY_R3
+      - OPP_ADJ_CORNER_MATCHUP_AWAY_R5
+      - OFF_HOME_XG_R3
+      - OFF_HOME_XG_R5
+      - DEF_HOME_XGA_R3
+      - DEF_HOME_XGA_R5
+      - OFF_HOME_LUCK_R3
+      - OFF_HOME_LUCK_R5
+      - OFF_AWAY_XG_R3
+      - OFF_AWAY_XG_R5
+      - DEF_AWAY_XGA_R3
+      - DEF_AWAY_XGA_R5
+      - OFF_AWAY_LUCK_R3
+      - OFF_AWAY_LUCK_R5
+      - CTX_HOME_CUM_PTS
+      - CTX_AWAY_CUM_PTS
+      - CTX_HOME_PPG_L10
+      - CTX_AWAY_PPG_L10
+      - H2H_TOTAL_GOALS_R5
+      - H2H_CORNERS_R5
+      - H2H_HOME_WIN_RATE_R5
+      - MKT_OVERROUND
+      - MKT_IMPLIED_OVER25
+      - MKT_AH_LINE
+      - MKT_AH_HOME_ODDS
+      - MKT_AH_AWAY_ODDS
+      - MKT_LAMBDA_TOTAL
+      - MKT_LAMBDA_HOME
+      - MKT_LAMBDA_AWAY
+      - MKT_POISSON_BTTS_PROB
+      - MKT_LAMBDA_AH_DIFF
+      - DC_LAMBDA_HOME
+      - DC_LAMBDA_AWAY
+      - DC_ATTACK_HOME
+      - DC_DEFENSE_HOME
+      - DC_ATTACK_AWAY
+      - DC_DEFENSE_AWAY
+      - DC_CORNER_LAMBDA_HOME
+      - DC_CORNER_LAMBDA_AWAY
+      - DC_CORNER_ATTACK_HOME
+      - DC_CORNER_DEFENSE_HOME
+      - DC_CORNER_ATTACK_AWAY
+      - DC_CORNER_DEFENSE_AWAY
+      - CTX_HOME_GOALS_STD_R5
+      - CTX_HOME_CONCEDED_STD_R5
+      - CTX_HOME_CORNERS_STD_R5
+      - CTX_AWAY_GOALS_STD_R5
+      - CTX_AWAY_CONCEDED_STD_R5
+      - CTX_AWAY_CORNERS_STD_R5
+      - CTX_HOME_SCORE_STREAK
+      - CTX_HOME_WIN_STREAK
+      - CTX_HOME_CS_STREAK
+      - CTX_AWAY_SCORE_STREAK
+      - CTX_AWAY_WIN_STREAK
+      - CTX_AWAY_CS_STREAK
+      - SQUAD_HOME_XG_MEAN_R3
+      - SQUAD_HOME_XG_MEAN_R5
+      - SQUAD_HOME_XA_MEAN_R3
+      - SQUAD_HOME_XA_MEAN_R5
+      - SQUAD_HOME_RATING_MEAN_R3
+      - SQUAD_HOME_RATING_MEAN_R5
+      - SQUAD_AWAY_XG_MEAN_R3
+      - SQUAD_AWAY_XG_MEAN_R5
+      - SQUAD_AWAY_XA_MEAN_R3
+      - SQUAD_AWAY_XA_MEAN_R5
+      - SQUAD_AWAY_RATING_MEAN_R3
+      - SQUAD_AWAY_RATING_MEAN_R5
+      - LUCK_HOME_BURNOUT_R5
+      - LUCK_AWAY_BURNOUT_R5
+      - XOC_HOME
+      - XOC_AWAY
+      - FRDS_HOME
+      - FRDS_AWAY
+      - DEF_ANCHOR_HOME
+      - DEF_ANCHOR_AWAY
+      - LINEUP_HOME_KEY_ATTACKER_MISSING
+      - LINEUP_AWAY_KEY_ATTACKER_MISSING
       metric_name: test_log_loss
-      metric_value: 1.0077
-      mlflow_run_id: 18fcf5a3d2e747879e3912c5573425c4
-      model_path: models/result_3way_d1_skellamresult_v1_20260916.joblib
-      model_type: skellam_result
-      previous_model_path: models/result_3way_d1_xgboost_v1_20260820.joblib
-      selected_at: '2026-09-16T22:41:00Z'
+      metric_value: 1.006975
+      mlflow_run_id: 6b6600a516514b68b023498d938f6f6e
+      model_path: models/result_3way_d1_skellamresult_v1_20261002.joblib
+      model_type: skellamresult
+      previous_model_path: models/result_3way_d1_skellamresult_v1_20261002.joblib
+      selected_at: '2026-10-02T21:08:19Z'
     total_corners:
       feature_subset:
       - OFF_HOME_FTHG_R3
@@ -1332,12 +1514,12 @@ contexts:
       - LINEUP_HOME_KEY_ATTACKER_MISSING
       - LINEUP_AWAY_KEY_ATTACKER_MISSING
       metric_name: test_mae
-      metric_value: 1.33275
-      mlflow_run_id: 657ef8293729479d84c3abd2f18ba1b2
-      model_path: models/total_goals_d1_xgboostregressor_v1_20260928.joblib
-      model_type: xgboost_regressor
+      metric_value: 1.334423
+      mlflow_run_id: 48842d5fcb974692a107f4abb6ae9758
+      model_path: models/total_goals_d1_xgboostregressor_v1_20261002.joblib
+      model_type: xgboostregressor
       previous_model_path: models/total_goals_d1_xgboostregressor_v1_20260905.joblib
-      selected_at: '2026-09-28T13:41:46Z'
+      selected_at: '2026-10-02T21:01:25Z'
   E0:
     away_corners:
       feature_subset:
@@ -1713,12 +1895,12 @@ contexts:
       - LINEUP_HOME_KEY_ATTACKER_MISSING
       - LINEUP_AWAY_KEY_ATTACKER_MISSING
       metric_name: test_mae
-      metric_value: 0.830817
-      mlflow_run_id: fdbb46d9cbd8483581c1d6a11326b4a0
-      model_path: models/away_goals_xgboostregressor_v1_20260928.joblib
-      model_type: xgboost_regressor
-      previous_model_path: models/away_goals_xgboostregressor_v1_20260903.joblib
-      selected_at: '2026-09-28T13:41:46Z'
+      metric_value: 0.829754
+      mlflow_run_id: 394b394ea49644a8a67db1656206216a
+      model_path: models/away_goals_xgboostregressor_v1_20261002.joblib
+      model_type: xgboostregressor
+      previous_model_path: models/away_goals_xgboostregressor_v1_20260928.joblib
+      selected_at: '2026-10-02T20:48:38Z'
     btts:
       feature_subset:
       - OFF_HOME_FTHG_R3
@@ -1903,12 +2085,12 @@ contexts:
       - LINEUP_HOME_KEY_ATTACKER_MISSING
       - LINEUP_AWAY_KEY_ATTACKER_MISSING
       metric_name: test_log_loss
-      metric_value: 0.686826
-      mlflow_run_id: 3e3f41d532d448b29951a403ebd1e45a
-      model_path: models/btts_xgboost_v1_20260928.joblib
+      metric_value: 0.690362
+      mlflow_run_id: e807ac1b0df24a0da94fe5f022233b12
+      model_path: models/btts_xgboost_v1_20261002.joblib
       model_type: xgboost
-      previous_model_path: models/btts_xgboost_v1_20260924.joblib
-      selected_at: '2026-09-28T13:41:46Z'
+      previous_model_path: models/btts_xgboost_v1_20260928.joblib
+      selected_at: '2026-10-02T20:54:29Z'
     home_corners:
       feature_subset:
       - OFF_HOME_FTHG_R3
@@ -2283,20 +2465,202 @@ contexts:
       - LINEUP_HOME_KEY_ATTACKER_MISSING
       - LINEUP_AWAY_KEY_ATTACKER_MISSING
       metric_name: test_mae
-      metric_value: 0.946402
-      mlflow_run_id: 5e22da2fac5d4adc81c77e4d306f152d
-      model_path: models/home_goals_xgboostregressor_v1_20260928.joblib
-      model_type: xgboost_regressor
-      previous_model_path: models/home_goals_xgboostregressor_v1_20260903.joblib
-      selected_at: '2026-09-28T13:41:46Z'
+      metric_value: 0.945788
+      mlflow_run_id: 685e0e44dfc149598f186abd2ecc13a5
+      model_path: models/home_goals_xgboostregressor_v1_20261002.joblib
+      model_type: xgboostregressor
+      previous_model_path: models/home_goals_xgboostregressor_v1_20261002.joblib
+      selected_at: '2026-10-02T20:42:45Z'
     result_3way:
+      feature_subset:
+      - OFF_HOME_FTHG_R3
+      - OFF_HOME_FTHG_R5
+      - DEF_HOME_FTAG_R3
+      - DEF_HOME_FTAG_R5
+      - OFF_HOME_HS_R3
+      - OFF_HOME_HS_R5
+      - DEF_HOME_AS_R3
+      - DEF_HOME_AS_R5
+      - OFF_HOME_HST_R3
+      - OFF_HOME_HST_R5
+      - DEF_HOME_AST_R3
+      - DEF_HOME_AST_R5
+      - OFF_HOME_HC_R3
+      - OFF_HOME_HC_R5
+      - DEF_HOME_AC_R3
+      - DEF_HOME_AC_R5
+      - DIS_HOME_HY_R3
+      - DIS_HOME_HY_R5
+      - DIS_HOME_AY_R3
+      - DIS_HOME_AY_R5
+      - DIS_HOME_HR_R3
+      - DIS_HOME_HR_R5
+      - DIS_HOME_AR_R3
+      - DIS_HOME_AR_R5
+      - OFF_HOME_SHOT_ACCURACY_R3
+      - OFF_HOME_SHOT_ACCURACY_R5
+      - DIS_HOME_DISCIPLINE_SCORE_R3
+      - DIS_HOME_DISCIPLINE_SCORE_R5
+      - DEF_HOME_SAVE_RATE_R3
+      - DEF_HOME_SAVE_RATE_R5
+      - OFF_AWAY_FTAG_R3
+      - OFF_AWAY_FTAG_R5
+      - DEF_AWAY_FTHG_R3
+      - DEF_AWAY_FTHG_R5
+      - OFF_AWAY_AS_R3
+      - OFF_AWAY_AS_R5
+      - DEF_AWAY_HS_R3
+      - DEF_AWAY_HS_R5
+      - OFF_AWAY_AST_R3
+      - OFF_AWAY_AST_R5
+      - DEF_AWAY_HST_R3
+      - DEF_AWAY_HST_R5
+      - OFF_AWAY_AC_R3
+      - OFF_AWAY_AC_R5
+      - DEF_AWAY_HC_R3
+      - DEF_AWAY_HC_R5
+      - DIS_AWAY_AY_R3
+      - DIS_AWAY_AY_R5
+      - DIS_AWAY_HY_R3
+      - DIS_AWAY_HY_R5
+      - DIS_AWAY_AR_R3
+      - DIS_AWAY_AR_R5
+      - DIS_AWAY_HR_R3
+      - DIS_AWAY_HR_R5
+      - OFF_AWAY_SHOT_ACCURACY_R3
+      - OFF_AWAY_SHOT_ACCURACY_R5
+      - DIS_AWAY_DISCIPLINE_SCORE_R3
+      - DIS_AWAY_DISCIPLINE_SCORE_R5
+      - OFF_HOME_FTHG_EMA5
+      - DEF_HOME_FTAG_EMA5
+      - OFF_HOME_HST_EMA5
+      - OFF_AWAY_FTAG_EMA5
+      - DEF_AWAY_FTHG_EMA5
+      - OFF_AWAY_AST_EMA5
+      - CTX_HOME_REST_DAYS
+      - CTX_AWAY_REST_DAYS
+      - CTX_REST_DAYS_DIFF
+      - MKT_IMPLIED_HOME
+      - MKT_IMPLIED_DRAW
+      - MKT_IMPLIED_AWAY
+      - STRENGTH_Goal_Diff
+      - STRENGTH_SoT_Diff
+      - INTERACTION_ATTACK_GOALS_DIFF_R5
+      - INTERACTION_DEFENSE_GOALS_DIFF_R5
+      - INTERACTION_ATTACK_SOT_DIFF_R5
+      - EFFICIENCY_HOME_ATTACK_VS_AWAY_DEF_R5
+      - EFFICIENCY_AWAY_ATTACK_VS_HOME_DEF_R5
+      - EFFICIENCY_ATTACK_MATCHUP_DIFF_R5
+      - OPP_ADJ_HOME_GOALS_SCORED_R3
+      - OPP_ADJ_HOME_GOALS_SCORED_R5
+      - OPP_ADJ_HOME_GOALS_CONCEDED_R3
+      - OPP_ADJ_HOME_GOALS_CONCEDED_R5
+      - OPP_ADJ_HOME_CORNERS_SCORED_R3
+      - OPP_ADJ_HOME_CORNERS_SCORED_R5
+      - OPP_ADJ_HOME_CORNERS_CONCEDED_R3
+      - OPP_ADJ_HOME_CORNERS_CONCEDED_R5
+      - OPP_ADJ_HOME_SOT_SCORED_R3
+      - OPP_ADJ_HOME_SOT_SCORED_R5
+      - OPP_ADJ_AWAY_GOALS_SCORED_R3
+      - OPP_ADJ_AWAY_GOALS_SCORED_R5
+      - OPP_ADJ_AWAY_GOALS_CONCEDED_R3
+      - OPP_ADJ_AWAY_GOALS_CONCEDED_R5
+      - OPP_ADJ_AWAY_CORNERS_SCORED_R3
+      - OPP_ADJ_AWAY_CORNERS_SCORED_R5
+      - OPP_ADJ_AWAY_CORNERS_CONCEDED_R3
+      - OPP_ADJ_AWAY_CORNERS_CONCEDED_R5
+      - OPP_ADJ_AWAY_SOT_SCORED_R3
+      - OPP_ADJ_AWAY_SOT_SCORED_R5
+      - OPP_ADJ_GOAL_MATCHUP_HOME_R3
+      - OPP_ADJ_GOAL_MATCHUP_HOME_R5
+      - OPP_ADJ_GOAL_MATCHUP_AWAY_R3
+      - OPP_ADJ_GOAL_MATCHUP_AWAY_R5
+      - OPP_ADJ_CORNER_MATCHUP_HOME_R3
+      - OPP_ADJ_CORNER_MATCHUP_HOME_R5
+      - OPP_ADJ_CORNER_MATCHUP_AWAY_R3
+      - OPP_ADJ_CORNER_MATCHUP_AWAY_R5
+      - OFF_HOME_XG_R3
+      - OFF_HOME_XG_R5
+      - DEF_HOME_XGA_R3
+      - DEF_HOME_XGA_R5
+      - OFF_HOME_LUCK_R3
+      - OFF_HOME_LUCK_R5
+      - OFF_AWAY_XG_R3
+      - OFF_AWAY_XG_R5
+      - DEF_AWAY_XGA_R3
+      - DEF_AWAY_XGA_R5
+      - OFF_AWAY_LUCK_R3
+      - OFF_AWAY_LUCK_R5
+      - CTX_HOME_CUM_PTS
+      - CTX_AWAY_CUM_PTS
+      - CTX_HOME_PPG_L10
+      - CTX_AWAY_PPG_L10
+      - H2H_TOTAL_GOALS_R5
+      - H2H_CORNERS_R5
+      - H2H_HOME_WIN_RATE_R5
+      - MKT_OVERROUND
+      - MKT_IMPLIED_OVER25
+      - MKT_AH_LINE
+      - MKT_AH_HOME_ODDS
+      - MKT_AH_AWAY_ODDS
+      - MKT_LAMBDA_TOTAL
+      - MKT_LAMBDA_HOME
+      - MKT_LAMBDA_AWAY
+      - MKT_POISSON_BTTS_PROB
+      - MKT_LAMBDA_AH_DIFF
+      - DC_LAMBDA_HOME
+      - DC_LAMBDA_AWAY
+      - DC_ATTACK_HOME
+      - DC_DEFENSE_HOME
+      - DC_ATTACK_AWAY
+      - DC_DEFENSE_AWAY
+      - DC_CORNER_LAMBDA_HOME
+      - DC_CORNER_LAMBDA_AWAY
+      - DC_CORNER_ATTACK_HOME
+      - DC_CORNER_DEFENSE_HOME
+      - DC_CORNER_ATTACK_AWAY
+      - DC_CORNER_DEFENSE_AWAY
+      - CTX_HOME_GOALS_STD_R5
+      - CTX_HOME_CONCEDED_STD_R5
+      - CTX_HOME_CORNERS_STD_R5
+      - CTX_AWAY_GOALS_STD_R5
+      - CTX_AWAY_CONCEDED_STD_R5
+      - CTX_AWAY_CORNERS_STD_R5
+      - CTX_HOME_SCORE_STREAK
+      - CTX_HOME_WIN_STREAK
+      - CTX_HOME_CS_STREAK
+      - CTX_AWAY_SCORE_STREAK
+      - CTX_AWAY_WIN_STREAK
+      - CTX_AWAY_CS_STREAK
+      - SQUAD_HOME_XG_MEAN_R3
+      - SQUAD_HOME_XG_MEAN_R5
+      - SQUAD_HOME_XA_MEAN_R3
+      - SQUAD_HOME_XA_MEAN_R5
+      - SQUAD_HOME_RATING_MEAN_R3
+      - SQUAD_HOME_RATING_MEAN_R5
+      - SQUAD_AWAY_XG_MEAN_R3
+      - SQUAD_AWAY_XG_MEAN_R5
+      - SQUAD_AWAY_XA_MEAN_R3
+      - SQUAD_AWAY_XA_MEAN_R5
+      - SQUAD_AWAY_RATING_MEAN_R3
+      - SQUAD_AWAY_RATING_MEAN_R5
+      - LUCK_HOME_BURNOUT_R5
+      - LUCK_AWAY_BURNOUT_R5
+      - XOC_HOME
+      - XOC_AWAY
+      - FRDS_HOME
+      - FRDS_AWAY
+      - DEF_ANCHOR_HOME
+      - DEF_ANCHOR_AWAY
+      - LINEUP_HOME_KEY_ATTACKER_MISSING
+      - LINEUP_AWAY_KEY_ATTACKER_MISSING
       metric_name: test_log_loss
-      metric_value: 1.004261
-      mlflow_run_id: 0b9318ac0ace4a219aebb40d023707af
-      model_path: models/result_3way_skellamresult_v1_20260903.joblib
-      model_type: skellam_result
-      previous_model_path: models/result_3way_xgboost_v1_20260820.joblib
-      selected_at: '2026-09-03T18:45:00Z'
+      metric_value: 1.002583
+      mlflow_run_id: fb0b6fcb26e3418bab66c26b33dfcd30
+      model_path: models/result_3way_skellamresult_v1_20261002.joblib
+      model_type: skellamresult
+      previous_model_path: models/result_3way_skellamresult_v1_20260903.joblib
+      selected_at: '2026-10-02T15:05:51Z'
     total_corners:
       feature_subset:
       - OFF_HOME_FTHG_R3
@@ -2671,12 +3035,12 @@ contexts:
       - LINEUP_HOME_KEY_ATTACKER_MISSING
       - LINEUP_AWAY_KEY_ATTACKER_MISSING
       metric_name: test_mae
-      metric_value: 1.245041
-      mlflow_run_id: d1f9542fd46e497ebbd8ee8c691202b2
-      model_path: models/total_goals_xgboostregressor_v1_20260928.joblib
-      model_type: xgboost_regressor
-      previous_model_path: models/total_goals_xgboostregressor_v1_20260903.joblib
-      selected_at: '2026-09-28T13:41:46Z'
+      metric_value: 1.23666
+      mlflow_run_id: a3d2c5f642304a6ba9be3905594ab129
+      model_path: models/total_goals_xgboostregressor_v1_20261002.joblib
+      model_type: xgboostregressor
+      previous_model_path: models/total_goals_xgboostregressor_v1_20261002.joblib
+      selected_at: '2026-10-02T21:00:23Z'
   F1:
     away_corners:
       feature_subset:
@@ -3052,12 +3416,12 @@ contexts:
       - LINEUP_HOME_KEY_ATTACKER_MISSING
       - LINEUP_AWAY_KEY_ATTACKER_MISSING
       metric_name: test_mae
-      metric_value: 0.952315
-      mlflow_run_id: 06283c1a879143f9b3b0c0388866be2c
-      model_path: models/away_goals_f1_xgboostregressor_v1_20260928.joblib
-      model_type: xgboost_regressor
-      previous_model_path: models/away_goals_f1_xgboostregressor_v1_20260816.joblib
-      selected_at: '2026-09-28T13:41:46Z'
+      metric_value: 0.946673
+      mlflow_run_id: 807a6c35efe54021b018e76bcf23f7ce
+      model_path: models/away_goals_f1_xgboostregressor_v1_20261002.joblib
+      model_type: xgboostregressor
+      previous_model_path: models/away_goals_f1_xgboostregressor_v1_20260928.joblib
+      selected_at: '2026-10-02T20:53:16Z'
     btts:
       feature_subset:
       - OFF_HOME_FTHG_R3
@@ -3243,11 +3607,11 @@ contexts:
       - LINEUP_AWAY_KEY_ATTACKER_MISSING
       metric_name: test_log_loss
       metric_value: 0.687258
-      mlflow_run_id: 6fdd6ee892f74b78b73fa092df341069
-      model_path: models/btts_f1_xgboost_v1_20260928.joblib
+      mlflow_run_id: f75dcd8e4fd747c59fea2ba8a44b8a0e
+      model_path: models/btts_f1_xgboost_v1_20261002.joblib
       model_type: xgboost
-      previous_model_path: models/btts_f1_xgboost_v1_20260924.joblib
-      selected_at: '2026-09-28T13:41:46Z'
+      previous_model_path: models/btts_f1_xgboost_v1_20261002.joblib
+      selected_at: '2026-10-02T20:59:09Z'
     home_corners:
       feature_subset:
       - OFF_HOME_FTHG_R3
@@ -3622,20 +3986,202 @@ contexts:
       - LINEUP_HOME_KEY_ATTACKER_MISSING
       - LINEUP_AWAY_KEY_ATTACKER_MISSING
       metric_name: test_mae
-      metric_value: 1.011086
-      mlflow_run_id: a1c82aad774d4e3a950a9db2c942f7df
-      model_path: models/home_goals_f1_xgboostregressor_v1_20260928.joblib
-      model_type: xgboost_regressor
-      previous_model_path: models/home_goals_f1_xgboostregressor_v1_20260816.joblib
-      selected_at: '2026-09-28T13:41:46Z'
+      metric_value: 1.015015
+      mlflow_run_id: 55a87c394fb640d2aecb2c858a69cc7f
+      model_path: models/home_goals_f1_xgboostregressor_v1_20261002.joblib
+      model_type: xgboostregressor
+      previous_model_path: models/home_goals_f1_xgboostregressor_v1_20260905.joblib
+      selected_at: '2026-10-02T20:47:26Z'
     result_3way:
+      feature_subset:
+      - OFF_HOME_FTHG_R3
+      - OFF_HOME_FTHG_R5
+      - DEF_HOME_FTAG_R3
+      - DEF_HOME_FTAG_R5
+      - OFF_HOME_HS_R3
+      - OFF_HOME_HS_R5
+      - DEF_HOME_AS_R3
+      - DEF_HOME_AS_R5
+      - OFF_HOME_HST_R3
+      - OFF_HOME_HST_R5
+      - DEF_HOME_AST_R3
+      - DEF_HOME_AST_R5
+      - OFF_HOME_HC_R3
+      - OFF_HOME_HC_R5
+      - DEF_HOME_AC_R3
+      - DEF_HOME_AC_R5
+      - DIS_HOME_HY_R3
+      - DIS_HOME_HY_R5
+      - DIS_HOME_AY_R3
+      - DIS_HOME_AY_R5
+      - DIS_HOME_HR_R3
+      - DIS_HOME_HR_R5
+      - DIS_HOME_AR_R3
+      - DIS_HOME_AR_R5
+      - OFF_HOME_SHOT_ACCURACY_R3
+      - OFF_HOME_SHOT_ACCURACY_R5
+      - DIS_HOME_DISCIPLINE_SCORE_R3
+      - DIS_HOME_DISCIPLINE_SCORE_R5
+      - DEF_HOME_SAVE_RATE_R3
+      - DEF_HOME_SAVE_RATE_R5
+      - OFF_AWAY_FTAG_R3
+      - OFF_AWAY_FTAG_R5
+      - DEF_AWAY_FTHG_R3
+      - DEF_AWAY_FTHG_R5
+      - OFF_AWAY_AS_R3
+      - OFF_AWAY_AS_R5
+      - DEF_AWAY_HS_R3
+      - DEF_AWAY_HS_R5
+      - OFF_AWAY_AST_R3
+      - OFF_AWAY_AST_R5
+      - DEF_AWAY_HST_R3
+      - DEF_AWAY_HST_R5
+      - OFF_AWAY_AC_R3
+      - OFF_AWAY_AC_R5
+      - DEF_AWAY_HC_R3
+      - DEF_AWAY_HC_R5
+      - DIS_AWAY_AY_R3
+      - DIS_AWAY_AY_R5
+      - DIS_AWAY_HY_R3
+      - DIS_AWAY_HY_R5
+      - DIS_AWAY_AR_R3
+      - DIS_AWAY_AR_R5
+      - DIS_AWAY_HR_R3
+      - DIS_AWAY_HR_R5
+      - OFF_AWAY_SHOT_ACCURACY_R3
+      - OFF_AWAY_SHOT_ACCURACY_R5
+      - DIS_AWAY_DISCIPLINE_SCORE_R3
+      - DIS_AWAY_DISCIPLINE_SCORE_R5
+      - OFF_HOME_FTHG_EMA5
+      - DEF_HOME_FTAG_EMA5
+      - OFF_HOME_HST_EMA5
+      - OFF_AWAY_FTAG_EMA5
+      - DEF_AWAY_FTHG_EMA5
+      - OFF_AWAY_AST_EMA5
+      - CTX_HOME_REST_DAYS
+      - CTX_AWAY_REST_DAYS
+      - CTX_REST_DAYS_DIFF
+      - MKT_IMPLIED_HOME
+      - MKT_IMPLIED_DRAW
+      - MKT_IMPLIED_AWAY
+      - STRENGTH_Goal_Diff
+      - STRENGTH_SoT_Diff
+      - INTERACTION_ATTACK_GOALS_DIFF_R5
+      - INTERACTION_DEFENSE_GOALS_DIFF_R5
+      - INTERACTION_ATTACK_SOT_DIFF_R5
+      - EFFICIENCY_HOME_ATTACK_VS_AWAY_DEF_R5
+      - EFFICIENCY_AWAY_ATTACK_VS_HOME_DEF_R5
+      - EFFICIENCY_ATTACK_MATCHUP_DIFF_R5
+      - OPP_ADJ_HOME_GOALS_SCORED_R3
+      - OPP_ADJ_HOME_GOALS_SCORED_R5
+      - OPP_ADJ_HOME_GOALS_CONCEDED_R3
+      - OPP_ADJ_HOME_GOALS_CONCEDED_R5
+      - OPP_ADJ_HOME_CORNERS_SCORED_R3
+      - OPP_ADJ_HOME_CORNERS_SCORED_R5
+      - OPP_ADJ_HOME_CORNERS_CONCEDED_R3
+      - OPP_ADJ_HOME_CORNERS_CONCEDED_R5
+      - OPP_ADJ_HOME_SOT_SCORED_R3
+      - OPP_ADJ_HOME_SOT_SCORED_R5
+      - OPP_ADJ_AWAY_GOALS_SCORED_R3
+      - OPP_ADJ_AWAY_GOALS_SCORED_R5
+      - OPP_ADJ_AWAY_GOALS_CONCEDED_R3
+      - OPP_ADJ_AWAY_GOALS_CONCEDED_R5
+      - OPP_ADJ_AWAY_CORNERS_SCORED_R3
+      - OPP_ADJ_AWAY_CORNERS_SCORED_R5
+      - OPP_ADJ_AWAY_CORNERS_CONCEDED_R3
+      - OPP_ADJ_AWAY_CORNERS_CONCEDED_R5
+      - OPP_ADJ_AWAY_SOT_SCORED_R3
+      - OPP_ADJ_AWAY_SOT_SCORED_R5
+      - OPP_ADJ_GOAL_MATCHUP_HOME_R3
+      - OPP_ADJ_GOAL_MATCHUP_HOME_R5
+      - OPP_ADJ_GOAL_MATCHUP_AWAY_R3
+      - OPP_ADJ_GOAL_MATCHUP_AWAY_R5
+      - OPP_ADJ_CORNER_MATCHUP_HOME_R3
+      - OPP_ADJ_CORNER_MATCHUP_HOME_R5
+      - OPP_ADJ_CORNER_MATCHUP_AWAY_R3
+      - OPP_ADJ_CORNER_MATCHUP_AWAY_R5
+      - OFF_HOME_XG_R3
+      - OFF_HOME_XG_R5
+      - DEF_HOME_XGA_R3
+      - DEF_HOME_XGA_R5
+      - OFF_HOME_LUCK_R3
+      - OFF_HOME_LUCK_R5
+      - OFF_AWAY_XG_R3
+      - OFF_AWAY_XG_R5
+      - DEF_AWAY_XGA_R3
+      - DEF_AWAY_XGA_R5
+      - OFF_AWAY_LUCK_R3
+      - OFF_AWAY_LUCK_R5
+      - CTX_HOME_CUM_PTS
+      - CTX_AWAY_CUM_PTS
+      - CTX_HOME_PPG_L10
+      - CTX_AWAY_PPG_L10
+      - H2H_TOTAL_GOALS_R5
+      - H2H_CORNERS_R5
+      - H2H_HOME_WIN_RATE_R5
+      - MKT_OVERROUND
+      - MKT_IMPLIED_OVER25
+      - MKT_AH_LINE
+      - MKT_AH_HOME_ODDS
+      - MKT_AH_AWAY_ODDS
+      - MKT_LAMBDA_TOTAL
+      - MKT_LAMBDA_HOME
+      - MKT_LAMBDA_AWAY
+      - MKT_POISSON_BTTS_PROB
+      - MKT_LAMBDA_AH_DIFF
+      - DC_LAMBDA_HOME
+      - DC_LAMBDA_AWAY
+      - DC_ATTACK_HOME
+      - DC_DEFENSE_HOME
+      - DC_ATTACK_AWAY
+      - DC_DEFENSE_AWAY
+      - DC_CORNER_LAMBDA_HOME
+      - DC_CORNER_LAMBDA_AWAY
+      - DC_CORNER_ATTACK_HOME
+      - DC_CORNER_DEFENSE_HOME
+      - DC_CORNER_ATTACK_AWAY
+      - DC_CORNER_DEFENSE_AWAY
+      - CTX_HOME_GOALS_STD_R5
+      - CTX_HOME_CONCEDED_STD_R5
+      - CTX_HOME_CORNERS_STD_R5
+      - CTX_AWAY_GOALS_STD_R5
+      - CTX_AWAY_CONCEDED_STD_R5
+      - CTX_AWAY_CORNERS_STD_R5
+      - CTX_HOME_SCORE_STREAK
+      - CTX_HOME_WIN_STREAK
+      - CTX_HOME_CS_STREAK
+      - CTX_AWAY_SCORE_STREAK
+      - CTX_AWAY_WIN_STREAK
+      - CTX_AWAY_CS_STREAK
+      - SQUAD_HOME_XG_MEAN_R3
+      - SQUAD_HOME_XG_MEAN_R5
+      - SQUAD_HOME_XA_MEAN_R3
+      - SQUAD_HOME_XA_MEAN_R5
+      - SQUAD_HOME_RATING_MEAN_R3
+      - SQUAD_HOME_RATING_MEAN_R5
+      - SQUAD_AWAY_XG_MEAN_R3
+      - SQUAD_AWAY_XG_MEAN_R5
+      - SQUAD_AWAY_XA_MEAN_R3
+      - SQUAD_AWAY_XA_MEAN_R5
+      - SQUAD_AWAY_RATING_MEAN_R3
+      - SQUAD_AWAY_RATING_MEAN_R5
+      - LUCK_HOME_BURNOUT_R5
+      - LUCK_AWAY_BURNOUT_R5
+      - XOC_HOME
+      - XOC_AWAY
+      - FRDS_HOME
+      - FRDS_AWAY
+      - DEF_ANCHOR_HOME
+      - DEF_ANCHOR_AWAY
+      - LINEUP_HOME_KEY_ATTACKER_MISSING
+      - LINEUP_AWAY_KEY_ATTACKER_MISSING
       metric_name: test_log_loss
-      metric_value: 0.9776
-      mlflow_run_id: af799e692af649d39773d921508ebf5d
-      model_path: models/result_3way_f1_skellamresult_v1_20260916.joblib
-      model_type: skellam_result
-      previous_model_path: models/result_3way_f1_xgboost_v1_20260816.joblib
-      selected_at: '2026-09-16T22:41:00Z'
+      metric_value: 0.966842
+      mlflow_run_id: 00ba7c3cb2c34ccf881a5c8bc32c20ea
+      model_path: models/result_3way_f1_skellamresult_v1_20261002.joblib
+      model_type: skellamresult
+      previous_model_path: models/result_3way_f1_skellamresult_v1_20261002.joblib
+      selected_at: '2026-10-02T21:12:02Z'
     total_corners:
       feature_subset:
       - OFF_HOME_FTHG_R3
@@ -4010,12 +4556,12 @@ contexts:
       - LINEUP_HOME_KEY_ATTACKER_MISSING
       - LINEUP_AWAY_KEY_ATTACKER_MISSING
       metric_name: test_mae
-      metric_value: 1.409725
-      mlflow_run_id: 0f7b2cbe11a14c79b9b89ab033bcace5
-      model_path: models/total_goals_f1_xgboostregressor_v1_20260928.joblib
-      model_type: xgboost_regressor
-      previous_model_path: models/total_goals_f1_xgboostregressor_v1_20260916.joblib
-      selected_at: '2026-09-28T13:41:46Z'
+      metric_value: 1.405808
+      mlflow_run_id: 3a2a8ee5d4ab45958bd92ecc54fb3247
+      model_path: models/total_goals_f1_xgboostregressor_v1_20261002.joblib
+      model_type: xgboostregressor
+      previous_model_path: models/total_goals_f1_xgboostregressor_v1_20261002.joblib
+      selected_at: '2026-10-02T21:05:12Z'
   I1:
     away_corners:
       feature_subset:
@@ -4391,12 +4937,12 @@ contexts:
       - LINEUP_HOME_KEY_ATTACKER_MISSING
       - LINEUP_AWAY_KEY_ATTACKER_MISSING
       metric_name: test_mae
-      metric_value: 0.793423
-      mlflow_run_id: 19aea233dab846c4a571c5e2c949f933
-      model_path: models/away_goals_i1_xgboostregressor_v1_20260928.joblib
-      model_type: xgboost_regressor
-      previous_model_path: models/away_goals_i1_xgboostregressor_v1_20260816.joblib
-      selected_at: '2026-09-28T13:41:46Z'
+      metric_value: 0.79288
+      mlflow_run_id: bccde684f8f6470bbd8adb1db91a832d
+      model_path: models/away_goals_i1_xgboostregressor_v1_20261002.joblib
+      model_type: xgboostregressor
+      previous_model_path: models/away_goals_i1_xgboostregressor_v1_20260928.joblib
+      selected_at: '2026-10-02T20:50:57Z'
     btts:
       feature_subset:
       - OFF_HOME_FTHG_R3
@@ -4581,12 +5127,12 @@ contexts:
       - LINEUP_HOME_KEY_ATTACKER_MISSING
       - LINEUP_AWAY_KEY_ATTACKER_MISSING
       metric_name: test_log_loss
-      metric_value: 0.689088
-      mlflow_run_id: 4a65f8c4aa47495399efaaacfcc364ae
-      model_path: models/btts_i1_xgboost_v1_20260928.joblib
+      metric_value: 0.688622
+      mlflow_run_id: 7aa5eef06dd74362aee1b535635ba3d1
+      model_path: models/btts_i1_xgboost_v1_20261002.joblib
       model_type: xgboost
-      previous_model_path: models/btts_i1_xgboost_v1_20260924.joblib
-      selected_at: '2026-09-28T13:41:46Z'
+      previous_model_path: models/btts_i1_xgboost_v1_20261002.joblib
+      selected_at: '2026-10-02T20:56:48Z'
     home_corners:
       feature_subset:
       - OFF_HOME_FTHG_R3
@@ -4961,12 +5507,12 @@ contexts:
       - LINEUP_HOME_KEY_ATTACKER_MISSING
       - LINEUP_AWAY_KEY_ATTACKER_MISSING
       metric_name: test_mae
-      metric_value: 0.859519
-      mlflow_run_id: d7e687ad54ab42e882a1b47484bb9546
-      model_path: models/home_goals_i1_xgboostregressor_v1_20260928.joblib
-      model_type: xgboost_regressor
-      previous_model_path: models/home_goals_i1_xgboostregressor_v1_20260816.joblib
-      selected_at: '2026-09-28T13:41:46Z'
+      metric_value: 0.856897
+      mlflow_run_id: d3b1a498357942e282912c1a3152b78a
+      model_path: models/home_goals_i1_xgboostregressor_v1_20261002.joblib
+      model_type: xgboostregressor
+      previous_model_path: models/home_goals_i1_xgboostregressor_v1_20261002.joblib
+      selected_at: '2026-10-02T20:45:04Z'
     result_3way:
       metric_name: test_log_loss
       metric_value: 0.9791
@@ -5349,12 +5895,12 @@ contexts:
       - LINEUP_HOME_KEY_ATTACKER_MISSING
       - LINEUP_AWAY_KEY_ATTACKER_MISSING
       metric_name: test_mae
-      metric_value: 1.241614
-      mlflow_run_id: f8470fa1d8cf442eb2db351b21762903
-      model_path: models/total_goals_i1_randomforestregressor_v1_20260928.joblib
-      model_type: rf_regressor
+      metric_value: 1.229728
+      mlflow_run_id: 27cfb5a816974691adf70c60010df579
+      model_path: models/total_goals_i1_randomforestregressor_v1_20261002.joblib
+      model_type: randomforestregressor
       previous_model_path: models/total_goals_i1_xgboostregressor_v1_20260928.joblib
-      selected_at: '2026-09-28T13:41:46Z'
+      selected_at: '2026-10-02T21:02:46Z'
   SP1:
     away_corners:
       feature_subset:
@@ -5730,12 +6276,12 @@ contexts:
       - LINEUP_HOME_KEY_ATTACKER_MISSING
       - LINEUP_AWAY_KEY_ATTACKER_MISSING
       metric_name: test_mae
-      metric_value: 0.755435
-      mlflow_run_id: d9067610996c4978a63ed852556f3b0e
-      model_path: models/away_goals_sp1_xgboostregressor_v1_20260928.joblib
-      model_type: xgboost_regressor
+      metric_value: 0.753801
+      mlflow_run_id: 6aa7d16c04784f778b29e7875f0323bf
+      model_path: models/away_goals_sp1_xgboostregressor_v1_20261002.joblib
+      model_type: xgboostregressor
       previous_model_path: models/away_goals_sp1_xgboostregressor_v1_20260905.joblib
-      selected_at: '2026-09-28T13:41:46Z'
+      selected_at: '2026-10-02T20:52:06Z'
     btts:
       feature_subset:
       - OFF_HOME_FTHG_R3
@@ -5920,12 +6466,12 @@ contexts:
       - LINEUP_HOME_KEY_ATTACKER_MISSING
       - LINEUP_AWAY_KEY_ATTACKER_MISSING
       metric_name: test_log_loss
-      metric_value: 0.698935
-      mlflow_run_id: a6401b80b08a4edbb4a17259bd37ef6d
-      model_path: models/btts_sp1_xgboost_v1_20260928.joblib
+      metric_value: 0.697014
+      mlflow_run_id: 8d91ada2fc5d412eb57f9b28d3f75ee1
+      model_path: models/btts_sp1_xgboost_v1_20261002.joblib
       model_type: xgboost
       previous_model_path: models/btts_sp1_xgboost_v1_20260916.joblib
-      selected_at: '2026-09-28T13:41:46Z'
+      selected_at: '2026-10-02T20:57:59Z'
     home_corners:
       feature_subset:
       - OFF_HOME_FTHG_R3
@@ -6300,20 +6846,202 @@ contexts:
       - LINEUP_HOME_KEY_ATTACKER_MISSING
       - LINEUP_AWAY_KEY_ATTACKER_MISSING
       metric_name: test_mae
-      metric_value: 0.876008
-      mlflow_run_id: 461ca1e85687453793b51195821add00
-      model_path: models/home_goals_sp1_xgboostregressor_v1_20260928.joblib
-      model_type: xgboost_regressor
-      previous_model_path: models/home_goals_sp1_xgboostregressor_v1_20260905.joblib
-      selected_at: '2026-09-28T13:41:46Z'
+      metric_value: 0.876103
+      mlflow_run_id: a0247e44ea6144568724cf79a3b54f9b
+      model_path: models/home_goals_sp1_xgboostregressor_v1_20261002.joblib
+      model_type: xgboostregressor
+      previous_model_path: models/home_goals_sp1_xgboostregressor_v1_20260928.joblib
+      selected_at: '2026-10-02T20:46:15Z'
     result_3way:
+      feature_subset:
+      - OFF_HOME_FTHG_R3
+      - OFF_HOME_FTHG_R5
+      - DEF_HOME_FTAG_R3
+      - DEF_HOME_FTAG_R5
+      - OFF_HOME_HS_R3
+      - OFF_HOME_HS_R5
+      - DEF_HOME_AS_R3
+      - DEF_HOME_AS_R5
+      - OFF_HOME_HST_R3
+      - OFF_HOME_HST_R5
+      - DEF_HOME_AST_R3
+      - DEF_HOME_AST_R5
+      - OFF_HOME_HC_R3
+      - OFF_HOME_HC_R5
+      - DEF_HOME_AC_R3
+      - DEF_HOME_AC_R5
+      - DIS_HOME_HY_R3
+      - DIS_HOME_HY_R5
+      - DIS_HOME_AY_R3
+      - DIS_HOME_AY_R5
+      - DIS_HOME_HR_R3
+      - DIS_HOME_HR_R5
+      - DIS_HOME_AR_R3
+      - DIS_HOME_AR_R5
+      - OFF_HOME_SHOT_ACCURACY_R3
+      - OFF_HOME_SHOT_ACCURACY_R5
+      - DIS_HOME_DISCIPLINE_SCORE_R3
+      - DIS_HOME_DISCIPLINE_SCORE_R5
+      - DEF_HOME_SAVE_RATE_R3
+      - DEF_HOME_SAVE_RATE_R5
+      - OFF_AWAY_FTAG_R3
+      - OFF_AWAY_FTAG_R5
+      - DEF_AWAY_FTHG_R3
+      - DEF_AWAY_FTHG_R5
+      - OFF_AWAY_AS_R3
+      - OFF_AWAY_AS_R5
+      - DEF_AWAY_HS_R3
+      - DEF_AWAY_HS_R5
+      - OFF_AWAY_AST_R3
+      - OFF_AWAY_AST_R5
+      - DEF_AWAY_HST_R3
+      - DEF_AWAY_HST_R5
+      - OFF_AWAY_AC_R3
+      - OFF_AWAY_AC_R5
+      - DEF_AWAY_HC_R3
+      - DEF_AWAY_HC_R5
+      - DIS_AWAY_AY_R3
+      - DIS_AWAY_AY_R5
+      - DIS_AWAY_HY_R3
+      - DIS_AWAY_HY_R5
+      - DIS_AWAY_AR_R3
+      - DIS_AWAY_AR_R5
+      - DIS_AWAY_HR_R3
+      - DIS_AWAY_HR_R5
+      - OFF_AWAY_SHOT_ACCURACY_R3
+      - OFF_AWAY_SHOT_ACCURACY_R5
+      - DIS_AWAY_DISCIPLINE_SCORE_R3
+      - DIS_AWAY_DISCIPLINE_SCORE_R5
+      - OFF_HOME_FTHG_EMA5
+      - DEF_HOME_FTAG_EMA5
+      - OFF_HOME_HST_EMA5
+      - OFF_AWAY_FTAG_EMA5
+      - DEF_AWAY_FTHG_EMA5
+      - OFF_AWAY_AST_EMA5
+      - CTX_HOME_REST_DAYS
+      - CTX_AWAY_REST_DAYS
+      - CTX_REST_DAYS_DIFF
+      - MKT_IMPLIED_HOME
+      - MKT_IMPLIED_DRAW
+      - MKT_IMPLIED_AWAY
+      - STRENGTH_Goal_Diff
+      - STRENGTH_SoT_Diff
+      - INTERACTION_ATTACK_GOALS_DIFF_R5
+      - INTERACTION_DEFENSE_GOALS_DIFF_R5
+      - INTERACTION_ATTACK_SOT_DIFF_R5
+      - EFFICIENCY_HOME_ATTACK_VS_AWAY_DEF_R5
+      - EFFICIENCY_AWAY_ATTACK_VS_HOME_DEF_R5
+      - EFFICIENCY_ATTACK_MATCHUP_DIFF_R5
+      - OPP_ADJ_HOME_GOALS_SCORED_R3
+      - OPP_ADJ_HOME_GOALS_SCORED_R5
+      - OPP_ADJ_HOME_GOALS_CONCEDED_R3
+      - OPP_ADJ_HOME_GOALS_CONCEDED_R5
+      - OPP_ADJ_HOME_CORNERS_SCORED_R3
+      - OPP_ADJ_HOME_CORNERS_SCORED_R5
+      - OPP_ADJ_HOME_CORNERS_CONCEDED_R3
+      - OPP_ADJ_HOME_CORNERS_CONCEDED_R5
+      - OPP_ADJ_HOME_SOT_SCORED_R3
+      - OPP_ADJ_HOME_SOT_SCORED_R5
+      - OPP_ADJ_AWAY_GOALS_SCORED_R3
+      - OPP_ADJ_AWAY_GOALS_SCORED_R5
+      - OPP_ADJ_AWAY_GOALS_CONCEDED_R3
+      - OPP_ADJ_AWAY_GOALS_CONCEDED_R5
+      - OPP_ADJ_AWAY_CORNERS_SCORED_R3
+      - OPP_ADJ_AWAY_CORNERS_SCORED_R5
+      - OPP_ADJ_AWAY_CORNERS_CONCEDED_R3
+      - OPP_ADJ_AWAY_CORNERS_CONCEDED_R5
+      - OPP_ADJ_AWAY_SOT_SCORED_R3
+      - OPP_ADJ_AWAY_SOT_SCORED_R5
+      - OPP_ADJ_GOAL_MATCHUP_HOME_R3
+      - OPP_ADJ_GOAL_MATCHUP_HOME_R5
+      - OPP_ADJ_GOAL_MATCHUP_AWAY_R3
+      - OPP_ADJ_GOAL_MATCHUP_AWAY_R5
+      - OPP_ADJ_CORNER_MATCHUP_HOME_R3
+      - OPP_ADJ_CORNER_MATCHUP_HOME_R5
+      - OPP_ADJ_CORNER_MATCHUP_AWAY_R3
+      - OPP_ADJ_CORNER_MATCHUP_AWAY_R5
+      - OFF_HOME_XG_R3
+      - OFF_HOME_XG_R5
+      - DEF_HOME_XGA_R3
+      - DEF_HOME_XGA_R5
+      - OFF_HOME_LUCK_R3
+      - OFF_HOME_LUCK_R5
+      - OFF_AWAY_XG_R3
+      - OFF_AWAY_XG_R5
+      - DEF_AWAY_XGA_R3
+      - DEF_AWAY_XGA_R5
+      - OFF_AWAY_LUCK_R3
+      - OFF_AWAY_LUCK_R5
+      - CTX_HOME_CUM_PTS
+      - CTX_AWAY_CUM_PTS
+      - CTX_HOME_PPG_L10
+      - CTX_AWAY_PPG_L10
+      - H2H_TOTAL_GOALS_R5
+      - H2H_CORNERS_R5
+      - H2H_HOME_WIN_RATE_R5
+      - MKT_OVERROUND
+      - MKT_IMPLIED_OVER25
+      - MKT_AH_LINE
+      - MKT_AH_HOME_ODDS
+      - MKT_AH_AWAY_ODDS
+      - MKT_LAMBDA_TOTAL
+      - MKT_LAMBDA_HOME
+      - MKT_LAMBDA_AWAY
+      - MKT_POISSON_BTTS_PROB
+      - MKT_LAMBDA_AH_DIFF
+      - DC_LAMBDA_HOME
+      - DC_LAMBDA_AWAY
+      - DC_ATTACK_HOME
+      - DC_DEFENSE_HOME
+      - DC_ATTACK_AWAY
+      - DC_DEFENSE_AWAY
+      - DC_CORNER_LAMBDA_HOME
+      - DC_CORNER_LAMBDA_AWAY
+      - DC_CORNER_ATTACK_HOME
+      - DC_CORNER_DEFENSE_HOME
+      - DC_CORNER_ATTACK_AWAY
+      - DC_CORNER_DEFENSE_AWAY
+      - CTX_HOME_GOALS_STD_R5
+      - CTX_HOME_CONCEDED_STD_R5
+      - CTX_HOME_CORNERS_STD_R5
+      - CTX_AWAY_GOALS_STD_R5
+      - CTX_AWAY_CONCEDED_STD_R5
+      - CTX_AWAY_CORNERS_STD_R5
+      - CTX_HOME_SCORE_STREAK
+      - CTX_HOME_WIN_STREAK
+      - CTX_HOME_CS_STREAK
+      - CTX_AWAY_SCORE_STREAK
+      - CTX_AWAY_WIN_STREAK
+      - CTX_AWAY_CS_STREAK
+      - SQUAD_HOME_XG_MEAN_R3
+      - SQUAD_HOME_XG_MEAN_R5
+      - SQUAD_HOME_XA_MEAN_R3
+      - SQUAD_HOME_XA_MEAN_R5
+      - SQUAD_HOME_RATING_MEAN_R3
+      - SQUAD_HOME_RATING_MEAN_R5
+      - SQUAD_AWAY_XG_MEAN_R3
+      - SQUAD_AWAY_XG_MEAN_R5
+      - SQUAD_AWAY_XA_MEAN_R3
+      - SQUAD_AWAY_XA_MEAN_R5
+      - SQUAD_AWAY_RATING_MEAN_R3
+      - SQUAD_AWAY_RATING_MEAN_R5
+      - LUCK_HOME_BURNOUT_R5
+      - LUCK_AWAY_BURNOUT_R5
+      - XOC_HOME
+      - XOC_AWAY
+      - FRDS_HOME
+      - FRDS_AWAY
+      - DEF_ANCHOR_HOME
+      - DEF_ANCHOR_AWAY
+      - LINEUP_HOME_KEY_ATTACKER_MISSING
+      - LINEUP_AWAY_KEY_ATTACKER_MISSING
       metric_name: test_log_loss
-      metric_value: 0.9602
-      mlflow_run_id: 909d45a38160430084a9e9ef08ec1937
-      model_path: models/result_3way_sp1_skellamresult_v1_20260916.joblib
-      model_type: skellam_result
-      previous_model_path: models/result_3way_sp1_xgboost_v1_20260820.joblib
-      selected_at: '2026-09-16T22:33:40Z'
+      metric_value: 0.957587
+      mlflow_run_id: 6f9d1530c0b748e2891f7b20baa6c866
+      model_path: models/result_3way_sp1_skellamresult_v1_20261002.joblib
+      model_type: skellamresult
+      previous_model_path: models/result_3way_sp1_skellamresult_v1_20261002.joblib
+      selected_at: '2026-10-02T21:10:52Z'
     total_corners:
       feature_subset:
       - OFF_HOME_FTHG_R3
@@ -6688,12 +7416,12 @@ contexts:
       - LINEUP_HOME_KEY_ATTACKER_MISSING
       - LINEUP_AWAY_KEY_ATTACKER_MISSING
       metric_name: test_mae
-      metric_value: 1.221678
-      mlflow_run_id: 366448ef03a64eaab6f265f76da1c15c
-      model_path: models/total_goals_sp1_xgboostregressor_v1_20260928.joblib
-      model_type: xgboost_regressor
-      previous_model_path: models/total_goals_sp1_xgboostregressor_v1_20260916.joblib
-      selected_at: '2026-09-28T13:41:46Z'
+      metric_value: 1.218285
+      mlflow_run_id: f23dcf703f314e6db6482f6ed568c9dc
+      model_path: models/total_goals_sp1_xgboostregressor_v1_20261002.joblib
+      model_type: xgboostregressor
+      previous_model_path: models/total_goals_sp1_xgboostregressor_v1_20261002.joblib
+      selected_at: '2026-10-02T21:04:01Z'
   SWE:
     away_goals:
       feature_subset:

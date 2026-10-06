@@ -193,6 +193,74 @@ def test_xoc_fewer_than_3_fwds():
 
 
 # ---------------------------------------------------------------------------
+# Test: a low-minute cameo must not dominate the per-90 rolling average
+# ---------------------------------------------------------------------------
+
+def test_xoc_excludes_low_minute_cameo_from_per90_extrapolation():
+    """A substitute who plays only a couple of minutes but records a real
+    chance (e.g. 2 min, 0.42 xG) must not have that extrapolated to an
+    absurd per-90 rate (0.42/2*90 = 18.9) that then dominates the rolling
+    average -- confirmed live against real data (Girona, Pablo Ibanez, 2
+    minutes played, 0.42 xG + 0.24 xA -> 29.7 "xG+xA per 90", which then
+    inflated XOC_HOME to 59.4 across many real matches). The cameo's per-90
+    value must be excluded (NaN) from the rolling window, not included --
+    so the rolling mean here must reflect only the real, full-minutes
+    appearance, not be pulled toward the cameo's inflated number."""
+    raw_prior1 = pd.DataFrame({
+        "match_id": ["R1"],
+        "date": pd.to_datetime(["2024-01-01"]),
+        "home_team": ["Arsenal"],
+        "away_team": ["Tottenham"],
+    })
+    raw_prior2 = pd.DataFrame({
+        "match_id": ["R2"],
+        "date": pd.to_datetime(["2024-01-08"]),
+        "home_team": ["Arsenal"],
+        "away_team": ["Liverpool"],
+    })
+    raw_match = pd.DataFrame({
+        "match_id": ["R3"],
+        "date": pd.to_datetime(["2024-01-15"]),
+        "home_team": ["Arsenal"],
+        "away_team": ["Chelsea"],
+    })
+    raw_full = pd.concat([raw_prior1, raw_prior2, raw_match], ignore_index=True)
+
+    lineup_home = _make_lineup(
+        fotmob_match_id=300, player_ids=[40], team_name="Arsenal", side="home", position_group="FWD",
+    )
+    lineup_away = _make_lineup(
+        fotmob_match_id=300, player_ids=[50], team_name="Chelsea", side="away", position_group="FWD",
+    )
+    lineups = pd.concat([lineup_home, lineup_away], ignore_index=True)
+
+    stats_rows = [
+        # R1: a real, full-minutes appearance -- xgxa_p90 = 0.1/90*90 = 0.1
+        _make_player_stats("R1", 40, "Arsenal", xg=0.1, xa=0.0, minutes_played=90),
+        # R2: a 2-minute cameo with a real chance -- would extrapolate to
+        # (0.42/2)*90 = 18.9 without a minimum-minutes floor.
+        _make_player_stats("R2", 40, "Arsenal", xg=0.42, xa=0.0, minutes_played=2),
+        _make_player_stats("R3", 40, "Arsenal", xg=0.2, xa=0.0, minutes_played=90),
+        _make_player_stats("R1", 50, "Chelsea", xg=0.1, xa=0.0, minutes_played=90),
+        _make_player_stats("R2", 50, "Chelsea", xg=0.1, xa=0.0, minutes_played=90),
+        _make_player_stats("R3", 50, "Chelsea", xg=0.1, xa=0.0, minutes_played=90),
+    ]
+    player_stats = pd.DataFrame(stats_rows)
+
+    result = compute_xoc(lineups, player_stats, raw_full, league_code="E0")
+
+    row = result[result["match_id"] == "R3"]
+    assert not row.empty
+    xoc_home = row["XOC_HOME"].values[0]
+    # Rolling mean over R1 (0.1) and R2 (excluded, insufficient minutes) must
+    # be ~0.1 -- NOT ~9.5 (mean of 0.1 and the 18.9 cameo extrapolation).
+    assert xoc_home < 1.0, (
+        f"XOC_HOME ({xoc_home}) should reflect only the real 0.1 appearance, "
+        f"not be inflated by the 2-minute cameo's per-90 extrapolation"
+    )
+
+
+# ---------------------------------------------------------------------------
 # Test 3: Coefficient normalisation
 # ---------------------------------------------------------------------------
 

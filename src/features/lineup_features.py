@@ -16,6 +16,15 @@ from src.utils.logger import get_logger
 
 LOGGER = get_logger(__name__)
 
+# Below this many minutes, a per-90 extrapolation is dominated by noise, not
+# signal -- confirmed live: a real 2-minute Girona cameo with 0.42 xG + 0.24
+# xA extrapolated to 29.7 "xG+xA per 90" (compute_xoc), which then inflated
+# XOC_HOME to as high as 59.4 across many real matches via the 5-match
+# rolling average. compute_defensive_anchor shares the identical
+# `numerator / minutes_played * 90` shape (DEF_ANCHOR_HOME/AWAY reaching
+# 185/98 against a project-wide mean of ~9) -- same floor applies to both.
+_MIN_MINUTES_FOR_PER90_RATE = 30
+
 # ---------------------------------------------------------------------------
 # Coefficient loader
 # ---------------------------------------------------------------------------
@@ -90,8 +99,10 @@ def compute_xoc(
     for col in ["xg", "xa", "minutes_played"]:
         stats[col] = pd.to_numeric(stats[col], errors="coerce").fillna(0.0)
 
-    # Filter out zero-minute entries to avoid division noise
-    stats = stats[stats["minutes_played"] > 0].copy()
+    # Filter out low-minute entries to avoid per-90 extrapolation noise
+    # (a few-minute cameo with a real chance otherwise blows up to an
+    # absurd per-90 rate -- see _MIN_MINUTES_FOR_PER90_RATE's own comment).
+    stats = stats[stats["minutes_played"] >= _MIN_MINUTES_FOR_PER90_RATE].copy()
     stats["xgxa_p90"] = (stats["xg"] + stats["xa"]) / stats["minutes_played"] * 90.0
     stats["team_std"] = stats["team_name"].map(standardize_team_name)
 
@@ -414,7 +425,9 @@ def compute_defensive_anchor(
     stats_dated = stats.merge(match_info[["match_id", "date"]], on="match_id", how="inner")
     stats_dated["def_rec"] = stats_dated["interceptions"] + stats_dated["recoveries"]
     mp = pd.to_numeric(stats_dated["minutes_played"], errors="coerce")
-    stats_dated["def_rec_p90"] = stats_dated["def_rec"] / mp.where(mp > 0) * 90.0
+    # NaN below the minimum-minutes floor, not just mp > 0 -- avoids the same
+    # per-90 extrapolation blowup XOC had (see _MIN_MINUTES_FOR_PER90_RATE).
+    stats_dated["def_rec_p90"] = stats_dated["def_rec"] / mp.where(mp >= _MIN_MINUTES_FOR_PER90_RATE) * 90.0
     stats_dated = stats_dated.sort_values(["player_id", "date", "match_id"]).reset_index(drop=True)
     stats_dated["def_anchor_roll"] = stats_dated.groupby("player_id")["def_rec_p90"].transform(
         lambda s: s.shift(1).rolling(5, min_periods=1).mean()

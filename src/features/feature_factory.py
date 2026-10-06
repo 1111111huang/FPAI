@@ -24,6 +24,49 @@ LOGGER = get_logger(__name__)
 _MAX_STALE_HISTORY_DAYS = 400
 
 
+def _compute_rest_days(team_date_df: pd.DataFrame, nonleague_dates: pd.DataFrame) -> pd.Series:
+    """Days since a team's last match of ANY kind, not just its last
+    tracked-league appearance (US#212) -- `nonleague_dates` (team, date)
+    supplies cup/continental/international match dates sourced outside
+    raw_matches (see fotmob_nonleague_matches). An empty nonleague_dates is
+    a no-op: this reduces to the original groupby/shift league-only gap,
+    so every existing caller/test is unaffected until that table is
+    actually populated."""
+    if nonleague_dates.empty:
+        return team_date_df.groupby("team")["date"].transform(lambda s: (s - s.shift(1)).dt.days)
+
+    # merge_asof drops the right side's match column entirely when it shares
+    # the left side's "on" name (nothing left to disambiguate) -- renamed so
+    # the matched date survives as its own column instead of silently
+    # echoing the left date back (which produced a 0-day gap for every row).
+    all_dates = (
+        pd.concat([team_date_df[["team", "date"]], nonleague_dates[["team", "date"]]], ignore_index=True)
+        .drop_duplicates()
+        .rename(columns={"date": "matched_date"})
+        .sort_values("matched_date")
+    )
+    # merge_asof always returns a fresh 0..n-1 RangeIndex, discarding
+    # whatever index `left` had -- sort_values keeps the ORIGINAL (now
+    # shuffled) index labels on `left`, so without this reset the later
+    # subtraction aligns by coincidental label equality between two
+    # unrelated rows instead of by position, silently pairing each row with
+    # a different row's match. Confirmed live: produced a nonsensical
+    # -3132-day "rest" for a real match once the dataset was large enough
+    # for `left`'s shuffled labels to actually diverge from `matched`'s
+    # fresh ones (a 2-row unit test fixture happened not to shuffle at all,
+    # which is why this passed before being caught against real data).
+    left = team_date_df[["team", "date"]].sort_values("date")
+    original_index = left.index
+    left = left.reset_index(drop=True)
+    matched = pd.merge_asof(
+        left, all_dates, left_on="date", right_on="matched_date", by="team",
+        direction="backward", allow_exact_matches=False,
+    )
+    rest_days = (left["date"] - matched["matched_date"]).dt.days
+    rest_days.index = original_index
+    return rest_days.reindex(team_date_df.index)
+
+
 def remove_margin(
     home_odds: pd.Series | float,
     draw_odds: pd.Series | float,
@@ -81,6 +124,10 @@ class FeatureFactory:
                 ORDER BY date, match_id
                 """
             ).fetchdf()
+            self._ensure_nonleague_matches_schema(conn)
+            nonleague_df = conn.execute(
+                "SELECT team, match_date AS date FROM fotmob_nonleague_matches"
+            ).fetchdf()
 
         if raw_df.empty:
             return pd.DataFrame(columns=["match_id"])
@@ -89,6 +136,9 @@ class FeatureFactory:
         raw_df = raw_df.dropna(subset=["date"]).reset_index(drop=True)
         raw_df["home_team"] = raw_df["home_team"].astype(str).map(standardize_team_name)
         raw_df["away_team"] = raw_df["away_team"].astype(str).map(standardize_team_name)
+        nonleague_df["team"] = nonleague_df["team"].astype(str).map(standardize_team_name)
+        nonleague_df["date"] = pd.to_datetime(nonleague_df["date"], errors="coerce")
+        nonleague_df = nonleague_df.dropna(subset=["date"])
         for col in ["xg_h", "xg_a", "xga_h", "xga_a"]:
             if col in raw_df.columns:
                 raw_df[col] = pd.to_numeric(raw_df[col], errors="coerce")
@@ -253,12 +303,8 @@ class FeatureFactory:
         home_df = add_ema(home_df, "HOME", home_ema_map, span=5)
         away_df = add_ema(away_df, "AWAY", away_ema_map, span=5)
 
-        home_df["CTX_HOME_REST_DAYS"] = (
-            home_df.groupby("team")["date"].transform(lambda s: (s - s.shift(1)).dt.days)
-        )
-        away_df["CTX_AWAY_REST_DAYS"] = (
-            away_df.groupby("team")["date"].transform(lambda s: (s - s.shift(1)).dt.days)
-        )
+        home_df["CTX_HOME_REST_DAYS"] = _compute_rest_days(home_df, nonleague_df)
+        away_df["CTX_AWAY_REST_DAYS"] = _compute_rest_days(away_df, nonleague_df)
         # W198 follow-up (2026-10-01): this bulk/offline path (used to build
         # feature_store for training/backtesting) never got W198's stale-team
         # fix -- only build_for_match's live single-match path drops a stale
@@ -990,6 +1036,22 @@ class FeatureFactory:
             col_means = features[imputable].mean()
             features[imputable] = features[imputable].fillna(col_means)
         return features
+
+    @staticmethod
+    def _ensure_nonleague_matches_schema(conn) -> None:
+        """US#212: ensure fotmob_nonleague_matches exists (empty by default
+        until the fetch-nonleague-matches CLI backfills it), so
+        compute_rolling_stats can always query it rather than branching on
+        whether it's been created yet."""
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS fotmob_nonleague_matches (
+                team TEXT,
+                match_date TIMESTAMP,
+                PRIMARY KEY (team, match_date)
+            )
+            """
+        )
 
     @staticmethod
     def _ensure_raw_matches_schema(conn) -> None:
