@@ -178,6 +178,26 @@ def fetch_matches_for_leagues(day: date, league_ids: dict[str, int], delay: floa
     return result
 
 
+def fetch_all_matches(day: date, delay: float = 1.0) -> list[dict]:
+    """Like fetch_matches_for_leagues, but keeps every competition in the
+    day's payload instead of filtering to LEAGUE_IDS (US#212) -- FotMob's
+    /api/data/matches already returns cup/continental/international
+    fixtures alongside the 5 tracked domestic leagues in the same request;
+    this is the one caller that needs them instead of discarding them.
+    """
+    LOGGER.info("Fetching FotMob matches (all competitions) | date=%s", day)
+    payload = _fetch_matches_payload(day, delay)
+    if payload is None:
+        return []
+
+    matches: list[dict] = []
+    for league_entry in payload.get("leagues", []):
+        matches.extend(_parse_finished_matches(league_entry.get("matches", [])))
+
+    LOGGER.info("Got %d finished matches (all competitions) | date=%s", len(matches), day)
+    return matches
+
+
 def _extract_top_stat(top_stats: dict, label: str) -> float | int | None:
     entry = top_stats.get(label)
     if entry is None:

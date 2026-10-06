@@ -14,6 +14,7 @@ sys.path.append(str(Path(__file__).resolve().parents[1]))
 
 from src.ingestion.fotmob.fetcher import (
     LEAGUE_IDS,
+    fetch_all_matches,
     fetch_finished_match_ids,
     fetch_match_player_stats,
     fetch_matches_for_leagues,
@@ -140,6 +141,45 @@ def test_fetch_finished_match_ids_filters_to_requested_league():
 
     assert len(matches) == 1
     assert matches[0]["fotmob_match_id"] == 1
+
+
+# ---------------------------------------------------------------------------
+# fetch_all_matches (US#212)
+# ---------------------------------------------------------------------------
+
+def test_fetch_all_matches_includes_matches_from_every_competition_in_the_payload():
+    """Unlike fetch_finished_match_ids/fetch_matches_for_leagues, this must
+    NOT filter to a known league_id -- US#212 needs cup/continental/
+    international matches (e.g. Champions League, id 904988, not in
+    LEAGUE_IDS) alongside the 5 tracked domestic leagues already covered."""
+    payload = {
+        "leagues": [
+            {"id": 47, "matches": [_match_entry(match_id=1, home="Arsenal", away="Everton")]},
+            {"id": 904988, "matches": [_match_entry(match_id=2, home="Chelsea", away="Inter")]},
+        ]
+    }
+    with patch("src.ingestion.fotmob.fetcher.requests.get", return_value=_mock_resp(payload)), \
+         patch("src.ingestion.fotmob.fetcher.time.sleep"):
+        matches = fetch_all_matches(date(2024, 5, 19), delay=0)
+
+    assert {m["fotmob_match_id"] for m in matches} == {1, 2}
+
+
+def test_fetch_all_matches_excludes_unfinished_matches():
+    payload = {"leagues": [{"id": 904988, "matches": [_match_entry(finished=False)]}]}
+    with patch("src.ingestion.fotmob.fetcher.requests.get", return_value=_mock_resp(payload)), \
+         patch("src.ingestion.fotmob.fetcher.time.sleep"):
+        matches = fetch_all_matches(date(2024, 5, 19), delay=0)
+
+    assert matches == []
+
+
+def test_fetch_all_matches_treats_a_null_payload_as_no_matches():
+    with patch("src.ingestion.fotmob.fetcher.requests.get", return_value=_mock_resp(None)), \
+         patch("src.ingestion.fotmob.fetcher.time.sleep"):
+        matches = fetch_all_matches(date(2011, 8, 1), delay=0)
+
+    assert matches == []
 
 
 # ---------------------------------------------------------------------------

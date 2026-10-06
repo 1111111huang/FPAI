@@ -284,6 +284,16 @@ def _build_parser() -> argparse.ArgumentParser:
     lineup_p.add_argument("--league", default="E0", help="Football-Data league code (default: E0)")
     lineup_p.add_argument("--delay", type=float, default=1.0, help="Polite delay in seconds between requests.")
 
+    # fetch-nonleague-matches (US#212)
+    nonleague_p = subparsers.add_parser(
+        "fetch-nonleague-matches",
+        help="Fetch cup/continental/international match dates for tracked teams from FotMob's "
+             "all-competitions payload, so CTX_*_REST_DAYS can reflect a non-league match in the gap",
+    )
+    nonleague_p.add_argument("--date-from", required=True, help="Start date YYYY-MM-DD (inclusive)")
+    nonleague_p.add_argument("--date-to", required=True, help="End date YYYY-MM-DD (inclusive)")
+    nonleague_p.add_argument("--delay", type=float, default=1.0, help="Polite delay in seconds between requests.")
+
     # learning-curve
     lc_parser = subparsers.add_parser("learning-curve", help="Train on growing data subsets to diagnose feature ceiling vs. data ceiling")
     lc_target_group = lc_parser.add_mutually_exclusive_group(required=True)
@@ -737,6 +747,112 @@ def run_fetch_lineups(
     print(f"fetch-lineups complete | matches_scanned={len(fotmob_ids)} | rows_upserted={total}")
 
 
+def _fetch_and_upsert_nonleague_matches(db_manager: DuckDBManager, from_d, to_d, delay: float = 1.0) -> dict:
+    """Shared core for fetch-nonleague-matches (US#212): scope tracked_teams
+    to FotMob-covered leagues, scan every day in [from_d, to_d] via
+    fetch_all_matches, resolve against tracked_teams, and upsert. Used by
+    both the manual CLI (explicit date range) and the scheduled incremental
+    step (a small recent window) below."""
+    from datetime import timedelta
+
+    from src.ingestion.fotmob.fetcher import LEAGUE_IDS, fetch_all_matches
+    from src.ingestion.fotmob.merge import resolve_nonleague_match_dates, upsert_nonleague_match_dates
+
+    with db_manager.connection() as conn:
+        teams_df = conn.execute(
+            "SELECT home_team AS team FROM raw_matches WHERE league IN ? "
+            "UNION SELECT away_team AS team FROM raw_matches WHERE league IN ?",
+            [tuple(LEAGUE_IDS), tuple(LEAGUE_IDS)],
+        ).fetchdf()
+    tracked_teams = set(teams_df["team"].dropna())
+    LOGGER.info("fetch-nonleague-matches: %d tracked teams (FotMob-covered leagues only)", len(tracked_teams))
+
+    all_matches: list[dict] = []
+    current = from_d
+    while current <= to_d:
+        try:
+            all_matches.extend(fetch_all_matches(current, delay=delay))
+        except Exception as exc:  # noqa: BLE001
+            LOGGER.warning("Failed to fetch match list for %s: %s", current, exc)
+        current += timedelta(days=1)
+
+    resolved = resolve_nonleague_match_dates(all_matches, tracked_teams)
+    total = upsert_nonleague_match_dates(resolved, db_manager)
+    return {"days_scanned": (to_d - from_d).days + 1, "matches_seen": len(all_matches), "upserted": total}
+
+
+def run_fetch_nonleague_matches(
+    db_manager: DuckDBManager,
+    date_from: str,
+    date_to: str,
+    delay: float = 1.0,
+) -> None:
+    """Fetch cup/continental/international match dates for our own tracked
+    teams from FotMob's all-competitions payload and upsert them into
+    fotmob_nonleague_matches (US#212), so compute_rolling_stats can let a
+    non-league match shorten CTX_*_REST_DAYS when it falls inside a league
+    gap. Manual, explicit-range entry point (e.g. a one-off historical
+    backfill) -- see run_fetch_nonleague_matches_incremental for the
+    scheduled refresh-data step."""
+    from datetime import date as _date
+
+    LOGGER.info("Executing command: fetch-nonleague-matches | %s..%s", date_from, date_to)
+    try:
+        from_d = _date.fromisoformat(date_from)
+        to_d = _date.fromisoformat(date_to)
+    except ValueError as exc:
+        LOGGER.error("Invalid date format: %s", exc)
+        return
+
+    result = _fetch_and_upsert_nonleague_matches(db_manager, from_d, to_d, delay=delay)
+    print(
+        f"fetch-nonleague-matches complete | days_scanned={result['days_scanned']} | "
+        f"matches_seen={result['matches_seen']} | tracked_matches_upserted={result['upserted']}"
+    )
+
+
+# US#212: how far back the scheduled refresh-data step looks on its first
+# ever run (no fotmob_nonleague_matches rows yet to pick up from) -- wide
+# enough to cover a missed week or two of scheduler downtime, nowhere near
+# the ~1,839-day full historical backfill (a deliberate one-off, run
+# manually via the fetch-nonleague-matches CLI, not on this schedule).
+_NONLEAGUE_MATCHES_FIRST_RUN_LOOKBACK_DAYS = 30
+
+
+def run_fetch_nonleague_matches_incremental(db_manager: DuckDBManager, delay: float = 1.0) -> None:
+    """Scheduled refresh-data step (US#212): fetch only the days since the
+    last run instead of re-scanning the full history every week -- the one-
+    time historical backfill is a separate, manually-triggered action (see
+    the fetch-nonleague-matches CLI command)."""
+    from datetime import date as _date, timedelta
+
+    with db_manager.connection() as conn:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS fotmob_nonleague_matches (
+                team TEXT,
+                match_date TIMESTAMP,
+                PRIMARY KEY (team, match_date)
+            )
+            """
+        )
+        last_date = conn.execute("SELECT MAX(match_date) FROM fotmob_nonleague_matches").fetchone()[0]
+
+    today = _date.today()
+    from_d = (last_date.date() + timedelta(days=1)) if last_date is not None else (
+        today - timedelta(days=_NONLEAGUE_MATCHES_FIRST_RUN_LOOKBACK_DAYS)
+    )
+    if from_d > today:
+        LOGGER.info("fetch-nonleague-matches (incremental): already up to date, nothing to fetch.")
+        return
+
+    result = _fetch_and_upsert_nonleague_matches(db_manager, from_d, today, delay=delay)
+    LOGGER.info(
+        "fetch-nonleague-matches (incremental) complete | %s..%s | matches_seen=%d | tracked_matches_upserted=%d",
+        from_d, today, result["matches_seen"], result["upserted"],
+    )
+
+
 def run_refresh_sweden_data(app_settings: AppSettings, db_manager: DuckDBManager) -> None:
     """Fetch + upsert Sweden's Allsvenskan CSV and rebuild the feature store (US#132).
 
@@ -821,6 +937,7 @@ def run_refresh_data(app_settings: AppSettings, db_manager: DuckDBManager, leagu
     from src.ingestion.fotmob.lineup import backfill_lineups_from_player_stats
     total = backfill_lineups_from_player_stats(db_manager, league=league)
     LOGGER.info("refresh-data: lineup backfill complete | rows_upserted=%d", total)
+    run_fetch_nonleague_matches_incremental(db_manager)
     LOGGER.info("refresh-data complete.")
 
 
@@ -2460,6 +2577,13 @@ def main() -> None:
             date_from=args.date_from,
             date_to=args.date_to,
             league=str(args.league),
+            delay=float(args.delay),
+        )
+    elif args.command == "fetch-nonleague-matches":
+        run_fetch_nonleague_matches(
+            db_manager,
+            date_from=args.date_from,
+            date_to=args.date_to,
             delay=float(args.delay),
         )
     elif args.command == "select-best-models":

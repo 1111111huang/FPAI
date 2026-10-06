@@ -119,12 +119,16 @@ def test_run_refresh_data_epl_still_runs_full_pipeline(monkeypatch: pytest.Monke
         "src.ingestion.fotmob.lineup.backfill_lineups_from_player_stats",
         lambda db_manager, league=None: calls.append("lineups") or 0,
     )
+    monkeypatch.setattr(
+        main, "run_fetch_nonleague_matches_incremental",
+        lambda *a, **kw: calls.append("nonleague_matches"),
+    )
 
     from src.utils.config_loader import settings as app_settings
 
     main.run_refresh_data(app_settings, _UnusedDBManager(), league="E0")
 
-    assert calls == ["scrape", "ingest", "understat", "fotmob", "lineups"]
+    assert calls == ["scrape", "ingest", "understat", "fotmob", "lineups", "nonleague_matches"]
 
 
 def test_build_sweden_refresh_scheduler_registers_one_job_with_sweden_job_id() -> None:

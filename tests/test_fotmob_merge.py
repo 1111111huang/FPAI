@@ -13,7 +13,11 @@ sys.path.append(str(Path(__file__).resolve().parents[1]))
 
 duckdb = pytest.importorskip("duckdb")
 
-from src.ingestion.fotmob.merge import upsert_player_match_stats
+from src.ingestion.fotmob.merge import (
+    resolve_nonleague_match_dates,
+    upsert_nonleague_match_dates,
+    upsert_player_match_stats,
+)
 from src.utils.db_manager import DuckDBManager
 
 
@@ -188,3 +192,66 @@ def test_upsert_player_match_stats_handles_empty_input(tmp_path: Path) -> None:
     ]), db_manager)
 
     assert result == {"matched": 0, "unmatched": 0, "players_upserted": 0, "rows_upserted": 0}
+
+
+# ---------------------------------------------------------------------------
+# resolve_nonleague_match_dates / upsert_nonleague_match_dates (US#212)
+# ---------------------------------------------------------------------------
+
+def test_resolve_nonleague_match_dates_keeps_only_tracked_teams() -> None:
+    """A Champions League tie between a tracked team (Chelsea) and a club
+    we don't track in any of the 6 leagues (Ajax) must yield a row for
+    Chelsea only -- Ajax has no place in CTX_*_REST_DAYS, which only ever
+    needs rest-days for teams raw_matches already knows about."""
+    matches = [
+        {
+            "fotmob_match_id": 1,
+            "match_date": pd.Timestamp("2025-09-17"),
+            "home_team": "Chelsea",
+            "away_team": "Ajax",
+        },
+    ]
+    tracked_teams = {"Chelsea", "Liverpool"}
+
+    result = resolve_nonleague_match_dates(matches, tracked_teams)
+
+    assert list(result.itertuples(index=False, name=None)) == [("Chelsea", pd.Timestamp("2025-09-17"))]
+
+
+def test_resolve_nonleague_match_dates_keeps_both_sides_when_both_tracked() -> None:
+    """Two tracked teams meeting in a cup/continental tie (e.g. an
+    all-English European night) both get a row -- the gap matters for
+    each team's own rest-days, independent of the other."""
+    matches = [
+        {
+            "fotmob_match_id": 2,
+            "match_date": pd.Timestamp("2025-09-17"),
+            "home_team": "Liverpool",
+            "away_team": "Chelsea",
+        },
+    ]
+    tracked_teams = {"Chelsea", "Liverpool"}
+
+    result = resolve_nonleague_match_dates(matches, tracked_teams)
+
+    assert set(result.itertuples(index=False, name=None)) == {
+        ("Liverpool", pd.Timestamp("2025-09-17")),
+        ("Chelsea", pd.Timestamp("2025-09-17")),
+    }
+
+
+def test_upsert_nonleague_match_dates_is_idempotent(tmp_path: Path) -> None:
+    db_manager = _make_db_manager(tmp_path)
+    df = pd.DataFrame(
+        [{"team": "Chelsea", "date": pd.Timestamp("2025-09-17")}]
+    )
+
+    first = upsert_nonleague_match_dates(df, db_manager)
+    second = upsert_nonleague_match_dates(df, db_manager)
+
+    with db_manager.connection() as conn:
+        rows = conn.execute("SELECT team, match_date FROM fotmob_nonleague_matches").fetchall()
+
+    assert first == 1
+    assert second == 1
+    assert rows == [("Chelsea", pd.Timestamp("2025-09-17"))]

@@ -8,7 +8,8 @@ risk of a date/team-string formatting mismatch against the hash function.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+import logging
+from typing import TYPE_CHECKING, Iterable
 
 import pandas as pd
 
@@ -213,3 +214,85 @@ def upsert_player_match_stats(
         "players_upserted": len(players),
         "rows_upserted": len(stats),
     }
+
+
+def resolve_nonleague_match_dates(
+    matches: list[dict],
+    tracked_teams: Iterable[str],
+    mapping_path: str = "config/team_mapping.json",
+) -> pd.DataFrame:
+    """Filter FotMob's all-competitions match list (fetcher.fetch_all_matches)
+    down to (team, date) rows for whichever side(s) of each match are one of
+    our own tracked teams (US#212) -- an opponent outside the 6 tracked
+    leagues (e.g. Ajax in a Champions League tie) maps to itself via
+    TeamNameMapper and is dropped since it's never in tracked_teams.
+
+    Args:
+        matches: per-match dicts with home_team/away_team/match_date (the
+            shape fetch_all_matches/_parse_finished_matches returns).
+        tracked_teams: canonical team names already used in raw_matches --
+            also doubles as the fuzzy-match candidate pool, same pattern as
+            resolve_match_ids's league-scoped pool (US#141).
+        mapping_path: Path to team_mapping.json for name normalisation.
+
+    Returns:
+        DataFrame with columns [team, date], one row per tracked side.
+    """
+    tracked = set(tracked_teams)
+    if not matches or not tracked:
+        return pd.DataFrame(columns=["team", "date"])
+
+    mapper = TeamNameMapper(mapping_path=mapping_path)
+    rows: list[dict] = []
+    # Unlike resolve_match_ids's league-scoped pool, this scans FotMob's
+    # entire worldwide daily payload against a ~100-team candidate pool --
+    # the overwhelming majority of matches (Thai league, Latvian league,
+    # women's competitions, etc.) are expected non-matches by design, not
+    # actionable "add this mapping" signals. map_team's per-miss WARNING
+    # would otherwise flood the log across a multi-year backfill, so it's
+    # quieted for the duration of this call only.
+    team_mapping_logger = logging.getLogger("src.ingestion.common.team_mapping")
+    previous_level = team_mapping_logger.level
+    team_mapping_logger.setLevel(logging.ERROR)
+    try:
+        for match in matches:
+            match_date = match["match_date"]
+            for side in ("home_team", "away_team"):
+                mapped = mapper.map_team(match[side], tracked)
+                if mapped in tracked:
+                    rows.append({"team": mapped, "date": match_date})
+    finally:
+        team_mapping_logger.setLevel(previous_level)
+
+    return pd.DataFrame(rows, columns=["team", "date"]).drop_duplicates()
+
+
+def upsert_nonleague_match_dates(df: pd.DataFrame, db_manager: "DuckDBManager") -> int:
+    """Persist (team, date) rows into fotmob_nonleague_matches (US#212) --
+    feature_factory.compute_rolling_stats reads this table to let a cup/
+    continental/international match shorten CTX_*_REST_DAYS when it falls
+    inside a league gap."""
+    with db_manager.connection() as conn:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS fotmob_nonleague_matches (
+                team TEXT,
+                match_date TIMESTAMP,
+                PRIMARY KEY (team, match_date)
+            )
+            """
+        )
+        if df.empty:
+            return 0
+
+        upsert_rows = df.rename(columns={"date": "match_date"})[["team", "match_date"]].drop_duplicates()
+        conn.register("_nonleague_upd", upsert_rows)
+        conn.execute(
+            """
+            INSERT INTO fotmob_nonleague_matches (team, match_date)
+            SELECT team, match_date FROM _nonleague_upd
+            ON CONFLICT (team, match_date) DO NOTHING
+            """
+        )
+        conn.unregister("_nonleague_upd")
+        return len(upsert_rows)

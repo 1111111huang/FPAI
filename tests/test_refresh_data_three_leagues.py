@@ -48,6 +48,7 @@ def test_run_refresh_data_scrapes_the_correct_leagues_own_page(
         "src.ingestion.fotmob.lineup.backfill_lineups_from_player_stats",
         lambda db_manager, league=None: 0,
     )
+    monkeypatch.setattr(main, "run_fetch_nonleague_matches_incremental", lambda *a, **kw: None)
 
     from src.utils.config_loader import settings as app_settings
 
