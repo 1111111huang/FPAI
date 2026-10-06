@@ -96,8 +96,9 @@ For `tier == "llm_only"`:
 
 ## 9. Open items (flagged, not resolved here)
 
-- Exact fotmob / odds-provider competition codes and IDs for UCL and UEL — implementation-time lookup.
 - Exact frontend tier-label copy — a product/copy decision, not architectural.
+
+**Resolved during plan-writing (2026-10-06):** investigated exact data sourcing. Live fixtures: fotmob's `/api/data/matches` already returns UCL/UEL fixtures/results unfiltered (`fetch_all_matches`, `src/ingestion/fotmob/fetcher.py:181-198`), but its parser currently extracts no score field — needs extending. Live + historical odds: OddsPapi (`app/backend/oddspapi_client.py`, `scripts/pull_oddspapi_btts_corners.py`) is the only viable source — tournament IDs for UCL/UEL aren't yet known and need discovery via `/v4/tournaments?sportId=10`, the same method already used for the 5 ML leagues' IDs. **Material constraint, accepted by direct user decision (2026-10-06):** OddsPapi's historical-odds endpoint only has data from 2026-01-01 onward (confirmed live, older fixtures 404) and a 250-req/month free-tier quota shared with other historical pulls — so the Section 8 backtest-ROI sample will be thin (a few months of matches, not a multi-season corpus) for a while. Decision: proceed anyway, treat the launch-gate result the same way the existing E0 lesson A/B (n=6-13 bets) was treated — inconclusive-not-negative on a small sample, not a blocker — and revisit the bar as more data accumulates month over month.
 
 ## 10. Testing
 
