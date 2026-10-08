@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
 
@@ -24,7 +25,11 @@ def configure_logger(level: int = logging.INFO) -> logging.Logger:
     console_handler.setLevel(level)
     console_handler.setFormatter(formatter)
 
-    file_handler = logging.FileHandler(log_file, encoding="utf-8")
+    # ponytail: 10MB x 5 backups = 60MB ceiling. Raise if ever too aggressive
+    # for post-incident debugging; W247's daily per-league subprocess job
+    # was what turned the old unbounded FileHandler into a volume-capacity
+    # incident (125MB/1M+ lines accumulated since Aug 12, never rotated).
+    file_handler = RotatingFileHandler(log_file, maxBytes=10_000_000, backupCount=5, encoding="utf-8")
     file_handler.setLevel(level)
     file_handler.setFormatter(formatter)
 
