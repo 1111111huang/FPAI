@@ -123,7 +123,7 @@ def test_web_search_falls_back_to_secondary_key_when_primary_fails():
     def fake_client(api_key):
         return primary if api_key == "primary-key" else secondary
 
-    with patch.dict("os.environ", {"TAVILY_API_KEY": "primary-key", "TAVILY_API_KEY_FALLBACK": "fallback-key"}, clear=True), \
+    with patch.dict("os.environ", {"TAVILY_API_KEY": "primary-key", "TAVILY_API_KEY_2": "fallback-key"}, clear=True), \
          patch("tavily.TavilyClient", side_effect=fake_client):
         result = _web_search_impl("Arsenal Chelsea injury news")
 
@@ -138,7 +138,7 @@ def test_web_search_both_keys_failing_degrades_instead_of_raising():
     instance = MagicMock()
     instance.search.side_effect = RuntimeError("still exceeds usage limit")
 
-    with patch.dict("os.environ", {"TAVILY_API_KEY": "primary-key", "TAVILY_API_KEY_FALLBACK": "fallback-key"}, clear=True), \
+    with patch.dict("os.environ", {"TAVILY_API_KEY": "primary-key", "TAVILY_API_KEY_2": "fallback-key"}, clear=True), \
          patch("tavily.TavilyClient", return_value=instance):
         result = _web_search_impl("Arsenal Chelsea injury news")
 

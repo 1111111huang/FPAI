@@ -122,13 +122,13 @@ def _looks_like_post_match_result(title: str, content: str) -> bool:
 def _web_search_impl(query: str) -> str:
     from tavily import TavilyClient
 
-    # Second key (TAVILY_API_KEY_FALLBACK) is tried when the primary is
-    # missing/exhausted -- e.g. quota hit on the primary account. dict.fromkeys
-    # dedupes in case both env vars are set to the same value.
+    # TAVILY_API_KEY_2.._8 (A111 follow-up) are tried in order when an
+    # earlier key is missing/exhausted -- e.g. quota hit on that account.
+    # dict.fromkeys dedupes in case the same key is set under multiple names.
     api_keys = list(dict.fromkeys(
         k for k in (
             os.environ.get("TAVILY_API_KEY"),
-            os.environ.get("TAVILY_API_KEY_FALLBACK"),
+            *(os.environ.get(f"TAVILY_API_KEY_{i}") for i in range(2, 9)),
         )
         if k
     ))

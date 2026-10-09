@@ -41,6 +41,13 @@ LOGGER = get_logger(__name__)
 CREDIT_COUNTER_PATH = Path(__file__).parent.parent.parent / "data" / "odds_api_credit_counter.json"
 CREDIT_COUNTER_PATH_2 = Path(__file__).parent.parent.parent / "data" / "odds_api_credit_counter_2.json"
 CREDIT_COUNTER_PATH_3 = Path(__file__).parent.parent.parent / "data" / "odds_api_credit_counter_3.json"
+# _4.._8 (2026-10-08): same per-key credit file, generated rather than
+# hardcoded since there's no BUG-056-style default-to-primary quirk for
+# these slots (that quirk is _3-only, see build_odds_client()).
+_ODDS_CREDIT_COUNTER_PATHS_4_TO_8 = {
+    i: Path(__file__).parent.parent.parent / "data" / f"odds_api_credit_counter_{i}.json"
+    for i in range(4, 9)
+}
 CREDIT_COUNTER_PATH_ODDSPAPI = Path(__file__).parent.parent.parent / "data" / "oddspapi_credit_counter.json"
 CREDIT_COUNTER_PATH_ODDSPAPI_2 = Path(__file__).parent.parent.parent / "data" / "oddspapi_credit_counter_2.json"
 CREDIT_COUNTER_PATH_ODDSPAPI_3 = Path(__file__).parent.parent.parent / "data" / "oddspapi_credit_counter_3.json"
@@ -209,7 +216,9 @@ def build_odds_client() -> OddsAPIClient | HistoricalOddsClient | FallbackOddsCl
     falls back to ODDS_API_KEY's own value when unset, so local/dev setups that only
     ever configure one real key don't need a second env var just to exercise
     the 3-key code path; production sets ODDS_API_KEY_3 to a genuinely
-    distinct key."""
+    distinct key. ODDS_API_KEY_4.._8, when set, are additional fallbacks --
+    simply omitted if unset, same convention as ODDSPAPI_API_KEY_2/_3 (no
+    default-to-primary quirk beyond _3)."""
     override_date = sandbox_date()
     if override_date is not None:
         return HistoricalOddsClient(sandbox_date=override_date.isoformat())
@@ -219,6 +228,10 @@ def build_odds_client() -> OddsAPIClient | HistoricalOddsClient | FallbackOddsCl
         (primary_key, CREDIT_COUNTER_PATH),
         (os.environ.get("ODDS_API_KEY_2", ""), CREDIT_COUNTER_PATH_2),
         (os.environ.get("ODDS_API_KEY_3") or primary_key, CREDIT_COUNTER_PATH_3),
+        *(
+            (os.environ.get(f"ODDS_API_KEY_{i}", ""), path)
+            for i, path in _ODDS_CREDIT_COUNTER_PATHS_4_TO_8.items()
+        ),
     ]
     clients = [_build_persisting_odds_client(key, path) for key, path in keys_and_paths if key]
     if not clients:
