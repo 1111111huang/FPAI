@@ -212,6 +212,42 @@ class RecommendationCache:
             ).fetchall()
         return [self._row_to_entry(row) for row in rows]
 
+    def list_latest_for_keys(self, keys: list[tuple[str, str]]) -> dict[tuple[str, str], CacheEntry]:
+        """Bulk analogue of get_latest_any_config() for many (match_id,
+        date) pairs in one query -- lets a caller like main.py's bulk
+        recommendations endpoint collapse what would otherwise be N
+        separate HTTP round trips (one get_latest_any_config() call per
+        match, the shape MatchExplorerPage/DashboardPage used to make
+        straight from the frontend) into a single query.
+
+        Deliberately ignores agent_config_hash, same as
+        get_latest_any_config() -- GET /api/recommendations/{match_id}'s
+        extra get_latest(exact hash) preference over that only ever
+        differs when no row exists at all under the current hash, in
+        which case the any-config fallback it already falls through to
+        returns this exact same row anyway, since rows are append-only
+        and a hash bump is always *forward* (no later row can carry an
+        older hash than a row generated after a config change)."""
+        if not keys:
+            return {}
+        with self._connect() as conn:
+            placeholders = ",".join("(?,?)" for _ in keys)
+            params = [value for pair in keys for value in pair]
+            rows = conn.execute(
+                f"""
+                SELECT match_id, date, agent_config_hash, odds_json, recommendation_json, generated_at, triggered_by,
+                       reasoning_trace_json, forecast_payload_json
+                FROM recommendation_generations rg
+                WHERE (match_id, date) IN ({placeholders})
+                AND id = (
+                    SELECT MAX(id) FROM recommendation_generations rg2
+                    WHERE rg2.match_id = rg.match_id AND rg2.date = rg.date
+                )
+                """,
+                params,
+            ).fetchall()
+        return {(row[0], row[1]): self._row_to_entry(row) for row in rows}
+
     def most_recent_generated_at(self) -> str | None:
         """Latest `generated_at` across every row, any match/config -- used
         by main.py's boot-time pregenerate cooldown to tell "the cache is

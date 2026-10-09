@@ -9,7 +9,7 @@ import {
   type Match,
   __resetDashboardMatchesCacheForTests,
 } from "../MatchUI";
-import { generateRecommendation, getCachedRecommendation, getFixtures, getSandboxStatus } from "@/lib/api";
+import { generateRecommendation, getCachedRecommendationsBulk, getFixtures, getSandboxStatus } from "@/lib/api";
 import type { Fixture, MatchRecommendationOut } from "@/lib/types";
 
 vi.mock("@/lib/api");
@@ -216,7 +216,7 @@ describe("sandbox mode does not leak real results for fixtures still-future rela
     __resetDashboardMatchesCacheForTests();
     vi.mocked(getFixtures).mockReset();
     vi.mocked(getSandboxStatus).mockReset();
-    vi.mocked(getCachedRecommendation).mockReset();
+    vi.mocked(getCachedRecommendationsBulk).mockReset();
     vi.mocked(generateRecommendation).mockReset();
   });
 
@@ -297,15 +297,18 @@ describe("sandbox mode does not leak real results for fixtures still-future rela
       feature_completeness: 0.8,
       unknown_team: false,
     };
-    vi.mocked(getCachedRecommendation).mockResolvedValue(rec);
+    vi.mocked(getCachedRecommendationsBulk).mockResolvedValue({ "future-finished": rec });
 
     render(<MatchExplorerPage />);
 
-    // W53: the initial-list bulk cache check (Promise.all over
-    // getCachedRecommendation) now resolves this cache hit up front -- no
-    // click needed for a fixture rendered as upcoming under the sandbox
-    // future-fixture rule to show its precomputed recommendation.
-    await waitFor(() => expect(getCachedRecommendation).toHaveBeenCalledWith("future-finished", "2026-03-14"));
+    // W53/bulk follow-up: the initial-list bulk cache check (one POST
+    // /api/recommendations/bulk call, not one per match) now resolves this
+    // cache hit up front -- no click needed for a fixture rendered as
+    // upcoming under the sandbox future-fixture rule to show its
+    // precomputed recommendation.
+    await waitFor(() =>
+      expect(getCachedRecommendationsBulk).toHaveBeenCalledWith([{ matchId: "future-finished", date: "2026-03-14" }])
+    );
     await waitFor(() => {
       expect(screen.getByText("Direct Bet")).toBeInTheDocument();
       expect(screen.queryByText("Not yet generated")).not.toBeInTheDocument();
@@ -319,7 +322,7 @@ describe("MatchExplorerPage -- actionable-only filter (W108)", () => {
     __resetDashboardMatchesCacheForTests();
     vi.mocked(getFixtures).mockReset();
     vi.mocked(getSandboxStatus).mockReset();
-    vi.mocked(getCachedRecommendation).mockReset();
+    vi.mocked(getCachedRecommendationsBulk).mockReset();
     vi.mocked(getSandboxStatus).mockResolvedValue({ sandbox_mode: false, as_of: null });
   });
 
@@ -340,7 +343,7 @@ describe("MatchExplorerPage -- actionable-only filter (W108)", () => {
       limitations: [], prediction_basis: "team_history_and_market", invalid_market_count: 0,
       cold_start_risk: false, feature_completeness: 0.9, unknown_team: false,
     };
-    vi.mocked(getCachedRecommendation).mockImplementation(async (matchId: string) => (matchId === "1" ? rec : null));
+    vi.mocked(getCachedRecommendationsBulk).mockResolvedValue({ "1": rec });
 
     const user = userEvent.setup();
     render(<MatchExplorerPage />);

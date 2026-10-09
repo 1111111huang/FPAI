@@ -47,6 +47,7 @@ import {
   generateRecommendation,
   getBets,
   getCachedRecommendation,
+  getCachedRecommendationsBulk,
   getFixtures,
   logBetFromRecommendation,
   logBetManual,
@@ -253,40 +254,48 @@ export function applyRecommendation(match: Match, rec: MatchRecommendationOut): 
  * on click, MatchAnalysisPage.load on navigation), so a fully-precomputed
  * cache never visually manifested until every card was clicked individually.
  *
- * Runs one getCachedRecommendation() call per match concurrently (Promise.all,
- * not a sequential loop) -- the list is capped at 10 and this hits a local
- * SQLite-backed cache, so N concurrent local calls is the simple, correctly
- * scoped choice (no rate-limit concern like W52's football-data.org calls,
- * and no new backend bulk endpoint needed). A miss (null) or a thrown error
- * is treated identically -- same "degrade to miss" reasoning
- * MatchCard.handleExpand's own cache-check catch already established --
- * leaving the match unchanged (still hasRecommendation: false) so the
- * existing W47 lazy click-through fallback still applies untouched. */
+ * Originally one getCachedRecommendation() call per match (Promise.all) --
+ * fine when every caller was capped at 10, but Match Explorer's 90-day
+ * window can realistically hit 50-100+ matches, which the browser's
+ * ~6-connections-per-origin cap serialized into 10-17 round-trip batches
+ * (direct user report: switching to Match Explorer still took 5s+ after
+ * /api/fixtures itself was parallelized). Now one POST
+ * /api/recommendations/bulk call for the whole list instead. A miss (null)
+ * or the whole call throwing is treated identically -- same "degrade to
+ * miss" reasoning MatchCard.handleExpand's own cache-check catch already
+ * established -- leaving a match unchanged (still hasRecommendation: false)
+ * so the existing W47 lazy click-through fallback still applies untouched. */
 async function resolveCachedRecommendations(matches: Match[]): Promise<Match[]> {
-  return Promise.all(
-    matches.map(async (m) => {
-      try {
-        const rec = await getCachedRecommendation(m.id, m.kickoffIso.slice(0, 10));
-        return rec ? applyRecommendation(m, rec) : m;
-      } catch {
-        return m;
-      }
-    })
-  );
+  let byMatchId: Record<string, MatchRecommendationOut | null>;
+  try {
+    byMatchId = await getCachedRecommendationsBulk(
+      matches.map((m) => ({ matchId: m.id, date: m.kickoffIso.slice(0, 10) }))
+    );
+  } catch {
+    return matches;
+  }
+  return matches.map((m) => {
+    const rec = byMatchId?.[m.id];
+    return rec ? applyRecommendation(m, rec) : m;
+  });
 }
 
-/** Module-level (outside the component, survives unmount) so navigating to a
- * match's detail page and back doesn't re-run DashboardPage's ~12-call load
- * (1 fixtures + up to 10 concurrent recommendation calls + AppShell's own
- * duplicate sandbox-status fetch) every single time -- direct user report,
- * keyed by the same `today` date string load() already fetches with.
+/** Module-level (outside the component, survives unmount) so navigating away
+ * from DashboardPage or MatchExplorerPage and back doesn't re-run their
+ * multi-call load (fixtures + the bulk recommendations call + AppShell's own
+ * duplicate sandbox-status fetch) every single time -- direct user report.
+ * Shared by both pages, keyed by each one's own fetch-window string
+ * (DashboardPage: the bare `today` date; MatchExplorerPage: an
+ * "explorer:"-prefixed key so the two can never collide) -- despite the
+ * name, nothing below is Dashboard-specific, just a generic TTL-keyed
+ * resolved-matches cache.
  *
  * TTL is adaptive, not fixed: a live or soon-to-start match means scores/
  * live-wait odds can move, so that entry expires fast; a quiet window with
  * nothing imminent can sit far longer since nothing about it changes on its
  * own. ponytail: a plain module-level Map, not a real cache library --
  * upgrade to something with LRU eviction if this ever grows past a handful
- * of date keys per session (it won't -- one user, one dashboard). */
+ * of keys per session (it won't -- one user, two pages). */
 const DASHBOARD_CACHE_LIVE_TTL_MS = 60_000;
 const DASHBOARD_CACHE_IDLE_TTL_MS = 5 * 60_000;
 const DASHBOARD_CACHE_IMMINENT_WINDOW_MS = 30 * 60_000;
@@ -1906,7 +1915,6 @@ export function MatchExplorerPage() {
 
     async function load() {
       setError(null);
-      setMatches(null);
       try {
         // Widened from 30 to 90 days after live verification showed the
         // off-season gap between fixture windows can exceed 30 days (e.g.
@@ -1930,6 +1938,19 @@ export function MatchExplorerPage() {
         // looking forward, not back).
         const from = dateString(addDays(asOf, -30, sandboxMode), sandboxMode);
         const to = dateString(addDays(asOf, 90, sandboxMode), sandboxMode);
+        // Direct user follow-up: unlike DashboardPage, this page had no
+        // page-level cache at all -- switching back within seconds still
+        // blanked to the loading skeleton and re-ran the full fixtures +
+        // bulk-recommendations round trip every time. Shares DashboardPage's
+        // own cache map/TTL logic (see its doc comment above), keyed by this
+        // page's own fetch window instead of DashboardPage's single `today`.
+        const cacheKey = `explorer:${from}`;
+        const cached = getDashboardMatchesCache(cacheKey);
+        if (cached) {
+          setMatches(cached);
+          return;
+        }
+        setMatches(null);
         const fixtures = await getFixtures(from, to);
         if (cancelled) return;
         const initialMatches = fixtures.map((f) => fixtureToMatch(f, asOf, sandboxMode));
@@ -1947,7 +1968,9 @@ export function MatchExplorerPage() {
         // guard so a superseded run can't clobber a later one's state.
         setMatches(initialMatches);
         resolveCachedRecommendations(initialMatches).then((resolvedMatches) => {
-          if (!cancelled) setMatches(resolvedMatches);
+          if (cancelled) return;
+          setMatches(resolvedMatches);
+          setDashboardMatchesCache(cacheKey, resolvedMatches);
         });
       } catch (err) {
         if (!cancelled) setError(err instanceof ApiError ? err.message : "Could not load fixtures.");

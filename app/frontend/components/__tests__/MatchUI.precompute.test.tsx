@@ -20,7 +20,13 @@ import { describe, expect, it, vi, beforeEach } from "vitest";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { DashboardPage, MatchExplorerPage, dateString, __resetDashboardMatchesCacheForTests } from "../MatchUI";
-import { generateRecommendation, getCachedRecommendation, getFixtures, getSandboxStatus } from "@/lib/api";
+import {
+  generateRecommendation,
+  getCachedRecommendation,
+  getCachedRecommendationsBulk,
+  getFixtures,
+  getSandboxStatus,
+} from "@/lib/api";
 import type { Fixture, MatchRecommendationOut } from "@/lib/types";
 
 vi.mock("@/lib/api");
@@ -60,6 +66,7 @@ describe("Dashboard initial-list precompute visibility (W53)", () => {
     __resetDashboardMatchesCacheForTests();
     vi.mocked(getFixtures).mockReset();
     vi.mocked(getCachedRecommendation).mockReset();
+    vi.mocked(getCachedRecommendationsBulk).mockReset();
     vi.mocked(generateRecommendation).mockReset();
     vi.mocked(getSandboxStatus).mockReset();
     // Pin asOf to the real-clock Date the hook starts with (sandbox_mode:
@@ -77,7 +84,7 @@ describe("Dashboard initial-list precompute visibility (W53)", () => {
     const f = fixture("precomputed-match", `${today}T15:00:00Z`, "Arsenal", "Everton");
     vi.mocked(getFixtures).mockImplementation(async (from, to) => (from === today ? [f] : []));
     const cachedRec = makeRecommendation({ explanation: ["precomputed explanation"] });
-    vi.mocked(getCachedRecommendation).mockResolvedValue(cachedRec);
+    vi.mocked(getCachedRecommendationsBulk).mockResolvedValue({ "precomputed-match": cachedRec });
 
     render(<DashboardPage />);
 
@@ -89,7 +96,7 @@ describe("Dashboard initial-list precompute visibility (W53)", () => {
     expect(card).not.toBeNull();
     expect(within(card!).getByText("Direct Bet")).toBeInTheDocument();
     expect(screen.queryByText("Not yet generated")).not.toBeInTheDocument();
-    expect(getCachedRecommendation).toHaveBeenCalledWith("precomputed-match", today);
+    expect(getCachedRecommendationsBulk).toHaveBeenCalledWith([{ matchId: "precomputed-match", date: today }]);
     expect(generateRecommendation).not.toHaveBeenCalled();
   });
 
@@ -101,7 +108,7 @@ describe("Dashboard initial-list precompute visibility (W53)", () => {
     const today = dateString(now, false);
     const f = fixture("uncached-match", `${today}T15:00:00Z`, "Arsenal", "Everton");
     vi.mocked(getFixtures).mockImplementation(async (from, to) => (from === today ? [f] : []));
-    vi.mocked(getCachedRecommendation).mockResolvedValue(null);
+    vi.mocked(getCachedRecommendationsBulk).mockResolvedValue({ "uncached-match": null });
     const liveRec = makeRecommendation({ explanation: ["live explanation"] });
     vi.mocked(generateRecommendation).mockResolvedValue(liveRec);
 
@@ -113,16 +120,19 @@ describe("Dashboard initial-list precompute visibility (W53)", () => {
 
     // The bulk cache check must still have run (and found a miss) during the
     // initial load -- exactly one call before any click.
-    await waitFor(() => expect(getCachedRecommendation).toHaveBeenCalledWith("uncached-match", today));
-    await waitFor(() => expect(getCachedRecommendation).toHaveBeenCalledTimes(1));
+    await waitFor(() =>
+      expect(getCachedRecommendationsBulk).toHaveBeenCalledWith([{ matchId: "uncached-match", date: today }])
+    );
+    await waitFor(() => expect(getCachedRecommendationsBulk).toHaveBeenCalledTimes(1));
 
     // The existing W47 lazy fallback must still work end-to-end after the
-    // bulk check finds a miss -- its own (separate) cache-check call brings
-    // the total to 2.
+    // bulk check finds a miss -- a click goes through the card's own
+    // (separate, singular) getCachedRecommendation cache-check call.
     const user = userEvent.setup();
+    vi.mocked(getCachedRecommendation).mockResolvedValue(null);
     await user.click(screen.getByText("Not yet generated"));
 
-    await waitFor(() => expect(getCachedRecommendation).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(getCachedRecommendation).toHaveBeenCalledWith("uncached-match", today));
     await waitFor(() => expect(generateRecommendation).toHaveBeenCalledWith({
       home_team: "Arsenal",
       away_team: "Everton",
@@ -137,7 +147,7 @@ describe("Dashboard initial-list precompute visibility (W53)", () => {
     expect(within(card!).getByText("Direct Bet")).toBeInTheDocument();
   });
 
-  it("resolves the cache check concurrently across the whole initial list, not one match at a time", async () => {
+  it("resolves the whole initial list's cache check in a single bulk call, not one request per match", async () => {
     // W40: America/New_York's calendar day (dateString, the canonical
     // helper MatchUI.tsx's own components call), not the test runner's own
     // ambient timezone.
@@ -149,24 +159,23 @@ describe("Dashboard initial-list precompute visibility (W53)", () => {
     ];
     vi.mocked(getFixtures).mockImplementation(async (from, to) => (from === today ? fixtures : []));
 
-    const resolvers: Array<() => void> = [];
-    vi.mocked(getCachedRecommendation).mockImplementation(
-      () =>
-        new Promise((resolve) => {
-          resolvers.push(() => resolve(null));
-        })
+    let resolveBulk!: (value: Record<string, MatchRecommendationOut | null>) => void;
+    vi.mocked(getCachedRecommendationsBulk).mockImplementation(
+      () => new Promise((resolve) => { resolveBulk = resolve; })
     );
 
     render(<DashboardPage />);
 
-    // Both calls must have been *started* before either has resolved --
-    // proof this is Promise.all-style concurrent dispatch, not a sequential
-    // await-one-then-the-next loop (which would only ever have 1 pending
-    // call at this point).
-    await waitFor(() => expect(getCachedRecommendation).toHaveBeenCalledTimes(2));
-    expect(resolvers).toHaveLength(2);
+    // One request covering both matches -- not two separate per-match
+    // requests the way the pre-bulk-endpoint code made (direct user report
+    // that switching pages was still slow with N round trips per list).
+    await waitFor(() => expect(getCachedRecommendationsBulk).toHaveBeenCalledTimes(1));
+    expect(getCachedRecommendationsBulk).toHaveBeenCalledWith([
+      { matchId: "match-a", date: today },
+      { matchId: "match-b", date: today },
+    ]);
 
-    resolvers.forEach((r) => r());
+    resolveBulk({ "match-a": null, "match-b": null });
     await waitFor(() => expect(screen.getAllByText("Not yet generated")).toHaveLength(2));
   });
 });
@@ -187,13 +196,13 @@ describe("Match Explorer initial render is not blocked by the bulk cache check (
   beforeEach(() => {
     __resetDashboardMatchesCacheForTests();
     vi.mocked(getFixtures).mockReset();
-    vi.mocked(getCachedRecommendation).mockReset();
+    vi.mocked(getCachedRecommendationsBulk).mockReset();
     vi.mocked(generateRecommendation).mockReset();
     vi.mocked(getSandboxStatus).mockReset();
     vi.mocked(getSandboxStatus).mockResolvedValue({ sandbox_mode: false, as_of: "" });
   });
 
-  it("renders the fixture list immediately (before any cache-check promise resolves), then patches a precomputed recommendation in once it resolves", async () => {
+  it("renders the fixture list immediately (before the bulk cache-check call resolves), then patches a precomputed recommendation in once it resolves", async () => {
     // W40: America/New_York's calendar day (dateString, the canonical
     // helper MatchUI.tsx's own components call), not the test runner's own
     // ambient timezone.
@@ -202,35 +211,73 @@ describe("Match Explorer initial render is not blocked by the bulk cache check (
     const f = fixture("explorer-match", `${today}T15:00:00Z`, "Arsenal", "Everton");
     vi.mocked(getFixtures).mockResolvedValue([f]);
 
-    // A cache-check promise under this test's own control -- never resolved
-    // until asserted otherwise, so the initial render cannot be depending on
-    // it having settled.
-    let resolveCache!: (rec: MatchRecommendationOut | null) => void;
-    vi.mocked(getCachedRecommendation).mockImplementation(
-      () =>
-        new Promise((resolve) => {
-          resolveCache = resolve;
-        })
+    // The bulk cache-check call, under this test's own control -- never
+    // resolved until asserted otherwise, so the initial render cannot be
+    // depending on it having settled.
+    let resolveBulk!: (value: Record<string, MatchRecommendationOut | null>) => void;
+    vi.mocked(getCachedRecommendationsBulk).mockImplementation(
+      () => new Promise((resolve) => { resolveBulk = resolve; })
     );
 
     render(<MatchExplorerPage />);
 
     // The fixture must appear -- as "Not yet generated" -- while its
-    // cache-check promise is still outstanding. If the fix regresses back to
+    // cache-check call is still outstanding. If the fix regresses back to
     // awaiting the bulk check before the first setMatches, this would still
     // be showing LoadingRows here and neither assertion below would find
     // anything (a timeout, not a false pass).
     expect(await screen.findByText("Not yet generated")).toBeInTheDocument();
-    expect(getCachedRecommendation).toHaveBeenCalledWith("explorer-match", today);
+    expect(getCachedRecommendationsBulk).toHaveBeenCalledWith([{ matchId: "explorer-match", date: today }]);
 
     // Now resolve the cache hit -- the recommendation must be patched into
     // the already-rendered list, not require a click.
     const cachedRec = makeRecommendation({ explanation: ["patched in after first paint"] });
-    resolveCache(cachedRec);
+    resolveBulk({ "explorer-match": cachedRec });
 
     expect(await screen.findByText("Direct Bet")).toBeInTheDocument();
     expect(screen.queryByText("Not yet generated")).not.toBeInTheDocument();
     expect(generateRecommendation).not.toHaveBeenCalled();
+  });
+});
+
+// Direct user follow-up: does switching back and forth between Daily Edges
+// and Match Explorer actually benefit from caching? DashboardPage already
+// had its own page-level cache (W233); MatchExplorerPage didn't, so leaving
+// and returning to it always blanked to the loading skeleton and re-ran the
+// full fixtures + bulk-recommendations round trip, no matter how recently
+// you'd just been there. MatchExplorerPage now shares DashboardPage's same
+// cache map, keyed by its own fetch window.
+describe("MatchExplorerPage reuses a cached match list across remounts (navigating back and forth)", () => {
+  beforeEach(() => {
+    __resetDashboardMatchesCacheForTests();
+    vi.mocked(getFixtures).mockReset();
+    vi.mocked(getCachedRecommendationsBulk).mockReset();
+    vi.mocked(getSandboxStatus).mockReset();
+    vi.mocked(getSandboxStatus).mockResolvedValue({ sandbox_mode: false, as_of: "" });
+  });
+
+  it("a remount within the cache's TTL renders from the cache -- no new getFixtures/bulk call, no loading flash", async () => {
+    const now = new Date();
+    const today = dateString(now, false);
+    const f = fixture("cached-explorer-match", `${today}T15:00:00Z`, "Arsenal", "Everton");
+    vi.mocked(getFixtures).mockResolvedValue([f]);
+    const cachedRec = makeRecommendation({ explanation: ["cached across remounts"] });
+    vi.mocked(getCachedRecommendationsBulk).mockResolvedValue({ "cached-explorer-match": cachedRec });
+
+    const first = render(<MatchExplorerPage />);
+    expect(await screen.findByText("Arsenal")).toBeInTheDocument();
+    await waitFor(() => expect(getFixtures).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(getCachedRecommendationsBulk).toHaveBeenCalledTimes(1));
+    first.unmount();
+
+    render(<MatchExplorerPage />);
+
+    // Renders immediately from the cache -- already-resolved recommendation
+    // included, no intermediate "Not yet generated" flash.
+    expect(await screen.findByText("Arsenal")).toBeInTheDocument();
+    expect(screen.getByText("Direct Bet")).toBeInTheDocument();
+    expect(getFixtures).toHaveBeenCalledTimes(1);
+    expect(getCachedRecommendationsBulk).toHaveBeenCalledTimes(1);
   });
 });
 

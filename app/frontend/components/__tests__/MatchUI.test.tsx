@@ -23,6 +23,7 @@ import {
   shapSummarySentence,
   StatusBadge,
   TeamBadge,
+  __resetDashboardMatchesCacheForTests,
   type Match,
   type MarketRec,
   type Overall,
@@ -1579,6 +1580,12 @@ describe("LogBetButton (bet-logging locked-except-stake behavior)", () => {
 
 describe("MatchExplorerPage -- league section headers (direct user request)", () => {
   beforeEach(() => {
+    // MatchExplorerPage now shares DashboardPage's page-level matches cache
+    // (keyed by its own fetch window) -- without resetting it between tests,
+    // a later test in this block can silently hit a cache entry an earlier
+    // test populated (same real-clock `asOf` -> same cache key), skipping
+    // its own getFixtures call entirely.
+    __resetDashboardMatchesCacheForTests();
     vi.mocked(getFixtures).mockReset();
     vi.mocked(getCachedRecommendation).mockReset().mockResolvedValue(null);
     // AppShell (wraps MatchExplorerPage) calls these unconditionally on

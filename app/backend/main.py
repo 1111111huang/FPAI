@@ -1303,6 +1303,47 @@ async def get_agent_performance_dashboard(
     return compute_agent_performance_dashboard(outcomes, cache, top_n=top_n)
 
 
+class RecommendationBulkKey(BaseModel):
+    match_id: str
+    date: str
+
+
+@app.post("/api/recommendations/bulk")
+async def get_cached_recommendations_bulk(
+    keys: list[RecommendationBulkKey],
+    cache: RecommendationCache = Depends(recommendations.get_cache),
+) -> dict[str, MatchRecommendationOut | None]:
+    """Direct user report: switching to Match Explorer (and, before W53,
+    first-loading Dashboard) stayed slow even after /api/fixtures itself
+    was parallelized -- because resolveCachedRecommendations (MatchUI.tsx)
+    still made one GET /api/recommendations/{match_id} call *per match*,
+    50-100+ of them for Match Explorer's 90-day window, serialized into
+    10-17 batches by the browser's ~6-connections-per-origin cap. This
+    collapses that whole fan-out into one request: one
+    list_latest_for_keys() query instead of N get_latest_any_config()
+    calls, one response instead of N round trips.
+
+    Keyed by match_id in the response (not (match_id, date), unlike the
+    cache's own storage key) -- every caller already has exactly one date
+    per match_id in a given batch (a fixture occurs once), so match_id
+    alone is an unambiguous response key and keeps the frontend's lookup
+    a plain dict index instead of a composite-key reconstruction.
+
+    A miss for a given key is a null value in the response dict, not an
+    omitted key and not a 404 -- there is no single-item failure mode to
+    distinguish per key the way GET /api/recommendations/{match_id}'s 404
+    does for a single call; validate_and_degrade still runs per hit, same
+    as the single-match endpoint, so a malformed cached market is dropped
+    rather than raising."""
+    pairs = [(key.match_id, key.date) for key in keys]
+    entries = cache.list_latest_for_keys(pairs)
+    result: dict[str, MatchRecommendationOut | None] = {}
+    for key in keys:
+        entry = entries.get((key.match_id, key.date))
+        result[key.match_id] = validate_and_degrade(entry.recommendation) if entry else None
+    return result
+
+
 @app.get("/api/recommendations/{match_id}")
 async def get_cached_recommendation(
     match_id: str,

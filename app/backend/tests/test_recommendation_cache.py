@@ -219,6 +219,40 @@ def test_list_latest_per_match_returns_empty_list_when_nothing_cached(tmp_path: 
     assert cache.list_latest_per_match() == []
 
 
+def test_list_latest_for_keys_returns_the_latest_row_per_requested_key_regardless_of_hash(tmp_path: Path) -> None:
+    cache = RecommendationCache(db_path=tmp_path / "cache.db")
+    cache.record_generation("m1", "2026-08-22", "hash1", {}, {"overall": "direct_bet"}, "scheduled")
+    cache.record_generation("m1", "2026-08-22", "hash2", {}, {"overall": "conditional"}, "manual_regenerate")
+    cache.record_generation("m2", "2026-08-23", "hash1", {}, {"overall": "no_bet"}, "scheduled")
+    # Not requested below -- must not appear in the result, proving this is
+    # scoped to the given keys, not list_latest_per_match()'s "every match"
+    # scope.
+    cache.record_generation("m3", "2026-08-24", "hash1", {}, {"overall": "direct_bet"}, "scheduled")
+
+    entries = cache.list_latest_for_keys([("m1", "2026-08-22"), ("m2", "2026-08-23")])
+
+    assert set(entries) == {("m1", "2026-08-22"), ("m2", "2026-08-23")}
+    # m1's latest generation is the second one (hash2), not the first.
+    assert entries[("m1", "2026-08-22")].recommendation["overall"] == "conditional"
+    assert entries[("m2", "2026-08-23")].recommendation["overall"] == "no_bet"
+
+
+def test_list_latest_for_keys_omits_a_requested_key_with_nothing_cached(tmp_path: Path) -> None:
+    cache = RecommendationCache(db_path=tmp_path / "cache.db")
+    cache.record_generation("m1", "2026-08-22", "hash1", {}, {"overall": "direct_bet"}, "scheduled")
+
+    entries = cache.list_latest_for_keys([("m1", "2026-08-22"), ("missing", "2026-08-22")])
+
+    assert set(entries) == {("m1", "2026-08-22")}
+
+
+def test_list_latest_for_keys_returns_empty_dict_for_an_empty_key_list(tmp_path: Path) -> None:
+    cache = RecommendationCache(db_path=tmp_path / "cache.db")
+    cache.record_generation("m1", "2026-08-22", "hash1", {}, {"overall": "direct_bet"}, "scheduled")
+
+    assert cache.list_latest_for_keys([]) == {}
+
+
 # --- A107: reasoning_trace/forecast_payload -- same tracing agent-train/
 # agent-backtest persist to agent_telemetry, now captured for live
 # generations (eod_batch.py/t30_refresh.py/main.py) too. ---

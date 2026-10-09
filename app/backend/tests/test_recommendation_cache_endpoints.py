@@ -164,3 +164,61 @@ def test_cache_entry_exposes_the_odds_it_was_generated_from(tmp_path: Path):
         assert entry.odds == {"home": 1.5, "draw": 4.0, "away": 6.0}
     finally:
         app.dependency_overrides.clear()
+
+
+def test_bulk_returns_one_entry_per_requested_key_keyed_by_match_id(tmp_path: Path):
+    """Direct user report: switching to Match Explorer stayed slow even
+    after /api/fixtures was parallelized, because the frontend still made
+    one GET /api/recommendations/{match_id} call per match (50-100+ for a
+    90-day window). This bulk endpoint collapses that into one request."""
+    cache = _override_cache(tmp_path)
+    cache.record_generation(
+        match_id="m1", date="2026-08-22", agent_config_hash="hash1",
+        odds={}, recommendation=_VALID_RECOMMENDATION, triggered_by="scheduled",
+    )
+    try:
+        with TestClient(app) as client:
+            response = client.post(
+                "/api/recommendations/bulk",
+                json=[{"match_id": "m1", "date": "2026-08-22"}, {"match_id": "missing", "date": "2026-08-22"}],
+            )
+        assert response.status_code == 200
+        body = response.json()
+        assert body["m1"]["overall"] == "direct_bet"
+        assert body["missing"] is None
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_bulk_degrades_a_legacy_cached_row_instead_of_500ing(tmp_path: Path):
+    """Same BUG-028 degrade-on-malformed-market guarantee as the single-match
+    GET endpoint (test_get_degrades_a_legacy_cached_row_instead_of_500ing
+    above) -- validate_and_degrade runs per hit here too, not just for a
+    single lookup."""
+    cache = _override_cache(tmp_path)
+    legacy_market = {**_VALID_CANDIDATE, "market": "1X2", "selection": "Arsenal"}
+    cache.record_generation(
+        match_id="m1", date="2026-08-22", agent_config_hash="hash1",
+        odds={}, recommendation={**_VALID_RECOMMENDATION, "candidates": [legacy_market], "recommendation_pick": None},
+        triggered_by="scheduled",
+    )
+    try:
+        with TestClient(app) as client:
+            response = client.post("/api/recommendations/bulk", json=[{"match_id": "m1", "date": "2026-08-22"}])
+        assert response.status_code == 200
+        body = response.json()
+        assert body["m1"]["candidates"] == []
+        assert body["m1"]["invalid_market_count"] == 1
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_bulk_returns_empty_dict_for_an_empty_key_list(tmp_path: Path):
+    _override_cache(tmp_path)
+    try:
+        with TestClient(app) as client:
+            response = client.post("/api/recommendations/bulk", json=[])
+        assert response.status_code == 200
+        assert response.json() == {}
+    finally:
+        app.dependency_overrides.clear()

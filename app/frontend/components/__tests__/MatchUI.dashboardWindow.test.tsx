@@ -12,7 +12,7 @@ import { describe, expect, it, vi, beforeEach } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { DashboardPage, dateString, __resetDashboardMatchesCacheForTests } from "../MatchUI";
-import { getCachedRecommendation, getFixtures, getSandboxStatus } from "@/lib/api";
+import { getCachedRecommendationsBulk, getFixtures, getSandboxStatus } from "@/lib/api";
 import type { Fixture, MatchRecommendationOut } from "@/lib/types";
 
 vi.mock("@/lib/api");
@@ -255,9 +255,7 @@ describe("Dashboard always shows the next 10 matches (date-grouped, not today-on
       limitations: [], prediction_basis: "team_history_and_market", invalid_market_count: 0,
       cold_start_risk: false, feature_completeness: 0.9, unknown_team: false,
     };
-    vi.mocked(getCachedRecommendation).mockImplementation(async (matchId: string) =>
-      matchId === "actionable-match" ? rec : null
-    );
+    vi.mocked(getCachedRecommendationsBulk).mockResolvedValue({ "actionable-match": rec });
 
     const user = userEvent.setup();
     render(<DashboardPage />);

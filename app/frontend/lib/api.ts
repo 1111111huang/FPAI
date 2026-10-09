@@ -123,6 +123,30 @@ export async function getCachedRecommendation(
   return data;
 }
 
+/** Bulk analogue of getCachedRecommendation() -- one request for many
+ * (matchId, date) pairs instead of one request per match. Used by
+ * resolveCachedRecommendations (MatchUI.tsx) to collapse what used to be
+ * 50-100+ individual round trips (Match Explorer's 90-day window) into a
+ * single call. Not routed through readCache/cachedGet (those are keyed by
+ * a single GET path) -- a cache hit here is still useful (the 15s TTL on
+ * getCachedRecommendation's own per-match path doesn't apply to a POST
+ * body), but the caller already de-dupes which matches it bothers to ask
+ * about, so this always makes a real request for the batch it's given. */
+export async function getCachedRecommendationsBulk(
+  keys: { matchId: string; date: string }[]
+): Promise<Record<string, MatchRecommendationOut | null>> {
+  if (keys.length === 0) return {};
+  const response = await apiFetch(`/api/recommendations/bulk`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(keys.map((k) => ({ match_id: k.matchId, date: k.date }))),
+  });
+  if (!response.ok) {
+    throw new ApiError(`Failed to load cached recommendations (${response.status})`, response.status);
+  }
+  return response.json();
+}
+
 /** W12: logs a bet with every field but stake locked to the given
  * recommendation snapshot. */
 export async function logBetFromRecommendation(body: {
