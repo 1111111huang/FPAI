@@ -1671,13 +1671,21 @@ export function DashboardPage() {
         const todays = sorted.filter((m) => dayDiff(m.kickoffIso, asOf, sandboxMode) === 0);
         const later = sorted.filter((m) => dayDiff(m.kickoffIso, asOf, sandboxMode) !== 0);
         const nearest = [...todays, ...later.slice(0, Math.max(0, 10 - todays.length))];
-        // W53: resolve the precomputed cache for the (already-capped-to-10)
-        // list before rendering -- an additional await in this same guarded
-        // run, so re-check `cancelled` again before touching state.
-        const resolvedMatches = await resolveCachedRecommendations(nearest);
-        if (cancelled) return;
-        setMatches(resolvedMatches);
-        setDashboardMatchesCache(today, resolvedMatches);
+        // Render the capped list immediately (unblocked), then patch
+        // precomputed recommendations in via a follow-up setMatches once the
+        // cache check resolves in the background -- same non-blocking shape
+        // MatchExplorerPage already uses (W53 follow-up) for its own, much
+        // larger fan-out. Previously awaited resolveCachedRecommendations
+        // before the first setMatches here, blocking first paint on up to
+        // 10 extra (cheap, but real) round trips for no benefit at this
+        // cap size -- direct user report that Dashboard's first load is
+        // noticeably slow.
+        setMatches(nearest);
+        resolveCachedRecommendations(nearest).then((resolvedMatches) => {
+          if (cancelled) return;
+          setMatches(resolvedMatches);
+          setDashboardMatchesCache(today, resolvedMatches);
+        });
       } catch (err) {
         if (!cancelled) setError(err instanceof ApiError ? err.message : "Could not load fixtures.");
       }
@@ -1963,14 +1971,19 @@ export function MatchExplorerPage() {
     if (!result) return null;
     if (q.length > 0) {
       result = result.filter((m) => m.home.toLowerCase().includes(q) || m.away.toLowerCase().includes(q));
+    } else {
+      // Default (no search) view starts from today -- the -30 day fetch
+      // window exists so a typed search can still find a recently-kicked-off
+      // match (W211), not so past matches lead the unfiltered list.
+      result = result.filter((m) => dayDiff(m.kickoffIso, asOf, sandboxMode) >= 0);
     }
     // W108: applied after the team-name search, same "narrow what's shown"
     // relationship the search itself already has to the loaded window.
     if (actionableOnly) {
       result = result.filter(isActionable);
     }
-    return result;
-  }, [matches, query, actionableOnly]);
+    return [...result].sort((a, b) => a.kickoffIso.localeCompare(b.kickoffIso));
+  }, [matches, query, actionableOnly, asOf, sandboxMode]);
 
   // Direct user request: league section headers, since this page has no
   // grouping at all today -- mirrors DashboardPage's own date-group panel

@@ -1588,14 +1588,25 @@ describe("MatchExplorerPage -- league section headers (direct user request)", ()
     vi.mocked(getSandboxStatus).mockReset().mockResolvedValue({ sandbox_mode: false, as_of: null });
   });
 
+  // sandbox_mode is off in this describe block, so MatchExplorerPage's
+  // default (no-search) view filters to dayDiff(asOf) >= 0 against the real
+  // wall clock -- fixtures must stay relative to "now", not a hardcoded past
+  // date, or they'd be filtered out of the unfiltered list by the very fix
+  // this comment is next to.
+  function futureUtcDate(daysFromNow: number): string {
+    const d = new Date();
+    d.setUTCDate(d.getUTCDate() + daysFromNow);
+    return `${d.toISOString().slice(0, 10)}T15:00:00Z`;
+  }
+
   it("groups matches under a section header per distinct league, and each card also carries its own league pill", async () => {
     vi.mocked(getFixtures).mockResolvedValue([
       {
-        match_id: "1", utc_date: "2026-08-22T15:00:00Z", status: "SCHEDULED",
+        match_id: "1", utc_date: futureUtcDate(1), status: "SCHEDULED",
         home_team: "Arsenal", away_team: "Everton", home_goals: null, away_goals: null, competition: "E0",
       },
       {
-        match_id: "2", utc_date: "2026-08-23T15:00:00Z", status: "SCHEDULED",
+        match_id: "2", utc_date: futureUtcDate(2), status: "SCHEDULED",
         home_team: "Atleti", away_team: "Malaga", home_goals: null, away_goals: null, competition: "SP1",
       },
     ]);
@@ -1617,11 +1628,11 @@ describe("MatchExplorerPage -- league section headers (direct user request)", ()
   it("puts every fixture from the same league under one shared section header, not one per fixture", async () => {
     vi.mocked(getFixtures).mockResolvedValue([
       {
-        match_id: "1", utc_date: "2026-08-22T15:00:00Z", status: "SCHEDULED",
+        match_id: "1", utc_date: futureUtcDate(1), status: "SCHEDULED",
         home_team: "Arsenal", away_team: "Everton", home_goals: null, away_goals: null, competition: "E0",
       },
       {
-        match_id: "2", utc_date: "2026-08-23T15:00:00Z", status: "SCHEDULED",
+        match_id: "2", utc_date: futureUtcDate(2), status: "SCHEDULED",
         home_team: "Chelsea", away_team: "Brighton", home_goals: null, away_goals: null, competition: "E0",
       },
     ]);

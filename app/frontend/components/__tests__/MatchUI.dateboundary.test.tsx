@@ -243,8 +243,14 @@ describe("sandbox mode does not leak real results for fixtures still-future rela
     // so asOf never changes after mount and this test isn't subject to the
     // race described above. Still uses the same waitFor-everything pattern
     // for consistency, not because it's strictly required here.
+    //
+    // Dated "today" (real wall clock), not the fixed 2026-03-14 default --
+    // MatchExplorerPage's default (no-search) view now filters to
+    // dayDiff(asOf) >= 0, so a stale hardcoded past date would be filtered
+    // out of the list this test renders, unrelated to what it's checking
+    // (that a completed match still shows its real score with sandbox off).
     vi.mocked(getSandboxStatus).mockResolvedValue({ sandbox_mode: false, as_of: null });
-    vi.mocked(getFixtures).mockResolvedValue([finishedFixture()]);
+    vi.mocked(getFixtures).mockResolvedValue([finishedFixture({ utc_date: `${new Date().toISOString().slice(0, 10)}T12:00:00Z` })]);
 
     render(<MatchExplorerPage />);
 
@@ -318,9 +324,16 @@ describe("MatchExplorerPage -- actionable-only filter (W108)", () => {
   });
 
   it("hides non-actionable matches once checked, combined with the existing team-name search", async () => {
+    // sandbox_mode is off here, so MatchExplorerPage's default (no-search)
+    // view filters to dayDiff(asOf) >= 0 against the real wall clock --
+    // these fixtures must stay relative to "now", not a hardcoded past date.
+    const tomorrow = new Date();
+    tomorrow.setUTCDate(tomorrow.getUTCDate() + 1);
+    const dayAfter = new Date();
+    dayAfter.setUTCDate(dayAfter.getUTCDate() + 2);
     vi.mocked(getFixtures).mockResolvedValue([
-      { match_id: "1", utc_date: "2026-08-22T15:00:00Z", status: "SCHEDULED", home_team: "Arsenal", away_team: "Everton", home_goals: null, away_goals: null },
-      { match_id: "2", utc_date: "2026-08-23T15:00:00Z", status: "SCHEDULED", home_team: "Chelsea", away_team: "Brighton", home_goals: null, away_goals: null },
+      { match_id: "1", utc_date: `${tomorrow.toISOString().slice(0, 10)}T15:00:00Z`, status: "SCHEDULED", home_team: "Arsenal", away_team: "Everton", home_goals: null, away_goals: null },
+      { match_id: "2", utc_date: `${dayAfter.toISOString().slice(0, 10)}T15:00:00Z`, status: "SCHEDULED", home_team: "Chelsea", away_team: "Brighton", home_goals: null, away_goals: null },
     ]);
     const rec: MatchRecommendationOut = {
       match: {}, overall: "direct_bet", candidates: [], recommendation_pick: null, explanation: [], confidence: "high",

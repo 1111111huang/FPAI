@@ -15,7 +15,7 @@ from pathlib import Path
 import subprocess
 import sys
 import time
-from typing import Callable, Literal
+from typing import Any, Callable, Literal
 
 import duckdb
 from dotenv import load_dotenv
@@ -928,16 +928,22 @@ async def get_fixtures(date_from: str | None = None, date_to: str | None = None)
         # test-mocked, so it's the only place a tag is guaranteed to stick.
         return [dataclasses.replace(m, competition=competition) for m in matches]
 
-    matches: list[NormalizedMatch] = []
+    # Independent per-league/per-provider calls -- each already runs off the
+    # event loop via run_in_threadpool (_fetch_and_cache_fixtures), so firing
+    # them with asyncio.gather instead of one `await` at a time overlaps
+    # their network wait instead of serializing it. Call order (and hence
+    # `competitions`/`calls` order, preserved through zip below) is kept
+    # identical to the old sequential code so the final concatenated
+    # `matches` order is unchanged.
+    competitions: list[str] = []
+    calls: list[Any] = []
     if results_range is not None:
         past_from, past_to = results_range
         if "E0" in enabled:
-            matches += _tag(
-                await _cached_fixture_call(
-                    ("results", past_from, past_to), client.get_results, date_from=past_from, date_to=past_to
-                ),
-                "E0",
-            )
+            competitions.append("E0")
+            calls.append(_cached_fixture_call(
+                ("results", past_from, past_to), client.get_results, date_from=past_from, date_to=past_to
+            ))
         if "SWE" in enabled:
             # W71: sourced from raw_matches directly, not sweden_client.get_results()
             # (The Odds API's /scores endpoint can only see the last few real
@@ -945,93 +951,76 @@ async def get_fixtures(date_from: str | None = None, date_to: str | None = None)
             # unlike football-data.org's get_results() for E0). Still
             # cache-keyed as "results_swe" -- same TTL-cache slot as before,
             # just backed by a different underlying source.
-            matches += _tag(
-                await _cached_fixture_call(
-                    ("results_swe", past_from, past_to),
-                    historical_results_from_raw_matches, date_from=past_from, date_to=past_to,
-                ),
-                "SWE",
-            )
+            competitions.append("SWE")
+            calls.append(_cached_fixture_call(
+                ("results_swe", past_from, past_to),
+                historical_results_from_raw_matches, date_from=past_from, date_to=past_to,
+            ))
         if "SP1" in enabled:
-            matches += _tag(
-                await _cached_fixture_call(
-                    ("results_sp1", past_from, past_to), la_liga_client.get_results,
-                    competition_code=LA_LIGA_COMPETITION_CODE, date_from=past_from, date_to=past_to,
-                ),
-                "SP1",
-            )
+            competitions.append("SP1")
+            calls.append(_cached_fixture_call(
+                ("results_sp1", past_from, past_to), la_liga_client.get_results,
+                competition_code=LA_LIGA_COMPETITION_CODE, date_from=past_from, date_to=past_to,
+            ))
         if "I1" in enabled:
-            matches += _tag(
-                await _cached_fixture_call(
-                    ("results_i1", past_from, past_to), serie_a_client.get_results,
-                    competition_code=SERIE_A_COMPETITION_CODE, date_from=past_from, date_to=past_to,
-                ),
-                "I1",
-            )
+            competitions.append("I1")
+            calls.append(_cached_fixture_call(
+                ("results_i1", past_from, past_to), serie_a_client.get_results,
+                competition_code=SERIE_A_COMPETITION_CODE, date_from=past_from, date_to=past_to,
+            ))
         if "D1" in enabled:
-            matches += _tag(
-                await _cached_fixture_call(
-                    ("results_d1", past_from, past_to), bundesliga_client.get_results,
-                    competition_code=BUNDESLIGA_COMPETITION_CODE, date_from=past_from, date_to=past_to,
-                ),
-                "D1",
-            )
+            competitions.append("D1")
+            calls.append(_cached_fixture_call(
+                ("results_d1", past_from, past_to), bundesliga_client.get_results,
+                competition_code=BUNDESLIGA_COMPETITION_CODE, date_from=past_from, date_to=past_to,
+            ))
         if "F1" in enabled:
-            matches += _tag(
-                await _cached_fixture_call(
-                    ("results_f1", past_from, past_to), ligue1_client.get_results,
-                    competition_code=LIGUE_1_COMPETITION_CODE, date_from=past_from, date_to=past_to,
-                ),
-                "F1",
-            )
+            competitions.append("F1")
+            calls.append(_cached_fixture_call(
+                ("results_f1", past_from, past_to), ligue1_client.get_results,
+                competition_code=LIGUE_1_COMPETITION_CODE, date_from=past_from, date_to=past_to,
+            ))
     if fixtures_range is not None:
         future_from, future_to = fixtures_range
         if "E0" in enabled:
-            matches += _tag(
-                await _cached_fixture_call(
-                    ("fixtures", future_from, future_to), client.get_fixtures, date_from=future_from, date_to=future_to
-                ),
-                "E0",
-            )
+            competitions.append("E0")
+            calls.append(_cached_fixture_call(
+                ("fixtures", future_from, future_to), client.get_fixtures, date_from=future_from, date_to=future_to
+            ))
         if "SWE" in enabled:
-            matches += _tag(
-                await _cached_fixture_call(
-                    ("fixtures_swe", future_from, future_to), sweden_client.get_fixtures, date_from=future_from, date_to=future_to
-                ),
-                "SWE",
-            )
+            competitions.append("SWE")
+            calls.append(_cached_fixture_call(
+                ("fixtures_swe", future_from, future_to), sweden_client.get_fixtures, date_from=future_from, date_to=future_to
+            ))
         if "SP1" in enabled:
-            matches += _tag(
-                await _cached_fixture_call(
-                    ("fixtures_sp1", future_from, future_to), la_liga_client.get_fixtures,
-                    competition_code=LA_LIGA_COMPETITION_CODE, date_from=future_from, date_to=future_to,
-                ),
-                "SP1",
-            )
+            competitions.append("SP1")
+            calls.append(_cached_fixture_call(
+                ("fixtures_sp1", future_from, future_to), la_liga_client.get_fixtures,
+                competition_code=LA_LIGA_COMPETITION_CODE, date_from=future_from, date_to=future_to,
+            ))
         if "I1" in enabled:
-            matches += _tag(
-                await _cached_fixture_call(
-                    ("fixtures_i1", future_from, future_to), serie_a_client.get_fixtures,
-                    competition_code=SERIE_A_COMPETITION_CODE, date_from=future_from, date_to=future_to,
-                ),
-                "I1",
-            )
+            competitions.append("I1")
+            calls.append(_cached_fixture_call(
+                ("fixtures_i1", future_from, future_to), serie_a_client.get_fixtures,
+                competition_code=SERIE_A_COMPETITION_CODE, date_from=future_from, date_to=future_to,
+            ))
         if "D1" in enabled:
-            matches += _tag(
-                await _cached_fixture_call(
-                    ("fixtures_d1", future_from, future_to), bundesliga_client.get_fixtures,
-                    competition_code=BUNDESLIGA_COMPETITION_CODE, date_from=future_from, date_to=future_to,
-                ),
-                "D1",
-            )
+            competitions.append("D1")
+            calls.append(_cached_fixture_call(
+                ("fixtures_d1", future_from, future_to), bundesliga_client.get_fixtures,
+                competition_code=BUNDESLIGA_COMPETITION_CODE, date_from=future_from, date_to=future_to,
+            ))
         if "F1" in enabled:
-            matches += _tag(
-                await _cached_fixture_call(
-                    ("fixtures_f1", future_from, future_to), ligue1_client.get_fixtures,
-                    competition_code=LIGUE_1_COMPETITION_CODE, date_from=future_from, date_to=future_to,
-                ),
-                "F1",
-            )
+            competitions.append("F1")
+            calls.append(_cached_fixture_call(
+                ("fixtures_f1", future_from, future_to), ligue1_client.get_fixtures,
+                competition_code=LIGUE_1_COMPETITION_CODE, date_from=future_from, date_to=future_to,
+            ))
+
+    results = await asyncio.gather(*calls)
+    matches: list[NormalizedMatch] = []
+    for competition, result in zip(competitions, results):
+        matches += _tag(result, competition)
     return matches
 
 
