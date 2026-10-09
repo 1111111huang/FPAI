@@ -106,17 +106,145 @@ def test_get_results_uses_the_cache_on_a_repeat_call_for_the_same_day(tmp_path: 
     assert session.get.call_count == 1
 
 
-def test_get_results_bypasses_the_cache_for_a_multi_day_range(tmp_path: Path) -> None:
-    """No real caller ever passes date_from != date_to, but this stays a
-    plain live call rather than caching under a made-up key."""
-    session = _mock_session([_FINISHED_MATCH])
+def _match_payload(match_id: int, utc_date: str) -> dict:
+    return {
+        "id": match_id, "utcDate": utc_date, "status": "FINISHED",
+        "homeTeam": {"shortName": f"Home{match_id}"}, "awayTeam": {"shortName": f"Away{match_id}"},
+        "score": {"fullTime": {"home": 1, "away": 0}},
+    }
+
+
+def _mock_session_with_matches_by_date(matches_by_date: dict[str, list[dict]]) -> MagicMock:
+    """Unlike _mock_session (fixed payload regardless of params), this
+    filters a day -> raw-match-payloads lookup by the request's dateFrom/
+    dateTo params, closer to football-data.org's real behavior -- needed to
+    meaningfully test get_results()'s per-day cache bucketing (W237), which
+    only makes sense against matches that actually fall within requested
+    days. Also records every (dateFrom, dateTo) pair requested, for
+    asserting exactly which sub-ranges a cache-miss should trigger."""
+    session = MagicMock()
+    requested_ranges: list[tuple[str | None, str | None]] = []
+
+    def _get(url, headers=None, params=None, timeout=None):
+        date_from = (params or {}).get("dateFrom")
+        date_to = (params or {}).get("dateTo")
+        requested_ranges.append((date_from, date_to))
+        matches = [
+            payload
+            for date, payloads in matches_by_date.items()
+            for payload in payloads
+            if (date_from is None or date >= date_from) and (date_to is None or date <= date_to)
+        ]
+        response = MagicMock()
+        response.status_code = 200
+        response.headers = {}
+        response.json.return_value = {"count": len(matches), "matches": matches}
+        response.raise_for_status.return_value = None
+        return response
+
+    session.get.side_effect = _get
+    session.requested_ranges = requested_ranges
+    return session
+
+
+def test_get_results_range_serves_entirely_from_cache_once_every_day_is_already_cached(tmp_path: Path) -> None:
+    """W237: the whole point of per-day range caching -- a repeat request
+    for a range every day of which is already cached costs zero live calls,
+    where the old behavior (test file history) always re-fetched the whole
+    range fresh."""
+    session = _mock_session_with_matches_by_date({})
+    cache = ResultsCache(db_path=tmp_path / "results.db")
+    cache.store("PL", "2026-08-01", [NormalizedMatch(
+        match_id="1", utc_date="2026-08-01T15:00:00Z", status="FINISHED",
+        home_team="Home1", away_team="Away1", home_goals=1, away_goals=0,
+    )])
+    cache.store("PL", "2026-08-02", [])
+    client = FootballDataClient(api_key="fake-key", session=session, results_cache=cache)
+
+    results = client.get_results(date_from="2026-08-01", date_to="2026-08-02")
+
+    assert session.get.call_count == 0
+    assert [m.match_id for m in results] == ["1"]
+
+
+def test_get_results_range_only_live_fetches_the_missing_days_as_one_call(tmp_path: Path) -> None:
+    session = _mock_session_with_matches_by_date({
+        "2026-08-02": [_match_payload(2, "2026-08-02T15:00:00Z")],
+        "2026-08-03": [_match_payload(3, "2026-08-03T15:00:00Z")],
+    })
+    cache = ResultsCache(db_path=tmp_path / "results.db")
+    cache.store("PL", "2026-08-01", [NormalizedMatch(
+        match_id="1", utc_date="2026-08-01T15:00:00Z", status="FINISHED",
+        home_team="Home1", away_team="Away1", home_goals=1, away_goals=0,
+    )])
+    client = FootballDataClient(api_key="fake-key", session=session, results_cache=cache)
+
+    results = client.get_results(date_from="2026-08-01", date_to="2026-08-03")
+
+    assert session.get.call_count == 1
+    assert session.requested_ranges == [("2026-08-02", "2026-08-03")]
+    assert sorted(m.match_id for m in results) == ["1", "2", "3"]
+
+
+def test_get_results_range_caches_each_fetched_day_so_a_repeat_call_costs_zero_live_calls(tmp_path: Path) -> None:
+    session = _mock_session_with_matches_by_date({
+        "2026-08-15": [_match_payload(1, "2026-08-15T15:00:00Z")],
+    })
     cache = ResultsCache(db_path=tmp_path / "results.db")
     client = FootballDataClient(api_key="fake-key", session=session, results_cache=cache)
 
-    client.get_results(date_from="2026-08-01", date_to="2026-08-31")
-    client.get_results(date_from="2026-08-01", date_to="2026-08-31")
+    first = client.get_results(date_from="2026-08-14", date_to="2026-08-16")
+    second = client.get_results(date_from="2026-08-14", date_to="2026-08-16")
+
+    assert session.get.call_count == 1
+    assert [m.match_id for m in first] == [m.match_id for m in second] == ["1"]
+    # 08-14 and 08-16 had no finished matches -- still correctly cached as
+    # "fetched, zero results" rather than left as a permanent miss.
+    assert cache.get("PL", "2026-08-14") == []
+    assert cache.get("PL", "2026-08-16") == []
+
+
+def test_get_results_range_splits_into_separate_calls_for_non_contiguous_missing_days(tmp_path: Path) -> None:
+    session = _mock_session_with_matches_by_date({
+        "2026-08-01": [_match_payload(1, "2026-08-01T15:00:00Z")],
+        "2026-08-05": [_match_payload(5, "2026-08-05T15:00:00Z")],
+    })
+    cache = ResultsCache(db_path=tmp_path / "results.db")
+    # Pre-cache the middle day only -- splits the miss into two separate
+    # contiguous runs (08-01..08-02 and 08-04..08-05), not one call for the
+    # whole 08-01..08-05 span.
+    cache.store("PL", "2026-08-03", [])
+    client = FootballDataClient(api_key="fake-key", session=session, results_cache=cache)
+
+    results = client.get_results(date_from="2026-08-01", date_to="2026-08-05")
 
     assert session.get.call_count == 2
+    assert set(session.requested_ranges) == {("2026-08-01", "2026-08-02"), ("2026-08-04", "2026-08-05")}
+    assert sorted(m.match_id for m in results) == ["1", "5"]
+
+
+def test_get_results_range_always_live_fetches_today_and_never_caches_it(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Same "today is still mutable" reasoning as the single-day is_today
+    branch (test_get_results_bypasses_the_cache_for_today_even_on_a_repeat_call
+    above), now also applying to a range that happens to include today."""
+    import app.backend.football_data_client as fdc_module
+
+    monkeypatch.setattr(fdc_module, "_utc_today_isoformat", lambda: "2026-08-16")
+    session = _mock_session_with_matches_by_date({
+        "2026-08-16": [_match_payload(16, "2026-08-16T15:00:00Z")],
+    })
+    cache = ResultsCache(db_path=tmp_path / "results.db")
+    cache.store("PL", "2026-08-15", [])
+    client = FootballDataClient(api_key="fake-key", session=session, results_cache=cache)
+
+    client.get_results(date_from="2026-08-15", date_to="2026-08-16")
+    client.get_results(date_from="2026-08-15", date_to="2026-08-16")
+
+    # 08-15 is cached (0 calls needed for it); 08-16 ("today") is live-fetched
+    # on *every* call, never cached.
+    assert session.get.call_count == 2
+    assert session.requested_ranges == [("2026-08-16", "2026-08-16")] * 2
+    assert cache.get("PL", "2026-08-16") is None
 
 
 def test_get_results_bypasses_the_cache_for_today_even_on_a_repeat_call(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

@@ -8,12 +8,15 @@ own field names, respecting the free tier's ~10-requests/minute rate limit.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+import logging
 import threading
 import time
 from typing import TYPE_CHECKING, Callable
 
 import requests
+
+LOGGER = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     # W213: only needed for the type hint below -- results_cache.py imports
@@ -48,6 +51,38 @@ class NormalizedMatch:
     # codebase (tests included) keeps working unchanged; only
     # get_fixtures()'s merge logic in main.py sets it explicitly per source.
     competition: str = "E0"
+
+
+def _date_range(date_from: str, date_to: str) -> list[str]:
+    """Every calendar day from date_from to date_to, inclusive."""
+    start = datetime.strptime(date_from, "%Y-%m-%d").date()
+    end = datetime.strptime(date_to, "%Y-%m-%d").date()
+    days = []
+    day = start
+    while day <= end:
+        days.append(day.isoformat())
+        day += timedelta(days=1)
+    return days
+
+
+def _contiguous_date_ranges(days: list[str]) -> list[tuple[str, str]]:
+    """Groups a (sorted, deduped) list of day strings into the fewest
+    contiguous (start, end) spans -- e.g. ["08-01", "08-02", "08-04"] ->
+    [("08-01", "08-02"), ("08-04", "08-04")]. Used so a cache-miss day range
+    with gaps still costs one upstream call per contiguous run, not one per
+    missing day."""
+    if not days:
+        return []
+    ranges: list[tuple[str, str]] = []
+    start = prev = days[0]
+    for day in days[1:]:
+        if datetime.strptime(day, "%Y-%m-%d").date() - datetime.strptime(prev, "%Y-%m-%d").date() == timedelta(days=1):
+            prev = day
+        else:
+            ranges.append((start, prev))
+            start = prev = day
+    ranges.append((start, prev))
+    return ranges
 
 
 def _normalize(raw: dict) -> NormalizedMatch:
@@ -92,6 +127,14 @@ class _RateLimiter:
             return
         wait_seconds = self._reset_at - self._time_fn()
         if wait_seconds > 0:
+            # Previously silent -- a request stalling for up to a minute
+            # here was indistinguishable in production logs from genuine
+            # upstream latency, with nothing pointing at the rate limiter as
+            # the cause. Found live chasing a ~60s GET /api/fixtures.
+            LOGGER.warning(
+                "football-data.org rate limit exhausted -- blocking for %.1fs until the window resets.",
+                wait_seconds,
+            )
             self._sleep_fn(wait_seconds)
 
     def would_block(self) -> bool:
@@ -216,7 +259,62 @@ class FootballDataClient:
             matches = self._get_matches(competition_code, "FINISHED", date_from, date_to, blocking=blocking)
             self._results_cache.store(competition_code, date_from, matches)
             return matches
+        # W237: a genuine multi-day range used to always bypass the cache
+        # entirely ("no real caller ever passes date_from != date_to" --
+        # true when this was written, no longer true once main.py's
+        # GET /api/fixtures started calling get_results() with a 30-day-back
+        # range for every football-data.org-backed league). Confirmed live:
+        # a cold Match Explorer load makes 5 leagues x 2 (results + fixtures)
+        # = 10 calls through the one shared rate-limited client/lock, which
+        # can by itself exhaust the ~10-req/min budget and trip
+        # wait_if_needed()'s up-to-a-minute blocking sleep. Most of a
+        # "30 days back" range is genuinely immutable past results, so
+        # per-day caching (already built for the single-day case above)
+        # applies here too -- only the days actually missing from the cache
+        # (and "today", always excluded -- still-mutable, see is_today
+        # above) need a live call at all.
+        if self._results_cache is not None and date_from is not None and date_to is not None and date_from != date_to:
+            return self._get_results_range_cached(competition_code, date_from, date_to, blocking=blocking)
         return self._get_matches(competition_code, "FINISHED", date_from, date_to, blocking=blocking)
+
+    def _get_results_range_cached(
+        self, competition_code: str, date_from: str, date_to: str, blocking: bool,
+    ) -> list[NormalizedMatch]:
+        today = _utc_today_isoformat()
+        days = _date_range(date_from, date_to)
+        matches: list[NormalizedMatch] = []
+        missing_days: list[str] = []
+        for day in days:
+            if day == today:
+                # Always a live-fetch day, same "still mutable" reasoning as
+                # the single-day is_today branch above -- never read from or
+                # written to the cache.
+                missing_days.append(day)
+                continue
+            cached = self._results_cache.get(competition_code, day)
+            if cached is None:
+                missing_days.append(day)
+            else:
+                matches.extend(cached)
+
+        for sub_from, sub_to in _contiguous_date_ranges(missing_days):
+            fetched = self._get_matches(competition_code, "FINISHED", sub_from, sub_to, blocking=blocking)
+            by_day: dict[str, list[NormalizedMatch]] = {day: [] for day in _date_range(sub_from, sub_to)}
+            for match in fetched:
+                # Defensive .setdefault(), not a bare index -- the live API
+                # is trusted to only return matches inside [sub_from,
+                # sub_to], but a match landing outside that (a provider
+                # quirk, a timezone edge) must still be returned to the
+                # caller, just not mis-filed into a day this sub-range
+                # never asked the cache to own.
+                by_day.setdefault(match.utc_date[:10], []).append(match)
+            for day, day_matches in by_day.items():
+                if day == today:
+                    continue
+                self._results_cache.store(competition_code, day, day_matches)
+            matches.extend(fetched)
+
+        return matches
 
     def _get_matches(
         self, competition_code: str, status: str, date_from: str | None, date_to: str | None,
