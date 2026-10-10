@@ -8,13 +8,15 @@ own field names, respecting the free tier's ~10-requests/minute rate limit.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 import logging
 import threading
 import time
 from typing import TYPE_CHECKING, Callable
 
 import requests
+
+from app.backend.date_range_utils import contiguous_date_ranges as _contiguous_date_ranges, date_range as _date_range
 
 LOGGER = logging.getLogger(__name__)
 
@@ -51,38 +53,6 @@ class NormalizedMatch:
     # codebase (tests included) keeps working unchanged; only
     # get_fixtures()'s merge logic in main.py sets it explicitly per source.
     competition: str = "E0"
-
-
-def _date_range(date_from: str, date_to: str) -> list[str]:
-    """Every calendar day from date_from to date_to, inclusive."""
-    start = datetime.strptime(date_from, "%Y-%m-%d").date()
-    end = datetime.strptime(date_to, "%Y-%m-%d").date()
-    days = []
-    day = start
-    while day <= end:
-        days.append(day.isoformat())
-        day += timedelta(days=1)
-    return days
-
-
-def _contiguous_date_ranges(days: list[str]) -> list[tuple[str, str]]:
-    """Groups a (sorted, deduped) list of day strings into the fewest
-    contiguous (start, end) spans -- e.g. ["08-01", "08-02", "08-04"] ->
-    [("08-01", "08-02"), ("08-04", "08-04")]. Used so a cache-miss day range
-    with gaps still costs one upstream call per contiguous run, not one per
-    missing day."""
-    if not days:
-        return []
-    ranges: list[tuple[str, str]] = []
-    start = prev = days[0]
-    for day in days[1:]:
-        if datetime.strptime(day, "%Y-%m-%d").date() - datetime.strptime(prev, "%Y-%m-%d").date() == timedelta(days=1):
-            prev = day
-        else:
-            ranges.append((start, prev))
-            start = prev = day
-    ranges.append((start, prev))
-    return ranges
 
 
 def _normalize(raw: dict) -> NormalizedMatch:
