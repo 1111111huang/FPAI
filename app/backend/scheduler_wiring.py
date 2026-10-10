@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import asyncio
 from collections import Counter
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import os
 from pathlib import Path
 import subprocess
@@ -17,7 +17,8 @@ from typing import Callable
 
 import requests
 
-from app.backend.eod_batch import COMPETITION_CODE, LEAGUE_CODE, run_eod_batch
+from app.backend import fixture_cache
+from app.backend.eod_batch import COMPETITION_CODE, LEAGUE_CODE, has_kicked_off, run_eod_batch
 from app.backend.football_data_client import FootballDataClient, NormalizedMatch
 from app.backend.historical_odds_client import HistoricalOddsClient
 from app.backend.live_lessons import auto_judge_live_lessons, commit_lesson_batches, prepare_lesson_batches
@@ -78,6 +79,20 @@ LESSONS_WEEKLY_MINUTE = 10
 DATA_REFRESH_JOB_ID = "daily_data_refresh"
 DATA_REFRESH_HOUR = 4
 DATA_REFRESH_MINUTE = 0
+
+# W249: direct user request -- periodic safety net for a postponed/
+# rescheduled fixture (neither the nightly EOD job nor a match's own
+# one-shot T-30 job would ever notice a kickoff time changing outside
+# their own normal cadence), merged with proactively warming the ±N-day
+# window most users actually look at. RecoverableScheduler has no
+# interval trigger -- registered at a handful of fixed hours instead,
+# the same trick register_data_refresh_job's own single-hour registration
+# generalizes trivially.
+RECONCILIATION_JOB_ID_PREFIX = "fixture_reconciliation"
+RECONCILIATION_HOURS: tuple[int, ...] = (0, 4, 8, 12, 16, 20)
+RECONCILIATION_MINUTE = 30
+RECONCILIATION_WINDOW_DAYS_BACK = 2
+RECONCILIATION_WINDOW_DAYS_FORWARD = 2
 _REPO_ROOT = Path(__file__).parent.parent.parent
 
 # W62/W81/W140: every competition_specific league (match_info.py's
@@ -513,6 +528,154 @@ def register_data_refresh_job(
                 LOGGER.warning("Daily data refresh: league=%s exited with code %d.", league, returncode)
 
     scheduler.schedule_daily(DATA_REFRESH_JOB_ID, _data_refresh_job, hour=hour, minute=minute)
+
+
+def _reconciliation_clients_for_league(
+    league: str,
+    fixtures_client: FootballDataClient,
+    sweden_fixtures_client: SwedenFixturesClient | None,
+    la_liga_fixtures_client: FootballDataClient | None,
+    serie_a_fixtures_client: FootballDataClient | None,
+    bundesliga_fixtures_client: FootballDataClient | None,
+    ligue1_fixtures_client: FootballDataClient | None,
+) -> tuple[Callable, Callable, dict] | None:
+    """Returns (get_results, get_fixtures, extra_kwargs) for a league, or
+    None if that league isn't configured this run -- mirrors
+    _fetch_fixtures_for_league's own per-league branching and
+    "not configured" contract exactly."""
+    if league == "SWE":
+        if sweden_fixtures_client is None:
+            return None
+        return (sweden_fixtures_client.get_results, sweden_fixtures_client.get_fixtures, {})
+    if league == "SP1":
+        if la_liga_fixtures_client is None:
+            return None
+        return (
+            la_liga_fixtures_client.get_results, la_liga_fixtures_client.get_fixtures,
+            {"competition_code": LA_LIGA_COMPETITION_CODE},
+        )
+    if league == "I1":
+        if serie_a_fixtures_client is None:
+            return None
+        return (
+            serie_a_fixtures_client.get_results, serie_a_fixtures_client.get_fixtures,
+            {"competition_code": SERIE_A_COMPETITION_CODE},
+        )
+    if league == "D1":
+        if bundesliga_fixtures_client is None:
+            return None
+        return (
+            bundesliga_fixtures_client.get_results, bundesliga_fixtures_client.get_fixtures,
+            {"competition_code": BUNDESLIGA_COMPETITION_CODE},
+        )
+    if league == "F1":
+        if ligue1_fixtures_client is None:
+            return None
+        return (
+            ligue1_fixtures_client.get_results, ligue1_fixtures_client.get_fixtures,
+            {"competition_code": LIGUE_1_COMPETITION_CODE},
+        )
+    return (fixtures_client.get_results, fixtures_client.get_fixtures, {"competition_code": COMPETITION_CODE})
+
+
+def register_fixture_reconciliation_job(
+    scheduler: RecoverableScheduler,
+    fixtures_client: FootballDataClient,
+    odds_client: OddsAPIClient | None,
+    cache: RecommendationCache,
+    config: AgentConfig,
+    now_fn: Callable[[], datetime] = lambda: sandbox_now(NY_TZ),
+    sweden_fixtures_client: SwedenFixturesClient | None = None,
+    la_liga_fixtures_client: FootballDataClient | None = None,
+    serie_a_fixtures_client: FootballDataClient | None = None,
+    bundesliga_fixtures_client: FootballDataClient | None = None,
+    ligue1_fixtures_client: FootballDataClient | None = None,
+    hours: tuple[int, ...] = RECONCILIATION_HOURS,
+    minute: int = RECONCILIATION_MINUTE,
+    days_back: int = RECONCILIATION_WINDOW_DAYS_BACK,
+    days_forward: int = RECONCILIATION_WINDOW_DAYS_FORWARD,
+) -> None:
+    """Registers the periodic fixture-reconciliation job (W249) at each of
+    `hours` (RecoverableScheduler's own fixed-hour trick for "every N
+    hours" -- see this module's RECONCILIATION_HOURS comment).
+
+    Each run, per enabled league: live-fetches (bypassing fixture_cache's
+    own TTL on purpose -- the whole point is to catch a change that cache
+    might still think is "fresh") results for [today-days_back, today] and
+    fixtures for [today, today+days_forward], via
+    fixture_cache.force_refresh_range -- this both detects a changed
+    kickoff time (the correctness fix) and leaves the cache warm for the
+    window real users actually look at (the warming fix, merged into one
+    job rather than two). Then re-registers the T-30 job
+    (build_schedule_t30) for every fixture in the future side that hasn't
+    kicked off yet. schedule_once's own (job_id, run_at)-keyed design
+    (scheduler.py) makes this safe to call unconditionally every cycle,
+    changed kickoff or not -- an unchanged run_at is a harmless no-op
+    re-registration; nothing diffs against a previous snapshot."""
+
+    def _reconcile_job() -> None:
+        today = now_fn().date()
+        past_from = (today - timedelta(days=days_back)).isoformat()
+        future_to = (today + timedelta(days=days_forward)).isoformat()
+        today_str = today.isoformat()
+        enabled = set(list_display_enabled_competition_ids())
+        now = sandbox_now(timezone.utc)
+
+        for league in COMPETITIONS:
+            if league not in enabled:
+                continue
+            clients = _reconciliation_clients_for_league(
+                league, fixtures_client, sweden_fixtures_client,
+                la_liga_fixtures_client, serie_a_fixtures_client,
+                bundesliga_fixtures_client, ligue1_fixtures_client,
+            )
+            if clients is None:
+                continue
+            fetch_results, fetch_fixtures, extra_kwargs = clients
+
+            async def _refresh() -> list[NormalizedMatch]:
+                _, future_matches = await asyncio.gather(
+                    fixture_cache.force_refresh_range(
+                        fixture_cache.results_call_type(league), fetch_results,
+                        date_from=past_from, date_to=today_str, **extra_kwargs,
+                    ),
+                    fixture_cache.force_refresh_range(
+                        fixture_cache.fixtures_call_type(league), fetch_fixtures,
+                        date_from=today_str, date_to=future_to, **extra_kwargs,
+                    ),
+                )
+                return future_matches
+
+            try:
+                future_matches = asyncio.run(_refresh())
+            except Exception:
+                LOGGER.warning(
+                    "Fixture reconciliation: live refresh failed for league=%s -- skipping, "
+                    "cache keeps whatever it had (not invalidated).", league, exc_info=True,
+                )
+                continue
+
+            for fixture in future_matches:
+                if has_kicked_off(fixture, now):
+                    continue
+                # date_str MUST be the fixture's own kickoff date, not
+                # today_str: it flows through refresh_match_at_t30 into
+                # cache.record_generation(date=...), and every read path
+                # (RecommendationCache.get_latest, the frontend's own
+                # kickoffIso.slice(0,10) lookup) keys strictly on the
+                # fixture's actual date. register_eod_job gets away with
+                # one shared date_str only because it fetches exactly one
+                # day; this job's window spans days_forward+1 of them, so
+                # a shared today_str would silently orphan every
+                # non-today fixture's recommendation under a key nothing
+                # ever looks up.
+                schedule_t30 = build_schedule_t30(
+                    scheduler, odds_client, cache, config, fixture.utc_date[:10], league=league,
+                )
+                schedule_t30(fixture)
+
+    for hour in hours:
+        scheduler.schedule_daily(f"{RECONCILIATION_JOB_ID_PREFIX}_{hour:02d}", _reconcile_job, hour=hour, minute=minute)
 
 
 def register_lessons_job(

@@ -15,8 +15,10 @@ from unittest.mock import MagicMock, patch
 
 sys.path.append(str(Path(__file__).resolve().parents[3]))
 
+import pytest
 import requests
 
+from app.backend import fixture_cache
 from app.backend.football_data_client import NormalizedMatch
 from app.backend.odds_api_client import CreditCounter, FileCreditCounterStore
 from app.backend.recommendation_cache import RecommendationCache
@@ -36,11 +38,14 @@ from app.backend.scheduler_wiring import (
     LESSONS_WEEKLY_HOUR,
     LESSONS_WEEKLY_JOB_ID,
     LESSONS_WEEKLY_MINUTE,
+    RECONCILIATION_HOURS,
+    RECONCILIATION_MINUTE,
     PersistingOddsClient,
     PersistingOddsPapiClient,
     next_day_date_str,
     register_data_refresh_job,
     register_eod_job,
+    register_fixture_reconciliation_job,
     register_lessons_job,
     t30_run_at,
 )
@@ -905,3 +910,203 @@ def test_register_data_refresh_job_continues_after_one_leagues_subprocess_fails_
 
     assert mock_popen.call_count == 2
     assert mock_process.wait.call_count == 1
+
+
+@pytest.fixture(autouse=True)
+def _clear_fixture_cache_between_reconciliation_tests():
+    fixture_cache.clear()
+    yield
+    fixture_cache.clear()
+
+
+def test_register_fixture_reconciliation_job_registers_one_job_per_hour(tmp_path: Path) -> None:
+    run_log = JobRunLog(db_path=tmp_path / "job_runs.db")
+    now = datetime(_FUTURE_DAY.year, _FUTURE_DAY.month, _FUTURE_DAY.day, 1, 0, tzinfo=NY_TZ)
+    scheduler = RecoverableScheduler(run_log=run_log, now_fn=lambda: now)
+    fixtures_client = MagicMock()
+    fixtures_client.get_fixtures.return_value = []
+    fixtures_client.get_results.return_value = []
+    cache = RecommendationCache(db_path=tmp_path / "cache.db")
+    config = AgentConfig.default()
+
+    register_fixture_reconciliation_job(
+        scheduler, fixtures_client=fixtures_client, odds_client=None, cache=cache, config=config,
+        now_fn=lambda: now, hours=(0, 4),
+    )
+
+    job_ids = {job.id for job in scheduler._scheduler.get_jobs()}
+    assert "fixture_reconciliation_00" in job_ids
+    assert "fixture_reconciliation_04" in job_ids
+
+
+def test_register_fixture_reconciliation_job_warms_the_fixture_cache(tmp_path: Path) -> None:
+    """The merged warming half of W249: a reconciliation run's own live
+    fetch must leave fixture_cache warm, so a subsequent get_range() call
+    for an overlapping day is a cache hit."""
+    fixture = NormalizedMatch(
+        match_id="m1", utc_date=f"{_FUTURE_DAY_STR}T15:00:00Z", status="SCHEDULED",
+        home_team="Arsenal", away_team="Everton", home_goals=None, away_goals=None,
+    )
+    run_log = JobRunLog(db_path=tmp_path / "job_runs.db")
+    now = datetime(_FUTURE_DAY.year, _FUTURE_DAY.month, _FUTURE_DAY.day, 0, 30, tzinfo=NY_TZ)
+    scheduler = RecoverableScheduler(run_log=run_log, now_fn=lambda: now)
+    fixtures_client = MagicMock()
+    fixtures_client.get_fixtures.return_value = [fixture]
+    fixtures_client.get_results.return_value = []
+    cache = RecommendationCache(db_path=tmp_path / "cache.db")
+    config = AgentConfig.default()
+
+    register_fixture_reconciliation_job(
+        scheduler, fixtures_client=fixtures_client, odds_client=None, cache=cache, config=config,
+        now_fn=lambda: now, hours=(0,),
+    )
+    assert _wait_until(lambda: run_log.has_run("fixture_reconciliation_00", _FUTURE_DAY_STR))
+
+    import asyncio as _asyncio
+    cached = _asyncio.run(fixture_cache.get_range(
+        "fixtures", MagicMock(side_effect=AssertionError("must not refetch -- already warm")),
+        date_from=_FUTURE_DAY_STR, date_to=_FUTURE_DAY_STR,
+    ))
+    assert len(cached) == 1
+    assert cached[0].match_id == "m1"
+
+
+def test_register_fixture_reconciliation_job_resyncs_t30_for_every_not_yet_kicked_off_fixture(tmp_path: Path) -> None:
+    fixture = NormalizedMatch(
+        match_id="m1", utc_date=f"{_FUTURE_DAY_STR}T15:00:00Z", status="SCHEDULED",
+        home_team="Arsenal", away_team="Everton", home_goals=None, away_goals=None,
+    )
+    run_log = JobRunLog(db_path=tmp_path / "job_runs.db")
+    now = datetime(_FUTURE_DAY.year, _FUTURE_DAY.month, _FUTURE_DAY.day, 23, 30, tzinfo=NY_TZ)
+    scheduler = RecoverableScheduler(run_log=run_log, now_fn=lambda: now)
+    fixtures_client = MagicMock()
+    fixtures_client.get_fixtures.return_value = [fixture]
+    fixtures_client.get_results.return_value = []
+    cache = RecommendationCache(db_path=tmp_path / "cache.db")
+    config = AgentConfig.default()
+
+    register_fixture_reconciliation_job(
+        scheduler, fixtures_client=fixtures_client, odds_client=None, cache=cache, config=config,
+        now_fn=lambda: now, hours=(23,),
+    )
+    assert _wait_until(lambda: run_log.has_run("fixture_reconciliation_23", _FUTURE_DAY_STR))
+    assert run_log.has_run("t30_m1", t30_run_at(fixture).isoformat())
+
+
+def test_register_fixture_reconciliation_job_keys_a_future_day_fixture_under_its_own_date_not_todays(
+    tmp_path: Path,
+) -> None:
+    """Regression guard: a fixture kicking off the day AFTER the cycle runs
+    must get its T-30 refresh keyed under ITS OWN date, not today's --
+    date_str flows into cache.record_generation(date=...), and
+    RecommendationCache.get_latest (plus the frontend's own
+    kickoffIso.slice(0,10) lookup) keys strictly on the fixture's actual
+    date, so a mis-dated write is silently unreachable rather than merely
+    wrong.
+
+    Kickoff is 02:00Z rather than the usual 15:00Z for a reason: the T-30
+    instant has to be in the past relative to `now` for schedule_once's
+    catch-up to actually run the job body (the only way to observe which
+    date_str was baked in), and `now` can't advance past _FUTURE_DAY
+    without making the fixture "today". An early-morning kickoff is also
+    precisely the case the bug does NOT self-heal for -- no later cycle
+    runs on the fixture's own day before it kicks off."""
+    next_day_str = (_FUTURE_DAY + timedelta(days=1)).isoformat()
+    fixture = NormalizedMatch(
+        match_id="m1", utc_date=f"{next_day_str}T02:00:00Z", status="SCHEDULED",
+        home_team="Arsenal", away_team="Everton", home_goals=None, away_goals=None,
+    )
+    run_log = JobRunLog(db_path=tmp_path / "job_runs.db")
+    now = datetime(_FUTURE_DAY.year, _FUTURE_DAY.month, _FUTURE_DAY.day, 23, 30, tzinfo=NY_TZ)
+    scheduler = RecoverableScheduler(run_log=run_log, now_fn=lambda: now)
+    fixtures_client = MagicMock()
+    fixtures_client.get_fixtures.return_value = [fixture]
+    fixtures_client.get_results.return_value = []
+    cache = RecommendationCache(db_path=tmp_path / "cache.db")
+    config = AgentConfig.default()
+
+    with patch("app.backend.scheduler_wiring.refresh_match_at_t30") as mock_refresh:
+        register_fixture_reconciliation_job(
+            scheduler, fixtures_client=fixtures_client, odds_client=None, cache=cache, config=config,
+            now_fn=lambda: now, hours=(23,),
+        )
+        assert _wait_until(lambda: run_log.has_run("fixture_reconciliation_23", _FUTURE_DAY_STR))
+        assert _wait_until(lambda: mock_refresh.called)
+
+    assert mock_refresh.call_args.kwargs["date_str"] == next_day_str
+    assert run_log.has_run("t30_m1", t30_run_at(fixture).isoformat())
+
+
+def test_register_fixture_reconciliation_job_does_not_resync_an_already_kicked_off_fixture(tmp_path: Path) -> None:
+    """has_kicked_off's filter must genuinely exclude a fixture whose
+    kickoff has passed. `now` is anchored to a REAL-past day here, unlike
+    every other case in this group: has_kicked_off compares against real
+    wall-clock time (sandbox_now), not the injected now_fn, so nothing
+    inside a _FUTURE_DAY-centred window could ever be "already kicked off"
+    at all and the filter would never actually be exercised. Both fixtures
+    land inside the fetched [today, today+2] window, so the only thing
+    separating them is the filter itself."""
+    yesterday = (datetime.now(timezone.utc) - timedelta(days=1)).date()
+    kicked_off = NormalizedMatch(
+        match_id="m2", utc_date=f"{yesterday.isoformat()}T15:00:00Z", status="FINISHED",
+        home_team="A", away_team="B", home_goals=1, away_goals=0,
+    )
+    upcoming = NormalizedMatch(
+        match_id="m1", utc_date=f"{(yesterday + timedelta(days=2)).isoformat()}T15:00:00Z", status="SCHEDULED",
+        home_team="Arsenal", away_team="Everton", home_goals=None, away_goals=None,
+    )
+    run_log = JobRunLog(db_path=tmp_path / "job_runs.db")
+    now = datetime(yesterday.year, yesterday.month, yesterday.day, 23, 30, tzinfo=NY_TZ)
+    scheduler = RecoverableScheduler(run_log=run_log, now_fn=lambda: now)
+    fixtures_client = MagicMock()
+    fixtures_client.get_fixtures.return_value = [kicked_off, upcoming]
+    fixtures_client.get_results.return_value = []
+    cache = RecommendationCache(db_path=tmp_path / "cache.db")
+    config = AgentConfig.default()
+
+    register_fixture_reconciliation_job(
+        scheduler, fixtures_client=fixtures_client, odds_client=None, cache=cache, config=config,
+        now_fn=lambda: now, hours=(0,),
+    )
+    assert _wait_until(lambda: run_log.has_run("fixture_reconciliation_00", yesterday.isoformat()))
+
+    job_ids = {job.id for job in scheduler._scheduler.get_jobs()}
+    assert "t30_m1" in job_ids  # the still-upcoming fixture WAS re-synced
+    assert "t30_m2" not in job_ids  # the already-kicked-off one was not
+    # m2's own T-30 instant is in the past, so had it been scheduled at all
+    # its catch-up would have fired immediately and left this marker.
+    assert not run_log.has_run("t30_m2", t30_run_at(kicked_off).isoformat())
+
+
+def test_register_fixture_reconciliation_job_one_leagues_failure_does_not_block_the_others(tmp_path: Path) -> None:
+    e0_fixture = NormalizedMatch(
+        match_id="m1", utc_date=f"{_FUTURE_DAY_STR}T15:00:00Z", status="SCHEDULED",
+        home_team="Arsenal", away_team="Everton", home_goals=None, away_goals=None,
+    )
+    run_log = JobRunLog(db_path=tmp_path / "job_runs.db")
+    # 23:30 NY (= next-day 03:30 UTC), not the 00:30 the other cases use:
+    # past BOTH the 00:30 reconciliation trigger AND m1's own T-30 instant
+    # (_FUTURE_DAY 14:30Z), so the re-registered T-30 job's catch-up
+    # actually fires and leaves the run_log marker this asserts on. Same
+    # anchor as test_..._resyncs_t30_for_every_not_yet_kicked_off_fixture.
+    now = datetime(_FUTURE_DAY.year, _FUTURE_DAY.month, _FUTURE_DAY.day, 23, 30, tzinfo=NY_TZ)
+    scheduler = RecoverableScheduler(run_log=run_log, now_fn=lambda: now)
+    fixtures_client = MagicMock()
+    fixtures_client.get_fixtures.return_value = [e0_fixture]
+    fixtures_client.get_results.return_value = []
+    sweden_fixtures_client = MagicMock()
+    sweden_fixtures_client.get_fixtures.side_effect = requests.exceptions.ConnectionError("down")
+    sweden_fixtures_client.get_results.side_effect = requests.exceptions.ConnectionError("down")
+    cache = RecommendationCache(db_path=tmp_path / "cache.db")
+    config = AgentConfig.default()
+
+    with patch(
+        "app.backend.scheduler_wiring.list_display_enabled_competition_ids", return_value=["E0", "SWE"]
+    ):
+        register_fixture_reconciliation_job(
+            scheduler, fixtures_client=fixtures_client, odds_client=None, cache=cache, config=config,
+            now_fn=lambda: now, sweden_fixtures_client=sweden_fixtures_client, hours=(0,),
+        )
+        assert _wait_until(lambda: run_log.has_run("fixture_reconciliation_00", _FUTURE_DAY_STR))
+
+    assert run_log.has_run("t30_m1", t30_run_at(e0_fixture).isoformat())
