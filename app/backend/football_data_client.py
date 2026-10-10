@@ -142,12 +142,21 @@ class FootballDataClient:
         # case a key is set under multiple env vars, falsy entries dropped.
         self._api_keys = tuple(dict.fromkeys(k for k in (api_key, *fallback_api_keys) if k))
         self._session = session or requests.Session()
-        # ponytail: one rate limiter shared across every key in self._api_keys,
-        # not a separate budget per key (unlike build_odds_client()'s per-key
-        # CreditCounter) -- a fallback key's own quota isn't tracked
-        # independently. Upgrade to per-key _RateLimiter instances if a
-        # fallback key's budget ever needs isolating from the primary's.
-        self._rate_limiter = rate_limiter or _RateLimiter()
+        # W250 (found live, 2026-10-10): previously ONE _RateLimiter shared
+        # across every key -- wait_if_needed() blocked for up to a minute on
+        # the FIRST key's exhausted budget before the per-key fallback loop
+        # below ever got a chance to try a key with its own fresh quota
+        # (confirmed live: a boot-time burst blocked on the primary key's
+        # rate limit despite _2/_3 being configured with untouched budgets).
+        # Each key now gets its own _RateLimiter, and _get_matches() tries
+        # ready keys before exhausted ones so a fresh fallback key is used
+        # instead of sleeping. `rate_limiter=` (existing constructor param,
+        # used by tests to inject a mock) seeds the FIRST key's limiter;
+        # every other key gets its own default _RateLimiter().
+        self._rate_limiters: dict[str, _RateLimiter] = {
+            key: (rate_limiter if i == 0 and rate_limiter is not None else _RateLimiter())
+            for i, key in enumerate(self._api_keys)
+        }
         # W213: optional -- every existing construction site (tests
         # included) omits this and keeps calling the live API on every
         # get_results(), completely unchanged.
@@ -167,6 +176,14 @@ class FootballDataClient:
         # thread makes it) always sees the freshest known remaining-budget
         # before deciding whether to wait.
         self._request_lock = threading.Lock()
+
+    @property
+    def _rate_limiter(self) -> _RateLimiter:
+        """The first configured key's own limiter -- convenience accessor
+        for the common single-key case (and existing tests written against
+        it), kept rather than updated wholesale now that _get_matches() can
+        track more than one."""
+        return self._rate_limiters[self._api_keys[0]]
 
     def get_fixtures(
         self, competition_code: str = "PL", date_from: str | None = None, date_to: str | None = None,
@@ -320,25 +337,36 @@ class FootballDataClient:
             self._request_lock.acquire()
 
         try:
-            if not blocking and self._rate_limiter.would_block():
-                raise RateLimitWouldBlock(
-                    f"Rate limit exhausted for {competition_code}; skipping non-blocking call rather than waiting."
-                )
-            self._rate_limiter.wait_if_needed()
-
-            # Each configured key tried in order on a failed request (bad
-            # key, quota exhausted, network blip) -- same discipline as
-            # SwedenFixturesClient._get() (BUG-056).
+            # W250: each configured key tried in order on a failed request
+            # (bad key, quota exhausted, network blip) -- same discipline as
+            # SwedenFixturesClient._get() (BUG-056) -- but keys whose OWN
+            # rate limit isn't currently exhausted are tried before ones
+            # that are (a stable sort: ready keys keep their relative
+            # order, then exhausted ones keep theirs), so a fresh fallback
+            # key's budget is used immediately instead of sleeping through
+            # an earlier key's wait_if_needed() first. Only once every key
+            # is exhausted does this loop reach one and actually wait
+            # (blocking=True) or raise (blocking=False) on it.
+            ordered = sorted(
+                enumerate(self._api_keys), key=lambda pair: self._rate_limiters[pair[1]].would_block()
+            )
             last_exc: requests.RequestException | None = None
-            for i, key in enumerate(self._api_keys):
+            for i, key in ordered:
+                limiter = self._rate_limiters[key]
                 try:
+                    if not blocking and limiter.would_block():
+                        raise RateLimitWouldBlock(
+                            f"Rate limit exhausted for key #{i + 1} ({competition_code}); "
+                            "skipping non-blocking call rather than waiting."
+                        )
+                    limiter.wait_if_needed()
                     response = self._session.get(
                         f"{BASE_URL}/competitions/{competition_code}/matches",
                         headers={"X-Auth-Token": key},
                         params=params,
                         timeout=10,
                     )
-                    self._rate_limiter.update_from_headers(response.headers)
+                    limiter.update_from_headers(response.headers)
                     response.raise_for_status()
                     payload = response.json()
                     return [_normalize(match) for match in payload.get("matches", [])]

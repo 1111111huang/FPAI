@@ -530,6 +530,50 @@ def test_duplicate_fallback_key_deduped_not_tried_twice() -> None:
     assert session.get.call_count == 1
 
 
+def test_falls_through_to_a_fresh_keys_budget_instead_of_blocking_on_an_exhausted_one() -> None:
+    """W250, found live: the primary key's budget being exhausted used to
+    block for up to a minute (one shared _RateLimiter) before the
+    fallback-key loop ever got a chance to try a configured key with its
+    own, untouched quota. Each key now has its own limiter, and ready keys
+    are tried before exhausted ones -- the fresh key must be used
+    immediately, with no sleep at all."""
+    sleep_fn = MagicMock()
+    exhausted_limiter = _RateLimiter(sleep_fn=sleep_fn, time_fn=lambda: 100.0)
+    exhausted_limiter.update_from_headers({"x-requests-available-minute": "0", "X-RequestCounter-Reset": "45"})
+
+    session = _mock_session([])
+    client = FootballDataClient(
+        api_key="exhausted-key", session=session, fallback_api_keys=("fresh-key",),
+        rate_limiter=exhausted_limiter,
+    )
+
+    client.get_fixtures(competition_code="PL")
+
+    sleep_fn.assert_not_called()
+    session.get.assert_called_once()
+    assert session.get.call_args.kwargs["headers"]["X-Auth-Token"] == "fresh-key"
+
+
+def test_raises_when_every_keys_budget_is_exhausted_and_blocking_is_false() -> None:
+    session = _mock_session([])
+    limiter1 = _RateLimiter(sleep_fn=MagicMock(), time_fn=lambda: 100.0)
+    limiter1.update_from_headers({"x-requests-available-minute": "0", "X-RequestCounter-Reset": "45"})
+    client = FootballDataClient(
+        api_key="key-1", session=session, fallback_api_keys=("key-2",), rate_limiter=limiter1,
+    )
+    # key-2's own (auto-created) limiter has no injected clock -- marking it
+    # exhausted via real headers still works, since would_block() just
+    # compares its reset instant against "now" and 45s can't have passed.
+    client._rate_limiters["key-2"].update_from_headers(
+        {"x-requests-available-minute": "0", "X-RequestCounter-Reset": "45"}
+    )
+
+    with pytest.raises(RateLimitWouldBlock):
+        client.get_results(date_from="2026-08-22", date_to="2026-08-22", blocking=False)
+
+    session.get.assert_not_called()
+
+
 def test_client_calls_rate_limiter_before_each_request() -> None:
     session = _mock_session([])
     rate_limiter = MagicMock()
