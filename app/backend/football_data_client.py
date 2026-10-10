@@ -135,9 +135,18 @@ class FootballDataClient:
         session: requests.Session | None = None,
         rate_limiter: _RateLimiter | None = None,
         results_cache: ResultsCache | None = None,
+        fallback_api_keys: tuple[str, ...] = (),
     ) -> None:
-        self._api_key = api_key
+        # Same fallback discipline as SwedenFixturesClient._get() (BUG-056):
+        # tried in order on a failed request, deduped (dict.fromkeys) in
+        # case a key is set under multiple env vars, falsy entries dropped.
+        self._api_keys = tuple(dict.fromkeys(k for k in (api_key, *fallback_api_keys) if k))
         self._session = session or requests.Session()
+        # ponytail: one rate limiter shared across every key in self._api_keys,
+        # not a separate budget per key (unlike build_odds_client()'s per-key
+        # CreditCounter) -- a fallback key's own quota isn't tracked
+        # independently. Upgrade to per-key _RateLimiter instances if a
+        # fallback key's budget ever needs isolating from the primary's.
         self._rate_limiter = rate_limiter or _RateLimiter()
         # W213: optional -- every existing construction site (tests
         # included) omits this and keeps calling the live API on every
@@ -316,16 +325,30 @@ class FootballDataClient:
                     f"Rate limit exhausted for {competition_code}; skipping non-blocking call rather than waiting."
                 )
             self._rate_limiter.wait_if_needed()
-            response = self._session.get(
-                f"{BASE_URL}/competitions/{competition_code}/matches",
-                headers={"X-Auth-Token": self._api_key},
-                params=params,
-                timeout=10,
-            )
-            self._rate_limiter.update_from_headers(response.headers)
-            response.raise_for_status()
 
-            payload = response.json()
-            return [_normalize(match) for match in payload.get("matches", [])]
+            # Each configured key tried in order on a failed request (bad
+            # key, quota exhausted, network blip) -- same discipline as
+            # SwedenFixturesClient._get() (BUG-056).
+            last_exc: requests.RequestException | None = None
+            for i, key in enumerate(self._api_keys):
+                try:
+                    response = self._session.get(
+                        f"{BASE_URL}/competitions/{competition_code}/matches",
+                        headers={"X-Auth-Token": key},
+                        params=params,
+                        timeout=10,
+                    )
+                    self._rate_limiter.update_from_headers(response.headers)
+                    response.raise_for_status()
+                    payload = response.json()
+                    return [_normalize(match) for match in payload.get("matches", [])]
+                except requests.RequestException as exc:
+                    LOGGER.warning(
+                        "FootballDataClient.%s: key #%d failed (%s) -- trying next key.",
+                        competition_code, i + 1, exc,
+                    )
+                    last_exc = exc
+            assert last_exc is not None  # unreachable -- __init__ guarantees >=1 key
+            raise last_exc
         finally:
             self._request_lock.release()

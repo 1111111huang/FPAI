@@ -80,7 +80,12 @@ def get_fixtures_client() -> FootballDataClient:
         # I1/D1/F1 all reuse this same singleton, differentiated only by
         # competition_code per call) -- one ResultsCache covers all of them.
         _fixtures_client = FootballDataClient(
-            api_key=os.environ.get("FOOTBALL_DATA_API_KEY", ""), results_cache=ResultsCache(),
+            api_key=os.environ.get("FOOTBALL_DATA_API_KEY", ""),
+            results_cache=ResultsCache(),
+            fallback_api_keys=(
+                os.environ.get("FOOTBALL_DATA_API_KEY_2", ""),
+                os.environ.get("FOOTBALL_DATA_API_KEY_3", ""),
+            ),
         )
     return _fixtures_client
 

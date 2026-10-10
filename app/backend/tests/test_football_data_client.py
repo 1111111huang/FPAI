@@ -469,6 +469,67 @@ def test_raises_for_http_error_status() -> None:
         client.get_fixtures()
 
 
+def test_get_fixtures_falls_back_to_second_key_when_first_is_rejected() -> None:
+    """Mirrors SwedenFixturesClient's own fallback test (BUG-056 discipline)
+    -- a bad primary key now has somewhere to fail over to."""
+    import requests
+
+    session = MagicMock()
+    unauthorized = MagicMock()
+    unauthorized.headers = {}
+    unauthorized.raise_for_status.side_effect = requests.HTTPError("401 Unauthorized")
+    ok = MagicMock()
+    ok.headers = {}
+    ok.raise_for_status.return_value = None
+    ok.json.return_value = {"matches": [_SCHEDULED_MATCH]}
+    session.get.side_effect = [unauthorized, ok]
+
+    client = FootballDataClient(api_key="bad-key", session=session, fallback_api_keys=("good-key",))
+    results = client.get_fixtures(competition_code="PL")
+
+    assert len(results) == 1
+    assert session.get.call_count == 2
+    assert session.get.call_args_list[0].kwargs["headers"]["X-Auth-Token"] == "bad-key"
+    assert session.get.call_args_list[1].kwargs["headers"]["X-Auth-Token"] == "good-key"
+
+
+def test_get_fixtures_raises_once_every_key_is_exhausted() -> None:
+    import requests
+
+    session = MagicMock()
+    unauthorized = MagicMock()
+    unauthorized.headers = {}
+    unauthorized.raise_for_status.side_effect = requests.HTTPError("401 Unauthorized")
+    session.get.return_value = unauthorized
+
+    client = FootballDataClient(api_key="bad-key", session=session, fallback_api_keys=("also-bad",))
+
+    with pytest.raises(requests.HTTPError):
+        client.get_fixtures(competition_code="PL")
+    assert session.get.call_count == 2
+
+
+def test_empty_fallback_keys_filtered_out_not_tried_as_empty_string() -> None:
+    """The default (no FOOTBALL_DATA_API_KEY_2 configured) passes an empty
+    string through -- must be dropped, not tried as a literal empty key."""
+    session = _mock_session([])
+    client = FootballDataClient(api_key="only-key", session=session, fallback_api_keys=("", ""))
+
+    client.get_fixtures(competition_code="PL")
+
+    assert session.get.call_count == 1
+    assert session.get.call_args.kwargs["headers"]["X-Auth-Token"] == "only-key"
+
+
+def test_duplicate_fallback_key_deduped_not_tried_twice() -> None:
+    session = _mock_session([])
+    client = FootballDataClient(api_key="same-key", session=session, fallback_api_keys=("same-key",))
+
+    client.get_fixtures(competition_code="PL")
+
+    assert session.get.call_count == 1
+
+
 def test_client_calls_rate_limiter_before_each_request() -> None:
     session = _mock_session([])
     rate_limiter = MagicMock()
