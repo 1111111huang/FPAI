@@ -5,7 +5,7 @@
  * the bet-logging modal's locked-except-stake behavior. Runs headless via
  * Vitest + React Testing Library -- no live backend; @/lib/api is mocked.
  */
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { render, renderHook, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, test, vi, beforeEach } from "vitest";
 
@@ -23,6 +23,8 @@ import {
   shapSummarySentence,
   StatusBadge,
   TeamBadge,
+  useLiveMatchPolling,
+  DASHBOARD_CACHE_LIVE_TTL_MS,
   __resetDashboardMatchesCacheForTests,
   type Match,
   type MarketRec,
@@ -1663,6 +1665,49 @@ describe("MatchExplorerPage -- league section headers (direct user request)", ()
     const [from, to] = vi.mocked(getFixtures).mock.calls[0];
     expect(from! < today).toBe(true);
     expect(to! > today).toBe(true);
+  });
+});
+
+describe("useLiveMatchPolling (direct user request, 2026-10-10)", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("bumps the retry tick every DASHBOARD_CACHE_LIVE_TTL_MS while a live match is present", () => {
+    vi.useFakeTimers();
+    const setRetryTick = vi.fn();
+    const liveMatch = baseMatch({ status: "live" });
+
+    renderHook(() => useLiveMatchPolling([liveMatch], setRetryTick));
+
+    expect(setRetryTick).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(DASHBOARD_CACHE_LIVE_TTL_MS);
+    expect(setRetryTick).toHaveBeenCalledTimes(1);
+    vi.advanceTimersByTime(DASHBOARD_CACHE_LIVE_TTL_MS);
+    expect(setRetryTick).toHaveBeenCalledTimes(2);
+  });
+
+  it("never polls when nothing shown is live", () => {
+    vi.useFakeTimers();
+    const setRetryTick = vi.fn();
+    const upcomingMatch = baseMatch({ status: "upcoming" });
+
+    renderHook(() => useLiveMatchPolling([upcomingMatch], setRetryTick));
+
+    vi.advanceTimersByTime(5 * DASHBOARD_CACHE_LIVE_TTL_MS);
+    expect(setRetryTick).not.toHaveBeenCalled();
+  });
+
+  it("stops polling once unmounted", () => {
+    vi.useFakeTimers();
+    const setRetryTick = vi.fn();
+    const liveMatch = baseMatch({ status: "live" });
+
+    const { unmount } = renderHook(() => useLiveMatchPolling([liveMatch], setRetryTick));
+    unmount();
+
+    vi.advanceTimersByTime(5 * DASHBOARD_CACHE_LIVE_TTL_MS);
+    expect(setRetryTick).not.toHaveBeenCalled();
   });
 });
 

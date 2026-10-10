@@ -14,7 +14,7 @@
  * messaging already covers this honestly.
  */
 
-import { useEffect, useMemo, useState } from "react";
+import { type Dispatch, type SetStateAction, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { usePathname, useSearchParams } from "next/navigation";
 import { useSession } from "next-auth/react";
@@ -296,7 +296,7 @@ async function resolveCachedRecommendations(matches: Match[]): Promise<Match[]> 
  * own. ponytail: a plain module-level Map, not a real cache library --
  * upgrade to something with LRU eviction if this ever grows past a handful
  * of keys per session (it won't -- one user, two pages). */
-const DASHBOARD_CACHE_LIVE_TTL_MS = 60_000;
+export const DASHBOARD_CACHE_LIVE_TTL_MS = 60_000;
 const DASHBOARD_CACHE_IDLE_TTL_MS = 5 * 60_000;
 const DASHBOARD_CACHE_IMMINENT_WINDOW_MS = 30 * 60_000;
 const DASHBOARD_CACHE_LIVE_MATCH_DURATION_MS = 3 * 60 * 60_000;
@@ -323,6 +323,26 @@ function setDashboardMatchesCache(key: string, matches: Match[]): void {
     ? DASHBOARD_CACHE_LIVE_TTL_MS
     : DASHBOARD_CACHE_IDLE_TTL_MS;
   dashboardMatchesCache.set(key, { matches, fetchedAt: now, ttlMs });
+}
+
+/** Direct user request (2026-10-10): a live match's card doesn't update on
+ * its own today -- the TTL split above only shortens how long stale data
+ * survives the *next* fetch, nothing actually triggers one while the user
+ * stays on the page. Scoped to exactly the case that needs it (at least one
+ * currently-shown match is live) so an idle page with nothing live never
+ * fires a background request at all. Interval matches
+ * DASHBOARD_CACHE_LIVE_TTL_MS so each tick lands right as the cache entry
+ * it's trying to refresh actually expires, not sooner (polling faster would
+ * just re-read the same still-fresh cache entry and do nothing). `setRetryTick`
+ * is a useState setter -- stable across renders -- so this only re-runs
+ * when whether-anything-is-live actually flips, not on every render. */
+export function useLiveMatchPolling(matches: Match[] | null, setRetryTick: Dispatch<SetStateAction<number>>): void {
+  const hasLive = (matches ?? []).some((m) => m.status === "live");
+  useEffect(() => {
+    if (!hasLive) return;
+    const interval = setInterval(() => setRetryTick((t) => t + 1), DASHBOARD_CACHE_LIVE_TTL_MS);
+    return () => clearInterval(interval);
+  }, [hasLive, setRetryTick]);
 }
 
 /** Test-only escape hatch: this cache is module-level by design (it has to
@@ -1707,6 +1727,8 @@ export function DashboardPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [asOf, retryTick]);
 
+  useLiveMatchPolling(matches, setRetryTick);
+
   function updateMatch(updated: Match) {
     setMatches((prev) => prev?.map((m) => (m.id === updated.id ? updated : m)) ?? null);
   }
@@ -1983,6 +2005,8 @@ export function MatchExplorerPage() {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [asOf, retryTick]);
+
+  useLiveMatchPolling(matches, setRetryTick);
 
   function updateMatch(updated: Match) {
     setMatches((prev) => prev?.map((m) => (m.id === updated.id ? updated : m)) ?? null);
