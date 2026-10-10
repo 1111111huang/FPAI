@@ -1,8 +1,10 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { Plus, WarningCircle, X } from "@phosphor-icons/react";
 import { TeamBadge, marketLabel } from "./MatchUI";
+import { showToast } from "@/lib/toast";
 
 // W218: the one closed set of valid market/selection pairs -- duplicated
 // from BetTracker.tsx's MARKET_SELECTIONS (that file imports this one, not
@@ -152,6 +154,7 @@ export function LogBetModal({
     setErrorMsg(null);
     try {
       await onSubmit({ market, selection, odds: parsedOdds, stake: parsedStake });
+      showToast("Bet logged");
     } catch (err) {
       setErrorMsg(err instanceof Error ? err.message : "Could not log bet.");
     } finally {
@@ -159,7 +162,16 @@ export function LogBetModal({
     }
   }
 
-  return (
+  // W218 bug report: rendered inline (not portaled), this dialog was a DOM
+  // descendant of whichever card/button opened it -- MatchCard's whole body
+  // is itself a clickable div (role="button" onClick=handleExpand), so every
+  // click anywhere in the modal (backdrop, header, non-interactive text) bubbled
+  // up and toggled that card's expand/collapse, and the modal inherited that
+  // ancestor's `cursor-pointer` CSS (cursor is an inherited property) even over
+  // non-clickable areas. Portaling to document.body removes it from that DOM
+  // subtree entirely, which fixes both: no ancestor to bubble into or inherit
+  // cursor from.
+  return createPortal(
     <>
       <div
         className="fixed inset-0 z-40 bg-page/70 backdrop-blur-sm"
@@ -324,6 +336,7 @@ export function LogBetModal({
           </button>
         </div>
       </div>
-    </>
+    </>,
+    document.body
   );
 }

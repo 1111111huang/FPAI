@@ -16,6 +16,7 @@ import { AppShell } from "./AppShell";
 import { LEAGUE_LABEL } from "@/lib/dashboardMetrics";
 import { addDays, dateString, ErrorState, TeamBadge, marketLabel, matchStatusLabel } from "./MatchUI";
 import { LogBetModal, MARKET_SELECTIONS } from "./LogBetModal";
+import { ConfirmDialog } from "./ConfirmDialog";
 
 function formatDate(iso: string): string {
   return iso.slice(0, 10);
@@ -253,7 +254,8 @@ function BetRow({
 
   if (editing) {
     return (
-      <div className="border-b border-border py-3 text-sm last:border-b-0">
+      <tr className="border-b border-border last:border-b-0">
+        <td colSpan={6} className="py-3 text-sm">
         <div className="flex items-center justify-between text-ink">
           <span className="truncate">{label}</span>
           <button
@@ -335,73 +337,63 @@ function BetRow({
         >
           {saving ? "Saving…" : "Save"}
         </button>
-      </div>
+        </td>
+      </tr>
     );
   }
 
   return (
-    <div className="grid grid-cols-[1fr_auto_auto_auto_auto_auto] items-center gap-4 border-b border-border py-3 text-sm last:border-b-0">
-      <span className="truncate text-ink">
-        {bet.home_team} v {bet.away_team}
-        <span className="ml-2 text-xs text-ink-secondary">
-          {bet.market} · {bet.selection}
-        </span>
-      </span>
-      <span className="text-right font-mono text-ink-secondary">{bet.odds.toFixed(2)}</span>
-      <span className="text-right font-mono text-ink-secondary">{bet.stake.toFixed(2)}</span>
-      <span className="text-right font-mono text-ink">
-        {bet.profit_loss !== null ? bet.profit_loss.toFixed(2) : "—"}
-      </span>
-      <span className={`justify-self-end uppercase text-xs font-medium ${outcomeColor}`}>{bet.outcome}</span>
-      <span className="justify-self-end flex items-center gap-2 text-xs">
-        {confirming ? (
-          <span className="flex items-center gap-1.5">
-            <span className="text-ink-secondary">Delete this bet?</span>
-            <button
-              type="button"
-              onClick={confirmDelete}
-              disabled={deleting}
-              aria-label={`Confirm delete: ${label}`}
-              className="font-medium text-serious disabled:opacity-50"
-            >
-              {deleting ? "…" : "Yes"}
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                setConfirming(false);
-                setDeleteError(null);
-              }}
-              disabled={deleting}
-              aria-label={`Cancel delete: ${label}`}
-              className="text-ink-secondary disabled:opacity-50"
-            >
-              Cancel
-            </button>
-            {deleteError && <span className="text-serious">{deleteError}</span>}
+    <tr className="border-b border-border text-sm last:border-b-0">
+      <td className="py-3 align-middle text-ink">
+        <span className="truncate">
+          {bet.home_team} v {bet.away_team}
+          <span className="ml-2 text-xs text-ink-secondary">
+            {bet.market} · {bet.selection}
           </span>
-        ) : (
-          <>
-            <button
-              type="button"
-              onClick={startEditing}
-              aria-label={`Edit bet: ${label}`}
-              className="text-ink-secondary hover:text-accent"
-            >
-              Edit
-            </button>
-            <button
-              type="button"
-              onClick={() => setConfirming(true)}
-              aria-label={`Delete bet: ${label}`}
-              className="text-ink-secondary hover:text-serious"
-            >
-              Delete
-            </button>
-          </>
-        )}
-      </span>
-    </div>
+        </span>
+      </td>
+      <td className="py-3 align-middle text-right font-mono text-ink-secondary">{bet.odds.toFixed(2)}</td>
+      <td className="py-3 align-middle text-right font-mono text-ink-secondary">{bet.stake.toFixed(2)}</td>
+      <td className="py-3 align-middle text-right font-mono text-ink">
+        {bet.profit_loss !== null ? bet.profit_loss.toFixed(2) : "—"}
+      </td>
+      <td className={`py-3 align-middle text-right text-xs font-medium uppercase ${outcomeColor}`}>{bet.outcome}</td>
+      <td className="py-3 align-middle text-right text-xs">
+        <span className="flex items-center justify-end gap-2">
+          <button
+            type="button"
+            onClick={startEditing}
+            aria-label={`Edit bet: ${label}`}
+            className="text-ink-secondary hover:text-accent"
+          >
+            Edit
+          </button>
+          <button
+            type="button"
+            onClick={() => setConfirming(true)}
+            aria-label={`Delete bet: ${label}`}
+            className="text-ink-secondary hover:text-serious"
+          >
+            Delete
+          </button>
+        </span>
+        <ConfirmDialog
+          open={confirming}
+          title="Delete this bet?"
+          message="This can't be undone."
+          confirmLabel={deleting ? "Deleting…" : "Delete"}
+          confirmAriaLabel={`Confirm delete: ${label}`}
+          cancelAriaLabel={`Cancel delete: ${label}`}
+          busy={deleting}
+          error={deleteError}
+          onConfirm={confirmDelete}
+          onCancel={() => {
+            setConfirming(false);
+            setDeleteError(null);
+          }}
+        />
+      </td>
+    </tr>
   );
 }
 
@@ -569,19 +561,23 @@ export function BetTrackerPage() {
           <p className="mt-2 text-sm text-ink-secondary">No bets logged yet.</p>
         )}
         {!error && bets && bets.length > 0 && (
-          <div className="mt-2">
-            <div className="grid grid-cols-[1fr_auto_auto_auto_auto_auto] gap-4 border-b border-border pb-1.5 text-xs font-medium uppercase tracking-wide text-muted">
-              <span>Match</span>
-              <span className="text-right">Odds</span>
-              <span className="text-right">Stake</span>
-              <span className="text-right">P&amp;L</span>
-              <span className="text-right">Outcome</span>
-              <span />
-            </div>
-            {bets.map((bet) => (
-              <BetRow key={bet.id} bet={bet} onDeleted={load} onUpdated={load} onSessionExpired={() => setNeedsAuth(true)} />
-            ))}
-          </div>
+          <table className="mt-2 w-full border-collapse">
+            <thead>
+              <tr className="border-b border-border text-xs font-medium uppercase tracking-wide text-muted">
+                <th className="pb-1.5 text-left font-medium">Match</th>
+                <th className="pb-1.5 text-right font-medium">Odds</th>
+                <th className="pb-1.5 text-right font-medium">Stake</th>
+                <th className="pb-1.5 text-right font-medium">P&amp;L</th>
+                <th className="pb-1.5 text-right font-medium">Outcome</th>
+                <th className="pb-1.5" />
+              </tr>
+            </thead>
+            <tbody>
+              {bets.map((bet) => (
+                <BetRow key={bet.id} bet={bet} onDeleted={load} onUpdated={load} onSessionExpired={() => setNeedsAuth(true)} />
+              ))}
+            </tbody>
+          </table>
         )}
       </div>
     </AppShell>

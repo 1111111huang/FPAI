@@ -109,9 +109,12 @@ describe("LogBetModal", () => {
   it("clicking the backdrop calls onClose", async () => {
     const onClose = vi.fn();
     const user = userEvent.setup();
-    const { container } = render(<LogBetModal {...baseProps} locked market="result_3way" selection="draw" odds={4.0} onClose={onClose} />);
+    // Portaled to document.body (W218 bug fix: clicks must not bubble into
+    // whatever clickable ancestor opened the modal), so the backdrop lives
+    // outside the RTL container -- query the document, not `container`.
+    render(<LogBetModal {...baseProps} locked market="result_3way" selection="draw" odds={4.0} onClose={onClose} />);
 
-    await user.click(container.querySelector('[aria-hidden="true"]')!);
+    await user.click(document.body.querySelector('[aria-hidden="true"]')!);
 
     expect(onClose).toHaveBeenCalled();
   });
@@ -131,7 +134,7 @@ describe("LogBetModal", () => {
     let resolveSubmit!: () => void;
     const onSubmit = vi.fn(() => new Promise<void>((resolve) => { resolveSubmit = resolve; }));
     const user = userEvent.setup();
-    const { container } = render(
+    render(
       <LogBetModal {...baseProps} locked market="result_3way" selection="draw" odds={4.0} onClose={onClose} onSubmit={onSubmit} />
     );
 
@@ -139,7 +142,7 @@ describe("LogBetModal", () => {
     await user.click(screen.getByRole("button", { name: /confirm bet/i }));
     expect(onSubmit).toHaveBeenCalled(); // now "saving"
 
-    await user.click(container.querySelector('[aria-hidden="true"]')!);
+    await user.click(document.body.querySelector('[aria-hidden="true"]')!);
     await user.keyboard("{Escape}");
     expect(onClose).not.toHaveBeenCalled();
 
