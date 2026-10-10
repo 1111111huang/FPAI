@@ -54,7 +54,7 @@ from app.backend.recommendations import MatchRecommendationOut, RecommendationRe
 from app.backend.scheduler import JobRunLog, RecoverableScheduler
 from app.backend.scheduler_wiring import (
     build_odds_client, build_oddspapi_client, build_schedule_t30, register_data_refresh_job, register_eod_job,
-    register_lessons_job,
+    register_fixture_reconciliation_job, register_lessons_job,
 )
 from app.backend.settlement import settle_open_bets
 from app.backend.users import UserStore
@@ -379,6 +379,21 @@ async def lifespan(app: FastAPI):
         # with nothing refreshing it (see scheduler_wiring.py's
         # register_data_refresh_job docstring).
         register_data_refresh_job(scheduler)
+        # W249: periodic postponement/reschedule safety net + ±2-day
+        # fixture-cache warming -- see scheduler_wiring.py's
+        # register_fixture_reconciliation_job docstring.
+        register_fixture_reconciliation_job(
+            scheduler,
+            fixtures_client=get_fixtures_client(),
+            odds_client=build_odds_client(),
+            cache=recommendations.get_cache(),
+            config=config,
+            sweden_fixtures_client=get_sweden_fixtures_client(),
+            la_liga_fixtures_client=get_la_liga_fixtures_client(),
+            serie_a_fixtures_client=get_serie_a_fixtures_client(),
+            bundesliga_fixtures_client=get_bundesliga_fixtures_client(),
+            ligue1_fixtures_client=get_ligue1_fixtures_client(),
+        )
         register_lessons_job(
             scheduler,
             cache=recommendations.get_cache(),
