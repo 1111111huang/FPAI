@@ -5,7 +5,8 @@ is built last), so this is the minimal connective tissue W04 actually needs."""
 
 from __future__ import annotations
 
-from datetime import date
+import dataclasses
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 import sys
 import threading
@@ -18,22 +19,21 @@ import pytest
 import requests
 from fastapi.testclient import TestClient
 
+from app.backend import fixture_cache
 from app.backend.football_data_client import NormalizedMatch
-from app.backend.main import _fixture_cache, _fixture_cache_pending, _split_fixture_date_range, app
+from app.backend.main import _split_fixture_date_range, app
 
 
 @pytest.fixture(autouse=True)
 def _clear_fixture_cache():
-    """W52: the TTL cache (and its in-flight-request tracking dict) is
-    module-level state (mirroring the existing `_fixtures_client` singleton
-    pattern) -- clear it before every test so identical date ranges reused
-    across unrelated test cases in this file don't leak cached results (or
-    a stuck pending entry) between them."""
-    _fixture_cache.clear()
-    _fixture_cache_pending.clear()
+    """W52/W249: the TTL cache (and its in-flight-request tracking dict)
+    is module-level state in fixture_cache.py -- clear it before every
+    test so identical date ranges reused across unrelated test cases in
+    this file don't leak cached results (or a stuck pending entry)
+    between them."""
+    fixture_cache.clear()
     yield
-    _fixture_cache.clear()
-    _fixture_cache_pending.clear()
+    fixture_cache.clear()
 
 
 @pytest.fixture(autouse=True)
@@ -114,7 +114,13 @@ def test_fixtures_endpoint_skips_a_display_disabled_competition_entirely(sweden_
     sweden_client_mock.get_fixtures.return_value = [_SWEDISH_FIXTURE]
     with patch("app.backend.main.list_display_enabled_competition_ids", return_value=["E0"]):
         with patch("app.backend.main.get_fixtures_client") as mock_get_client:
-            mock_get_client.return_value.get_fixtures.return_value = [_REAL_FIXTURE]
+            # W249: fixture_cache.py buckets a returned match by its own
+            # utc_date, day by day -- so (unlike the old flat-range cache)
+            # the mocked match's date must actually fall inside the queried
+            # window, or the per-day cache correctly never surfaces it.
+            mock_get_client.return_value.get_fixtures.return_value = [
+                dataclasses.replace(_REAL_FIXTURE, utc_date="2027-07-02T15:00:00Z")
+            ]
             with TestClient(app) as client:
                 response = client.get(
                     "/api/fixtures", params={"date_from": "2027-07-01", "date_to": "2027-07-05"}
@@ -216,7 +222,11 @@ def test_fixtures_endpoint_wholly_future_range_still_uses_get_fixtures_only():
     with patch("app.backend.main._current_real_date", return_value=date(2026, 7, 19)):
         with patch("app.backend.main.get_fixtures_client") as mock_get_client:
             mock_client = mock_get_client.return_value
-            mock_client.get_fixtures.return_value = [_REAL_FIXTURE]
+            # W249: must fall inside the queried window -- see the
+            # dataclasses.replace comment on the skip-disabled test above.
+            mock_client.get_fixtures.return_value = [
+                dataclasses.replace(_REAL_FIXTURE, utc_date="2026-08-22T15:00:00Z")
+            ]
             mock_client.get_results.return_value = []
             with TestClient(app) as client:
                 response = client.get(
@@ -262,8 +272,15 @@ def test_fixtures_endpoint_today_only_query_checks_both_finished_and_scheduled()
     with patch("app.backend.main._current_real_date", return_value=date(2025, 3, 10)):
         with patch("app.backend.main.get_fixtures_client") as mock_get_client:
             mock_client = mock_get_client.return_value
-            mock_client.get_results.return_value = [_REAL_RESULT]
-            mock_client.get_fixtures.return_value = [_REAL_FIXTURE]
+            # W249: both must fall on the single queried day (2025-03-10) --
+            # see the dataclasses.replace comment on the skip-disabled test
+            # above.
+            mock_client.get_results.return_value = [
+                dataclasses.replace(_REAL_RESULT, utc_date="2025-03-10T08:00:00Z")
+            ]
+            mock_client.get_fixtures.return_value = [
+                dataclasses.replace(_REAL_FIXTURE, utc_date="2025-03-10T18:00:00Z")
+            ]
             with TestClient(app) as client:
                 response = client.get(
                     "/api/fixtures", params={"date_from": "2025-03-10", "date_to": "2025-03-10"}
@@ -398,40 +415,45 @@ def test_fixtures_endpoint_concurrent_requests_dedupe_to_a_single_upstream_call(
     mock_client.get_fixtures.assert_called_once_with(date_from="2027-05-01", date_to="2027-05-05")
 
 
-def test_fixtures_endpoint_cache_expires_after_ttl_and_refetches():
-    """The within-TTL dedup test proves two quick, sequential requests only
-    hit the client once. This proves the other half: once the TTL has
-    genuinely elapsed, a third request for the same key must hit the client
-    again -- the cache must not pin stale data (or suppress real calls)
-    forever. Patches `_fixture_cache_now` (mirrors this file's existing
-    `_current_real_date` patching convention) to advance time deterministically
-    rather than a real 60-second sleep."""
+def test_fixtures_endpoint_cache_expires_at_a_matchs_own_kickoff_and_refetches():
+    """The within-TTL dedup test above proves two quick, sequential
+    requests only hit the client once. This proves the other half: once a
+    cached day's own computed TTL has genuinely elapsed (here, because the
+    one SCHEDULED match in it reached its own kickoff time), a third
+    request for the same day must hit the client again."""
+    kickoff = datetime(2027, 6, 1, 15, 0, tzinfo=timezone.utc)
+    fixture = NormalizedMatch(
+        match_id="m1", utc_date=kickoff.strftime("%Y-%m-%dT%H:%M:%SZ"), status="SCHEDULED",
+        home_team="Arsenal", away_team="Everton", home_goals=None, away_goals=None,
+    )
     with patch("app.backend.main.get_fixtures_client") as mock_get_client:
         mock_client = mock_get_client.return_value
-        mock_client.get_fixtures.return_value = []
+        mock_client.get_fixtures.return_value = [fixture]
 
-        fake_now = [1_000.0]
-        with patch("app.backend.main._fixture_cache_now", side_effect=lambda: fake_now[0]):
+        fake_wall_clock = [kickoff - timedelta(hours=1)]  # 1h (3600s) before kickoff
+        fake_monotonic = [1_000.0]
+        with patch("app.backend.fixture_cache.wall_clock_now", side_effect=lambda: fake_wall_clock[0]), \
+             patch("app.backend.fixture_cache.now_monotonic", side_effect=lambda: fake_monotonic[0]):
             with TestClient(app) as client:
                 first = client.get(
-                    "/api/fixtures", params={"date_from": "2027-06-01", "date_to": "2027-06-05"}
+                    "/api/fixtures", params={"date_from": "2027-06-01", "date_to": "2027-06-01"}
                 )
-                # Still within the 60s TTL -- must serve the cached entry.
-                fake_now[0] += 30.0
+                # Still ~55 minutes before kickoff -- must serve the cached entry.
+                fake_monotonic[0] += 3300.0
                 second = client.get(
-                    "/api/fixtures", params={"date_from": "2027-06-01", "date_to": "2027-06-05"}
+                    "/api/fixtures", params={"date_from": "2027-06-01", "date_to": "2027-06-01"}
                 )
-                # Past the 60s TTL from the first call -- must re-fetch.
-                fake_now[0] += 31.0
+                # Past kickoff (the computed TTL) -- must re-fetch.
+                fake_monotonic[0] += 400.0
                 third = client.get(
-                    "/api/fixtures", params={"date_from": "2027-06-01", "date_to": "2027-06-05"}
+                    "/api/fixtures", params={"date_from": "2027-06-01", "date_to": "2027-06-01"}
                 )
 
     assert first.status_code == 200
     assert second.status_code == 200
     assert third.status_code == 200
     assert mock_client.get_fixtures.call_count == 2
-    mock_client.get_fixtures.assert_called_with(date_from="2027-06-01", date_to="2027-06-05")
+    mock_client.get_fixtures.assert_called_with(date_from="2027-06-01", date_to="2027-06-01")
 
 
 # ---------------------------------------------------------------------------
@@ -454,7 +476,11 @@ def test_fixtures_endpoint_merges_sweden_fixtures_alongside_epl(sweden_client_mo
     sweden_client_mock.get_fixtures.return_value = [_SWEDISH_FIXTURE]
     with patch("app.backend.main._current_real_date", return_value=date(2026, 7, 19)):
         with patch("app.backend.main.get_fixtures_client") as mock_get_client:
-            mock_get_client.return_value.get_fixtures.return_value = [_REAL_FIXTURE]
+            # W249: must fall inside the queried window -- see the
+            # dataclasses.replace comment on the skip-disabled test above.
+            mock_get_client.return_value.get_fixtures.return_value = [
+                dataclasses.replace(_REAL_FIXTURE, utc_date="2026-08-22T15:00:00Z")
+            ]
             with TestClient(app) as client:
                 response = client.get(
                     "/api/fixtures", params={"date_from": "2026-08-21", "date_to": "2026-08-28"}
@@ -583,9 +609,15 @@ def test_fixtures_endpoint_sweden_fixture_cache_key_is_independent_of_epls(swede
     """A cached EPL call for a date range must not accidentally serve (or be
     served by) Sweden's cache entry for the identical range -- they must be
     keyed separately even though the date range string is the same."""
-    sweden_client_mock.get_fixtures.return_value = [_SWEDISH_FIXTURE]
+    # W249: must fall inside the queried window -- see the
+    # dataclasses.replace comment on the skip-disabled test above.
+    sweden_client_mock.get_fixtures.return_value = [
+        dataclasses.replace(_SWEDISH_FIXTURE, utc_date="2027-05-03T17:00:00Z")
+    ]
     with patch("app.backend.main.get_fixtures_client") as mock_get_client:
-        mock_get_client.return_value.get_fixtures.return_value = [_REAL_FIXTURE]
+        mock_get_client.return_value.get_fixtures.return_value = [
+            dataclasses.replace(_REAL_FIXTURE, utc_date="2027-05-02T15:00:00Z")
+        ]
         with TestClient(app) as client:
             response = client.get(
                 "/api/fixtures", params={"date_from": "2027-05-01", "date_to": "2027-05-05"}
@@ -619,7 +651,11 @@ def test_fixtures_endpoint_merges_la_liga_fixtures_alongside_e0_and_swe(la_liga_
     la_liga_client_mock.get_fixtures.return_value = [_LA_LIGA_FIXTURE]
     with patch("app.backend.main._current_real_date", return_value=date(2026, 7, 19)):
         with patch("app.backend.main.get_fixtures_client") as mock_get_client:
-            mock_get_client.return_value.get_fixtures.return_value = [_REAL_FIXTURE]
+            # W249: must fall inside the queried window -- see the
+            # dataclasses.replace comment on the skip-disabled test above.
+            mock_get_client.return_value.get_fixtures.return_value = [
+                dataclasses.replace(_REAL_FIXTURE, utc_date="2026-08-22T15:00:00Z")
+            ]
             with TestClient(app) as client:
                 response = client.get(
                     "/api/fixtures", params={"date_from": "2026-08-21", "date_to": "2026-08-28"}
@@ -669,10 +705,18 @@ def test_fixtures_endpoint_la_liga_fixture_cache_key_is_independent_of_e0s_and_s
     served by) La Liga's cache entry for the identical range -- keyed
     separately even though the date range string is the same, mirroring
     the existing SWE cache-key-independence test."""
-    la_liga_client_mock.get_fixtures.return_value = [_LA_LIGA_FIXTURE]
-    sweden_client_mock.get_fixtures.return_value = [_SWEDISH_FIXTURE]
+    # W249: must fall inside the queried window -- see the
+    # dataclasses.replace comment on the skip-disabled test above.
+    la_liga_client_mock.get_fixtures.return_value = [
+        dataclasses.replace(_LA_LIGA_FIXTURE, utc_date="2027-06-11T19:00:00Z")
+    ]
+    sweden_client_mock.get_fixtures.return_value = [
+        dataclasses.replace(_SWEDISH_FIXTURE, utc_date="2027-06-11T17:00:00Z")
+    ]
     with patch("app.backend.main.get_fixtures_client") as mock_get_client:
-        mock_get_client.return_value.get_fixtures.return_value = [_REAL_FIXTURE]
+        mock_get_client.return_value.get_fixtures.return_value = [
+            dataclasses.replace(_REAL_FIXTURE, utc_date="2027-06-11T15:00:00Z")
+        ]
         with TestClient(app) as client:
             response = client.get(
                 "/api/fixtures", params={"date_from": "2027-06-10", "date_to": "2027-06-15"}
@@ -714,7 +758,11 @@ def test_fixtures_endpoint_merges_new_league_fixtures_alongside_existing(
     new_leagues_client_mock[league].get_fixtures.return_value = [_NEW_LEAGUE_FIXTURE]
     with patch("app.backend.main._current_real_date", return_value=date(2026, 7, 19)):
         with patch("app.backend.main.get_fixtures_client") as mock_get_client:
-            mock_get_client.return_value.get_fixtures.return_value = [_REAL_FIXTURE]
+            # W249: must fall inside the queried window -- see the
+            # dataclasses.replace comment on the skip-disabled test above.
+            mock_get_client.return_value.get_fixtures.return_value = [
+                dataclasses.replace(_REAL_FIXTURE, utc_date="2026-08-22T15:00:00Z")
+            ]
             with TestClient(app) as client:
                 response = client.get(
                     "/api/fixtures", params={"date_from": "2026-08-21", "date_to": "2026-08-28"}
@@ -768,11 +816,21 @@ def test_fixtures_endpoint_new_leagues_cache_keys_are_independent_of_each_other_
     serve (or be served by) any of the three new leagues' cache entries for
     the identical range -- mirrors the existing SP1/SWE independence test,
     now with three more competitions in the same merge."""
-    new_leagues_client_mock["I1"].get_fixtures.return_value = [_NEW_LEAGUE_FIXTURE]
-    la_liga_client_mock.get_fixtures.return_value = [_LA_LIGA_FIXTURE]
-    sweden_client_mock.get_fixtures.return_value = [_SWEDISH_FIXTURE]
+    # W249: must fall inside the queried window -- see the
+    # dataclasses.replace comment on the skip-disabled test above.
+    new_leagues_client_mock["I1"].get_fixtures.return_value = [
+        dataclasses.replace(_NEW_LEAGUE_FIXTURE, utc_date="2027-06-11T19:00:00Z")
+    ]
+    la_liga_client_mock.get_fixtures.return_value = [
+        dataclasses.replace(_LA_LIGA_FIXTURE, utc_date="2027-06-11T19:00:00Z")
+    ]
+    sweden_client_mock.get_fixtures.return_value = [
+        dataclasses.replace(_SWEDISH_FIXTURE, utc_date="2027-06-11T17:00:00Z")
+    ]
     with patch("app.backend.main.get_fixtures_client") as mock_get_client:
-        mock_get_client.return_value.get_fixtures.return_value = [_REAL_FIXTURE]
+        mock_get_client.return_value.get_fixtures.return_value = [
+            dataclasses.replace(_REAL_FIXTURE, utc_date="2027-06-11T15:00:00Z")
+        ]
         with TestClient(app) as client:
             response = client.get(
                 "/api/fixtures", params={"date_from": "2027-06-10", "date_to": "2027-06-15"}
@@ -859,3 +917,36 @@ class TestSplitFixtureDateRange:
         # Wholly-past check (parsed_to < today) fires first: 2025-03-05 < 2025-03-10.
         assert results == ("2025-03-15", "2025-03-05")
         assert fixtures is None
+
+
+def test_fixtures_endpoint_shares_overlapping_days_across_two_different_requested_ranges():
+    """The actual bug report this plan exists for: Dashboard requesting
+    today..+90 and Match Explorer requesting today-30..+90 must share
+    every day they both cover -- not just the lucky case where their
+    future-side split points happen to coincide. Simulated here as two
+    requests with different outer ranges that overlap on 2026-08-22."""
+    fixture = NormalizedMatch(
+        match_id="m1", utc_date="2026-08-22T15:00:00Z", status="SCHEDULED",
+        home_team="Arsenal", away_team="Everton", home_goals=None, away_goals=None,
+    )
+    with patch("app.backend.main._current_real_date", return_value=date(2026, 7, 19)):
+        with patch("app.backend.main.get_fixtures_client") as mock_get_client:
+            mock_client = mock_get_client.return_value
+            mock_client.get_fixtures.return_value = [fixture]
+            with TestClient(app) as client:
+                first = client.get(
+                    "/api/fixtures", params={"date_from": "2026-08-22", "date_to": "2026-08-24"}
+                )
+                mock_client.get_fixtures.reset_mock()
+                mock_client.get_fixtures.return_value = []
+                second = client.get(
+                    "/api/fixtures", params={"date_from": "2026-08-20", "date_to": "2026-08-24"}
+                )
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    # Every day the second request needs (08-22..08-24) was already warmed
+    # by the first -- only the genuinely new days (08-20, 08-21) are missing.
+    mock_client.get_fixtures.assert_called_once_with(date_from="2026-08-20", date_to="2026-08-21")
+    assert len(second.json()) == 1
+    assert second.json()[0]["home_team"] == "Arsenal"

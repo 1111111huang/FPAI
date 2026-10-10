@@ -14,8 +14,7 @@ import os
 from pathlib import Path
 import subprocess
 import sys
-import time
-from typing import Any, Callable, Literal
+from typing import Any, Literal
 
 import duckdb
 from dotenv import load_dotenv
@@ -29,7 +28,7 @@ from starlette.responses import JSONResponse
 
 load_dotenv()
 
-from app.backend import bets, eod_batch, recommendations, sandbox_clock
+from app.backend import bets, eod_batch, fixture_cache, recommendations, sandbox_clock
 from app.backend.agent_config_hash import compute_agent_config_hash
 from app.backend.auth_deps import get_current_user_email
 from app.backend.bet_tracker import Bet, BetTracker
@@ -152,94 +151,6 @@ def get_sweden_fixtures_client() -> SwedenFixturesClient:
     return _sweden_fixtures_client
 
 
-# W52: football-data.org's free tier (~10 req/min) is shared across every
-# request through the single `_fixtures_client` singleton above. Three
-# independent frontend call sites (Dashboard, Match Explorer, manual bet
-# form) each fetch fixtures fresh on every mount with no de-duplication, so
-# normal navigation within a session can burst well past the budget and trip
-# a 429. This is a short-lived request-dedup cache (not a data-freshness
-# cache) -- 60s is short enough that staleness is a non-issue, long enough to
-# absorb that exact repeated-navigation pattern. Module-level state, matching
-# the existing `_fixtures_client` singleton pattern already in this file.
-_FIXTURE_CACHE_TTL_SECONDS = 60.0
-_fixture_cache: dict[tuple[str, str | None, str | None], tuple[float, list[NormalizedMatch]]] = {}
-
-# Code review follow-up (post-21e6bf9): a bare cache dict only de-dupes
-# requests that arrive *after* an earlier one has already completed and
-# populated the cache -- two genuinely concurrent cache-miss requests for
-# the same key (e.g. React StrictMode's double-effect-invocation in dev, or
-# two browser tabs loading at once) would both race past the cache check
-# and both hit the upstream client for real. This tracks the in-flight
-# asyncio.Task for each key so a second concurrent request awaits the same
-# task instead of starting its own.
-_fixture_cache_pending: dict[tuple[str, str | None, str | None], "asyncio.Task[list[NormalizedMatch]]"] = {}
-
-
-def _fixture_cache_now() -> float:
-    """Split out from _cached_fixture_call so tests can monkeypatch the
-    clock -- mirrors this file's existing `_current_real_date()` patchable-
-    function pattern -- to deterministically exercise TTL expiry without a
-    real 60-second sleep."""
-    return time.monotonic()
-
-
-async def _fetch_and_cache_fixtures(
-    cache_key: tuple[str, str | None, str | None],
-    fetch: Callable[..., list[NormalizedMatch]],
-    fetch_kwargs: dict[str, str | None],
-) -> list[NormalizedMatch]:
-    """Runs the actual upstream call (in the threadpool) and populates the
-    cache on success. A requests.HTTPError raised by `fetch` (e.g.
-    football-data.org's 429 rate-limit response) is turned into a clean 503
-    HTTPException rather than left to propagate as an unhandled 500 -- and
-    is NOT cached, so it doesn't wrongly suppress the next genuine
-    request."""
-    try:
-        matches = await run_in_threadpool(fetch, **fetch_kwargs)
-    except requests.exceptions.HTTPError as exc:
-        LOGGER.warning("Upstream fixture provider call failed for %s: %s", cache_key, exc, exc_info=True)
-        raise HTTPException(
-            status_code=503,
-            detail=(
-                "Fixture data is temporarily unavailable (the upstream provider is rate-limited "
-                "or unreachable). Please try again in a minute."
-            ),
-        ) from exc
-
-    _fixture_cache[cache_key] = (_fixture_cache_now() + _FIXTURE_CACHE_TTL_SECONDS, matches)
-    return matches
-
-
-async def _cached_fixture_call(
-    cache_key: tuple[str, str | None, str | None],
-    fetch: Callable[..., list[NormalizedMatch]],
-    **fetch_kwargs: str | None,
-) -> list[NormalizedMatch]:
-    """Look up `cache_key` in the module-level TTL cache; on a miss, either
-    join an already-in-flight call for the same key (`_fixture_cache_pending`)
-    or kick off a new one. The pending task is registered *before* the first
-    `await` inside it runs -- since asyncio is single-threaded/cooperative,
-    a second concurrent call checking `_fixture_cache_pending` between that
-    registration and the task's completion is guaranteed to see it, closing
-    the race a bare cache dict would leave open."""
-    cached = _fixture_cache.get(cache_key)
-    if cached is not None:
-        expires_at, matches = cached
-        if expires_at > _fixture_cache_now():
-            return matches
-
-    pending = _fixture_cache_pending.get(cache_key)
-    if pending is None:
-        pending = asyncio.ensure_future(_fetch_and_cache_fixtures(cache_key, fetch, fetch_kwargs))
-        _fixture_cache_pending[cache_key] = pending
-
-    try:
-        return await pending
-    finally:
-        if _fixture_cache_pending.get(cache_key) is pending:
-            del _fixture_cache_pending[cache_key]
-
-
 _PREGENERATE_DEFAULT_DAYS_AHEAD = 3
 # BUG-045: eod_batch.run_eod_batch()'s own default (5) is fine for the
 # scheduled nightly EOD job, which runs hours into a long-stable process.
@@ -357,8 +268,8 @@ async def _pregenerate_recommendations(
     resolved_date_from = date_from if (date_from and date_to) else today.isoformat()
     resolved_date_to = date_to if (date_from and date_to) else (today + timedelta(days=days_ahead)).isoformat()
     # W179: found live (2026-08-27) -- get_fixtures() deliberately raises a
-    # clean HTTPException(503) on an upstream 429/outage (see
-    # _fetch_and_cache_fixtures's own docstring), the right contract for its
+    # clean HTTPException(503) on an upstream 429/outage (see its own
+    # try/except around asyncio.gather, above), the right contract for its
     # primary caller (the /api/fixtures HTTP route). But this caller is a
     # fire-and-forget background task (_fire_and_forget), not a request --
     # there's no handler to turn that HTTPException into a response, so it
@@ -929,11 +840,11 @@ async def get_fixtures(date_from: str | None = None, date_to: str | None = None)
         return [dataclasses.replace(m, competition=competition) for m in matches]
 
     # Independent per-league/per-provider calls -- each already runs off the
-    # event loop via run_in_threadpool (_fetch_and_cache_fixtures), so firing
-    # them with asyncio.gather instead of one `await` at a time overlaps
-    # their network wait instead of serializing it. Call order (and hence
-    # `competitions`/`calls` order, preserved through zip below) is kept
-    # identical to the old sequential code so the final concatenated
+    # event loop via run_in_threadpool (inside fixture_cache.get_range), so
+    # firing them with asyncio.gather instead of one `await` at a time
+    # overlaps their network wait instead of serializing it. Call order (and
+    # hence `competitions`/`calls` order, preserved through zip below) is
+    # kept identical to the old sequential code so the final concatenated
     # `matches` order is unchanged.
     competitions: list[str] = []
     calls: list[Any] = []
@@ -941,83 +852,94 @@ async def get_fixtures(date_from: str | None = None, date_to: str | None = None)
         past_from, past_to = results_range
         if "E0" in enabled:
             competitions.append("E0")
-            calls.append(_cached_fixture_call(
-                ("results", past_from, past_to), client.get_results, date_from=past_from, date_to=past_to
+            calls.append(fixture_cache.get_range(
+                fixture_cache.results_call_type("E0"), client.get_results, date_from=past_from, date_to=past_to
             ))
         if "SWE" in enabled:
             # W71: sourced from raw_matches directly, not sweden_client.get_results()
             # (The Odds API's /scores endpoint can only see the last few real
             # days -- it has no arbitrary-historical-date capability at all,
             # unlike football-data.org's get_results() for E0). Still
-            # cache-keyed as "results_swe" -- same TTL-cache slot as before,
+            # cache-keyed as "results_swe" -- same cache slot as before,
             # just backed by a different underlying source.
             competitions.append("SWE")
-            calls.append(_cached_fixture_call(
-                ("results_swe", past_from, past_to),
+            calls.append(fixture_cache.get_range(
+                fixture_cache.results_call_type("SWE"),
                 historical_results_from_raw_matches, date_from=past_from, date_to=past_to,
             ))
         if "SP1" in enabled:
             competitions.append("SP1")
-            calls.append(_cached_fixture_call(
-                ("results_sp1", past_from, past_to), la_liga_client.get_results,
+            calls.append(fixture_cache.get_range(
+                fixture_cache.results_call_type("SP1"), la_liga_client.get_results,
                 competition_code=LA_LIGA_COMPETITION_CODE, date_from=past_from, date_to=past_to,
             ))
         if "I1" in enabled:
             competitions.append("I1")
-            calls.append(_cached_fixture_call(
-                ("results_i1", past_from, past_to), serie_a_client.get_results,
+            calls.append(fixture_cache.get_range(
+                fixture_cache.results_call_type("I1"), serie_a_client.get_results,
                 competition_code=SERIE_A_COMPETITION_CODE, date_from=past_from, date_to=past_to,
             ))
         if "D1" in enabled:
             competitions.append("D1")
-            calls.append(_cached_fixture_call(
-                ("results_d1", past_from, past_to), bundesliga_client.get_results,
+            calls.append(fixture_cache.get_range(
+                fixture_cache.results_call_type("D1"), bundesliga_client.get_results,
                 competition_code=BUNDESLIGA_COMPETITION_CODE, date_from=past_from, date_to=past_to,
             ))
         if "F1" in enabled:
             competitions.append("F1")
-            calls.append(_cached_fixture_call(
-                ("results_f1", past_from, past_to), ligue1_client.get_results,
+            calls.append(fixture_cache.get_range(
+                fixture_cache.results_call_type("F1"), ligue1_client.get_results,
                 competition_code=LIGUE_1_COMPETITION_CODE, date_from=past_from, date_to=past_to,
             ))
     if fixtures_range is not None:
         future_from, future_to = fixtures_range
         if "E0" in enabled:
             competitions.append("E0")
-            calls.append(_cached_fixture_call(
-                ("fixtures", future_from, future_to), client.get_fixtures, date_from=future_from, date_to=future_to
+            calls.append(fixture_cache.get_range(
+                fixture_cache.fixtures_call_type("E0"), client.get_fixtures, date_from=future_from, date_to=future_to
             ))
         if "SWE" in enabled:
             competitions.append("SWE")
-            calls.append(_cached_fixture_call(
-                ("fixtures_swe", future_from, future_to), sweden_client.get_fixtures, date_from=future_from, date_to=future_to
+            calls.append(fixture_cache.get_range(
+                fixture_cache.fixtures_call_type("SWE"), sweden_client.get_fixtures,
+                date_from=future_from, date_to=future_to,
             ))
         if "SP1" in enabled:
             competitions.append("SP1")
-            calls.append(_cached_fixture_call(
-                ("fixtures_sp1", future_from, future_to), la_liga_client.get_fixtures,
+            calls.append(fixture_cache.get_range(
+                fixture_cache.fixtures_call_type("SP1"), la_liga_client.get_fixtures,
                 competition_code=LA_LIGA_COMPETITION_CODE, date_from=future_from, date_to=future_to,
             ))
         if "I1" in enabled:
             competitions.append("I1")
-            calls.append(_cached_fixture_call(
-                ("fixtures_i1", future_from, future_to), serie_a_client.get_fixtures,
+            calls.append(fixture_cache.get_range(
+                fixture_cache.fixtures_call_type("I1"), serie_a_client.get_fixtures,
                 competition_code=SERIE_A_COMPETITION_CODE, date_from=future_from, date_to=future_to,
             ))
         if "D1" in enabled:
             competitions.append("D1")
-            calls.append(_cached_fixture_call(
-                ("fixtures_d1", future_from, future_to), bundesliga_client.get_fixtures,
+            calls.append(fixture_cache.get_range(
+                fixture_cache.fixtures_call_type("D1"), bundesliga_client.get_fixtures,
                 competition_code=BUNDESLIGA_COMPETITION_CODE, date_from=future_from, date_to=future_to,
             ))
         if "F1" in enabled:
             competitions.append("F1")
-            calls.append(_cached_fixture_call(
-                ("fixtures_f1", future_from, future_to), ligue1_client.get_fixtures,
+            calls.append(fixture_cache.get_range(
+                fixture_cache.fixtures_call_type("F1"), ligue1_client.get_fixtures,
                 competition_code=LIGUE_1_COMPETITION_CODE, date_from=future_from, date_to=future_to,
             ))
 
-    results = await asyncio.gather(*calls)
+    try:
+        results = await asyncio.gather(*calls)
+    except requests.exceptions.HTTPError as exc:
+        LOGGER.warning("Upstream fixture provider call failed: %s", exc, exc_info=True)
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Fixture data is temporarily unavailable (the upstream provider is rate-limited "
+                "or unreachable). Please try again in a minute."
+            ),
+        ) from exc
     matches: list[NormalizedMatch] = []
     for competition, result in zip(competitions, results):
         matches += _tag(result, competition)
@@ -1182,7 +1104,7 @@ async def create_recommendation(
     # duckdb.IOException rather than blocking or corrupting data. Was
     # previously unhandled here, surfacing as a raw 500 unlike every other
     # transient-external-condition path in this app
-    # (_fetch_and_cache_fixtures's own HTTPError-to-503 precedent, above).
+    # (get_fixtures's own HTTPError-to-503 precedent, above).
     try:
         # run_agent is a real ~10-30s synchronous call (LLM + Tavily) --
         # must run off the event loop or it blocks every other request.
