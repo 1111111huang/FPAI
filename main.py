@@ -117,6 +117,12 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     refresh_parser.add_argument("--league", type=str, default="E0", help="League code for understat fetch (default: E0).")
     refresh_parser.add_argument("--force", action="store_true", help="Force re-download and re-ingest of all files.")
+    refresh_parser.add_argument(
+        "--skip-feature-rebuild", action="store_true",
+        help="W252: skip the expensive whole-table feature-store rebuild (still scrapes/ingests/fetches this "
+        "league's own data) -- for a caller running this once per league in a loop that wants a single "
+        "consolidated 'main.py ingest' rebuild afterward instead of once per league.",
+    )
 
     # schedule-refresh (US#109)
     schedule_refresh_parser = subparsers.add_parser(
@@ -667,7 +673,9 @@ def run_refresh_market_values(app_settings: AppSettings, db_manager: DuckDBManag
     )
 
 
-def run_ingest(app_settings: AppSettings, db_manager: DuckDBManager, force: bool = False) -> None:
+def run_ingest(
+    app_settings: AppSettings, db_manager: DuckDBManager, force: bool = False, skip_feature_rebuild: bool = False,
+) -> None:
     LOGGER.info("Executing command: ingest")
     raw_dir = Path(app_settings.paths.raw_data_dir)
     if not raw_dir.exists():
@@ -692,6 +700,27 @@ def run_ingest(app_settings: AppSettings, db_manager: DuckDBManager, force: bool
         default_retry_delay_seconds=db_manager.default_retry_delay_seconds,
     )
     loader.process_directory(pattern="*.csv", force=force)
+    # W252 (found live, 2026-10-10): compute_rolling_stats() has no league
+    # scoping at all -- it reloads and recomputes features across the
+    # ENTIRE raw_matches table (every league, every season) every time
+    # it's called. register_data_refresh_job's own per-league subprocess
+    # loop used to call this (via run_ingest AND, redundantly, a second
+    # time via run_fetch_understat's own rebuild_features=True) once per
+    # league -- 11 full-dataset rebuilds a night across 6 leagues, each
+    # one apparently heavy enough to get OOM-killed (exit -9, every
+    # league, every night, confirmed live). skip_feature_rebuild=True lets
+    # a per-league caller still load that league's CSV rows (cheap, still
+    # needed) while deferring the expensive global rebuild to a single
+    # consolidated call once all leagues' data is fresh -- see
+    # register_data_refresh_job's own updated docstring.
+    if skip_feature_rebuild:
+        with db_manager.connection() as conn:
+            raw_count = conn.execute("SELECT COUNT(*) FROM raw_matches").fetchone()
+        LOGGER.info(
+            "Ingest complete (feature rebuild deferred) | raw_matches=%s",
+            int(raw_count[0]) if raw_count is not None else 0,
+        )
+        return
     factory = FeatureFactory(  # US#159
         config_path=db_manager.config_path,
         default_max_retries=db_manager.default_max_retries,
@@ -853,7 +882,9 @@ def run_fetch_nonleague_matches_incremental(db_manager: DuckDBManager, delay: fl
     )
 
 
-def run_refresh_sweden_data(app_settings: AppSettings, db_manager: DuckDBManager) -> None:
+def run_refresh_sweden_data(
+    app_settings: AppSettings, db_manager: DuckDBManager, skip_feature_rebuild: bool = False,
+) -> None:
     """Fetch + upsert Sweden's Allsvenskan CSV and rebuild the feature store (US#132).
 
     Sweden's source (football-data.co.uk's new/SWE.csv, US#124) is a single
@@ -864,7 +895,9 @@ def run_refresh_sweden_data(app_settings: AppSettings, db_manager: DuckDBManager
     path this deliberately does NOT chain fetch-understat, fetch-fotmob, or
     lineup backfill -- just fetch, upsert, and a feature-store rebuild (the
     same rebuild step run_ingest performs for EPL after ingesting new rows).
-    """
+
+    W252: skip_feature_rebuild -- see run_refresh_data's own docstring,
+    same reasoning, same flag name."""
     from src.ingestion.football_data.sweden_fetcher import fetch_sweden_csv
     from src.ingestion.football_data.sweden_loader import upsert_sweden_matches
 
@@ -875,6 +908,10 @@ def run_refresh_sweden_data(app_settings: AppSettings, db_manager: DuckDBManager
         "Sweden CSV upsert | rows_in=%d | skipped=%d | upserted=%d",
         result["rows_in"], result["skipped"], result["upserted"],
     )
+    if skip_feature_rebuild:
+        LOGGER.info("refresh-data (SWE): feature rebuild deferred.")
+        LOGGER.info("refresh-data complete.")
+        return
     factory = FeatureFactory(  # US#155/US#159
         config_path=db_manager.config_path,
         default_max_retries=db_manager.default_max_retries,
@@ -919,20 +956,30 @@ def run_scrape_all(app_settings: AppSettings, force: bool = False, leagues: list
         run_scrape(app_settings, force=force, **_SCRAPE_SOURCE_OVERRIDE_BY_LEAGUE.get(league, {}))
 
 
-def run_refresh_data(app_settings: AppSettings, db_manager: DuckDBManager, league: str = "E0", force: bool = False) -> None:
+def run_refresh_data(
+    app_settings: AppSettings, db_manager: DuckDBManager, league: str = "E0", force: bool = False,
+    skip_feature_rebuild: bool = False,
+) -> None:
     """Run scrape → ingest → fetch-understat → fetch-fotmob → fetch-lineups in sequence (US#81, US#95, US#101).
 
     US#132: league="SWE" takes a different, shorter path (run_refresh_sweden_data)
     -- Sweden's single-CSV source and lack of Understat/FotMob integration make
     the EPL scrape/ingest/understat/fotmob/lineup chain below inapplicable.
-    """
+
+    W252: skip_feature_rebuild (default False, so a standalone CLI call keeps
+    its exact original behavior -- scrape/ingest/fetch this league's data AND
+    rebuild the full feature store, same as always) lets a caller running
+    this once per league in a loop (register_data_refresh_job) defer the
+    expensive, unscoped, whole-table feature rebuild (run_ingest's own,
+    *and* fetch-understat's redundant second one below) to a single
+    consolidated call afterward instead of paying for it once per league."""
     if league == "SWE":
-        run_refresh_sweden_data(app_settings, db_manager)
+        run_refresh_sweden_data(app_settings, db_manager, skip_feature_rebuild=skip_feature_rebuild)
         return
     LOGGER.info("Executing command: refresh-data | league=%s | force=%s", league, force)
     run_scrape(app_settings, force=force, **_SCRAPE_SOURCE_OVERRIDE_BY_LEAGUE.get(league, {}))
-    run_ingest(app_settings, db_manager, force=force)
-    run_fetch_understat(app_settings, db_manager, league=league, rebuild_features=True)
+    run_ingest(app_settings, db_manager, force=force, skip_feature_rebuild=skip_feature_rebuild)
+    run_fetch_understat(app_settings, db_manager, league=league, rebuild_features=not skip_feature_rebuild)
     run_fetch_fotmob(app_settings, db_manager, league=league)
     from src.ingestion.fotmob.lineup import backfill_lineups_from_player_stats
     total = backfill_lineups_from_player_stats(db_manager, league=league)
@@ -2460,7 +2507,10 @@ def main() -> None:
     elif args.command == "ingest":
         run_ingest(app_settings, db_manager, force=getattr(args, "force", False))
     elif args.command == "refresh-data":
-        run_refresh_data(app_settings, db_manager, league=str(args.league), force=getattr(args, "force", False))
+        run_refresh_data(
+            app_settings, db_manager, league=str(args.league), force=getattr(args, "force", False),
+            skip_feature_rebuild=getattr(args, "skip_feature_rebuild", False),
+        )
     elif args.command == "schedule-refresh":
         run_schedule_refresh(
             league=str(args.league),

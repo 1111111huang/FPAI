@@ -867,7 +867,10 @@ def test_register_data_refresh_job_launches_a_subprocess_per_enabled_league(tmp_
     launch (main.py refresh-data --league <L>), one per configured league,
     run sequentially (not concurrently) since they all write to the same
     DuckDB file and a concurrent second writer would hit its exclusive
-    file lock."""
+    file lock. W252: each per-league call now also carries
+    --skip-feature-rebuild, and one extra consolidated `main.py ingest`
+    call follows the whole per-league loop -- see register_data_refresh_job's
+    own updated docstring."""
     run_log = JobRunLog(db_path=tmp_path / "job_runs.db")
     now = datetime(_FUTURE_DAY.year, _FUTURE_DAY.month, _FUTURE_DAY.day, DATA_REFRESH_HOUR, DATA_REFRESH_MINUTE + 5, tzinfo=NY_TZ)
     scheduler = RecoverableScheduler(run_log=run_log, now_fn=lambda: now)
@@ -878,14 +881,19 @@ def test_register_data_refresh_job_launches_a_subprocess_per_enabled_league(tmp_
         register_data_refresh_job(scheduler, leagues=("E0", "SP1"))
         assert _wait_until(lambda: run_log.has_run(DATA_REFRESH_JOB_ID, _FUTURE_DAY_STR))
 
-    assert mock_popen.call_count == 2
+    assert mock_popen.call_count == 3  # 2 per-league calls + 1 consolidated rebuild
+    per_league_calls = mock_popen.call_args_list[:2]
     leagues_seen = []
-    for call in mock_popen.call_args_list:
+    for call in per_league_calls:
         command = call.args[0]
-        assert "refresh-data" in command and "--league" in command
+        assert "refresh-data" in command and "--league" in command and "--skip-feature-rebuild" in command
         leagues_seen.append(command[command.index("--league") + 1])
     assert leagues_seen == ["E0", "SP1"]
-    assert mock_process.wait.call_count == 2
+    assert mock_process.wait.call_count == 3
+
+    rebuild_command = mock_popen.call_args_list[2].args[0]
+    assert rebuild_command[-1] == "ingest"
+    assert "--league" not in rebuild_command
 
 
 def test_register_data_refresh_job_skips_a_display_disabled_league(tmp_path: Path) -> None:
@@ -901,8 +909,9 @@ def test_register_data_refresh_job_skips_a_display_disabled_league(tmp_path: Pat
         register_data_refresh_job(scheduler, leagues=("E0", "SP1"))
         assert _wait_until(lambda: run_log.has_run(DATA_REFRESH_JOB_ID, _FUTURE_DAY_STR))
 
-    assert mock_popen.call_count == 1
-    assert "E0" in mock_popen.call_args.args[0]
+    assert mock_popen.call_count == 2  # 1 enabled league + 1 consolidated rebuild
+    assert "E0" in mock_popen.call_args_list[0].args[0]
+    assert mock_popen.call_args_list[1].args[0][-1] == "ingest"
 
 
 def test_register_data_refresh_job_continues_after_one_leagues_subprocess_fails_to_launch(tmp_path: Path) -> None:
@@ -910,21 +919,46 @@ def test_register_data_refresh_job_continues_after_one_leagues_subprocess_fails_
     stop the rest of the leagues from being attempted, and must not stop
     the overall job from being marked as ran -- same "one failure doesn't
     block the others" contract as register_eod_job's own per-competition
-    try/except."""
+    try/except. W252: SP1 still succeeding means the consolidated rebuild
+    at the end still runs (a 3rd Popen call) -- only a league that ALSO
+    fails to launch leaves nothing fresh to rebuild from (see the other
+    new test below for that case)."""
     run_log = JobRunLog(db_path=tmp_path / "job_runs.db")
     now = datetime(_FUTURE_DAY.year, _FUTURE_DAY.month, _FUTURE_DAY.day, DATA_REFRESH_HOUR, DATA_REFRESH_MINUTE + 5, tzinfo=NY_TZ)
     scheduler = RecoverableScheduler(run_log=run_log, now_fn=lambda: now)
 
     mock_process = MagicMock()
     mock_process.wait.return_value = 0
+    mock_rebuild_process = MagicMock()
+    mock_rebuild_process.wait.return_value = 0
     with patch(
-        "app.backend.scheduler_wiring.subprocess.Popen", side_effect=[OSError("boom"), mock_process]
+        "app.backend.scheduler_wiring.subprocess.Popen",
+        side_effect=[OSError("boom"), mock_process, mock_rebuild_process],
     ) as mock_popen:
         register_data_refresh_job(scheduler, leagues=("E0", "SP1"))
         assert _wait_until(lambda: run_log.has_run(DATA_REFRESH_JOB_ID, _FUTURE_DAY_STR))
 
-    assert mock_popen.call_count == 2
+    assert mock_popen.call_count == 3
     assert mock_process.wait.call_count == 1
+    assert mock_rebuild_process.wait.call_count == 1
+    assert mock_popen.call_args_list[2].args[0][-1] == "ingest"
+
+
+def test_register_data_refresh_job_skips_the_rebuild_when_every_league_fails_to_launch(tmp_path: Path) -> None:
+    """If nothing fresh was fetched (every league's subprocess failed to
+    even launch), the consolidated rebuild has nothing new to rebuild
+    from -- skip it rather than burning a rebuild cycle for no reason."""
+    run_log = JobRunLog(db_path=tmp_path / "job_runs.db")
+    now = datetime(_FUTURE_DAY.year, _FUTURE_DAY.month, _FUTURE_DAY.day, DATA_REFRESH_HOUR, DATA_REFRESH_MINUTE + 5, tzinfo=NY_TZ)
+    scheduler = RecoverableScheduler(run_log=run_log, now_fn=lambda: now)
+
+    with patch(
+        "app.backend.scheduler_wiring.subprocess.Popen", side_effect=[OSError("boom"), OSError("boom")],
+    ) as mock_popen:
+        register_data_refresh_job(scheduler, leagues=("E0", "SP1"))
+        assert _wait_until(lambda: run_log.has_run(DATA_REFRESH_JOB_ID, _FUTURE_DAY_STR))
+
+    assert mock_popen.call_count == 2  # both leagues attempted, no 3rd (rebuild) call
 
 
 @pytest.fixture(autouse=True)

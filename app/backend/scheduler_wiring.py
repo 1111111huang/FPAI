@@ -508,16 +508,31 @@ def register_data_refresh_job(
     the rest" contract as register_eod_job's own per-competition try/except
     -- the job still gets marked ran for the day, so a transient failure
     (e.g. Understat down) doesn't retry-loop forever; tomorrow's run tries
-    again naturally."""
+    again naturally.
+
+    W252 (found live, 2026-10-10): each league's own `refresh-data` call
+    used to also rebuild the ENTIRE feature store (every league, every
+    season, in one unscoped pandas pipeline) -- twice, in fact, once via
+    its own internal ingest step and again via fetch-understat's own
+    redundant rebuild -- for a total of 11 full-dataset rebuilds across 6
+    leagues, every single night. That's apparently heavy enough that every
+    one of them was getting OOM-killed (confirmed live: every league's
+    subprocess exited with code -9, every night). Each per-league call now
+    passes --skip-feature-rebuild (still scrapes/ingests/fetches that
+    league's own data -- only the expensive global rebuild is deferred),
+    and one single consolidated `main.py ingest` call runs after the whole
+    per-league loop completes, so the rebuild happens exactly once a
+    night, against every league's now-fresh data, instead of 11 times."""
 
     def _data_refresh_job() -> None:
         enabled = set(list_display_enabled_competition_ids())
+        any_league_succeeded = False
         for league in leagues:
             if league not in enabled:
                 continue
             try:
                 process = subprocess.Popen(
-                    [sys.executable, "main.py", "refresh-data", "--league", league],
+                    [sys.executable, "main.py", "refresh-data", "--league", league, "--skip-feature-rebuild"],
                     cwd=_REPO_ROOT,
                 )
                 returncode = process.wait()
@@ -526,6 +541,20 @@ def register_data_refresh_job(
                 continue
             if returncode != 0:
                 LOGGER.warning("Daily data refresh: league=%s exited with code %d.", league, returncode)
+            else:
+                any_league_succeeded = True
+
+        if not any_league_succeeded:
+            LOGGER.warning("Daily data refresh: no league's fetch succeeded -- skipping the feature rebuild.")
+            return
+        try:
+            process = subprocess.Popen([sys.executable, "main.py", "ingest"], cwd=_REPO_ROOT)
+            returncode = process.wait()
+        except Exception:
+            LOGGER.warning("Daily data refresh: feature rebuild failed to launch.", exc_info=True)
+            return
+        if returncode != 0:
+            LOGGER.warning("Daily data refresh: feature rebuild exited with code %d.", returncode)
 
     scheduler.schedule_daily(DATA_REFRESH_JOB_ID, _data_refresh_job, hour=hour, minute=minute)
 
