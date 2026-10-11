@@ -61,6 +61,44 @@ def test_daily_job_catches_up_immediately_when_trigger_time_already_passed(tmp_p
     assert calls == ["ran"]
 
 
+def test_daily_job_with_catch_up_false_does_not_fire_immediately_even_when_trigger_time_already_passed(
+    tmp_path: Path,
+) -> None:
+    """W251: a job that explicitly opts out of catch-up (e.g. one of
+    register_fixture_reconciliation_job's 6 hourly slots -- see its own
+    comment) must NOT run at registration time just because today's
+    trigger has already passed. Mirrors
+    test_daily_job_catches_up_immediately_when_trigger_time_already_passed
+    exactly, except catch_up=False and the opposite assertion."""
+    run_log = JobRunLog(db_path=tmp_path / "job_runs.db")
+    calls = []
+    now = datetime(2026, 7, 12, 23, 30, tzinfo=NY_TZ)  # 30 min past a 23:00 trigger
+
+    scheduler = RecoverableScheduler(run_log=run_log, now_fn=lambda: now)
+    scheduler.schedule_daily("daily_eod", lambda: calls.append("ran"), hour=23, minute=0, catch_up=False)
+
+    # No background catch-up thread is ever spawned in this path, so unlike
+    # the catch-up test there's nothing to poll for -- a direct assertion
+    # is already deterministic here.
+    assert calls == []
+    assert not run_log.has_run("daily_eod", "2026-07-12")
+
+
+def test_daily_job_with_catch_up_false_still_registers_the_future_cron_trigger(tmp_path: Path) -> None:
+    """catch_up=False must only suppress the immediate registration-time
+    fire -- the job still needs to actually run at its next real
+    occurrence, or it would never run at all."""
+    run_log = JobRunLog(db_path=tmp_path / "job_runs.db")
+    now = datetime(2026, 7, 12, 23, 30, tzinfo=NY_TZ)
+    scheduler = RecoverableScheduler(run_log=run_log, now_fn=lambda: now)
+
+    scheduler.schedule_daily("daily_eod", lambda: None, hour=23, minute=0, catch_up=False)
+
+    job = scheduler._scheduler.get_job("daily_eod")
+    assert job is not None
+    assert str(job.trigger) == "cron[hour='23', minute='0']"
+
+
 def test_daily_job_does_not_rerun_once_already_run_today(tmp_path: Path) -> None:
     run_log = JobRunLog(db_path=tmp_path / "job_runs.db")
     run_log.mark_ran("daily_eod", "2026-07-12")

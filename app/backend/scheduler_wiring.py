@@ -674,8 +674,22 @@ def register_fixture_reconciliation_job(
                 )
                 schedule_t30(fixture)
 
+    # W251: catch_up=False on every slot -- see schedule_daily()'s own
+    # docstring for why. Registering the same job body at 6 fixed hours
+    # (the only way this scheduler can approximate "every N hours", no
+    # interval trigger exists) means every slot whose hour has already
+    # passed today would otherwise catch up independently at boot --
+    # found live, a 16:16 redeploy fired 4 simultaneous reconciliation
+    # runs (every slot before 16:00) that then kept colliding with a 5th
+    # at the normal 16:30 trigger, all serializing through the same
+    # rate-limited client for the better part of an hour. A missed cycle
+    # here is fine to skip -- this is a periodic defensive check, not a
+    # once-daily job that must still happen today -- it picks back up at
+    # its own next natural slot regardless.
     for hour in hours:
-        scheduler.schedule_daily(f"{RECONCILIATION_JOB_ID_PREFIX}_{hour:02d}", _reconcile_job, hour=hour, minute=minute)
+        scheduler.schedule_daily(
+            f"{RECONCILIATION_JOB_ID_PREFIX}_{hour:02d}", _reconcile_job, hour=hour, minute=minute, catch_up=False,
+        )
 
 
 def register_lessons_job(

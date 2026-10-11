@@ -110,13 +110,32 @@ class RecoverableScheduler:
         self.timezone = timezone
         self._scheduler = BackgroundScheduler(timezone=timezone)
 
-    def schedule_daily(self, job_id: str, fn: Callable[[], None], hour: int, minute: int) -> None:
+    def schedule_daily(
+        self, job_id: str, fn: Callable[[], None], hour: int, minute: int, catch_up: bool = True,
+    ) -> None:
+        # W251 (found live, 2026-10-10): catch_up=True (the default) is
+        # correct for a genuine once-daily job -- a missed EOD/data-refresh
+        # run must still happen today, not silently skip to tomorrow. It's
+        # wrong for a caller that registers the SAME job body under several
+        # different job_ids to approximate "every N hours" via repeated
+        # schedule_daily calls (no interval trigger exists on this
+        # scheduler) -- every slot whose time-of-day has already passed
+        # today independently decides "I'm overdue" and catches up at once.
+        # Confirmed live: register_fixture_reconciliation_job's 6 hourly
+        # slots, redeployed at 16:16, fired 4 simultaneous catch-up runs
+        # (every slot before 16:00) all competing for the same rate-limited
+        # client, then a 5th joined 14 minutes later at its own normal
+        # 16:30 trigger -- a sustained pileup, not one missed run. A
+        # periodic defensive job like that one is fine skipping a cycle it
+        # missed; it'll pick back up at its own next natural slot.
         self._scheduler.add_job(
             lambda: self._run_and_mark(job_id, fn, run_key=self._now_fn().date().isoformat()),
             trigger=CronTrigger(hour=hour, minute=minute, timezone=self.timezone),
             id=job_id,
             replace_existing=True,
         )
+        if not catch_up:
+            return
         now = self._now_fn()
         trigger_today = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
         run_key = now.date().isoformat()
