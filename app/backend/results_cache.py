@@ -21,7 +21,7 @@ it isn't re-queried forever waiting for results that will never appear.
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 import sqlite3
 
@@ -36,6 +36,35 @@ DEFAULT_DB_PATH = Path(__file__).resolve().parents[2] / "data" / "match_results_
 # through to the live API unchanged from pre-cache behavior -- correctness
 # is never at risk, only that older dates don't get the speed benefit.
 SUPPORTED_SINCE = "2026-08-01"
+
+# BUG (found live, 2026-10-11): an empty FINISHED-matches answer got cached
+# here permanently (no TTL, by design -- see module docstring) before
+# football-data.org had actually posted that day's results, freezing a
+# wrong "0 matches" answer forever even once the real (non-empty) results
+# existed upstream. A non-empty answer is unambiguous -- real FINISHED
+# matches are definitionally final -- but an empty one can mean either
+# "genuinely no matches" or "not reported yet", and this cache has no way
+# to tell those apart at write time. Checking at *read* time instead,
+# against the already-stored `fetched_at`, means an old poisoned row
+# self-heals the moment it's read again with enough real time having
+# passed -- no manual purge of already-cached bad rows required.
+# ponytail: calendar-day heuristic, not a provider-confirmed signal. Raise
+# this (or check the provider's own fixture status) if lag beyond 2 days
+# is ever observed.
+EMPTY_RESULT_TRUST_DELAY_DAYS = 2
+
+
+def _utc_now() -> datetime:
+    """Split out so tests can monkeypatch it -- mirrors football_data_client
+    .py's own _utc_today_isoformat() convention (deterministic "how much
+    time has passed" assertions shouldn't depend on which real calendar
+    day the test happens to run on)."""
+    return datetime.now(timezone.utc)
+
+
+def _empty_result_is_trustworthy(match_date: str, fetched_at: str) -> bool:
+    fetched_date = datetime.fromisoformat(fetched_at).date()
+    return (fetched_date - date.fromisoformat(match_date)).days >= EMPTY_RESULT_TRUST_DELAY_DAYS
 
 
 class ResultsCache:
@@ -85,12 +114,16 @@ class ResultsCache:
         """Cached results for this (competition_code, date), or None on a
         cache miss (the caller must fetch live, then call `store()`). A hit
         can be an empty list -- a genuine no-finished-matches day is a valid,
-        cached answer, not a miss. Always a miss before SUPPORTED_SINCE."""
+        cached answer, not a miss -- but only once it was fetched long enough
+        after `date` to trust (see EMPTY_RESULT_TRUST_DELAY_DAYS); an empty
+        answer fetched too soon after `date` is treated as a miss instead,
+        so the caller re-fetches live and overwrites it via `store()`.
+        Always a miss before SUPPORTED_SINCE."""
         if date < SUPPORTED_SINCE:
             return None
         with self._connect() as conn:
             fetched = conn.execute(
-                "SELECT 1 FROM fetched_queries WHERE competition_code = ? AND date = ?",
+                "SELECT fetched_at FROM fetched_queries WHERE competition_code = ? AND date = ?",
                 (competition_code, date),
             ).fetchone()
             if fetched is None:
@@ -100,6 +133,8 @@ class ResultsCache:
                 "FROM match_results WHERE competition_code = ? AND date = ?",
                 (competition_code, date),
             ).fetchall()
+        if not rows and not _empty_result_is_trustworthy(date, fetched[0]):
+            return None
         # `competition` deliberately left at its dataclass default here, not
         # set to `competition_code` -- the live (uncached) path through
         # FootballDataClient._normalize() never sets it either (it's an
@@ -121,7 +156,7 @@ class ResultsCache:
         out-of-scope date is never written."""
         if date < SUPPORTED_SINCE:
             return
-        fetched_at = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+        fetched_at = _utc_now().replace(microsecond=0).isoformat()
         with self._connect() as conn:
             conn.execute(
                 "INSERT OR REPLACE INTO fetched_queries (competition_code, date, fetched_at) VALUES (?, ?, ?)",
