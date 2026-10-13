@@ -108,3 +108,16 @@ def test_confirmed_lineup_instruction_present_in_all_4_postures():
     for version in ("v1", "v1_aggressive", "v1_balanced", "v1_conservative"):
         text = _load_system_prompt(replace(_BASE, system_prompt_version=version))
         assert "CONFIRMED official starting lineup" in text
+
+
+def test_get_player_minutes_instruction_present_in_all_4_postures():
+    """A131: before citing a flagged player's absence as meaningful, the
+    prompt must point the LLM at the structured get_player_minutes tool
+    (real recent involvement) rather than trusting the search text's own
+    framing of who's "key" -- and must tell it to judge against
+    team_matches_available, not a bare minutes number, since the window can
+    span a break."""
+    for version in ("v1", "v1_aggressive", "v1_balanced", "v1_conservative"):
+        text = _load_system_prompt(replace(_BASE, system_prompt_version=version))
+        assert "get_player_minutes" in text
+        assert "team_matches_available" in text
