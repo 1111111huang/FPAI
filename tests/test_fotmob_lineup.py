@@ -17,6 +17,8 @@ from src.ingestion.fotmob.lineup import (
     backfill_lineups_from_player_stats,
     discover_match_ids_multi_league,
     fetch_match_lineup,
+    get_confirmed_lineup,
+    resolve_fotmob_match_id,
     upsert_match_lineups,
 )
 
@@ -301,3 +303,88 @@ def test_backfill_respects_the_requested_league_not_hardcoded_e0():
 
     mock_fetch.assert_called_once()
     assert mock_fetch.call_args.kwargs["league_id"] == LEAGUE_IDS["D1"]
+
+
+# ---------------------------------------------------------------------------
+# A130: live pre-kickoff lineup verification -- resolve_fotmob_match_id,
+# get_confirmed_lineup
+# ---------------------------------------------------------------------------
+
+def _day_matches_payload(league_id: int, matches: list[dict]) -> dict:
+    return {"leagues": [{"id": league_id, "matches": matches}]}
+
+
+def test_resolve_fotmob_match_id_matches_by_team_name():
+    payload = _day_matches_payload(55, [
+        {"id": 5749690, "home": {"name": "Atalanta"}, "away": {"name": "Venezia"}},
+        {"id": 5749699, "home": {"name": "Torino"}, "away": {"name": "Udinese"}},
+    ])
+    with patch("src.ingestion.fotmob.fetcher._fetch_matches_payload", return_value=payload), \
+         patch("src.ingestion.fotmob.lineup.time.sleep"):
+        match_id = resolve_fotmob_match_id("Atalanta", "Venezia", "2026-10-12", "I1", delay=0)
+
+    assert match_id == 5749690
+
+
+def test_resolve_fotmob_match_id_returns_none_when_no_name_matches():
+    """Fail closed: a name that doesn't confidently match any of the day's
+    listed fixtures must never guess at the nearest one -- a wrong match id
+    would silently attach a different fixture's lineup, worse than none."""
+    payload = _day_matches_payload(55, [
+        {"id": 5749690, "home": {"name": "Atalanta"}, "away": {"name": "Venezia"}},
+    ])
+    with patch("src.ingestion.fotmob.fetcher._fetch_matches_payload", return_value=payload), \
+         patch("src.ingestion.fotmob.lineup.time.sleep"):
+        match_id = resolve_fotmob_match_id("Some Other Club", "Yet Another Club", "2026-10-12", "I1", delay=0)
+
+    assert match_id is None
+
+
+def test_resolve_fotmob_match_id_returns_none_for_unsupported_league():
+    match_id = resolve_fotmob_match_id("Atalanta", "Venezia", "2026-10-12", "NOT_A_LEAGUE", delay=0)
+    assert match_id is None
+
+
+def test_resolve_fotmob_match_id_returns_none_when_day_payload_missing():
+    with patch("src.ingestion.fotmob.fetcher._fetch_matches_payload", return_value=None), \
+         patch("src.ingestion.fotmob.lineup.time.sleep"):
+        match_id = resolve_fotmob_match_id("Atalanta", "Venezia", "2026-10-12", "I1", delay=0)
+
+    assert match_id is None
+
+
+def test_get_confirmed_lineup_returns_names_when_standard():
+    payload = _lineup_payload(lineup_type="standard")
+    with patch("src.ingestion.fotmob.lineup.resolve_fotmob_match_id", return_value=5749690), \
+         patch("src.ingestion.fotmob.lineup.requests.get", return_value=_mock_resp(payload)), \
+         patch("src.ingestion.fotmob.lineup.time.sleep"):
+        result = get_confirmed_lineup("Brighton", "Arsenal", "2026-10-12", "E0", delay=0)
+
+    assert result == {
+        "home": ["Bart Verbruggen", "Home Defender"],
+        "away": ["Away Midfielder", "Away Forward"],
+    }
+
+
+def test_get_confirmed_lineup_returns_none_when_still_predicted():
+    """A 'predicted' lineup is FotMob's own pre-match algorithmic guess, not
+    the real team sheet -- treating it as fact would be no more reliable
+    than the web_search text this is meant to replace, just more
+    confidently wrong. Must be treated exactly like no lineup at all."""
+    payload = _lineup_payload(lineup_type="predicted")
+    with patch("src.ingestion.fotmob.lineup.resolve_fotmob_match_id", return_value=5749690), \
+         patch("src.ingestion.fotmob.lineup.requests.get", return_value=_mock_resp(payload)), \
+         patch("src.ingestion.fotmob.lineup.time.sleep"):
+        result = get_confirmed_lineup("Brighton", "Arsenal", "2026-10-12", "E0", delay=0)
+
+    assert result is None
+
+
+def test_get_confirmed_lineup_returns_none_when_match_id_not_resolved():
+    with patch("src.ingestion.fotmob.lineup.resolve_fotmob_match_id", return_value=None) as mock_resolve, \
+         patch("src.ingestion.fotmob.lineup.requests.get") as mock_get:
+        result = get_confirmed_lineup("Brighton", "Arsenal", "2026-10-12", "E0", delay=0)
+
+    assert result is None
+    mock_resolve.assert_called_once()
+    mock_get.assert_not_called()

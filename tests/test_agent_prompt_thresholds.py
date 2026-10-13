@@ -97,3 +97,14 @@ def test_get_player_rating_instruction_present_in_all_4_postures():
         text = _load_system_prompt(replace(_BASE, system_prompt_version=version))
         assert "get_player_rating" in text
         assert "FIFA / EA Sports FC card" not in text
+
+
+def test_confirmed_lineup_instruction_present_in_all_4_postures():
+    """A130: when AVAILABILITY_SEARCH_RESULT is FotMob's own structured,
+    officially-sourced lineup (pipeline.py's _format_confirmed_lineup_text,
+    always starting with "CONFIRMED official starting lineup"), the prompt
+    must tell the LLM to treat it as the real, complete XI -- not just more
+    search prose to weigh the same way as a news article."""
+    for version in ("v1", "v1_aggressive", "v1_balanced", "v1_conservative"):
+        text = _load_system_prompt(replace(_BASE, system_prompt_version=version))
+        assert "CONFIRMED official starting lineup" in text

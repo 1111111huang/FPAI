@@ -126,13 +126,19 @@ def test_research_node_near_kickoff_uses_confirmed_lineup_query_first():
     than the generic query every other context uses, which can only ever
     find a predicted lineup this close to kickoff or earlier) can find real,
     non-speculative team news. When the confirmed-lineup query itself finds
-    something, no fallback call is made."""
-    with patch(
+    something, no fallback call is made.
+
+    FotMob check mocked to a miss (A130 tries it first in near_kickoff mode
+    -- see test_research_node_near_kickoff_prefers_fotmob_confirmed_lineup_
+    below for the hit path) so this test keeps verifying the pre-existing
+    web_search fallback chain unchanged."""
+    with patch("src.ingestion.fotmob.lineup.get_confirmed_lineup", return_value=None), \
+         patch(
         "src.agent.tools._dated_web_search",
         side_effect=["confirmed lineup text", "context text", "form text"],
     ) as mock_search:
         state = _base_state(match_info={
-            "home_team": "A", "away_team": "B", "date": "2026-06-21",
+            "home_team": "A", "away_team": "B", "date": "2026-06-21", "league": "E0",
             "odds": {"home": 2.0, "draw": 3.0, "away": 3.5},
             "near_kickoff": True,
         })
@@ -147,13 +153,15 @@ def test_research_node_near_kickoff_uses_confirmed_lineup_query_first():
 def test_research_node_near_kickoff_falls_back_to_predicted_query_when_confirmed_empty():
     """No confirmed lineup published yet (early T-30 refresh, or a source
     gap) -- regresses to the same predicted-lineup-oriented query every
-    other context already uses, rather than returning nothing."""
-    with patch(
+    other context already uses, rather than returning nothing. FotMob check
+    mocked to a miss, same reasoning as the test above."""
+    with patch("src.ingestion.fotmob.lineup.get_confirmed_lineup", return_value=None), \
+         patch(
         "src.agent.tools._dated_web_search",
         side_effect=["No results found.", "predicted lineup text", "context text", "form text"],
     ) as mock_search:
         state = _base_state(match_info={
-            "home_team": "A", "away_team": "B", "date": "2026-06-21",
+            "home_team": "A", "away_team": "B", "date": "2026-06-21", "league": "E0",
             "odds": {"home": 2.0, "draw": 3.0, "away": 3.5},
             "near_kickoff": True,
         })
@@ -164,6 +172,52 @@ def test_research_node_near_kickoff_falls_back_to_predicted_query_when_confirmed
     queries = [c.args[0] if c.args else c.kwargs["query"] for c in mock_search.call_args_list]
     assert "confirmed" in queries[0].lower()
     assert queries[1] == "A B injury suspension team news"  # unchanged existing query, reused as the fallback
+
+
+def test_research_node_near_kickoff_prefers_fotmob_confirmed_lineup():
+    """A130: when FotMob already has a "standard" (officially-sourced, not
+    predicted) lineup for this fixture, it's used directly as verified
+    ground truth and no web_search call is spent on the lineup query at
+    all -- real FotMob-verified names beat search-result prose, and it's a
+    saved Tavily call too."""
+    with patch(
+        "src.ingestion.fotmob.lineup.get_confirmed_lineup",
+        return_value={"home": ["Home Starter One", "Home Starter Two"], "away": ["Away Starter One"]},
+    ) as mock_fotmob, patch(
+        "src.agent.tools._dated_web_search",
+        side_effect=["context text", "form text"],
+    ) as mock_search:
+        state = _base_state(match_info={
+            "home_team": "A", "away_team": "B", "date": "2026-06-21", "league": "E0",
+            "odds": {"home": 2.0, "draw": 3.0, "away": 3.5},
+            "near_kickoff": True,
+        })
+        result = research_node(state)
+
+    mock_fotmob.assert_called_once_with("A", "B", "2026-06-21", "E0")
+    availability = result["research_evidence"]["availability"]
+    assert "Home Starter One" in availability
+    assert "Away Starter One" in availability
+    assert mock_search.call_count == 2  # match_context + form_context only -- no lineup web_search call
+
+
+def test_research_node_near_kickoff_without_league_skips_fotmob_check():
+    """No league in match_info -- A130's FotMob lookup needs one to resolve
+    the fixture, so it must skip cleanly (never crash) straight to the
+    existing web_search path, same as a FotMob miss."""
+    with patch("src.ingestion.fotmob.lineup.get_confirmed_lineup") as mock_fotmob, \
+         patch(
+        "src.agent.tools._dated_web_search",
+        side_effect=["confirmed lineup text", "context text", "form text"],
+    ):
+        state = _base_state(match_info={
+            "home_team": "A", "away_team": "B", "date": "2026-06-21",
+            "odds": {"home": 2.0, "draw": 3.0, "away": 3.5},
+            "near_kickoff": True,
+        })
+        research_node(state)
+
+    mock_fotmob.assert_not_called()
 
 
 def test_research_node_without_near_kickoff_is_unchanged():

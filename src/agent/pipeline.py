@@ -13,8 +13,12 @@ from typing import TYPE_CHECKING
 import duckdb
 from langchain_core.messages import HumanMessage
 
+from src.utils.logger import get_logger
+
 if TYPE_CHECKING:
     from src.agent.agent_config import AgentConfig
+
+LOGGER = get_logger(__name__)
 
 _ODDS_NUMBER_PATTERN = re.compile(r"\b\d{1,2}\.\d{1,2}\b")
 
@@ -59,6 +63,41 @@ def _parse_odds_from_search_text(text: str | None) -> dict | None:
     return {"home": home, "draw": draw, "away": away}
 
 
+def _get_confirmed_fotmob_lineup(match_info: dict) -> dict | None:
+    """A130: best-effort structured lineup check, tried before the
+    confirmed-lineup web_search call in near_kickoff mode. Needs `league`
+    to resolve the fixture -- missing it (or any other failure: unmatched
+    team names, FotMob not yet at "standard", a network error) degrades to
+    None exactly like "nothing found", never raises into the research
+    pipeline -- the caller's existing web_search fallback already covers
+    this case unchanged."""
+    league = match_info.get("league")
+    if not league:
+        return None
+
+    from src.ingestion.fotmob.lineup import get_confirmed_lineup
+
+    try:
+        return get_confirmed_lineup(
+            match_info["home_team"], match_info["away_team"], match_info["date"], league,
+        )
+    except Exception:
+        LOGGER.warning(
+            "FotMob confirmed-lineup check failed for %s vs %s -- falling back to web_search.",
+            match_info["home_team"], match_info["away_team"], exc_info=True,
+        )
+        return None
+
+
+def _format_confirmed_lineup_text(home: str, away: str, lineup: dict) -> str:
+    return (
+        "CONFIRMED official starting lineup (source: FotMob, not a news search -- "
+        "every name below is the real, officially-sourced team sheet, not speculative):\n"
+        f"{home}: {', '.join(lineup['home'])}\n"
+        f"{away}: {', '.join(lineup['away'])}"
+    )
+
+
 def research_node(state: dict) -> dict:
     """A32: guarantees minimum research coverage deterministically instead of
     depending on the LLM choosing to search. Always runs availability,
@@ -96,9 +135,13 @@ def research_node(state: dict) -> dict:
 
     regular_query = f"{home} {away} injury suspension team news"
     if match_info.get("near_kickoff"):
-        availability_text = _dated_web_search(f"{home} {away} confirmed starting lineup today")
-        if availability_text == "No results found.":
-            availability_text = _dated_web_search(regular_query)
+        confirmed_lineup = _get_confirmed_fotmob_lineup(match_info)
+        if confirmed_lineup is not None:
+            availability_text = _format_confirmed_lineup_text(home, away, confirmed_lineup)
+        else:
+            availability_text = _dated_web_search(f"{home} {away} confirmed starting lineup today")
+            if availability_text == "No results found.":
+                availability_text = _dated_web_search(regular_query)
     else:
         availability_text = _dated_web_search(regular_query)
     context_text = _dated_web_search(

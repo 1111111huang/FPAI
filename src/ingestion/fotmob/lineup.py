@@ -19,6 +19,7 @@ positionId ranges (observed in live data):
 
 from __future__ import annotations
 
+from pathlib import Path
 import time
 from typing import TYPE_CHECKING
 
@@ -80,6 +81,122 @@ def _create_lineup_table(conn) -> None:
         )
         """
     )
+
+
+# ---------------------------------------------------------------------------
+# A130: live pre-kickoff lineup verification
+#
+# Separate from fetch_match_lineup()/upsert_match_lineups() above, which are
+# backfill-shaped (known fotmob_match_id, historical/finished matches, DB
+# upsert) -- these resolve an *upcoming* fixture's FotMob match id live, at
+# generation time, and surface its lineup only once FotMob's own lineupType
+# says "standard" (the real, officially-sourced team sheet). "predicted"
+# (FotMob's own pre-match algorithmic guess, present hours before kickoff --
+# confirmed live, 2026-10-12, across all 4 same-day fixtures checked at
+# T-90) is deliberately treated the same as no lineup at all: trusting it
+# would be no more reliable than the web_search text this is meant to
+# replace, just more confidently wrong. Live-verified timing (same session):
+# a real match's lineupType flips predicted -> standard at T-50, comfortably
+# inside t30_refresh.py's existing near_kickoff window.
+# ---------------------------------------------------------------------------
+
+def _parse_matches_for_league(payload: dict, league_id: int) -> list[dict]:
+    """Like fetcher._parse_finished_matches, but without the finished-only
+    gate -- that filter structurally can never return an upcoming,
+    not-yet-played fixture, which is exactly what resolve_fotmob_match_id
+    needs to find."""
+    matches: list[dict] = []
+    for league in payload.get("leagues", []):
+        if league.get("id") != league_id:
+            continue
+        for match in league.get("matches", []):
+            try:
+                matches.append({
+                    "fotmob_match_id": int(match["id"]),
+                    "home_team": match["home"]["name"],
+                    "away_team": match["away"]["name"],
+                })
+            except (KeyError, TypeError, ValueError):
+                continue
+    return matches
+
+
+def resolve_fotmob_match_id(
+    home_team: str, away_team: str, match_date: str, league: str, delay: float = 1.0,
+) -> int | None:
+    """Resolve the FotMob match id for one specific upcoming fixture, via
+    the same TeamNameMapper/candidates discipline eod_batch.py's
+    odds_lookup()/oddspapi_fixture_lookup() already use to match an
+    external provider's own team-name spelling against a real-money odds
+    price -- reused here unchanged rather than inventing a second standard
+    for the identical name-matching problem. Fails closed (returns None) on
+    an unsupported league, a missing day payload, or any name-match
+    ambiguity -- a wrong match id would silently attach another fixture's
+    lineup, worse than finding none."""
+    from datetime import date as _date
+
+    from src.ingestion.common.team_mapping import TeamNameMapper
+    from src.ingestion.fotmob.fetcher import LEAGUE_IDS, _fetch_matches_payload
+
+    league_id = LEAGUE_IDS.get(league)
+    if league_id is None:
+        return None
+
+    day = _date.fromisoformat(match_date[:10])
+    payload = _fetch_matches_payload(day, delay)
+    if payload is None:
+        return None
+
+    candidates = _parse_matches_for_league(payload, league_id)
+    if not candidates:
+        return None
+
+    team_mapping_path = Path(__file__).resolve().parents[3] / "config" / "team_mapping.json"
+    mapper = TeamNameMapper(mapping_path=str(team_mapping_path))
+    pool = [home_team, away_team]
+    for candidate in candidates:
+        mapped_home = mapper.map_team(candidate["home_team"], pool, use_token_match=True)
+        mapped_away = mapper.map_team(candidate["away_team"], pool, use_token_match=True)
+        if mapped_home == home_team and mapped_away == away_team:
+            return candidate["fotmob_match_id"]
+    return None
+
+
+def get_confirmed_lineup(
+    home_team: str, away_team: str, match_date: str, league: str, delay: float = 1.0,
+) -> dict | None:
+    """Single entrypoint for the live research path: resolves this
+    fixture's FotMob match id and returns {"home": [...names], "away":
+    [...names]} only once FotMob's own lineupType says "standard" -- None
+    in every other case (unresolved match id, still "predicted", malformed
+    payload, request failure), so the caller can fall back to its existing
+    web_search path exactly as if this function didn't exist."""
+    fotmob_match_id = resolve_fotmob_match_id(home_team, away_team, match_date, league, delay=delay)
+    if fotmob_match_id is None:
+        return None
+
+    url = _MATCH_DETAILS_URL.format(match_id=fotmob_match_id)
+    try:
+        resp = requests.get(url, headers=_HEADERS, timeout=10)
+        resp.raise_for_status()
+    except requests.RequestException as exc:
+        LOGGER.warning("get_confirmed_lineup: request failed for match_id=%s: %s", fotmob_match_id, exc)
+        return None
+    finally:
+        time.sleep(delay)
+
+    payload = resp.json()
+    lineup = payload.get("content", {}).get("lineup")
+    if not lineup or lineup.get("lineupType") != "standard":
+        return None
+
+    def _names(team_key: str) -> list[str]:
+        return [p["name"] for p in lineup.get(team_key, {}).get("starters", []) if p.get("name")]
+
+    home_names, away_names = _names("homeTeam"), _names("awayTeam")
+    if not home_names or not away_names:
+        return None
+    return {"home": home_names, "away": away_names}
 
 
 # ---------------------------------------------------------------------------
