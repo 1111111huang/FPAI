@@ -95,6 +95,21 @@ RECONCILIATION_WINDOW_DAYS_BACK = 2
 RECONCILIATION_WINDOW_DAYS_FORWARD = 2
 _REPO_ROOT = Path(__file__).parent.parent.parent
 
+# W253: recommendation_cache.db is append-only with no other retention
+# mechanism (see recommendation_cache.py's module docstring) -- found live
+# growing unbounded (35MB -> 37MB in 2 days) while auditing what's taking up
+# the Railway volume. Weekly (not daily) since the DELETE itself is cheap at
+# today's row counts either way, but VACUUM rewrites the whole file -- no
+# reason to pay that nightly. 90-day retention is deliberately generous:
+# ponytail -- a fixed window, not configurable; narrow it (or add
+# export_rows(before=...) calls first) if 90 days of headroom ever isn't
+# enough to notice/export before data ages out.
+RECOMMENDATION_CACHE_PRUNE_JOB_ID = "weekly_recommendation_cache_prune"
+RECOMMENDATION_CACHE_RETENTION_DAYS = 90
+RECOMMENDATION_CACHE_PRUNE_DAY_OF_WEEK = 6  # Sunday (0=Monday..6=Sunday)
+RECOMMENDATION_CACHE_PRUNE_HOUR = 6
+RECOMMENDATION_CACHE_PRUNE_MINUTE = 30
+
 # W62/W81/W140: every competition_specific league (match_info.py's
 # COMPETITION_ALLOWLIST) the nightly EOD batch/T-30 refresh knows how to
 # process at all. "SWE" is only actually processed when the caller supplies
@@ -800,6 +815,28 @@ def register_lessons_job(
     scheduler.schedule_weekly(
         LESSONS_WEEKLY_JOB_ID, _weekly_review_job,
         day_of_week=LESSONS_WEEKLY_DAY_OF_WEEK, hour=LESSONS_WEEKLY_HOUR, minute=LESSONS_WEEKLY_MINUTE,
+    )
+
+
+def register_recommendation_cache_prune_job(scheduler: RecoverableScheduler, cache: RecommendationCache) -> None:
+    """W253: recommendation_cache.db's recommendation_generations table is
+    append-only (see its own module docstring) with nothing else ever
+    deleting a row -- the admin export/prune-recommendations endpoints added
+    alongside this let an operator archive+delete on demand, but nothing
+    stops it growing unbounded between visits. This automates the deletion
+    half on a weekly cadence, keeping RECOMMENDATION_CACHE_RETENTION_DAYS of
+    history at all times -- generous enough that a human doing the manual
+    export dance still has ample time before anything actually ages out."""
+
+    def _prune_job() -> None:
+        cutoff = (datetime.now(NY_TZ) - timedelta(days=RECOMMENDATION_CACHE_RETENTION_DAYS)).date().isoformat()
+        deleted = cache.prune_older_than(cutoff)
+        LOGGER.info("Weekly recommendation-cache prune: deleted %d generation(s) older than %s.", deleted, cutoff)
+
+    scheduler.schedule_weekly(
+        RECOMMENDATION_CACHE_PRUNE_JOB_ID, _prune_job,
+        day_of_week=RECOMMENDATION_CACHE_PRUNE_DAY_OF_WEEK,
+        hour=RECOMMENDATION_CACHE_PRUNE_HOUR, minute=RECOMMENDATION_CACHE_PRUNE_MINUTE,
     )
 
 

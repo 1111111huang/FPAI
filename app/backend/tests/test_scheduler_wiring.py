@@ -38,6 +38,11 @@ from app.backend.scheduler_wiring import (
     LESSONS_WEEKLY_HOUR,
     LESSONS_WEEKLY_JOB_ID,
     LESSONS_WEEKLY_MINUTE,
+    RECOMMENDATION_CACHE_PRUNE_DAY_OF_WEEK,
+    RECOMMENDATION_CACHE_PRUNE_HOUR,
+    RECOMMENDATION_CACHE_PRUNE_JOB_ID,
+    RECOMMENDATION_CACHE_PRUNE_MINUTE,
+    RECOMMENDATION_CACHE_RETENTION_DAYS,
     RECONCILIATION_HOURS,
     RECONCILIATION_MINUTE,
     PersistingOddsClient,
@@ -47,6 +52,7 @@ from app.backend.scheduler_wiring import (
     register_eod_job,
     register_fixture_reconciliation_job,
     register_lessons_job,
+    register_recommendation_cache_prune_job,
     t30_run_at,
 )
 from src.agent.agent_config import AgentConfig
@@ -1211,3 +1217,41 @@ def test_register_fixture_reconciliation_job_one_leagues_failure_does_not_block_
     # on its own thread, async relative to _fire_scheduled_job_now()
     # returning -- same reasoning as the other reconciliation tests above.
     assert _wait_until(lambda: run_log.has_run("t30_m1", t30_run_at(e0_fixture).isoformat()))
+
+
+def test_register_recommendation_cache_prune_job_deletes_only_rows_older_than_retention(tmp_path: Path) -> None:
+    """W253: recommendation_cache.db has no other retention mechanism (see
+    recommendation_cache.py's module docstring) -- this job is what keeps it
+    bounded. A row older than RECOMMENDATION_CACHE_RETENTION_DAYS must be
+    gone after the weekly trigger fires; a recent one must survive."""
+    cache = RecommendationCache(db_path=tmp_path / "cache.db")
+    run_log = JobRunLog(db_path=tmp_path / "job_runs.db")
+
+    assert RECOMMENDATION_CACHE_PRUNE_DAY_OF_WEEK == 6  # Sunday -- 2026-08-23 below must match
+    now = datetime(2026, 8, 23, RECOMMENDATION_CACHE_PRUNE_HOUR, RECOMMENDATION_CACHE_PRUNE_MINUTE + 5, tzinfo=NY_TZ)
+    old_date = (now - timedelta(days=RECOMMENDATION_CACHE_RETENTION_DAYS + 1)).date().isoformat()
+    recent_date = (now - timedelta(days=1)).date().isoformat()
+    cache.record_generation("old", old_date, "cfg", {}, {"overall": "no_bet"}, "scheduled")
+    cache.record_generation("recent", recent_date, "cfg", {}, {"overall": "no_bet"}, "scheduled")
+
+    scheduler = RecoverableScheduler(run_log=run_log, now_fn=lambda: now)
+    register_recommendation_cache_prune_job(scheduler, cache=cache)
+
+    assert _wait_until(lambda: run_log.has_run(RECOMMENDATION_CACHE_PRUNE_JOB_ID, "2026-08-23"))
+    remaining = cache.export_rows()
+    assert [entry.match_id for entry in remaining] == ["recent"]
+
+
+def test_register_recommendation_cache_prune_job_registers_the_future_weekly_trigger(tmp_path: Path) -> None:
+    """Mirrors test_daily_job_with_catch_up_false_still_registers_the_future_cron_trigger's
+    own reasoning for the daily case -- the weekly cron trigger itself must
+    be registered regardless of whether catch-up also fires immediately."""
+    run_log = JobRunLog(db_path=tmp_path / "job_runs.db")
+    now = datetime(2026, 8, 24, 0, 0, tzinfo=NY_TZ)  # a Monday, well before Sunday's slot
+    scheduler = RecoverableScheduler(run_log=run_log, now_fn=lambda: now)
+
+    register_recommendation_cache_prune_job(scheduler, cache=RecommendationCache(db_path=tmp_path / "cache.db"))
+
+    job = scheduler._scheduler.get_job(RECOMMENDATION_CACHE_PRUNE_JOB_ID)
+    assert job is not None
+    assert str(job.trigger) == "cron[day_of_week='6', hour='6', minute='30']"

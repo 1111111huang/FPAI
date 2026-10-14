@@ -287,6 +287,35 @@ def test_reasoning_trace_and_forecast_payload_default_to_none(tmp_path: Path) ->
     assert entry.forecast_payload is None
 
 
+def test_prune_older_than_deletes_only_rows_before_the_cutoff_date(tmp_path: Path) -> None:
+    """W253: the table is append-only with no other retention mechanism --
+    prune_older_than() filters on `date` (the match date), not generated_at,
+    so a match's whole generation history moves together once its date is
+    in the past."""
+    cache = RecommendationCache(db_path=tmp_path / "cache.db")
+    cache.record_generation("old", "2026-01-01", "cfg", {}, {"overall": "no_bet"}, "scheduled")
+    cache.record_generation("recent", "2026-09-01", "cfg", {}, {"overall": "no_bet"}, "scheduled")
+
+    deleted = cache.prune_older_than("2026-06-01")
+
+    assert deleted == 1
+    remaining = cache.export_rows()
+    assert [entry.match_id for entry in remaining] == ["recent"]
+
+
+def test_export_rows_before_filters_on_date_like_prune_does(tmp_path: Path) -> None:
+    """export_rows(before=...) exists so a caller can archive exactly what
+    prune_older_than() is about to delete -- both must filter on the same
+    column."""
+    cache = RecommendationCache(db_path=tmp_path / "cache.db")
+    cache.record_generation("old", "2026-01-01", "cfg", {}, {"overall": "no_bet"}, "scheduled")
+    cache.record_generation("recent", "2026-09-01", "cfg", {}, {"overall": "no_bet"}, "scheduled")
+
+    exported = cache.export_rows(before="2026-06-01")
+
+    assert [entry.match_id for entry in exported] == ["old"]
+
+
 def test_row_to_entry_handles_a_genuinely_pre_migration_null_row(tmp_path: Path) -> None:
     """A real pre-A107 row has SQL NULL for these columns (ALTER TABLE ADD
     COLUMN backfills existing rows with NULL, not the JSON string "null"

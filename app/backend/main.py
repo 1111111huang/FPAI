@@ -54,7 +54,7 @@ from app.backend.recommendations import MatchRecommendationOut, RecommendationRe
 from app.backend.scheduler import JobRunLog, RecoverableScheduler
 from app.backend.scheduler_wiring import (
     build_odds_client, build_oddspapi_client, build_schedule_t30, register_data_refresh_job, register_eod_job,
-    register_fixture_reconciliation_job, register_lessons_job,
+    register_fixture_reconciliation_job, register_lessons_job, register_recommendation_cache_prune_job,
 )
 from app.backend.settlement import settle_open_bets
 from app.backend.users import UserStore
@@ -408,6 +408,10 @@ async def lifespan(app: FastAPI):
             config=config,
             sweden_client=get_sweden_fixtures_client(),
         )
+        # W253: recommendation_cache.db is append-only with no other
+        # retention mechanism -- see scheduler_wiring.py's
+        # register_recommendation_cache_prune_job docstring.
+        register_recommendation_cache_prune_job(scheduler, cache=recommendations.get_cache())
         scheduler.start()
         LOGGER.info("W08/W09/W10 scheduler started (ENABLE_SCHEDULER=1).")
 
@@ -548,6 +552,34 @@ async def restore_database(target: _RESTORE_TARGET_NAMES, source_url: str) -> di
 
     bytes_written = await run_in_threadpool(_download)
     return {"target": target, "path": str(target_path), "bytes_written": bytes_written}
+
+
+@app.get("/api/admin/export-recommendations")
+def export_recommendations(
+    before: str | None = None,
+    cache: RecommendationCache = Depends(recommendations.get_cache),
+) -> dict:
+    """W253: recommendation_cache.db is append-only and has no retention
+    policy (see recommendation_cache.py's module docstring) -- it's the
+    only store on the Railway volume that grows forever. Rather than auto-
+    delete old generations, this lets you pull a full copy down yourself
+    (`curl -o export.json`) before calling prune-recommendations, so the
+    history still exists somewhere, just not on the live volume."""
+    rows = cache.export_rows(before=before)
+    return {"count": len(rows), "rows": [dataclasses.asdict(row) for row in rows]}
+
+
+@app.post("/api/admin/prune-recommendations")
+def prune_recommendations(
+    before: str,
+    cache: RecommendationCache = Depends(recommendations.get_cache),
+) -> dict:
+    """Deletes every cached generation for a match dated before `before`
+    (YYYY-MM-DD) and VACUUMs the db file. Export first via
+    GET /api/admin/export-recommendations?before=<same date> if you want to
+    keep the history -- this does not archive anything itself."""
+    deleted = cache.prune_older_than(before)
+    return {"deleted": deleted}
 
 
 class _LessonSyncItem(BaseModel):

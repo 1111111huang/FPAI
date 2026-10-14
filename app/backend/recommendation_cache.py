@@ -258,6 +258,39 @@ class RecommendationCache:
             row = conn.execute("SELECT MAX(generated_at) FROM recommendation_generations").fetchone()
         return row[0] if row and row[0] else None
 
+    def export_rows(self, before: str | None = None) -> list[CacheEntry]:
+        """Full-fidelity dump for archiving off the live volume before a
+        prune -- every column, not just the latest generation per match,
+        since the point of archiving is to not lose the append-only history
+        prune_older_than() is about to delete. `before` filters on the same
+        `date` column prune_older_than() deletes by, so a caller can export
+        exactly what it's about to prune."""
+        query = "SELECT match_id, date, agent_config_hash, odds_json, recommendation_json, generated_at, triggered_by, reasoning_trace_json, forecast_payload_json FROM recommendation_generations"
+        params: tuple = ()
+        if before is not None:
+            query += " WHERE date < ?"
+            params = (before,)
+        query += " ORDER BY id ASC"
+        with self._connect() as conn:
+            rows = conn.execute(query, params).fetchall()
+        return [self._row_to_entry(row) for row in rows]
+
+    def prune_older_than(self, cutoff_date: str) -> int:
+        """Deletes every generation for a match whose `date` is before
+        cutoff_date -- the table is append-only (see module docstring) and
+        otherwise grows forever; callers should export_rows(before=cutoff_date)
+        first if they want to keep the history somewhere outside this db.
+        VACUUM reclaims the freed pages so the .db file itself shrinks,
+        not just the row count -- run on a fresh connection since SQLite
+        refuses VACUUM inside an active transaction."""
+        with self._connect() as conn:
+            deleted = conn.execute(
+                "DELETE FROM recommendation_generations WHERE date < ?", (cutoff_date,),
+            ).rowcount
+        with self._connect() as conn:
+            conn.execute("VACUUM")
+        return deleted
+
     @staticmethod
     def _row_to_entry(row: tuple) -> CacheEntry:
         return CacheEntry(

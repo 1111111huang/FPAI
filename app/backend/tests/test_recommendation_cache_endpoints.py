@@ -222,3 +222,38 @@ def test_bulk_returns_empty_dict_for_an_empty_key_list(tmp_path: Path):
         assert response.json() == {}
     finally:
         app.dependency_overrides.clear()
+
+
+def test_export_recommendations_before_filters_by_match_date(tmp_path: Path):
+    """W253: GET /api/admin/export-recommendations?before=... lets an
+    operator pull a full copy of rows prune-recommendations is about to
+    delete, before deleting them."""
+    cache = _override_cache(tmp_path)
+    cache.record_generation(match_id="old", date="2026-01-01", agent_config_hash="cfg", odds={}, recommendation=_VALID_RECOMMENDATION, triggered_by="scheduled")
+    cache.record_generation(match_id="recent", date="2026-09-01", agent_config_hash="cfg", odds={}, recommendation=_VALID_RECOMMENDATION, triggered_by="scheduled")
+    try:
+        with TestClient(app) as client:
+            response = client.get("/api/admin/export-recommendations", params={"before": "2026-06-01"})
+        assert response.status_code == 200
+        body = response.json()
+        assert body["count"] == 1
+        assert body["rows"][0]["match_id"] == "old"
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_prune_recommendations_deletes_rows_before_the_cutoff(tmp_path: Path):
+    """POST /api/admin/prune-recommendations?before=... is the destructive
+    half -- a separate manual call so an operator must export first, never
+    an automatic side effect of exporting."""
+    cache = _override_cache(tmp_path)
+    cache.record_generation(match_id="old", date="2026-01-01", agent_config_hash="cfg", odds={}, recommendation=_VALID_RECOMMENDATION, triggered_by="scheduled")
+    cache.record_generation(match_id="recent", date="2026-09-01", agent_config_hash="cfg", odds={}, recommendation=_VALID_RECOMMENDATION, triggered_by="scheduled")
+    try:
+        with TestClient(app) as client:
+            response = client.post("/api/admin/prune-recommendations", params={"before": "2026-06-01"})
+        assert response.status_code == 200
+        assert response.json() == {"deleted": 1}
+        assert [entry.match_id for entry in cache.export_rows()] == ["recent"]
+    finally:
+        app.dependency_overrides.clear()
