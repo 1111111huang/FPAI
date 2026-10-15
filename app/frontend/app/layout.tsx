@@ -1,4 +1,4 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import { IBM_Plex_Mono, Inter } from "next/font/google";
 import "./globals.css";
 import { Providers } from "./providers";
@@ -6,6 +6,15 @@ import { Providers } from "./providers";
 export const metadata: Metadata = {
   title: "Oddsey",
   description: "Oddsey betting agent web app.",
+  manifest: "/manifest.json",
+  icons: {
+    icon: "/icons/icon-192.png",
+    apple: "/icons/icon-192.png",
+  },
+};
+
+export const viewport: Viewport = {
+  themeColor: "#0a0a0d",
 };
 
 // Direct user spec (2026-09-17): Inter (400-800, the default for
