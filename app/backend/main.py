@@ -57,6 +57,8 @@ from app.backend.scheduler_wiring import (
     register_fixture_reconciliation_job, register_lessons_job, register_recommendation_cache_prune_job,
 )
 from app.backend.settlement import settle_open_bets
+from app.backend.push_notifications import send_to_user as send_push_to_user
+from app.backend.push_subscriptions import PushSubscriptionStore
 from app.backend.users import UserStore
 from src.agent.agent_config import AgentConfig
 from src.logic.competition_registry import list_display_enabled_competition_ids
@@ -1360,6 +1362,48 @@ def get_user_store() -> UserStore:
     if _user_store_singleton is None:
         _user_store_singleton = UserStore()
     return _user_store_singleton
+
+
+_push_store_singleton: PushSubscriptionStore | None = None
+
+
+def get_push_store() -> PushSubscriptionStore:
+    """FastAPI dependency -- overridden in tests via conftest.py's
+    autouse _default_push_store fixture, matching get_user_store's own
+    singleton pattern."""
+    global _push_store_singleton
+    if _push_store_singleton is None:
+        _push_store_singleton = PushSubscriptionStore()
+    return _push_store_singleton
+
+
+class PushSubscribeRequest(BaseModel):
+    endpoint: str
+    p256dh: str
+    auth: str
+
+
+class PushUnsubscribeRequest(BaseModel):
+    endpoint: str
+
+
+@app.post("/api/push/subscribe", status_code=204)
+async def push_subscribe(
+    request: PushSubscribeRequest,
+    user_email: str = Depends(get_current_user_email),
+    user_store: UserStore = Depends(get_user_store),
+    push_store: PushSubscriptionStore = Depends(get_push_store),
+) -> None:
+    user = user_store.get_or_create(user_email)
+    push_store.add(user.id, request.endpoint, request.p256dh, request.auth)
+
+
+@app.delete("/api/push/subscribe", status_code=204)
+async def push_unsubscribe(
+    request: PushUnsubscribeRequest,
+    push_store: PushSubscriptionStore = Depends(get_push_store),
+) -> None:
+    push_store.remove(request.endpoint)
 
 
 async def _settle_if_already_decided(tracker: BetTracker, bet: Bet, user_id: int) -> Bet:

@@ -20,10 +20,17 @@ calling out) -- run explicitly via `RUN_LIVE_TESTS=1 pytest -m live`.
 
 from __future__ import annotations
 
+from pathlib import Path
 import os
 import socket
+import sys
+
+sys.path.append(str(Path(__file__).resolve().parents[3]))
 
 import pytest
+
+from app.backend.main import app, get_push_store
+from app.backend.push_subscriptions import PushSubscriptionStore
 
 
 def pytest_configure(config: pytest.Config) -> None:
@@ -57,3 +64,20 @@ def _block_real_network(request: pytest.FixtureRequest, monkeypatch: pytest.Monk
     monkeypatch.setattr(socket.socket, "connect", _blocked)
     monkeypatch.setattr(socket.socket, "connect_ex", _blocked)
     yield
+
+
+@pytest.fixture(autouse=True)
+def _default_push_store(tmp_path, request):
+    """Every test in this suite gets a tmp_path-scoped PushSubscriptionStore
+    by default (mirrors this file's own _block_real_network: a safety net so
+    no test has to know push exists, not a replacement for a test that
+    specifically wants to assert push behavior -- that test overrides
+    get_push_store again with its own store, inside its own body, after
+    this fixture has already run)."""
+    if request.node.get_closest_marker("live"):
+        yield
+        return
+    store = PushSubscriptionStore(db_path=tmp_path / "push_subscriptions.db")
+    app.dependency_overrides[get_push_store] = lambda: store
+    yield
+    app.dependency_overrides.pop(get_push_store, None)
