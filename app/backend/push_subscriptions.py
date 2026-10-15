@@ -69,6 +69,14 @@ class PushSubscriptionStore:
             ).fetchone()
             return PushSubscription(*row)
 
+    def get_by_endpoint(self, endpoint: str) -> PushSubscription | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT id, user_id, endpoint, p256dh, auth, created_at FROM push_subscriptions WHERE endpoint = ?",
+                (endpoint,),
+            ).fetchone()
+            return PushSubscription(*row) if row else None
+
     def remove(self, endpoint: str) -> None:
         with self._connect() as conn:
             conn.execute("DELETE FROM push_subscriptions WHERE endpoint = ?", (endpoint,))

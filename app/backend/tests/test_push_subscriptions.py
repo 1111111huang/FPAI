@@ -31,6 +31,20 @@ def test_remove_deletes_the_subscription(tmp_path: Path):
     assert store.list_for_user(1) == []
 
 
+def test_get_by_endpoint_returns_the_subscription(tmp_path: Path):
+    store = PushSubscriptionStore(db_path=tmp_path / "push.db")
+    store.add(user_id=1, endpoint="https://push.example/abc", p256dh="key1", auth="auth1")
+    sub = store.get_by_endpoint("https://push.example/abc")
+    assert sub is not None
+    assert sub.user_id == 1
+    assert sub.endpoint == "https://push.example/abc"
+
+
+def test_get_by_endpoint_returns_none_when_not_found(tmp_path: Path):
+    store = PushSubscriptionStore(db_path=tmp_path / "push.db")
+    assert store.get_by_endpoint("https://push.example/missing") is None
+
+
 def test_list_subscribed_user_ids_returns_distinct_users(tmp_path: Path):
     store = PushSubscriptionStore(db_path=tmp_path / "push.db")
     store.add(user_id=1, endpoint="https://push.example/a", p256dh="k", auth="a")

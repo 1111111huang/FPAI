@@ -1394,15 +1394,38 @@ async def push_subscribe(
     user_store: UserStore = Depends(get_user_store),
     push_store: PushSubscriptionStore = Depends(get_push_store),
 ) -> None:
+    """Code review on e6a0a5d: push_store.add()'s upsert silently
+    reassigns an existing endpoint row to a new user_id if someone else's
+    endpoint string is POSTed again. Low real-world risk (Web Push
+    endpoints are server-issued, high-entropy, unguessable) but cheap to
+    close off now that it's reachable -- reject a collision with a
+    different owner instead of silently reassigning."""
     user = user_store.get_or_create(user_email)
+    existing = push_store.get_by_endpoint(request.endpoint)
+    if existing is not None and existing.user_id != user.id:
+        raise HTTPException(
+            status_code=409,
+            detail="This subscription is already registered to a different account.",
+        )
     push_store.add(user.id, request.endpoint, request.p256dh, request.auth)
 
 
 @app.delete("/api/push/subscribe", status_code=204)
 async def push_unsubscribe(
     request: PushUnsubscribeRequest,
+    user_email: str = Depends(get_current_user_email),
+    user_store: UserStore = Depends(get_user_store),
     push_store: PushSubscriptionStore = Depends(get_push_store),
 ) -> None:
+    """Code review on e6a0a5d: this endpoint had no auth dependency at all,
+    letting any caller delete any subscription by endpoint. 404s (not 403)
+    for a subscription owned by someone else, same reasoning as
+    delete_bet (app/backend/main.py) -- doesn't confirm to a caller that a
+    given endpoint is registered at all if it isn't theirs."""
+    user = user_store.get_or_create(user_email)
+    sub = push_store.get_by_endpoint(request.endpoint)
+    if sub is None or sub.user_id != user.id:
+        raise HTTPException(status_code=404, detail="Subscription not found.")
     push_store.remove(request.endpoint)
 
 
