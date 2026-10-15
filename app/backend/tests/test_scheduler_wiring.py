@@ -206,6 +206,94 @@ def test_persisting_odds_client_get_event_odds_forwards_regions_and_team_names(t
     )
 
 
+def test_persisting_odds_client_marks_unavailable_on_401_then_reraises(tmp_path: Path) -> None:
+    """W254: direct user request -- a revoked/invalid key (BUG-056) must not
+    be retried first on every subsequent call. The 401 itself must still
+    propagate unchanged (FallbackOddsClient's own except clause is what
+    actually moves to the next key)."""
+    store = FileCreditCounterStore(tmp_path / "counter.json")
+    counter = CreditCounter()
+    inner_client = MagicMock()
+    inner_client.get_odds.side_effect = requests.HTTPError(response=MagicMock(status_code=401, headers={}))
+
+    client = PersistingOddsClient(client=inner_client, counter=counter, store=store)
+
+    assert client.is_available() is True
+    with pytest.raises(requests.HTTPError):
+        client.get_odds()
+    assert client.is_available() is False
+    assert client.unavailable_reason() == "401"
+
+    reloaded = FileCreditCounterStore(tmp_path / "counter.json").load()
+    assert reloaded.is_available() is False
+
+
+def test_persisting_odds_client_marks_unavailable_on_429_using_retry_after_header(tmp_path: Path) -> None:
+    store = FileCreditCounterStore(tmp_path / "counter.json")
+    counter = CreditCounter(now_fn=lambda: datetime(2026, 10, 14, 12, 0, tzinfo=timezone.utc))
+    inner_client = MagicMock()
+    inner_client.get_odds.side_effect = requests.HTTPError(
+        response=MagicMock(status_code=429, headers={"Retry-After": "120"}),
+    )
+
+    client = PersistingOddsClient(client=inner_client, counter=counter, store=store)
+    with pytest.raises(requests.HTTPError):
+        client.get_odds()
+
+    assert client.is_available() is False
+    assert client.unavailable_reason() == "429"
+
+
+def test_persisting_odds_client_does_not_mark_unavailable_on_an_unrelated_5xx(tmp_path: Path) -> None:
+    """Only 401/403/429 are about the key itself -- a 500/502/503 is the
+    provider's own outage, not evidence this particular key is bad, so it
+    must not get cooled down over it."""
+    store = FileCreditCounterStore(tmp_path / "counter.json")
+    counter = CreditCounter()
+    inner_client = MagicMock()
+    inner_client.get_odds.side_effect = requests.HTTPError(response=MagicMock(status_code=503, headers={}))
+
+    client = PersistingOddsClient(client=inner_client, counter=counter, store=store)
+    with pytest.raises(requests.HTTPError):
+        client.get_odds()
+
+    assert client.is_available() is True
+
+
+def test_fallback_odds_client_tries_an_available_key_before_a_cooling_down_one() -> None:
+    """W254: the first key in the list being in cooldown must not mean it's
+    tried first anyway -- an available later key must be preferred,
+    regardless of list position."""
+    cooling_down, available = MagicMock(), MagicMock()
+    cooling_down.is_available.return_value = False
+    cooling_down.unavailable_reason.return_value = "401"
+    available.is_available.return_value = True
+    available.get_odds.return_value = ["available key's odds"]
+
+    result = FallbackOddsClient([cooling_down, available]).get_odds()
+
+    assert result == ["available key's odds"]
+    cooling_down.get_odds.assert_not_called()
+
+
+def test_fallback_odds_client_tries_a_cooling_down_key_as_a_last_resort_if_nothing_else_works() -> None:
+    """Reorder, never hard-skip (same discipline as FootballDataClient's own
+    would_block() sort, W250) -- if every other key has also failed, a
+    cooling-down key still gets one attempt rather than returning None
+    outright on a possibly-overcautious cooldown estimate."""
+    cooling_down, exhausted = MagicMock(), MagicMock()
+    cooling_down.is_available.return_value = False
+    cooling_down.unavailable_reason.return_value = "429"
+    cooling_down.get_odds.return_value = ["rescued despite cooldown"]
+    exhausted.is_available.return_value = True
+    exhausted.get_odds.return_value = None
+
+    result = FallbackOddsClient([cooling_down, exhausted]).get_odds()
+
+    assert result == ["rescued despite cooldown"]
+    cooling_down.get_odds.assert_called_once()
+
+
 def test_fallback_odds_client_uses_first_client_when_it_succeeds() -> None:
     primary, secondary = MagicMock(), MagicMock()
     primary.get_odds.return_value = ["primary odds"]
@@ -332,6 +420,54 @@ def test_persisting_oddspapi_client_get_fixtures_forwards_args(tmp_path: Path) -
 
     assert result == ["fixture"]
     inner_client.get_fixtures.assert_called_once_with(tournament_id=8, status_id=1)
+
+
+def test_persisting_oddspapi_client_marks_unavailable_on_429_from_get_corners_odds(tmp_path: Path) -> None:
+    """W254: same cooldown contract as PersistingOddsClient -- confirmed live
+    (this exact session): OddsPapi's key #1 hit 429 on get_corners_odds."""
+    store = FileCreditCounterStore(tmp_path / "counter.json")
+    counter = CreditCounter()
+    inner_client = MagicMock()
+    inner_client.get_corners_odds.side_effect = requests.HTTPError(response=MagicMock(status_code=429, headers={}))
+
+    client = PersistingOddsPapiClient(client=inner_client, counter=counter, store=store)
+    with pytest.raises(requests.HTTPError):
+        client.get_corners_odds(fixture_id="555")
+
+    assert client.is_available() is False
+    assert client.unavailable_reason() == "429"
+
+
+def test_persisting_oddspapi_client_marks_unavailable_on_401_from_get_fixtures(tmp_path: Path) -> None:
+    """get_fixtures() never saved the counter at all pre-W254 (no success
+    path needs the credit count persisted) -- a 401 here must still be
+    recorded onto the same per-key counter get_corners_odds reads, since
+    both share one underlying key."""
+    store = FileCreditCounterStore(tmp_path / "counter.json")
+    counter = CreditCounter()
+    inner_client = MagicMock()
+    inner_client.get_fixtures.side_effect = requests.HTTPError(response=MagicMock(status_code=401, headers={}))
+
+    client = PersistingOddsPapiClient(client=inner_client, counter=counter, store=store)
+    with pytest.raises(requests.HTTPError):
+        client.get_fixtures(tournament_id=8)
+
+    assert client.is_available() is False
+    reloaded = FileCreditCounterStore(tmp_path / "counter.json").load()
+    assert reloaded.is_available() is False
+
+
+def test_fallback_oddspapi_client_tries_an_available_key_before_a_cooling_down_one() -> None:
+    cooling_down, available = MagicMock(), MagicMock()
+    cooling_down.is_available.return_value = False
+    cooling_down.unavailable_reason.return_value = "429"
+    available.is_available.return_value = True
+    available.get_corners_odds.return_value = {"over_9.5": 1.9, "under_9.5": 1.95}
+
+    result = FallbackOddsPapiClient([cooling_down, available]).get_corners_odds(fixture_id="555")
+
+    assert result == {"over_9.5": 1.9, "under_9.5": 1.95}
+    cooling_down.get_corners_odds.assert_not_called()
 
 
 def test_fallback_oddspapi_client_uses_first_client_when_it_succeeds() -> None:

@@ -21,7 +21,7 @@ schema itself is real."""
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import json
 from pathlib import Path
 import sys
@@ -380,13 +380,58 @@ def test_credit_counter_rolls_over_on_first_check_after_a_month_boundary_restart
     # confirm the rollover was persisted, not just held in memory
     store.save(counter_record_usage)
     reloaded = json.loads(counter_path.read_text())
-    assert reloaded == {"credits_used": 10, "month_key": "2026-08"}
+    assert reloaded == {
+        "credits_used": 10, "month_key": "2026-08", "unavailable_until": None, "unavailable_reason": None,
+    }
 
 
 def test_file_credit_counter_store_missing_file_starts_fresh(tmp_path: Path) -> None:
     store = FileCreditCounterStore(tmp_path / "does_not_exist.json")
     counter = store.load(now_fn=lambda: datetime(2026, 7, 11, tzinfo=timezone.utc))
     assert counter.credits_used == 0
+
+
+def test_credit_counter_is_available_by_default() -> None:
+    assert CreditCounter().is_available() is True
+    assert CreditCounter().unavailable_reason is None
+
+
+def test_credit_counter_mark_unavailable_blocks_until_the_given_time() -> None:
+    now = datetime(2026, 10, 14, 12, 0, tzinfo=timezone.utc)
+    counter = CreditCounter(now_fn=lambda: now)
+
+    counter.mark_unavailable(now + timedelta(hours=24), reason="401")
+
+    assert counter.is_available() is False
+    assert counter.unavailable_reason == "401"
+
+
+def test_credit_counter_becomes_available_again_once_the_cooldown_elapses() -> None:
+    """now_fn is read live on every call (same pattern _roll_month_if_needed
+    already relies on) -- a counter built before the cooldown ends still
+    correctly reports available once enough (simulated) time has passed."""
+    clock = {"now": datetime(2026, 10, 14, 12, 0, tzinfo=timezone.utc)}
+    counter = CreditCounter(now_fn=lambda: clock["now"])
+    counter.mark_unavailable(clock["now"] + timedelta(seconds=60), reason="429")
+    assert counter.is_available() is False
+
+    clock["now"] = clock["now"] + timedelta(seconds=61)
+
+    assert counter.is_available() is True
+    assert counter.unavailable_reason is None  # only reported while actually unavailable
+
+
+def test_credit_counter_cooldown_round_trips_through_file_store(tmp_path: Path) -> None:
+    now = datetime(2026, 10, 14, 12, 0, tzinfo=timezone.utc)
+    store = FileCreditCounterStore(tmp_path / "odds_credit_usage.json")
+    counter = store.load(now_fn=lambda: now)
+    counter.mark_unavailable(now + timedelta(hours=24), reason="401")
+    store.save(counter)
+
+    reloaded = store.load(now_fn=lambda: now)
+
+    assert reloaded.is_available() is False
+    assert reloaded.unavailable_reason == "401"
 
 
 def test_normalize_secondary_reads_team_totals_at_the_1_5_line() -> None:

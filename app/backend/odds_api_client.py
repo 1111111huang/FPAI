@@ -31,7 +31,7 @@ The Odds API's own spelling, matching what it actually returns.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import json
 from pathlib import Path
 from typing import Callable
@@ -179,10 +179,14 @@ class CreditCounter:
         now_fn: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
         credits_used: int = 0,
         month_key: str | None = None,
+        unavailable_until: datetime | None = None,
+        unavailable_reason: str | None = None,
     ) -> None:
         self._now_fn = now_fn
         self._credits_used = credits_used
         self._month_key = month_key or _month_key(now_fn())
+        self._unavailable_until = unavailable_until
+        self._unavailable_reason = unavailable_reason
 
     def _roll_month_if_needed(self) -> None:
         current = _month_key(self._now_fn())
@@ -203,14 +207,45 @@ class CreditCounter:
         self._roll_month_if_needed()
         self._credits_used += cost
 
+    # W254: direct user request -- a key rejected with 401 (revoked/invalid,
+    # confirmed live BUG-056) or 429 (rate-limited) stayed in the fallback
+    # rotation's front position forever, so every single call re-tried it
+    # first and paid for its failure before reaching a key that might
+    # actually work. mark_unavailable()/is_available() track a per-key
+    # cooldown, persisted the same way credits_used already is, so a
+    # known-bad key is deprioritized across calls *and* restarts instead of
+    # being retried from scratch every time.
+    def mark_unavailable(self, until: datetime, reason: str) -> None:
+        self._unavailable_until = until
+        self._unavailable_reason = reason
+
+    def is_available(self) -> bool:
+        return self._unavailable_until is None or self._now_fn() >= self._unavailable_until
+
+    @property
+    def unavailable_reason(self) -> str | None:
+        return None if self.is_available() else self._unavailable_reason
+
     def to_dict(self) -> dict:
-        return {"credits_used": self._credits_used, "month_key": self._month_key}
+        return {
+            "credits_used": self._credits_used,
+            "month_key": self._month_key,
+            "unavailable_until": self._unavailable_until.isoformat() if self._unavailable_until else None,
+            "unavailable_reason": self._unavailable_reason,
+        }
 
     @classmethod
     def from_dict(
         cls, data: dict, now_fn: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
     ) -> "CreditCounter":
-        return cls(now_fn=now_fn, credits_used=data.get("credits_used", 0), month_key=data.get("month_key"))
+        unavailable_until_raw = data.get("unavailable_until")
+        return cls(
+            now_fn=now_fn,
+            credits_used=data.get("credits_used", 0),
+            month_key=data.get("month_key"),
+            unavailable_until=datetime.fromisoformat(unavailable_until_raw) if unavailable_until_raw else None,
+            unavailable_reason=data.get("unavailable_reason"),
+        )
 
 
 class FileCreditCounterStore:

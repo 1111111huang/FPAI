@@ -129,18 +129,61 @@ BUNDESLIGA_COMPETITION_CODE = "BL1"
 LIGUE_1_COMPETITION_CODE = "FL1"
 
 
+# W254: direct user request -- a 401 means the key is revoked/invalid
+# (confirmed live, BUG-056) and won't start working again on its own, so it
+# gets a long cooldown; a 429 means rate-limited, which the API itself often
+# tells you how long to wait for via Retry-After. Anything else (5xx, a
+# network blip) isn't necessarily this key's fault specifically, so it isn't
+# marked unavailable at all -- only these two status codes are about the key
+# itself rather than a transient/unrelated failure.
+_UNAUTHORIZED_COOLDOWN = timedelta(hours=24)
+_RATE_LIMITED_DEFAULT_COOLDOWN = timedelta(seconds=60)
+
+
+def _cooldown_for_http_error(exc: requests.HTTPError) -> tuple[timedelta, str] | None:
+    status = exc.response.status_code if exc.response is not None else None
+    if status in (401, 403):
+        return _UNAUTHORIZED_COOLDOWN, str(status)
+    if status == 429:
+        retry_after = exc.response.headers.get("Retry-After") if exc.response is not None else None
+        if retry_after and retry_after.isdigit():
+            return timedelta(seconds=int(retry_after)), "429"
+        return _RATE_LIMITED_DEFAULT_COOLDOWN, "429"
+    return None
+
+
 class PersistingOddsClient:
     """Wraps OddsAPIClient so its CreditCounter is persisted to disk after
     every call. W07's OddsAPIClient/CreditCounter/FileCreditCounterStore
     trio deliberately leaves persistence to the caller (see
     test_odds_api_client.py) -- this is that caller, used only here so a
     backend restart doesn't lose track of the current month's credit usage.
+
+    W254: also records a cooldown on the same persisted CreditCounter when a
+    call fails with 401/403/429 (see _cooldown_for_http_error above), then
+    re-raises unchanged -- FallbackOddsClient's own except clause still
+    fires exactly as before, but is_available() now lets it skip a
+    known-bad key on the next call instead of retrying it first every time.
     """
 
     def __init__(self, client: OddsAPIClient, counter: CreditCounter, store: FileCreditCounterStore) -> None:
         self._client = client
         self._counter = counter
         self._store = store
+
+    def is_available(self) -> bool:
+        return self._counter.is_available()
+
+    def unavailable_reason(self) -> str | None:
+        return self._counter.unavailable_reason
+
+    def _record_failure_and_reraise(self, exc: requests.HTTPError):
+        cooldown = _cooldown_for_http_error(exc)
+        if cooldown is not None:
+            duration, reason = cooldown
+            self._counter.mark_unavailable(datetime.now(timezone.utc) + duration, reason)
+            self._store.save(self._counter)
+        raise exc
 
     def get_odds(self, sport_key: str = "soccer_epl", date: str | None = None):
         # W99: found live -- the wrapped OddsAPIClient/HistoricalOddsClient
@@ -152,7 +195,10 @@ class PersistingOddsClient:
         # code path ever ran, on this app's first live deployment. Local/
         # sandbox testing structurally never exercises this class at all --
         # build_odds_client() only returns it when SANDBOX_MODE is off.
-        result = self._client.get_odds(sport_key=sport_key, date=date)
+        try:
+            result = self._client.get_odds(sport_key=sport_key, date=date)
+        except requests.HTTPError as exc:
+            self._record_failure_and_reraise(exc)
         self._store.save(self._counter)
         return result
 
@@ -168,10 +214,13 @@ class PersistingOddsClient:
         # forwarded too, not just markets -- the exact same "wrapper drops a
         # newly-added param, crashes the first time production actually
         # calls it" bug W99 already found for get_odds()'s own `date` param.
-        result = self._client.get_event_odds(
-            sport_key=sport_key, event_id=event_id, markets=markets,
-            regions=regions, home_team=home_team, away_team=away_team,
-        )
+        try:
+            result = self._client.get_event_odds(
+                sport_key=sport_key, event_id=event_id, markets=markets,
+                regions=regions, home_team=home_team, away_team=away_team,
+            )
+        except requests.HTTPError as exc:
+            self._record_failure_and_reraise(exc)
         self._store.save(self._counter)
         return result
 
@@ -190,7 +239,19 @@ class FallbackOddsClient:
         self._clients = clients
 
     def _try_each_client(self, call: Callable[[PersistingOddsClient], object], op_name: str):
-        for i, client in enumerate(self._clients):
+        # W254: stable sort by "currently in cooldown" -- available keys
+        # keep their relative order and go first, cooling-down ones keep
+        # theirs and go last, same "reorder, never hard-skip" discipline as
+        # FootballDataClient._get_matches' own would_block() sort (W250):
+        # a cooling-down key is still tried as a last resort if every other
+        # key has also failed, in case the cooldown estimate was wrong.
+        ordered = sorted(enumerate(self._clients), key=lambda pair: not pair[1].is_available())
+        for i, client in ordered:
+            if not client.is_available():
+                LOGGER.info(
+                    "FallbackOddsClient.%s: key #%d still cooling down (%s) -- trying anyway as a last resort.",
+                    op_name, i + 1, client.unavailable_reason(),
+                )
             try:
                 result = call(client)
             except requests.RequestException as exc:
@@ -271,18 +332,40 @@ def build_odds_client() -> OddsAPIClient | HistoricalOddsClient | FallbackOddsCl
 
 class PersistingOddsPapiClient:
     """Same persist-after-call contract as PersistingOddsClient above, for
-    OddsPapiClient's own (much smaller, 250/month) credit budget."""
+    OddsPapiClient's own (much smaller, 250/month) credit budget. W254: same
+    cooldown-on-401/403/429 contract too -- see PersistingOddsClient's own
+    docstring."""
 
     def __init__(self, client: OddsPapiClient, counter: CreditCounter, store: FileCreditCounterStore) -> None:
         self._client = client
         self._counter = counter
         self._store = store
 
+    def is_available(self) -> bool:
+        return self._counter.is_available()
+
+    def unavailable_reason(self) -> str | None:
+        return self._counter.unavailable_reason
+
+    def _record_failure_and_reraise(self, exc: requests.HTTPError):
+        cooldown = _cooldown_for_http_error(exc)
+        if cooldown is not None:
+            duration, reason = cooldown
+            self._counter.mark_unavailable(datetime.now(timezone.utc) + duration, reason)
+            self._store.save(self._counter)
+        raise exc
+
     def get_fixtures(self, tournament_id: int, status_id: int = 0):
-        return self._client.get_fixtures(tournament_id=tournament_id, status_id=status_id)
+        try:
+            return self._client.get_fixtures(tournament_id=tournament_id, status_id=status_id)
+        except requests.HTTPError as exc:
+            self._record_failure_and_reraise(exc)
 
     def get_corners_odds(self, fixture_id: str):
-        result = self._client.get_corners_odds(fixture_id=fixture_id)
+        try:
+            result = self._client.get_corners_odds(fixture_id=fixture_id)
+        except requests.HTTPError as exc:
+            self._record_failure_and_reraise(exc)
         self._store.save(self._counter)
         return result
 
@@ -297,7 +380,15 @@ class FallbackOddsPapiClient:
         self._clients = clients
 
     def _try_each_client(self, call: Callable[[PersistingOddsPapiClient], object], op_name: str):
-        for i, client in enumerate(self._clients):
+        # W254: same reorder-not-skip cooldown discipline as
+        # FallbackOddsClient._try_each_client -- see its own comment above.
+        ordered = sorted(enumerate(self._clients), key=lambda pair: not pair[1].is_available())
+        for i, client in ordered:
+            if not client.is_available():
+                LOGGER.info(
+                    "FallbackOddsPapiClient.%s: key #%d still cooling down (%s) -- trying anyway as a last resort.",
+                    op_name, i + 1, client.unavailable_reason(),
+                )
             try:
                 result = call(client)
             except requests.RequestException as exc:
