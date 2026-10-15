@@ -46,3 +46,7 @@ mcp  # src/mcp_server.py's own dependency, outside the app deploy path -- not
 fastapi==0.135.1
 uvicorn==0.41.0
 httpx==0.28.1
+pywebpush==1.14.1  # pinned -- 2.x requires cryptography>=47, which conflicts
+                   # with mlflow==3.10.1's own cryptography<47 pin (one shared
+                   # venv/requirements.txt for the whole project). 1.14.1 only
+                   # requires cryptography>=2.6.1, verified conflict-free.
