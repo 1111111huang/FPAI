@@ -8,6 +8,7 @@ import { House, List, ListBullets, MagnifyingGlass, Ticket, X, type Icon } from 
 import { getFixtures } from "@/lib/api";
 import type { Fixture } from "@/lib/types";
 import { useSandboxAsOf } from "@/lib/useSandboxAsOf";
+import { InstallAppBanner } from "@/components/InstallAppBanner";
 import { UserMenu } from "@/components/UserMenu";
 
 function matchAnalysisHref(f: Fixture) {
@@ -242,6 +243,8 @@ export function AppShell({
           </div>
           {railTrigger && <div className="shrink-0 lg:hidden">{railTrigger}</div>}
         </div>
+
+        <InstallAppBanner />
 
         {/* Direct feedback: <main> is now the one scrolling region on
             desktop (lg:min-h-0 + lg:overflow-y-auto, paired with the shell's
