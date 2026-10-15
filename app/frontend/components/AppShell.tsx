@@ -2,6 +2,7 @@
 
 import Image from "next/image";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useState, useEffect } from "react";
 import { House, List, ListBullets, MagnifyingGlass, Ticket, X, type Icon } from "@phosphor-icons/react";
 
@@ -65,6 +66,7 @@ export function AppShell({
   // /api/sandbox/status per mount, not shared/cached. Cheap local read;
   // worth revisiting if AppShell ends up wrapping many more pages.
   const { asOf } = useSandboxAsOf();
+  const router = useRouter();
   const [query, setQuery] = useState("");
   const [searchFixtures, setSearchFixtures] = useState<Fixture[]>([]);
   const [hasFocused, setHasFocused] = useState(false);
@@ -72,6 +74,16 @@ export function AppShell({
   // collapsible on a phone, and the expanded state should overlay the main
   // content rather than sit inline and push it down.
   const [menuOpen, setMenuOpen] = useState(false);
+
+  function handleTabClick(event: React.MouseEvent<HTMLAnchorElement>, href: string) {
+    navigator.vibrate?.(10);
+    if (typeof document === "undefined" || !("startViewTransition" in document)) return;
+    if (href === window.location.pathname) return;
+    event.preventDefault();
+    (document as Document & { startViewTransition: (cb: () => void) => void }).startViewTransition(() => {
+      router.push(href);
+    });
+  }
 
   useEffect(() => {
     // Lazy on purpose -- see this plan's "Before you start" note. Eagerly
@@ -176,7 +188,7 @@ export function AppShell({
           and push the page down. Direct feedback: the whole left panel
           (menu/footer) should collapse behind this, and expand as an
           overlay on top of the main content, not inline above it. */}
-      <div className="flex items-center justify-between border-b border-border bg-surface px-4 py-3 lg:hidden">
+      <div className="flex items-center justify-between border-b border-border bg-surface px-4 pb-3 pt-[calc(0.75rem+env(safe-area-inset-top))] lg:hidden">
         <div className="flex items-center gap-2">
           <OddseyLogo size={36} />
           <span className="text-base font-semibold tracking-tight text-ink">Oddsey</span>
@@ -261,7 +273,7 @@ export function AppShell({
             gap above it that scrolled cards bleed through. Padding on a
             non-scrolling descendant just scrolls away with the content, so a
             sticky child's `top-0` lands flush with the true scrollport edge. */}
-        <main className="flex-1 px-4 pb-20 sm:px-6 lg:min-h-0 lg:overflow-y-auto lg:pb-8">
+        <main className="flex-1 px-4 pb-20 [view-transition-name:main-content] sm:px-6 lg:min-h-0 lg:overflow-y-auto lg:pb-8">
           <div className="pt-8">{children}</div>
         </main>
       </div>
@@ -270,7 +282,7 @@ export function AppShell({
           metaphor above is unfamiliar to a bottom-tab/vertical-feed mental
           model (Instagram/TikTok/X). Hidden at `lg` and up, where the
           desktop sidebar nav (above) is the only nav shown. */}
-      <nav className="fixed inset-x-0 bottom-0 z-20 flex items-center justify-around border-t border-border bg-page px-2 py-1.5 lg:hidden">
+      <nav className="fixed inset-x-0 bottom-0 z-20 flex items-center justify-around border-t border-border bg-page px-2 pb-[calc(0.375rem+env(safe-area-inset-bottom))] pt-1.5 lg:hidden">
         {NAV_ITEMS.map((item) => {
           const Icon = item.icon;
           const isActive = active === item.key;
@@ -281,6 +293,7 @@ export function AppShell({
               // See the sidebar nav's own Link above -- same pre-login
               // stale-prefetch-redirect issue applies to this mobile tab.
               prefetch={item.key === "bets" ? false : undefined}
+              onClick={(event) => handleTabClick(event, item.href)}
               className={`flex flex-col items-center gap-0.5 rounded-md px-4 py-1.5 text-[11px] font-medium transition-colors duration-150 ${
                 isActive ? "text-ink" : "text-ink-secondary"
               }`}

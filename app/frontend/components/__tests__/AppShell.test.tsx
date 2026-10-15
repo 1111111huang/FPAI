@@ -3,6 +3,14 @@ import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { AppShell } from "../AppShell";
 
+// Task 6: AppShell now calls useRouter() (tab-tap view-transition). jsdom has
+// no mounted App Router, so the real hook throws ("invariant expected app
+// router to be mounted") -- same per-file mock pattern as
+// LogBetButton.test.tsx / app/login/__tests__/page.test.tsx.
+vi.mock("next/navigation", () => ({
+  useRouter: () => ({ push: vi.fn() }),
+}));
+
 vi.mock("@/lib/api", () => ({
   getFixtures: vi.fn(),
   getSandboxStatus: vi.fn(),
