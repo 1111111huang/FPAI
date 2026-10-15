@@ -1430,7 +1430,9 @@ async def push_unsubscribe(
     push_store.remove(request.endpoint)
 
 
-async def _settle_if_already_decided(tracker: BetTracker, bet: Bet, user_id: int) -> Bet:
+async def _settle_if_already_decided(
+    tracker: BetTracker, bet: Bet, user_id: int, push_store: PushSubscriptionStore
+) -> Bet:
     """W212: direct user feedback -- a bet logged against a match that
     already finished (the normal case when backfilling, W211) should show
     its real outcome immediately, not sit "open" until the user separately
@@ -1457,11 +1459,30 @@ async def _settle_if_already_decided(tracker: BetTracker, bet: Bet, user_id: int
     try:
         client = get_fixtures_client()
         sweden_client = get_sweden_fixtures_client()
-        await run_in_threadpool(settle_open_bets, tracker, client, sweden_client, user_id=user_id, blocking=False)
+        settled = await run_in_threadpool(
+            settle_open_bets, tracker, client, sweden_client, user_id=user_id, blocking=False
+        )
+        for settled_bet in settled:
+            _notify_bet_settled(push_store, settled_bet)
     except Exception:
         LOGGER.warning("Auto-settle-on-log failed for bet %s -- left open.", bet.id, exc_info=True)
         return bet
     return tracker.get_bet(bet.id) or bet
+
+
+def _notify_bet_settled(push_store: PushSubscriptionStore, bet: Bet) -> None:
+    """Shared by both settlement call sites below -- auto-settle-on-log and
+    the on-demand Settle open bets button -- so a bet settling through
+    either path notifies its owner exactly once, from one place."""
+    if bet.user_id is None or bet.outcome == "open":
+        return
+    result_word = "won" if bet.outcome == "won" else "lost"
+    send_push_to_user(
+        push_store, bet.user_id,
+        title=f"Bet settled: {result_word}",
+        body=f"{bet.home_team} vs {bet.away_team} -- {bet.market} {bet.selection}",
+        url="/bets",
+    )
 
 
 @app.post("/api/bets/from-recommendation")
@@ -1470,6 +1491,7 @@ async def create_bet_from_recommendation(
     tracker: BetTracker = Depends(bets.get_bet_tracker),
     user_email: str = Depends(get_current_user_email),
     user_store: UserStore = Depends(get_user_store),
+    push_store: PushSubscriptionStore = Depends(get_push_store),
 ) -> BetOut:
     """Every field but stake is locked -- derived from the recommendation
     snapshot itself, which is also stored verbatim (recommendations aren't
@@ -1487,7 +1509,7 @@ async def create_bet_from_recommendation(
         source="from_recommendation", recommendation_snapshot=request.recommendation,
         user_id=user.id,
     )
-    bet = await _settle_if_already_decided(tracker, bet, user.id)
+    bet = await _settle_if_already_decided(tracker, bet, user.id, push_store)
     return BetOut.from_bet(bet)
 
 
@@ -1497,6 +1519,7 @@ async def create_bet_manual(
     tracker: BetTracker = Depends(bets.get_bet_tracker),
     user_email: str = Depends(get_current_user_email),
     user_store: UserStore = Depends(get_user_store),
+    push_store: PushSubscriptionStore = Depends(get_push_store),
 ) -> BetOut:
     """User-provided fields, but match_id must be a resolved fixture reference
     (enforced by the frontend's Match Explorer search, not free-typed team
@@ -1510,7 +1533,7 @@ async def create_bet_manual(
         source="manual", recommendation_snapshot=None,
         user_id=user.id,
     )
-    bet = await _settle_if_already_decided(tracker, bet, user.id)
+    bet = await _settle_if_already_decided(tracker, bet, user.id, push_store)
     return BetOut.from_bet(bet)
 
 
@@ -1542,6 +1565,7 @@ async def settle_open(
     tracker: BetTracker = Depends(bets.get_bet_tracker),
     user_email: str = Depends(get_current_user_email),
     user_store: UserStore = Depends(get_user_store),
+    push_store: PushSubscriptionStore = Depends(get_push_store),
 ) -> list[BetOut]:
     """On-demand settlement trigger (W13) -- intentionally not folded into
     W08's scheduler; bet settlement isn't tied to recommendation-generation
@@ -1565,6 +1589,8 @@ async def settle_open(
     settled = await run_in_threadpool(
         settle_open_bets, tracker, client, sweden_client, user_id=user.id, blocking=blocking
     )
+    for settled_bet in settled:
+        _notify_bet_settled(push_store, settled_bet)
     return [BetOut.from_bet(bet) for bet in settled]
 
 
