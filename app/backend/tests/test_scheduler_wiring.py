@@ -21,6 +21,7 @@ import requests
 from app.backend import fixture_cache
 from app.backend.football_data_client import NormalizedMatch
 from app.backend.odds_api_client import CreditCounter, FileCreditCounterStore
+from app.backend.push_subscriptions import PushSubscriptionStore
 from app.backend.recommendation_cache import RecommendationCache
 from app.backend.recommendation_outcomes import RecommendationOutcomeStore
 from app.backend.scheduler import NY_TZ, JobRunLog, RecoverableScheduler
@@ -1391,3 +1392,43 @@ def test_register_recommendation_cache_prune_job_registers_the_future_weekly_tri
     job = scheduler._scheduler.get_job(RECOMMENDATION_CACHE_PRUNE_JOB_ID)
     assert job is not None
     assert str(job.trigger) == "cron[day_of_week='6', hour='6', minute='30']"
+
+
+def test_register_eod_job_notifies_subscribers_once_after_the_nightly_run(tmp_path: Path) -> None:
+    """New in this task: register_eod_job accepts an optional push_store --
+    when supplied, every existing per-league test above (which omit it) is
+    completely unaffected (push_store defaults to None -> notification step
+    skipped entirely, no PushSubscriptionStore ever constructed for those
+    tests). Only a test that explicitly opts in, like this one, exercises
+    the notify path."""
+    fixture = NormalizedMatch(
+        match_id="m1", utc_date=f"{_FUTURE_DAY_STR}T15:00:00Z", status="SCHEDULED",
+        home_team="Arsenal", away_team="Everton", home_goals=None, away_goals=None,
+    )
+    fixtures_client = MagicMock()
+    fixtures_client.get_fixtures.return_value = [fixture]
+    cache = RecommendationCache(db_path=tmp_path / "cache.db")
+    config = AgentConfig.default()
+    run_log = JobRunLog(db_path=tmp_path / "job_runs.db")
+    push_store = PushSubscriptionStore(db_path=tmp_path / "push.db")
+    push_store.add(user_id=1, endpoint="https://push.example/a", p256dh="k", auth="a")
+
+    now = datetime(_FUTURE_DAY.year, _FUTURE_DAY.month, _FUTURE_DAY.day, 23, 30, tzinfo=NY_TZ)
+    scheduler = RecoverableScheduler(run_log=run_log, now_fn=lambda: now)
+
+    recommendation = {
+        "match": {"home": "Arsenal", "away": "Everton", "date": "2026-08-22", "league": "E0"},
+        "overall": "no_bet", "markets": [], "explanation": "test", "confidence": "low",
+        "limitations": [], "prediction_basis": "market_odds_only",
+    }
+    with patch("app.backend.recommendations.run_agent", return_value=recommendation), \
+         patch("app.backend.scheduler_wiring.send_to_all_subscribers") as mock_send:
+        register_eod_job(
+            scheduler, fixtures_client=fixtures_client, odds_client=None,
+            cache=cache, config=config, now_fn=lambda: now, push_store=push_store,
+        )
+        assert _wait_until(lambda: run_log.has_run(EOD_JOB_ID, _FUTURE_DAY_STR))
+
+    assert mock_send.call_count == 1
+    _, kwargs = mock_send.call_args
+    assert kwargs["store"] is push_store

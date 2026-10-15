@@ -24,6 +24,8 @@ from app.backend.historical_odds_client import HistoricalOddsClient
 from app.backend.live_lessons import auto_judge_live_lessons, commit_lesson_batches, prepare_lesson_batches
 from app.backend.odds_api_client import CreditCounter, FileCreditCounterStore, OddsAPIClient
 from app.backend.oddspapi_client import OddsPapiClient
+from app.backend.push_notifications import send_to_all_subscribers
+from app.backend.push_subscriptions import PushSubscriptionStore
 from app.backend.recommendation_cache import RecommendationCache
 from app.backend.recommendation_outcomes import RecommendationOutcomeStore, resolve_pending_recommendations
 from app.backend.scheduler import NY_TZ, RecoverableScheduler
@@ -536,6 +538,7 @@ def register_eod_job(
     bundesliga_fixtures_client: FootballDataClient | None = None,
     ligue1_fixtures_client: FootballDataClient | None = None,
     oddspapi_client: OddsPapiClient | None = None,
+    push_store: PushSubscriptionStore | None = None,
 ) -> None:
     """Registers the daily EOD batch job (W09) on the given scheduler.
     RecoverableScheduler.schedule_daily itself handles the restart/catch-up
@@ -586,6 +589,15 @@ def register_eod_job(
                     schedule_t30=schedule_t30, date_str=date_str, fixtures=fixtures, league=league,
                     oddspapi_client=oddspapi_client,
                 )
+            )
+
+        # None (the default, and every pre-existing caller) means push
+        # notifications aren't wired for this run -- skip entirely rather
+        # than constructing a store no caller asked for.
+        if push_store is not None:
+            send_to_all_subscribers(
+                store=push_store, title="New recommendations ready",
+                body=f"Tomorrow's picks ({date_str}) are in.", url="/",
             )
 
     scheduler.schedule_daily(EOD_JOB_ID, _eod_job, hour=EOD_HOUR, minute=EOD_MINUTE)

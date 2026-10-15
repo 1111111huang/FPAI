@@ -379,6 +379,7 @@ async def lifespan(app: FastAPI):
             bundesliga_fixtures_client=get_bundesliga_fixtures_client(),
             ligue1_fixtures_client=get_ligue1_fixtures_client(),
             oddspapi_client=build_oddspapi_client(),
+            push_store=get_push_store(),
         )
         # W247: automated daily replacement for the manual
         # POST /api/admin/trigger-data-refresh endpoint -- production's
