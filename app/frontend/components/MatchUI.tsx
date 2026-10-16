@@ -81,6 +81,13 @@ export type MarketRec = {
   // See lib/types.ts's MarketCandidateOut.shap_contributions -- already
   // signed toward this candidate's own selection, server-side.
   shapContributions?: { feature: string; shapValue: number; value: number | null }[] | null;
+  // W240: the agent's own one-line reason this specific candidate won or
+  // lost (lib/types.ts's MarketCandidateOut.reason) -- was already parsed
+  // off the API response but never threaded past that point. Surfaced on
+  // StatusBadge's tooltip so a market with a visibly positive Edge% that
+  // still reads "No Bet" doesn't just show the generic, sometimes
+  // contradictory "No sufficient edge found" explanation.
+  reason?: string | null;
 };
 
 export type RecommendationPick = { market: string; selection: string };
@@ -237,6 +244,7 @@ export function applyRecommendation(match: Match, rec: MatchRecommendationOut): 
       impliedProbability: c.implied_probability,
       valueEdge: c.value_edge,
       targetOdds: c.target_odds ?? null,
+      reason: c.reason ?? null,
       shapContributions: c.shap_contributions?.map((s) => ({
         feature: s.feature,
         shapValue: s.shap_value,
@@ -873,6 +881,7 @@ export function StatusBadge({
   status,
   size = "sm",
   isThePick = true,
+  reason,
 }: {
   status: Overall;
   size?: "sm" | "lg";
@@ -888,13 +897,23 @@ export function StatusBadge({
   // card, or a table's own highlighted/shown row) describes a single
   // resolved verdict already and keeps the default.
   isThePick?: boolean;
+  // W240: a specific candidate's own one-line rationale (MarketRec.reason),
+  // when the caller has one, replaces STATUS_META's generic per-status
+  // explain text in the tooltip. Direct user finding: the generic no_bet
+  // explain ("No sufficient edge found") directly contradicted a visibly
+  // positive Edge% column for a market the agent rejected on reliability
+  // grounds, not a lack of edge -- confusing, since green/gray otherwise
+  // reads as "which number is bigger." Undefined (every pre-existing call
+  // site) keeps the original generic-text behavior exactly.
+  reason?: string | null;
 }) {
   const s = STATUS_META[status];
   const pad = size === "lg" ? "px-3 py-1.5 text-sm" : "px-2 py-0.5 text-[11px]";
   const secondary = !isThePick && status !== "no_bet" && status !== "insufficient_data";
+  const explain = reason && reason.trim() ? reason : s.explain;
   return (
     <span
-      title={secondary ? `${s.explain} This market isn't the match's top pick -- see the highlighted row.` : s.explain}
+      title={secondary ? `${explain} This market isn't the match's top pick -- see the highlighted row.` : explain}
       className={`inline-flex items-center gap-1.5 rounded-md border ${s.ring} ${s.fill} ${s.text} ${pad} font-medium ${
         secondary ? "opacity-60" : ""
       }`}
@@ -2518,7 +2537,7 @@ function ProbabilityRow({
         </span>
       ) : (
         <span className="justify-self-end">
-          <StatusBadge status={m.recommendationType} isThePick={highlighted} />
+          <StatusBadge status={m.recommendationType} isThePick={highlighted} reason={m.reason} />
         </span>
       )}
       {/* W210 follow-up (2026-09-14): re-enabled -- see Task 3's

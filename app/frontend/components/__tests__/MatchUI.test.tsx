@@ -1471,6 +1471,41 @@ describe("MatchAnalysisPage -- cache-first load (W47)", () => {
     expect(screen.getByText("Also Qualifies")).toBeInTheDocument();
   });
 
+  it("W240: a no_bet row's own reason replaces the generic 'No sufficient edge found' tooltip when one is given", async () => {
+    // Direct user finding: a row with a visibly positive value_edge
+    // (+9.3%) still reading "No Bet" looked contradictory next to the
+    // generic STATUS_META explain text, which flatly claims no edge was
+    // found. The agent's own per-candidate reason (when the backend sends
+    // one) should explain the REAL rationale instead of that generic line.
+    vi.mocked(getCachedRecommendation).mockResolvedValue(
+      makeRecommendation({
+        overall: "direct_bet",
+        candidates: [
+          {
+            market: "result_3way", selection: "home", recommendation_type: "direct_bet",
+            current_odds: 2.88, min_odds: 0, ml_probability: 0.43, implied_probability: 0.347, value_edge: 0.083,
+          },
+          {
+            market: "away_goals", selection: "under_1.5", recommendation_type: "no_bet",
+            current_odds: 1.82, min_odds: 0, ml_probability: 0.64, implied_probability: 0.547, value_edge: 0.093,
+            reason: "Away_goals model has thin historical coverage for this fixture -- edge not trusted despite the number.",
+          },
+        ],
+        recommendation_pick: { market: "result_3way", selection: "home" },
+      })
+    );
+
+    render(<MatchAnalysisPage id="m1" home="Frosinone" away="Sassuolo" date="2026-10-16" />);
+
+    await screen.findByText("away_goals · under_1.5");
+    const noBetBadge = screen.getByText("No Bet");
+    expect(noBetBadge).toHaveAttribute(
+      "title",
+      "Away_goals model has thin historical coverage for this fixture -- edge not trusted despite the number.",
+    );
+    expect(noBetBadge.getAttribute("title")).not.toContain("No sufficient edge found");
+  });
+
   it("W210 follow-up (W115 re-enable): renders a Log bet control for a direct_bet, non-anomalous market", async () => {
     // Default the session to authenticated so the real "Log bet" trigger
     // renders (not LogBetButton's unauthenticated "Sign in to log this
