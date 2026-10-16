@@ -33,7 +33,7 @@ Addition: accumulate every league's fetched fixtures into one combined list acro
 
 ## 5. The notify job
 
-For a given cluster, reads each fixture's current recommendation from `RecommendationCache` (already-refreshed by its own T-30 job by this point — a fixture whose T-30 job itself failed/skipped just surfaces its last-known cached pick, same best-effort posture `t30_refresh.py` already has), builds the push body (up to 3 "Home v Away" pairs, then `"+N more"` if the cluster has more), and calls the existing `send_to_all_subscribers` (`push_notifications.py`, unchanged) with `title="Kickoff soon"`, that body, `url="/"`.
+No `RecommendationCache` read needed: the approved message format (Section 2) surfaces only team names, not pick content, and the cluster's fixtures (with their `home_team`/`away_team`) are already fully known at EOD-schedule time, captured in the notify job's closure. For a given cluster, the job builds the push body directly from that fixture list (up to 3 "Home v Away" pairs, then `"+N more"` if the cluster has more) and calls the existing `send_to_all_subscribers` (`push_notifications.py`, unchanged) with `title="Kickoff soon"`, that body, `url="/"`. (If a future revision wants pick content in the body, that's the point where a cache read would be added -- not needed for this spec's scope.)
 
 Reuses the same `push_store: PushSubscriptionStore | None = None`-defaults-to-skip pattern the nightly EOD push already established in `register_eod_job` — existing tests that don't pass a push store stay unaffected.
 
