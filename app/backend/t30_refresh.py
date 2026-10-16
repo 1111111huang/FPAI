@@ -21,7 +21,7 @@ simply a first generation, not a special case.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Literal
+from typing import Callable, Literal
 
 from datetime import timezone
 
@@ -64,7 +64,19 @@ def refresh_match_at_t30(
     config: AgentConfig,
     date_str: str,
     league: str = LEAGUE_CODE,
+    get_odds_events: Callable[[], list | None] | None = None,
 ) -> T30RefreshResult:
+    # BUG-082: get_odds_events, when supplied, replaces the plain
+    # odds_client.get_odds() call below -- scheduler_wiring.py's
+    # build_schedule_t30 passes one that's shared (and cached) across every
+    # fixture in the same kickoff cluster, since get_odds() already returns
+    # the whole league's odds in one response regardless of which fixture
+    # asked. Without this, a normal matchday with N fixtures kicking off
+    # together fired N separate, nearly-simultaneous calls for the exact
+    # same payload -- found live auditing football-data.org's call volume
+    # during the 2026-10-16 incident. None (every other/pre-existing
+    # caller) preserves the original direct-call behavior exactly.
+    #
     # W62: `league` defaults to LEAGUE_CODE/"E0", preserving every existing
     # caller's exact behavior -- lets the multi-competition scheduler
     # orchestration call this once per competition instead of it being
@@ -88,7 +100,12 @@ def refresh_match_at_t30(
 
     # W58: explicit sport_key from the competition-id mapping, rather than
     # relying on get_odds()'s own "soccer_epl" default parameter.
-    odds_events = odds_client.get_odds(sport_key=ODDS_SPORT_KEY_BY_COMPETITION[league]) if odds_client is not None else None
+    if get_odds_events is not None:
+        odds_events = get_odds_events()
+    elif odds_client is not None:
+        odds_events = odds_client.get_odds(sport_key=ODDS_SPORT_KEY_BY_COMPETITION[league])
+    else:
+        odds_events = None
     if odds_events is None:
         LOGGER.info(
             "T-30 refresh: skipping match_id=%s -- no odds available (credit budget "

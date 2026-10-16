@@ -314,7 +314,9 @@ async def _pregenerate_recommendations(
         if not league_fixtures:
             continue
         schedule_t30 = (
-            build_schedule_t30(scheduler, odds_client, cache, config, resolved_date_from, league=league)
+            build_schedule_t30(
+                scheduler, odds_client, cache, config, resolved_date_from, league=league, fixtures=league_fixtures,
+            )
             if scheduler is not None
             else (lambda fixture: None)
         )

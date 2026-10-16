@@ -13,6 +13,7 @@ import os
 from pathlib import Path
 import subprocess
 import sys
+import threading
 from typing import Callable
 
 import requests
@@ -23,6 +24,7 @@ from app.backend.football_data_client import FootballDataClient, NormalizedMatch
 from app.backend.historical_odds_client import HistoricalOddsClient
 from app.backend.live_lessons import auto_judge_live_lessons, commit_lesson_batches, prepare_lesson_batches
 from app.backend.odds_api_client import CreditCounter, FileCreditCounterStore, OddsAPIClient
+from app.backend.odds_sport_keys import ODDS_SPORT_KEY_BY_COMPETITION
 from app.backend.oddspapi_client import OddsPapiClient
 from app.backend.push_notifications import send_to_all_subscribers
 from app.backend.push_subscriptions import PushSubscriptionStore
@@ -503,12 +505,46 @@ def build_schedule_t30(
     config: AgentConfig,
     date_str: str,
     league: str = LEAGUE_CODE,
+    fixtures: list[NormalizedMatch] | None = None,
 ) -> Callable[[NormalizedMatch], None]:
+    """`fixtures` (BUG-082), when supplied, is the full set of this league's
+    fixtures this T-30 wave covers -- used only to pre-group them into
+    kickoff clusters (the same cluster_fixtures_by_kickoff already used for
+    T-30 push-notification batching) so every fixture in one cluster shares
+    a single odds_client.get_odds() call instead of each firing its own.
+    get_odds() already returns the whole league's odds regardless of which
+    fixture asked, so N fixtures kicking off together (a normal matchday,
+    not just a redeploy pileup) were issuing N identical calls -- found live
+    auditing football-data.org's call volume during the 2026-10-16 incident
+    and generalized to The Odds API, which has the exact same shape here.
+    None (every pre-existing caller) falls back to one call per fixture,
+    unchanged from before."""
+    cluster_of: dict[str, int] = {}
+    if fixtures:
+        for cluster_id, cluster in enumerate(cluster_fixtures_by_kickoff(fixtures)):
+            for f in cluster:
+                cluster_of[f.match_id] = cluster_id
+
+    cluster_odds: dict[int, list | None] = {}
+    cluster_lock = threading.Lock()
+
+    def _shared_get_odds(cluster_id: int) -> list | None:
+        with cluster_lock:
+            if cluster_id in cluster_odds:
+                return cluster_odds[cluster_id]
+            sport_key = ODDS_SPORT_KEY_BY_COMPETITION[league]
+            odds_events = odds_client.get_odds(sport_key=sport_key) if odds_client is not None else None
+            cluster_odds[cluster_id] = odds_events
+            return odds_events
+
     def _schedule(fixture: NormalizedMatch) -> None:
+        cluster_id = cluster_of.get(fixture.match_id)
+        get_odds_events = (lambda: _shared_get_odds(cluster_id)) if cluster_id is not None else None
+
         def _job() -> None:
             refresh_match_at_t30(
                 fixture, odds_client=odds_client, cache=cache, config=config,
-                date_str=date_str, league=league,
+                date_str=date_str, league=league, get_odds_events=get_odds_events,
             )
 
         scheduler.schedule_once(f"t30_{fixture.match_id}", _job, run_at=t30_run_at(fixture))
@@ -645,7 +681,9 @@ def register_eod_job(
                 continue  # this league isn't configured this run (e.g. no sweden_fixtures_client)
             all_fixtures.extend(fixtures)
 
-            schedule_t30 = build_schedule_t30(scheduler, odds_client, cache, config, date_str, league=league)
+            schedule_t30 = build_schedule_t30(
+                scheduler, odds_client, cache, config, date_str, league=league, fixtures=fixtures,
+            )
             asyncio.run(
                 run_eod_batch(
                     fixtures_client=fixtures_client, odds_client=odds_client, cache=cache, config=config,
@@ -867,24 +905,32 @@ def register_fixture_reconciliation_job(
                 )
                 continue
 
+            # date_str MUST be each fixture's own kickoff date, not
+            # today_str: it flows through refresh_match_at_t30 into
+            # cache.record_generation(date=...), and every read path
+            # (RecommendationCache.get_latest, the frontend's own
+            # kickoffIso.slice(0,10) lookup) keys strictly on the fixture's
+            # actual date. register_eod_job gets away with one shared
+            # date_str only because it fetches exactly one day; this job's
+            # window spans days_forward+1 of them, so a shared today_str
+            # would silently orphan every non-today fixture's
+            # recommendation under a key nothing ever looks up. Grouped by
+            # date (BUG-082) rather than built fresh per fixture so same-day
+            # fixtures still share build_schedule_t30's cluster-grouped odds
+            # fetch -- a per-fixture build_schedule_t30 call would otherwise
+            # give each fixture its own, cluster-of-one cache.
+            pending_by_date: dict[str, list[NormalizedMatch]] = {}
             for fixture in future_matches:
                 if has_kicked_off(fixture, now):
                     continue
-                # date_str MUST be the fixture's own kickoff date, not
-                # today_str: it flows through refresh_match_at_t30 into
-                # cache.record_generation(date=...), and every read path
-                # (RecommendationCache.get_latest, the frontend's own
-                # kickoffIso.slice(0,10) lookup) keys strictly on the
-                # fixture's actual date. register_eod_job gets away with
-                # one shared date_str only because it fetches exactly one
-                # day; this job's window spans days_forward+1 of them, so
-                # a shared today_str would silently orphan every
-                # non-today fixture's recommendation under a key nothing
-                # ever looks up.
+                pending_by_date.setdefault(fixture.utc_date[:10], []).append(fixture)
+
+            for date_str, date_fixtures in pending_by_date.items():
                 schedule_t30 = build_schedule_t30(
-                    scheduler, odds_client, cache, config, fixture.utc_date[:10], league=league,
+                    scheduler, odds_client, cache, config, date_str, league=league, fixtures=date_fixtures,
                 )
-                schedule_t30(fixture)
+                for fixture in date_fixtures:
+                    schedule_t30(fixture)
 
     # W251: catch_up=False on every slot -- see schedule_daily()'s own
     # docstring for why. Registering the same job body at 6 fixed hours

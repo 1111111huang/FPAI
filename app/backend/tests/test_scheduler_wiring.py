@@ -49,6 +49,7 @@ from app.backend.scheduler_wiring import (
     PersistingOddsClient,
     PersistingOddsPapiClient,
     build_batch_notification_body,
+    build_schedule_t30,
     cluster_fixtures_by_kickoff,
     next_day_date_str,
     register_data_refresh_job,
@@ -1582,3 +1583,67 @@ def test_register_eod_job_schedules_one_batched_notify_per_kickoff_cluster(tmp_p
     assert any("Liverpool v Brentford" in b for b in batch_bodies)
     titles = [kwargs["title"] for _, kwargs in mock_send.call_args_list]
     assert titles.count("Kickoff soon") == 2
+
+
+def test_build_schedule_t30_shares_one_odds_fetch_across_a_kickoff_cluster() -> None:
+    """BUG-082: odds_client.get_odds() already returns the whole league's
+    odds in one response -- two fixtures 10 minutes apart (one cluster)
+    must share a single call between their two T-30 jobs, not one each."""
+    close_a = _match("a", f"{_FUTURE_DAY_STR}T15:00:00Z")
+    close_b = _match("b", f"{_FUTURE_DAY_STR}T15:10:00Z")
+    odds_client = MagicMock()
+    odds_client.get_odds.return_value = []
+    cache = MagicMock()
+    config = AgentConfig.default()
+
+    captured = {}
+    fake_scheduler = MagicMock()
+    fake_scheduler.schedule_once.side_effect = lambda job_id, fn, run_at: captured.__setitem__(job_id, fn)
+
+    schedule_t30 = build_schedule_t30(
+        fake_scheduler, odds_client, cache, config, _FUTURE_DAY_STR, league="E0",
+        fixtures=[close_a, close_b],
+    )
+    schedule_t30(close_a)
+    schedule_t30(close_b)
+
+    with patch("app.backend.scheduler_wiring.refresh_match_at_t30") as mock_refresh:
+        captured["t30_a"]()
+        captured["t30_b"]()
+        assert mock_refresh.call_count == 2
+        for call in mock_refresh.call_args_list:
+            call.kwargs["get_odds_events"]()
+
+    assert odds_client.get_odds.call_count == 1
+
+
+def test_build_schedule_t30_does_not_share_odds_across_different_clusters() -> None:
+    """Fixtures 40 minutes apart (two separate clusters, outside the
+    default 15-minute window) must each still fetch their own odds --
+    confirms the sharing above is scoped to a cluster, not every fixture
+    build_schedule_t30 was ever called with."""
+    early = _match("a", f"{_FUTURE_DAY_STR}T15:00:00Z")
+    late = _match("b", f"{_FUTURE_DAY_STR}T15:40:00Z")
+    odds_client = MagicMock()
+    odds_client.get_odds.return_value = []
+    cache = MagicMock()
+    config = AgentConfig.default()
+
+    captured = {}
+    fake_scheduler = MagicMock()
+    fake_scheduler.schedule_once.side_effect = lambda job_id, fn, run_at: captured.__setitem__(job_id, fn)
+
+    schedule_t30 = build_schedule_t30(
+        fake_scheduler, odds_client, cache, config, _FUTURE_DAY_STR, league="E0",
+        fixtures=[early, late],
+    )
+    schedule_t30(early)
+    schedule_t30(late)
+
+    with patch("app.backend.scheduler_wiring.refresh_match_at_t30") as mock_refresh:
+        captured["t30_a"]()
+        captured["t30_b"]()
+        for call in mock_refresh.call_args_list:
+            call.kwargs["get_odds_events"]()
+
+    assert odds_client.get_odds.call_count == 2
