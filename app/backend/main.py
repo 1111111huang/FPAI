@@ -984,20 +984,44 @@ async def get_fixtures(date_from: str | None = None, date_to: str | None = None)
                 competition_code=LIGUE_1_COMPETITION_CODE, date_from=future_from, date_to=future_to,
             ))
 
-    try:
-        results = await asyncio.gather(*calls)
-    except requests.exceptions.HTTPError as exc:
-        LOGGER.warning("Upstream fixture provider call failed: %s", exc, exc_info=True)
+    # BUG-081 (found live 2026-10-16): E0/SP1/I1/D1/F1 all share one
+    # football-data.org client/rate-limit budget (W76/W136's own "same
+    # underlying FootballDataClient instance" design), so a post-redeploy
+    # pileup of scheduled jobs (EOD, fixture reconciliation, data-refresh)
+    # all calling it at once can exhaust it for all five at the same
+    # moment -- but SWE (a separate Odds-API-backed provider) is
+    # independent, and even among the football-data.org-backed ones nothing
+    # should force a competition that already has a perfectly good result
+    # to be thrown away just because a different competition's call failed.
+    # return_exceptions=True + per-competition handling below isolates
+    # each call the same way historical_results_from_raw_matches already
+    # does for SWE's DB-lookup path -- one failure degrades, it doesn't
+    # blank the whole response.
+    results = await asyncio.gather(*calls, return_exceptions=True)
+    matches: list[NormalizedMatch] = []
+    any_failed = False
+    for competition, result in zip(competitions, results):
+        if isinstance(result, requests.exceptions.HTTPError):
+            LOGGER.warning(
+                "Upstream fixture provider call failed | competition=%s | %s", competition, result, exc_info=result,
+            )
+            any_failed = True
+            continue
+        if isinstance(result, BaseException):
+            raise result
+        matches += _tag(result, competition)
+    if any_failed and not matches:
+        # Every competition that could have had something to show either
+        # failed or came back empty -- nothing real to return, so say so
+        # plainly instead of silently rendering an empty page that looks
+        # identical to a genuine "no matches today".
         raise HTTPException(
             status_code=503,
             detail=(
                 "Fixture data is temporarily unavailable (the upstream provider is rate-limited "
                 "or unreachable). Please try again in a minute."
             ),
-        ) from exc
-    matches: list[NormalizedMatch] = []
-    for competition, result in zip(competitions, results):
-        matches += _tag(result, competition)
+        )
     return matches
 
 

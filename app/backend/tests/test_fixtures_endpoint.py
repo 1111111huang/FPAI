@@ -350,6 +350,32 @@ def test_fixtures_endpoint_upstream_http_error_returns_clean_degraded_response()
     assert "temporarily unavailable" in body["detail"].lower()
 
 
+def test_fixtures_endpoint_one_competitions_rate_limit_does_not_blank_out_the_others(sweden_client_mock):
+    """BUG-081 (found live 2026-10-16): E0/SP1/I1/D1/F1 share one
+    football-data.org rate-limit budget, so a post-redeploy pileup of
+    scheduled jobs can exhaust it for all five at once -- but SWE is a
+    separate provider, and even a genuine single-competition 429 must not
+    throw away another competition's already-successful result. If SWE's
+    call succeeds while E0's 429s, the response must still be 200 with
+    SWE's real fixture, not a blanket 503."""
+    sweden_client_mock.get_fixtures.return_value = [_SWEDISH_FIXTURE]
+    fake_response = MagicMock()
+    fake_response.status_code = 429
+    with patch("app.backend.main._current_real_date", return_value=date(2026, 7, 19)):
+        with patch("app.backend.main.get_fixtures_client") as mock_get_client:
+            mock_get_client.return_value.get_fixtures.side_effect = requests.exceptions.HTTPError(
+                "429 Client Error", response=fake_response,
+            )
+            with TestClient(app) as client:
+                response = client.get(
+                    "/api/fixtures", params={"date_from": "2026-08-21", "date_to": "2026-08-28"}
+                )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert {m["home_team"] for m in body} == {"Malmo FF"}
+
+
 def test_fixtures_endpoint_concurrent_requests_dedupe_to_a_single_upstream_call():
     """Code review follow-up (post-21e6bf9): the sequential dedup test above
     only proves a *second* request arriving after the first has already
