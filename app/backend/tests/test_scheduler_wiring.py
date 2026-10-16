@@ -48,6 +48,7 @@ from app.backend.scheduler_wiring import (
     RECONCILIATION_MINUTE,
     PersistingOddsClient,
     PersistingOddsPapiClient,
+    build_batch_notification_body,
     cluster_fixtures_by_kickoff,
     next_day_date_str,
     register_data_refresh_job,
@@ -1475,3 +1476,16 @@ def test_cluster_fixtures_by_kickoff_chains_a_cluster_beyond_the_window_end_to_e
     d = _match("d", "2026-10-17T15:40:00Z")
     clusters = cluster_fixtures_by_kickoff([a, b, c, d], window_minutes=15)
     assert clusters == [[a, b, c], [d]]
+
+
+def test_build_batch_notification_body_lists_all_when_at_or_under_limit() -> None:
+    a = _match("a", "2026-10-17T15:00:00Z")
+    b = _match("b", "2026-10-17T15:05:00Z")
+    body = build_batch_notification_body([a, b])
+    assert body == "Homea v Awaya, Homeb v Awayb"
+
+
+def test_build_batch_notification_body_truncates_with_remaining_count() -> None:
+    fixtures = [_match(str(i), "2026-10-17T15:00:00Z") for i in range(5)]
+    body = build_batch_notification_body(fixtures, max_shown=3)
+    assert body == "Home0 v Away0, Home1 v Away1, Home2 v Away2 +2 more"

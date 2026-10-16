@@ -487,6 +487,15 @@ def cluster_fixtures_by_kickoff(
     return clusters
 
 
+def build_batch_notification_body(cluster: list[NormalizedMatch], max_shown: int = 3) -> str:
+    pairs = [f"{f.home_team} v {f.away_team}" for f in cluster[:max_shown]]
+    body = ", ".join(pairs)
+    remaining = len(cluster) - max_shown
+    if remaining > 0:
+        body += f" +{remaining} more"
+    return body
+
+
 def build_schedule_t30(
     scheduler: RecoverableScheduler,
     odds_client: OddsAPIClient | None,
