@@ -1314,17 +1314,21 @@ describe("MatchAnalysisPage -- cache-first load (W47)", () => {
     // table row) -- getAllByText and take the table's own row title.
     const pickedRow = screen.getAllByText("BTTS No").find((el) => el.closest("div.grid"))?.closest("div.grid");
     const otherRow = screen.getByText("BTTS Yes").closest("div.grid");
-    // Found live, direct user report: the /40-opacity border + reused badge
-    // `fill` were too subtle to register as "highlighted" across a whole
-    // row -- now a solid border plus a dedicated, stronger wash.
-    // W232 follow-up (2026-09-17): a flat full-width wash read as cramped
-    // against the reference row -- now a left-to-right gradient fade, so
-    // the tint is strongest at the accent border and fades out by the
-    // time it reaches the odds/buttons.
-    expect(pickedRow?.className).toContain("border-l-good");
-    expect(pickedRow?.className).toContain("bg-gradient-to-r");
-    expect(pickedRow?.className).toContain("from-good-dim");
-    expect(otherRow?.className).toContain("border-l-transparent");
+    // W238: border-l-* moved from the row div onto the sticky Market cell
+    // (span.sticky) so the highlighted-row accent stays visible at the
+    // pinned left edge even once the rest of the row has scrolled out of
+    // view on mobile -- see ProbabilityRow's own comment.
+    const pickedMarketCell = screen.getAllByText("BTTS No").find((el) => el.closest("span.sticky"))?.closest("span.sticky");
+    const otherMarketCell = screen.getByText("BTTS Yes").closest("span.sticky");
+    expect(pickedMarketCell?.className.split(" ")).toContain("border-l-good");
+    // W238: the gradient fade was dropped in favor of a flat tint -- a
+    // gradient keyed to the row's own box would visibly slide underneath
+    // the now-sticky Market cell as the row scrolls, instead of fading
+    // once from left to right. The row itself gets the softer translucent
+    // tint; the sticky cell gets a solid equivalent so it stays opaque.
+    expect(pickedRow?.className.split(" ")).toContain("bg-good-dim/40");
+    expect(pickedMarketCell?.className.split(" ")).toContain("bg-good-dim");
+    expect(otherMarketCell?.className.split(" ")).toContain("border-l-transparent");
 
     // W230: the Model% figure itself is colored to match the row's status
     // on the highlighted row (reference screenshot), plain everywhere else.

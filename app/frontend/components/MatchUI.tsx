@@ -596,10 +596,20 @@ const STATUS_META: Record<
 // left-border color and Model-probability color tied to the row's own
 // RecommendationType (three values only -- never insufficient_data, a
 // table row's own status can't be that).
-const HIGHLIGHT_ROW_STYLE: Record<RecommendationType, { border: string; background: string; text: string }> = {
-  direct_bet: { border: "border-l-good", background: "bg-gradient-to-r from-good-dim via-good-dim/40 to-transparent", text: "text-good" },
-  conditional: { border: "border-l-warning", background: "bg-gradient-to-r from-warning-dim via-warning-dim/40 to-transparent", text: "text-warning" },
-  no_bet: { border: "border-l-border", background: "bg-surface", text: "text-ink" },
+// W238: `background` dropped its left-to-right fade (previously
+// `bg-gradient-to-r ... to-transparent`) in favor of a flat tint --
+// the Market cell now scrolls independently (`position: sticky`, see
+// ProbabilityRow) from the rest of the row on mobile, and a gradient
+// keyed to the row's own box would visibly slide underneath the pinned
+// cell as it scrolls, instead of fading once from left to right.
+// `stickyBackground` is the solid (non-alpha) equivalent used only on
+// that pinned cell, so it stays opaque and fully occludes whatever
+// scrolls underneath it rather than letting it bleed through a
+// translucent tint.
+const HIGHLIGHT_ROW_STYLE: Record<RecommendationType, { border: string; background: string; stickyBackground: string; text: string }> = {
+  direct_bet: { border: "border-l-good", background: "bg-good-dim/40", stickyBackground: "bg-good-dim", text: "text-good" },
+  conditional: { border: "border-l-warning", background: "bg-warning-dim/40", stickyBackground: "bg-warning-dim", text: "text-warning" },
+  no_bet: { border: "border-l-border", background: "bg-surface", stickyBackground: "bg-surface", text: "text-ink" },
 };
 
 // ---------------------------------------------------------------------------
@@ -2438,11 +2448,25 @@ function ProbabilityRow({
   const highlight = HIGHLIGHT_ROW_STYLE[m.recommendationType];
   return (
     <div
-      className={`grid grid-cols-[1fr_auto_auto_auto_auto_auto] items-center gap-4 border-b border-l-4 py-3 pl-3 text-sm last:border-b-0 ${
-        highlighted ? `${highlight.border} ${highlight.background}` : "border-l-transparent"
-      } border-border`}
+      className={`grid grid-cols-[140px_auto_auto_auto_auto_auto] items-center gap-4 border-b py-3 text-sm last:border-b-0 border-border ${
+        highlighted ? highlight.background : ""
+      }`}
     >
-      <span className="flex flex-col gap-0.5 truncate">
+      {/* W238: sticky (not just the first grid column) -- on a narrow
+          viewport this row overflows its container (ProbabilityRow's
+          parent wraps the whole table in overflow-x-auto) and the market
+          name is the one thing that must stay readable while the rest of
+          the row scrolls underneath it. Needs its own opaque background
+          (stickyBackground, not the row's own translucent `background`)
+          so the Model/Market/Edge/Status cells scrolling behind it don't
+          show through, and its own border-l-4 (moved here from the row
+          div above) so the highlighted-row accent stays visible at the
+          pinned edge instead of scrolling away with the rest of the row. */}
+      <span
+        className={`sticky left-0 z-10 flex flex-col gap-0.5 truncate border-l-4 pl-3 ${
+          highlighted ? `${highlight.border} ${highlight.stickyBackground}` : "border-l-transparent bg-page"
+        }`}
+      >
         {/* W227: a generic, human-readable title ("Home Win", "BTTS No")
             above the raw market/selection identifier -- previously the raw
             identifier was the only thing shown at all. */}
@@ -3231,33 +3255,46 @@ export function MatchAnalysisPage({
 
           <section className="mt-8">
             <h2 className="text-sm font-semibold uppercase tracking-wide text-muted">Model Probabilities</h2>
-            <div className="mt-2 grid grid-cols-[1fr_auto_auto_auto_auto_auto] gap-4 pl-4 text-[11px] uppercase tracking-wide text-muted">
-              <span>Market</span>
-              <span title={MODEL_PROBABILITY_EXPLAIN} className="text-right">Model</span>
-              <span className="text-right">Market</span>
-              <span title={EDGE_EXPLAIN} className="text-right">Edge</span>
-              <span className="justify-self-end">Status</span>
-              <span className="justify-self-end">&nbsp;</span>
+            {/* W238: Market stays fixed, the rest of the table scrolls --
+                found live on mobile: squeezing all 6 columns into one
+                shrink-to-fit grid truncated the Market column down to a
+                couple of characters ("H...", "Away...") on a narrow
+                viewport. overflow-x-auto + min-w-max lets the grid grow to
+                its natural (unsquashed) width and scroll horizontally
+                instead of shrinking; ProbabilityRow's own Market cell (and
+                the header's one below) is `sticky left-0` within this same
+                scroll container so it never leaves view. */}
+            <div className="mt-2 overflow-x-auto">
+              <div className="min-w-max">
+                <div className="grid grid-cols-[140px_auto_auto_auto_auto_auto] gap-4 text-[11px] uppercase tracking-wide text-muted">
+                  <span className="sticky left-0 z-10 bg-page pl-4">Market</span>
+                  <span title={MODEL_PROBABILITY_EXPLAIN} className="whitespace-nowrap text-right">Model</span>
+                  <span className="whitespace-nowrap text-right">Market</span>
+                  <span title={EDGE_EXPLAIN} className="whitespace-nowrap text-right">Edge</span>
+                  <span className="whitespace-nowrap justify-self-end">Status</span>
+                  <span className="whitespace-nowrap justify-self-end">&nbsp;</span>
+                </div>
+                {match.candidates.length === 0 ? (
+                  <p className="mt-2 rounded-lg border border-border bg-surface p-3.5 text-sm text-ink-secondary">
+                    No markets in this recommendation.
+                  </p>
+                ) : (
+                  match.candidates.map((m, i) => (
+                    <ProbabilityRow
+                      key={`${m.market}-${i}`}
+                      m={m}
+                      matchId={id}
+                      recommendation={rawRecommendation ?? undefined}
+                      alreadyLogged={loggedKeys.has(`${m.market}::${m.selection}`)}
+                      highlighted={shown?.market === m.market && shown?.selection === m.selection}
+                      homeTeam={home}
+                      awayTeam={away}
+                      statusLabel={matchStatusLabel(match.kickoffIso, match.status === "completed", asOf, sandboxMode)}
+                    />
+                  ))
+                )}
+              </div>
             </div>
-            {match.candidates.length === 0 ? (
-              <p className="mt-2 rounded-lg border border-border bg-surface p-3.5 text-sm text-ink-secondary">
-                No markets in this recommendation.
-              </p>
-            ) : (
-              match.candidates.map((m, i) => (
-                <ProbabilityRow
-                  key={`${m.market}-${i}`}
-                  m={m}
-                  matchId={id}
-                  recommendation={rawRecommendation ?? undefined}
-                  alreadyLogged={loggedKeys.has(`${m.market}::${m.selection}`)}
-                  highlighted={shown?.market === m.market && shown?.selection === m.selection}
-                  homeTeam={home}
-                  awayTeam={away}
-                  statusLabel={matchStatusLabel(match.kickoffIso, match.status === "completed", asOf, sandboxMode)}
-                />
-              ))
-            )}
             {match.invalidMarketCount > 0 && (
               <p className="mt-2 flex items-center gap-1.5 text-xs text-serious">
                 <WarningCircle weight="fill" size={13} />
