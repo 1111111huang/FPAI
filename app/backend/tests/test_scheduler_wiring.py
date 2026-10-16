@@ -1431,9 +1431,17 @@ def test_register_eod_job_notifies_subscribers_once_after_the_nightly_run(tmp_pa
         )
         assert _wait_until(lambda: run_log.has_run(EOD_JOB_ID, _FUTURE_DAY_STR))
 
-    assert mock_send.call_count == 1
-    _, kwargs = mock_send.call_args
+    # Task 3 (batched T-30 push): this single fixture is also its own
+    # kickoff cluster, so send_to_all_subscribers now fires twice -- once
+    # for the nightly "New recommendations ready" push (checked here,
+    # first call) and once for that fixture's own batch-notify cluster
+    # (covered by test_register_eod_job_schedules_one_batched_notify_per_kickoff_cluster
+    # above). This test's own concern is only the nightly push firing
+    # exactly once, so it pins down the first call rather than the total.
+    assert mock_send.call_count == 2
+    _, kwargs = mock_send.call_args_list[0]
     assert kwargs["store"] is push_store
+    assert kwargs["title"] == "New recommendations ready"
 
 
 def _match(match_id: str, kickoff: str) -> NormalizedMatch:
@@ -1489,3 +1497,88 @@ def test_build_batch_notification_body_truncates_with_remaining_count() -> None:
     fixtures = [_match(str(i), "2026-10-17T15:00:00Z") for i in range(5)]
     body = build_batch_notification_body(fixtures, max_shown=3)
     assert body == "Home0 v Away0, Home1 v Away1, Home2 v Away2 +2 more"
+
+
+def test_register_eod_job_schedules_one_batched_notify_per_kickoff_cluster(tmp_path: Path) -> None:
+    """Two fixtures 10 minutes apart (one cluster) + a third fixture 40
+    minutes later (its own cluster) should produce exactly 2 batch-notify
+    pushes, not 3 (one per fixture) and not 1 (all fixtures lumped
+    together)."""
+    close_a = NormalizedMatch(
+        match_id="m1", utc_date=f"{_FUTURE_DAY_STR}T15:00:00Z", status="SCHEDULED",
+        home_team="Arsenal", away_team="Everton", home_goals=None, away_goals=None,
+    )
+    close_b = NormalizedMatch(
+        match_id="m2", utc_date=f"{_FUTURE_DAY_STR}T15:10:00Z", status="SCHEDULED",
+        home_team="Chelsea", away_team="Fulham", home_goals=None, away_goals=None,
+    )
+    far = NormalizedMatch(
+        match_id="m3", utc_date=f"{_FUTURE_DAY_STR}T15:50:00Z", status="SCHEDULED",
+        home_team="Liverpool", away_team="Brentford", home_goals=None, away_goals=None,
+    )
+    fixtures_client = MagicMock()
+    fixtures_client.get_fixtures.return_value = [close_a, close_b, far]
+    cache = RecommendationCache(db_path=tmp_path / "cache.db")
+    config = AgentConfig.default()
+    run_log = JobRunLog(db_path=tmp_path / "job_runs.db")
+    push_store = PushSubscriptionStore(db_path=tmp_path / "push.db")
+    push_store.add(user_id=1, endpoint="https://push.example/a", p256dh="k", auth="a")
+
+    # "now" is well after all 3 fixtures' own T-30 times AND after the
+    # batch-notify jobs' (T-30 + buffer) times, so registering triggers
+    # immediate catch-up for everything -- same pattern as this file's
+    # other EOD/T-30 catch-up tests.
+    now = datetime(_FUTURE_DAY.year, _FUTURE_DAY.month, _FUTURE_DAY.day, 23, 30, tzinfo=NY_TZ)
+    scheduler = RecoverableScheduler(run_log=run_log, now_fn=lambda: now)
+
+    recommendation = {
+        "match": {"home": "Arsenal", "away": "Everton", "date": "2026-08-22", "league": "E0"},
+        "overall": "no_bet", "markets": [], "explanation": "test", "confidence": "low",
+        "limitations": [], "prediction_basis": "market_odds_only",
+    }
+
+    # Computed ahead of time to match _schedule_t30_batch_notify's own
+    # run_at formula (max t30_run_at in the cluster + a 3-minute buffer) --
+    # hardcoded as timedelta(minutes=3) here rather than importing
+    # T30_NOTIFY_BUFFER_MINUTES, since that constant doesn't exist until
+    # this task's Step 3 (this test is written and confirmed-failing
+    # first, per TDD).
+    close_cluster_run_at = t30_run_at(close_b) + timedelta(minutes=3)  # later of close_a/close_b
+    far_cluster_run_at = t30_run_at(far) + timedelta(minutes=3)
+    # _eod_job's own date_str is next_day_date_str(now_fn), i.e. tomorrow
+    # relative to "now" (23:30 on _FUTURE_DAY) -- _FUTURE_DAY_PLUS_1_STR,
+    # same next-day shift this file already relies on at its PD
+    # fixtures-fetch assertion above. The fixtures themselves are dated
+    # _FUTURE_DAY_STR only because the mocked fixtures_client ignores the
+    # date range it's called with -- that's independent of what date_str
+    # _eod_job computes internally and bakes into the notify job_id.
+    close_job_id = f"t30_notify_{_FUTURE_DAY_PLUS_1_STR}_m1"
+    far_job_id = f"t30_notify_{_FUTURE_DAY_PLUS_1_STR}_m3"
+
+    with patch("app.backend.recommendations.run_agent", return_value=recommendation), \
+         patch("app.backend.scheduler_wiring.send_to_all_subscribers") as mock_send:
+        register_eod_job(
+            scheduler, fixtures_client=fixtures_client, odds_client=None,
+            cache=cache, config=config, now_fn=lambda: now, push_store=push_store,
+        )
+        assert _wait_until(lambda: run_log.has_run(EOD_JOB_ID, _FUTURE_DAY_STR))
+        # Both batch-notify jobs' run_at is already in the past relative to
+        # "now" (same as T-30's own catch-up above), so registering them
+        # triggers an immediate catch-up run on a background thread --
+        # must wait for both to actually finish *before* the patch above
+        # is torn down, or a late-firing job calls the real (unpatched)
+        # send_to_all_subscribers instead of the mock (same gotcha this
+        # file's other catch-up tests already guard against).
+        assert _wait_until(lambda: run_log.has_run(close_job_id, close_cluster_run_at.isoformat()))
+        assert _wait_until(lambda: run_log.has_run(far_job_id, far_cluster_run_at.isoformat()))
+
+    # 1 nightly "New recommendations ready" call + 2 batch-notify calls
+    # (one for [close_a, close_b], one for [far]) = 3 total.
+    assert mock_send.call_count == 3
+    bodies = [kwargs["body"] for _, kwargs in mock_send.call_args_list]
+    assert "Tomorrow's picks" in bodies[0]
+    batch_bodies = bodies[1:]
+    assert any("Arsenal v Everton, Chelsea v Fulham" in b for b in batch_bodies)
+    assert any("Liverpool v Brentford" in b for b in batch_bodies)
+    titles = [kwargs["title"] for _, kwargs in mock_send.call_args_list]
+    assert titles.count("Kickoff soon") == 2

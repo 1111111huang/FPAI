@@ -516,6 +516,29 @@ def build_schedule_t30(
     return _schedule
 
 
+T30_NOTIFY_BUFFER_MINUTES = 3
+
+
+def _schedule_t30_batch_notify(
+    scheduler: RecoverableScheduler, push_store: PushSubscriptionStore,
+    cluster: list[NormalizedMatch], date_str: str,
+) -> None:
+    """One push per kickoff cluster (not per fixture) -- scheduled a few
+    minutes after the LAST fixture in the cluster would have had its own
+    T-30 refresh (t30_refresh.py, unchanged) complete, so every cluster
+    member's state is current by the time this reads the fixture list."""
+    run_at = max(t30_run_at(fixture) for fixture in cluster) + timedelta(minutes=T30_NOTIFY_BUFFER_MINUTES)
+    job_id = f"t30_notify_{date_str}_{cluster[0].match_id}"
+
+    def _job(cluster: list[NormalizedMatch] = cluster) -> None:
+        send_to_all_subscribers(
+            store=push_store, title="Kickoff soon",
+            body=build_batch_notification_body(cluster), url="/",
+        )
+
+    scheduler.schedule_once(job_id, _job, run_at=run_at)
+
+
 def _fetch_fixtures_for_league(
     league: str,
     fixtures_client: FootballDataClient,
@@ -600,6 +623,7 @@ def register_eod_job(
     def _eod_job() -> None:
         date_str = next_day_date_str(now_fn)
         enabled = set(list_display_enabled_competition_ids())
+        all_fixtures: list[NormalizedMatch] = []
         for league in COMPETITIONS:
             if league not in enabled:
                 continue
@@ -619,6 +643,7 @@ def register_eod_job(
                 continue
             if fixtures is None:
                 continue  # this league isn't configured this run (e.g. no sweden_fixtures_client)
+            all_fixtures.extend(fixtures)
 
             schedule_t30 = build_schedule_t30(scheduler, odds_client, cache, config, date_str, league=league)
             asyncio.run(
@@ -637,6 +662,8 @@ def register_eod_job(
                 store=push_store, title="New recommendations ready",
                 body=f"Tomorrow's picks ({date_str}) are in.", url="/",
             )
+            for cluster in cluster_fixtures_by_kickoff(all_fixtures):
+                _schedule_t30_batch_notify(scheduler, push_store, cluster, date_str)
 
     scheduler.schedule_daily(EOD_JOB_ID, _eod_job, hour=EOD_HOUR, minute=EOD_MINUTE)
 
