@@ -73,6 +73,22 @@ describe("UserMenu", () => {
     const toggle = await screen.findByRole("button", { name: /turn on notifications/i });
     await userEvent.click(toggle);
     expect(mockSubscribeToPush).toHaveBeenCalled();
+    expect(await screen.findByRole("button", { name: /turn off notifications/i })).toBeInTheDocument();
+  });
+
+  it("unsubscribes when the toggle is clicked while on", async () => {
+    Object.defineProperty(window.navigator, "serviceWorker", { value: {}, configurable: true });
+    Object.defineProperty(window, "PushManager", { value: function () {}, configurable: true });
+    mockIsPushSubscribed.mockReset().mockResolvedValue(true);
+    mockUseSession.mockReturnValue({
+      data: { user: { email: "fpai.deploy@gmail.com" } },
+      status: "authenticated",
+    });
+    render(<UserMenu />);
+    const toggle = await screen.findByRole("button", { name: /turn off notifications/i });
+    await userEvent.click(toggle);
+    expect(mockUnsubscribeFromPush).toHaveBeenCalled();
+    expect(await screen.findByRole("button", { name: /turn on notifications/i })).toBeInTheDocument();
   });
 
   it("hides the toggle when the browser has no PushManager support", () => {

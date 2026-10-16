@@ -8,6 +8,7 @@ import Link from "next/link";
 import { useEffect, useState } from "react";
 import { signOut, useSession } from "next-auth/react";
 import { isPushSubscribed, subscribeToPush, unsubscribeFromPush } from "@/lib/push";
+import { showToast } from "@/lib/toast";
 
 function canUsePush(): boolean {
   if (typeof window === "undefined") return false;
@@ -35,17 +36,21 @@ export function UserMenu() {
     const available = canUsePush();
     setPushAvailable(available);
     if (available) {
-      isPushSubscribed().then(setPushSubscribed);
+      isPushSubscribed().then(setPushSubscribed).catch(() => {});
     }
   }, [status]);
 
   async function togglePush() {
-    if (pushSubscribed) {
-      await unsubscribeFromPush();
-      setPushSubscribed(false);
-    } else {
-      await subscribeToPush();
-      setPushSubscribed(true);
+    try {
+      if (pushSubscribed) {
+        await unsubscribeFromPush();
+        setPushSubscribed(false);
+      } else {
+        await subscribeToPush();
+        setPushSubscribed(true);
+      }
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : "Could not update notifications.");
     }
   }
 
