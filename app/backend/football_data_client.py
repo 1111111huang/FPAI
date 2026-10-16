@@ -187,7 +187,27 @@ class FootballDataClient:
 
     def get_fixtures(
         self, competition_code: str = "PL", date_from: str | None = None, date_to: str | None = None,
+        blocking: bool = True,
     ) -> list[NormalizedMatch]:
+        # BUG-083 (found live 2026-10-16): blocking, same contract as
+        # get_results()'s own -- unlike that one, this had no override at
+        # all until now, even though it's called from the exact same
+        # user-facing GET /api/fixtures path (main.py) that
+        # settle_open_bets's blocking=False precedent (settlement.py,
+        # 2026-09-15) already established for a user-facing response.
+        # Found live: a cold GET /api/fixtures can itself exhaust the
+        # shared ~10-req/min budget across 5 football-data.org-backed
+        # leagues x 2 calls each (W237's own comment already documents
+        # this exact 10-call shape), then every later call (results or
+        # fixtures) blocks in wait_if_needed() for up to a minute --
+        # confirmed live via "football-data.org rate limit exhausted --
+        # blocking for 54.3s" in the deploy log while the dashboard sat on
+        # empty match cards for the whole wait. Request-serving code
+        # should degrade fast (BUG-081's per-competition handling already
+        # treats RateLimitWouldBlock as just another transient failure,
+        # same as settle_open_bets does), not hang a page load for a
+        # minute.
+        #
         # Found live (2026-08-14): a bare status=SCHEDULED filter is honored
         # inconsistently per competition by football-data.org -- PL returned
         # both TIMED and SCHEDULED matches under it, but PD strictly excluded
@@ -211,7 +231,9 @@ class FootballDataClient:
         # is additive coverage for a second live-match spelling, not a
         # correction of the first. Same invisibility bug either way: a status
         # string this filter doesn't name is silently dropped, not erred on.
-        return self._get_matches(competition_code, "SCHEDULED,TIMED,IN_PLAY,PAUSED,LIVE", date_from, date_to)
+        return self._get_matches(
+            competition_code, "SCHEDULED,TIMED,IN_PLAY,PAUSED,LIVE", date_from, date_to, blocking=blocking,
+        )
 
     def get_results(
         self, competition_code: str = "PL", date_from: str | None = None, date_to: str | None = None,

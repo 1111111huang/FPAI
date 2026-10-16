@@ -910,7 +910,8 @@ async def get_fixtures(date_from: str | None = None, date_to: str | None = None)
         if "E0" in enabled:
             competitions.append("E0")
             calls.append(fixture_cache.get_range(
-                fixture_cache.results_call_type("E0"), client.get_results, date_from=past_from, date_to=past_to
+                fixture_cache.results_call_type("E0"), client.get_results,
+                date_from=past_from, date_to=past_to, blocking=False,
             ))
         if "SWE" in enabled:
             # W71: sourced from raw_matches directly, not sweden_client.get_results()
@@ -928,32 +929,33 @@ async def get_fixtures(date_from: str | None = None, date_to: str | None = None)
             competitions.append("SP1")
             calls.append(fixture_cache.get_range(
                 fixture_cache.results_call_type("SP1"), la_liga_client.get_results,
-                competition_code=LA_LIGA_COMPETITION_CODE, date_from=past_from, date_to=past_to,
+                competition_code=LA_LIGA_COMPETITION_CODE, date_from=past_from, date_to=past_to, blocking=False,
             ))
         if "I1" in enabled:
             competitions.append("I1")
             calls.append(fixture_cache.get_range(
                 fixture_cache.results_call_type("I1"), serie_a_client.get_results,
-                competition_code=SERIE_A_COMPETITION_CODE, date_from=past_from, date_to=past_to,
+                competition_code=SERIE_A_COMPETITION_CODE, date_from=past_from, date_to=past_to, blocking=False,
             ))
         if "D1" in enabled:
             competitions.append("D1")
             calls.append(fixture_cache.get_range(
                 fixture_cache.results_call_type("D1"), bundesliga_client.get_results,
-                competition_code=BUNDESLIGA_COMPETITION_CODE, date_from=past_from, date_to=past_to,
+                competition_code=BUNDESLIGA_COMPETITION_CODE, date_from=past_from, date_to=past_to, blocking=False,
             ))
         if "F1" in enabled:
             competitions.append("F1")
             calls.append(fixture_cache.get_range(
                 fixture_cache.results_call_type("F1"), ligue1_client.get_results,
-                competition_code=LIGUE_1_COMPETITION_CODE, date_from=past_from, date_to=past_to,
+                competition_code=LIGUE_1_COMPETITION_CODE, date_from=past_from, date_to=past_to, blocking=False,
             ))
     if fixtures_range is not None:
         future_from, future_to = fixtures_range
         if "E0" in enabled:
             competitions.append("E0")
             calls.append(fixture_cache.get_range(
-                fixture_cache.fixtures_call_type("E0"), client.get_fixtures, date_from=future_from, date_to=future_to
+                fixture_cache.fixtures_call_type("E0"), client.get_fixtures,
+                date_from=future_from, date_to=future_to, blocking=False,
             ))
         if "SWE" in enabled:
             competitions.append("SWE")
@@ -965,25 +967,25 @@ async def get_fixtures(date_from: str | None = None, date_to: str | None = None)
             competitions.append("SP1")
             calls.append(fixture_cache.get_range(
                 fixture_cache.fixtures_call_type("SP1"), la_liga_client.get_fixtures,
-                competition_code=LA_LIGA_COMPETITION_CODE, date_from=future_from, date_to=future_to,
+                competition_code=LA_LIGA_COMPETITION_CODE, date_from=future_from, date_to=future_to, blocking=False,
             ))
         if "I1" in enabled:
             competitions.append("I1")
             calls.append(fixture_cache.get_range(
                 fixture_cache.fixtures_call_type("I1"), serie_a_client.get_fixtures,
-                competition_code=SERIE_A_COMPETITION_CODE, date_from=future_from, date_to=future_to,
+                competition_code=SERIE_A_COMPETITION_CODE, date_from=future_from, date_to=future_to, blocking=False,
             ))
         if "D1" in enabled:
             competitions.append("D1")
             calls.append(fixture_cache.get_range(
                 fixture_cache.fixtures_call_type("D1"), bundesliga_client.get_fixtures,
-                competition_code=BUNDESLIGA_COMPETITION_CODE, date_from=future_from, date_to=future_to,
+                competition_code=BUNDESLIGA_COMPETITION_CODE, date_from=future_from, date_to=future_to, blocking=False,
             ))
         if "F1" in enabled:
             competitions.append("F1")
             calls.append(fixture_cache.get_range(
                 fixture_cache.fixtures_call_type("F1"), ligue1_client.get_fixtures,
-                competition_code=LIGUE_1_COMPETITION_CODE, date_from=future_from, date_to=future_to,
+                competition_code=LIGUE_1_COMPETITION_CODE, date_from=future_from, date_to=future_to, blocking=False,
             ))
 
     # BUG-081 (found live 2026-10-16): E0/SP1/I1/D1/F1 all share one
@@ -1003,7 +1005,13 @@ async def get_fixtures(date_from: str | None = None, date_to: str | None = None)
     matches: list[NormalizedMatch] = []
     any_failed = False
     for competition, result in zip(competitions, results):
-        if isinstance(result, requests.exceptions.HTTPError):
+        # BUG-083: RequestException, not just HTTPError -- every call above
+        # now passes blocking=False, so an exhausted rate-limit budget
+        # raises RateLimitWouldBlock (a RequestException, not an
+        # HTTPError/a real HTTP response at all) instead of blocking for
+        # up to a minute. Same broadening settlement.py's own except
+        # clause already needed for the identical reason.
+        if isinstance(result, requests.exceptions.RequestException):
             LOGGER.warning(
                 "Upstream fixture provider call failed | competition=%s | %s", competition, result, exc_info=result,
             )

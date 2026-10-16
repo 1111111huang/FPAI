@@ -183,7 +183,7 @@ async def get_range(
     fetch: Callable[..., list[NormalizedMatch]],
     date_from: str | None,
     date_to: str | None,
-    **fetch_kwargs: str,
+    **fetch_kwargs: str | bool,
 ) -> list[NormalizedMatch]:
     """Looks up [date_from, date_to] day by day; any day missing/expired is
     (re)fetched -- grouped into the fewest contiguous spans, one upstream
@@ -226,7 +226,7 @@ async def force_refresh_range(
     fetch: Callable[..., list[NormalizedMatch]],
     date_from: str,
     date_to: str,
-    **fetch_kwargs: str,
+    **fetch_kwargs: str | bool,
 ) -> list[NormalizedMatch]:
     """Unconditionally live-fetches [date_from, date_to] (ignoring whatever
     is currently cached/its TTL) and overwrites every day's cache entry --

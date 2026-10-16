@@ -291,6 +291,26 @@ def test_get_results_blocking_false_raises_instead_of_sleeping_when_rate_limited
     session.get.assert_not_called()
 
 
+def test_get_fixtures_blocking_false_raises_instead_of_sleeping_when_rate_limited() -> None:
+    """BUG-083 (found live 2026-10-16): get_fixtures() had no blocking
+    override at all until now, unlike get_results() above -- GET
+    /api/fixtures (main.py) calls both for the exact same user-facing
+    response, so a cold load exhausting the shared budget could still
+    hang on get_fixtures() even after get_results() was already fixed
+    for settle_open_bets. blocking=False gives it the identical
+    fail-fast contract."""
+    session = _mock_session([])
+    client = FootballDataClient(api_key="fake-key", session=session)
+    client._rate_limiter.update_from_headers(
+        {"x-requests-available-minute": "0", "X-RequestCounter-Reset": "45"}
+    )
+
+    with pytest.raises(RateLimitWouldBlock):
+        client.get_fixtures(date_from="2026-08-22", date_to="2026-08-22", blocking=False)
+
+    session.get.assert_not_called()
+
+
 def test_get_results_blocking_true_still_calls_through_when_rate_limited(tmp_path: Path) -> None:
     """The default (blocking=True, every caller except auto-settle-on-log)
     is completely unchanged -- still waits via wait_if_needed() rather

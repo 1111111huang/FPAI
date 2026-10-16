@@ -20,7 +20,7 @@ import requests
 from fastapi.testclient import TestClient
 
 from app.backend import fixture_cache
-from app.backend.football_data_client import NormalizedMatch
+from app.backend.football_data_client import NormalizedMatch, RateLimitWouldBlock
 from app.backend.main import _split_fixture_date_range, app
 
 
@@ -158,7 +158,7 @@ def test_fixtures_endpoint_passes_date_range_through():
             with TestClient(app) as client:
                 client.get("/api/fixtures", params={"date_from": "2026-08-21", "date_to": "2026-08-28"})
 
-    mock_client.get_fixtures.assert_called_once_with(date_from="2026-08-21", date_to="2026-08-28")
+    mock_client.get_fixtures.assert_called_once_with(date_from="2026-08-21", date_to="2026-08-28", blocking=False)
 
 
 def test_fixtures_endpoint_returns_empty_list_gracefully():
@@ -211,7 +211,7 @@ def test_fixtures_endpoint_wholly_past_range_sources_real_results():
     assert len(body) == 1
     assert body[0]["home_team"] == "Liverpool"
     assert body[0]["home_goals"] == 2
-    mock_client.get_results.assert_called_once_with(date_from="2025-03-08", date_to="2025-03-08")
+    mock_client.get_results.assert_called_once_with(date_from="2025-03-08", date_to="2025-03-08", blocking=False)
     mock_client.get_fixtures.assert_not_called()
 
 
@@ -235,7 +235,7 @@ def test_fixtures_endpoint_wholly_future_range_still_uses_get_fixtures_only():
 
     assert response.status_code == 200
     assert len(response.json()) == 1
-    mock_client.get_fixtures.assert_called_once_with(date_from="2026-08-21", date_to="2026-08-28")
+    mock_client.get_fixtures.assert_called_once_with(date_from="2026-08-21", date_to="2026-08-28", blocking=False)
     mock_client.get_results.assert_not_called()
 
 
@@ -259,8 +259,8 @@ def test_fixtures_endpoint_boundary_spanning_range_merges_results_and_fixtures()
     assert response.status_code == 200
     body = response.json()
     assert [m["home_team"] for m in body] == ["Liverpool", "Chelsea"]
-    mock_client.get_results.assert_called_once_with(date_from="2025-03-08", date_to="2025-03-10")
-    mock_client.get_fixtures.assert_called_once_with(date_from="2025-03-10", date_to="2025-03-12")
+    mock_client.get_results.assert_called_once_with(date_from="2025-03-08", date_to="2025-03-10", blocking=False)
+    mock_client.get_fixtures.assert_called_once_with(date_from="2025-03-10", date_to="2025-03-12", blocking=False)
 
 
 def test_fixtures_endpoint_today_only_query_checks_both_finished_and_scheduled():
@@ -289,8 +289,8 @@ def test_fixtures_endpoint_today_only_query_checks_both_finished_and_scheduled()
     assert response.status_code == 200
     body = response.json()
     assert [m["home_team"] for m in body] == ["Liverpool", "Chelsea"]
-    mock_client.get_results.assert_called_once_with(date_from="2025-03-10", date_to="2025-03-10")
-    mock_client.get_fixtures.assert_called_once_with(date_from="2025-03-10", date_to="2025-03-10")
+    mock_client.get_results.assert_called_once_with(date_from="2025-03-10", date_to="2025-03-10", blocking=False)
+    mock_client.get_fixtures.assert_called_once_with(date_from="2025-03-10", date_to="2025-03-10", blocking=False)
 
 
 # ---------------------------------------------------------------------------
@@ -319,7 +319,7 @@ def test_fixtures_endpoint_deduplicates_identical_calls_within_ttl():
 
     assert first.status_code == 200
     assert second.status_code == 200
-    mock_client.get_fixtures.assert_called_once_with(date_from="2026-08-21", date_to="2026-08-28")
+    mock_client.get_fixtures.assert_called_once_with(date_from="2026-08-21", date_to="2026-08-28", blocking=False)
 
 
 def test_fixtures_endpoint_upstream_http_error_returns_clean_degraded_response():
@@ -376,6 +376,31 @@ def test_fixtures_endpoint_one_competitions_rate_limit_does_not_blank_out_the_ot
     assert {m["home_team"] for m in body} == {"Malmo FF"}
 
 
+def test_fixtures_endpoint_degrades_fast_instead_of_blocking_on_an_exhausted_rate_limit(sweden_client_mock):
+    """BUG-083 (found live 2026-10-16): every football-data.org-backed call
+    from this endpoint now passes blocking=False, so an exhausted rate
+    limit raises RateLimitWouldBlock immediately instead of sleeping for
+    up to a minute inside wait_if_needed() -- confirmed live via
+    "blocking for 54.3s" in the deploy log while the dashboard sat on
+    empty cards for the wait. RateLimitWouldBlock is a RequestException,
+    not an HTTPError, so BUG-081's except clause must catch the broader
+    type for this to degrade (not crash) the same way a 429 already does."""
+    sweden_client_mock.get_fixtures.return_value = [_SWEDISH_FIXTURE]
+    with patch("app.backend.main._current_real_date", return_value=date(2026, 7, 19)):
+        with patch("app.backend.main.get_fixtures_client") as mock_get_client:
+            mock_get_client.return_value.get_fixtures.side_effect = RateLimitWouldBlock(
+                "Rate limit exhausted for key #3 (PL); skipping non-blocking call rather than waiting."
+            )
+            with TestClient(app) as client:
+                response = client.get(
+                    "/api/fixtures", params={"date_from": "2026-08-21", "date_to": "2026-08-28"}
+                )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert {m["home_team"] for m in body} == {"Malmo FF"}
+
+
 def test_fixtures_endpoint_concurrent_requests_dedupe_to_a_single_upstream_call():
     """Code review follow-up (post-21e6bf9): the sequential dedup test above
     only proves a *second* request arriving after the first has already
@@ -398,7 +423,7 @@ def test_fixtures_endpoint_concurrent_requests_dedupe_to_a_single_upstream_call(
     entered = threading.Event()
     release = threading.Event()
 
-    def slow_get_fixtures(date_from=None, date_to=None):
+    def slow_get_fixtures(date_from=None, date_to=None, blocking=True):
         entered.set()
         assert release.wait(timeout=5), "release was never signalled -- test deadlocked"
         return []
@@ -438,7 +463,7 @@ def test_fixtures_endpoint_concurrent_requests_dedupe_to_a_single_upstream_call(
 
     assert responses["first"].status_code == 200
     assert responses["second"].status_code == 200
-    mock_client.get_fixtures.assert_called_once_with(date_from="2027-05-01", date_to="2027-05-05")
+    mock_client.get_fixtures.assert_called_once_with(date_from="2027-05-01", date_to="2027-05-05", blocking=False)
 
 
 def test_fixtures_endpoint_cache_expires_at_a_matchs_own_kickoff_and_refetches():
@@ -479,7 +504,7 @@ def test_fixtures_endpoint_cache_expires_at_a_matchs_own_kickoff_and_refetches()
     assert second.status_code == 200
     assert third.status_code == 200
     assert mock_client.get_fixtures.call_count == 2
-    mock_client.get_fixtures.assert_called_with(date_from="2027-06-01", date_to="2027-06-01")
+    mock_client.get_fixtures.assert_called_with(date_from="2027-06-01", date_to="2027-06-01", blocking=False)
 
 
 # ---------------------------------------------------------------------------
@@ -651,7 +676,7 @@ def test_fixtures_endpoint_sweden_fixture_cache_key_is_independent_of_epls(swede
 
     body = response.json()
     assert {m["home_team"] for m in body} == {"Chelsea", "Malmo FF"}
-    mock_get_client.return_value.get_fixtures.assert_called_once_with(date_from="2027-05-01", date_to="2027-05-05")
+    mock_get_client.return_value.get_fixtures.assert_called_once_with(date_from="2027-05-01", date_to="2027-05-05", blocking=False)
     sweden_client_mock.get_fixtures.assert_called_once_with(date_from="2027-05-01", date_to="2027-05-05")
 
 
@@ -691,7 +716,7 @@ def test_fixtures_endpoint_merges_la_liga_fixtures_alongside_e0_and_swe(la_liga_
     body = response.json()
     assert {m["home_team"] for m in body} == {"Chelsea", "Real Madrid"}
     la_liga_client_mock.get_fixtures.assert_called_once_with(
-        competition_code="PD", date_from="2026-08-21", date_to="2026-08-28"
+        competition_code="PD", date_from="2026-08-21", date_to="2026-08-28", blocking=False,
     )
 
 
@@ -722,7 +747,7 @@ def test_fixtures_endpoint_tags_la_liga_results_sp1(la_liga_client_mock):
     body = response.json()
     assert body[0]["competition"] == "SP1"
     la_liga_client_mock.get_results.assert_called_once_with(
-        competition_code="PD", date_from="2025-03-08", date_to="2025-03-08"
+        competition_code="PD", date_from="2025-03-08", date_to="2025-03-08", blocking=False,
     )
 
 
@@ -750,10 +775,10 @@ def test_fixtures_endpoint_la_liga_fixture_cache_key_is_independent_of_e0s_and_s
 
     body = response.json()
     assert {m["home_team"] for m in body} == {"Chelsea", "Malmo FF", "Real Madrid"}
-    mock_get_client.return_value.get_fixtures.assert_called_once_with(date_from="2027-06-10", date_to="2027-06-15")
+    mock_get_client.return_value.get_fixtures.assert_called_once_with(date_from="2027-06-10", date_to="2027-06-15", blocking=False)
     sweden_client_mock.get_fixtures.assert_called_once_with(date_from="2027-06-10", date_to="2027-06-15")
     la_liga_client_mock.get_fixtures.assert_called_once_with(
-        competition_code="PD", date_from="2027-06-10", date_to="2027-06-15"
+        competition_code="PD", date_from="2027-06-10", date_to="2027-06-15", blocking=False,
     )
 
 
@@ -798,7 +823,7 @@ def test_fixtures_endpoint_merges_new_league_fixtures_alongside_existing(
     body = response.json()
     assert {m["home_team"] for m in body} == {"Chelsea", _NEW_LEAGUE_FIXTURE.home_team}
     new_leagues_client_mock[league].get_fixtures.assert_called_once_with(
-        competition_code=fd_code, date_from="2026-08-21", date_to="2026-08-28"
+        competition_code=fd_code, date_from="2026-08-21", date_to="2026-08-28", blocking=False,
     )
 
 
@@ -831,7 +856,7 @@ def test_fixtures_endpoint_tags_new_league_results_correctly(league, fd_code, ne
     body = response.json()
     assert body[0]["competition"] == league
     new_leagues_client_mock[league].get_results.assert_called_once_with(
-        competition_code=fd_code, date_from="2025-03-08", date_to="2025-03-08"
+        competition_code=fd_code, date_from="2025-03-08", date_to="2025-03-08", blocking=False,
     )
 
 
@@ -866,9 +891,9 @@ def test_fixtures_endpoint_new_leagues_cache_keys_are_independent_of_each_other_
     assert {m["home_team"] for m in body} == {
         "Chelsea", "Malmo FF", "Real Madrid", _NEW_LEAGUE_FIXTURE.home_team,
     }
-    mock_get_client.return_value.get_fixtures.assert_called_once_with(date_from="2027-06-10", date_to="2027-06-15")
+    mock_get_client.return_value.get_fixtures.assert_called_once_with(date_from="2027-06-10", date_to="2027-06-15", blocking=False)
     new_leagues_client_mock["I1"].get_fixtures.assert_called_once_with(
-        competition_code="SA", date_from="2027-06-10", date_to="2027-06-15"
+        competition_code="SA", date_from="2027-06-10", date_to="2027-06-15", blocking=False,
     )
     # D1/F1 contributed nothing this call (only I1 was configured above) --
     # confirms their own cache slots don't accidentally pick up I1's result.
@@ -973,6 +998,6 @@ def test_fixtures_endpoint_shares_overlapping_days_across_two_different_requeste
     assert second.status_code == 200
     # Every day the second request needs (08-22..08-24) was already warmed
     # by the first -- only the genuinely new days (08-20, 08-21) are missing.
-    mock_client.get_fixtures.assert_called_once_with(date_from="2026-08-20", date_to="2026-08-21")
+    mock_client.get_fixtures.assert_called_once_with(date_from="2026-08-20", date_to="2026-08-21", blocking=False)
     assert len(second.json()) == 1
     assert second.json()[0]["home_team"] == "Arsenal"
