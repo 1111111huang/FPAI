@@ -2448,7 +2448,13 @@ function ProbabilityRow({
   const highlight = HIGHLIGHT_ROW_STYLE[m.recommendationType];
   return (
     <div
-      className={`grid grid-cols-[140px_auto_auto_auto_auto_auto] items-center gap-4 border-b py-3 text-sm last:border-b-0 border-border ${
+      // W239: 184px, not W238's original 140px -- wide enough for the
+      // longest market titles ("Away Goals Under 1.5", "Home Goals Over
+      // 1.5", both W239 renamed these from a bare "Over 1.5"/"Under 1.5"
+      // to disambiguate which team's goals) without `truncate` clipping
+      // them to "Away Goals Und...". Found live right after that rename
+      // shipped against the still-140px column from W238.
+      className={`grid grid-cols-[184px_auto_auto_auto_auto_auto] items-center gap-4 border-b py-3 text-sm last:border-b-0 border-border ${
         highlighted ? highlight.background : ""
       }`}
     >
@@ -3266,7 +3272,7 @@ export function MatchAnalysisPage({
                 scroll container so it never leaves view. */}
             <div className="mt-2 overflow-x-auto">
               <div className="min-w-max">
-                <div className="grid grid-cols-[140px_auto_auto_auto_auto_auto] gap-4 text-[11px] uppercase tracking-wide text-muted">
+                <div className="grid grid-cols-[184px_auto_auto_auto_auto_auto] gap-4 text-[11px] uppercase tracking-wide text-muted">
                   <span className="sticky left-0 z-10 bg-page pl-4">Market</span>
                   <span title={MODEL_PROBABILITY_EXPLAIN} className="whitespace-nowrap text-right">Model</span>
                   <span className="whitespace-nowrap text-right">Market</span>
