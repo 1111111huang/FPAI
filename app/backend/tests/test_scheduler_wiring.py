@@ -48,6 +48,7 @@ from app.backend.scheduler_wiring import (
     RECONCILIATION_MINUTE,
     PersistingOddsClient,
     PersistingOddsPapiClient,
+    cluster_fixtures_by_kickoff,
     next_day_date_str,
     register_data_refresh_job,
     register_eod_job,
@@ -1432,3 +1433,45 @@ def test_register_eod_job_notifies_subscribers_once_after_the_nightly_run(tmp_pa
     assert mock_send.call_count == 1
     _, kwargs = mock_send.call_args
     assert kwargs["store"] is push_store
+
+
+def _match(match_id: str, kickoff: str) -> NormalizedMatch:
+    return NormalizedMatch(
+        match_id=match_id, utc_date=kickoff, status="SCHEDULED",
+        home_team=f"Home{match_id}", away_team=f"Away{match_id}", home_goals=None, away_goals=None,
+    )
+
+
+def test_cluster_fixtures_by_kickoff_empty_list_returns_empty() -> None:
+    assert cluster_fixtures_by_kickoff([]) == []
+
+
+def test_cluster_fixtures_by_kickoff_single_fixture_returns_one_cluster() -> None:
+    fixture = _match("m1", "2026-10-17T15:00:00Z")
+    assert cluster_fixtures_by_kickoff([fixture]) == [[fixture]]
+
+
+def test_cluster_fixtures_by_kickoff_groups_fixtures_within_window() -> None:
+    a = _match("a", "2026-10-17T15:00:00Z")
+    b = _match("b", "2026-10-17T15:10:00Z")
+    clusters = cluster_fixtures_by_kickoff([b, a], window_minutes=15)
+    assert clusters == [[a, b]]
+
+
+def test_cluster_fixtures_by_kickoff_splits_fixtures_outside_window() -> None:
+    a = _match("a", "2026-10-17T15:00:00Z")
+    b = _match("b", "2026-10-17T15:30:00Z")
+    clusters = cluster_fixtures_by_kickoff([a, b], window_minutes=15)
+    assert clusters == [[a], [b]]
+
+
+def test_cluster_fixtures_by_kickoff_chains_a_cluster_beyond_the_window_end_to_end() -> None:
+    """14:55, 15:05, 15:18 stay one cluster -- each CONSECUTIVE gap is <=15
+    min (10, then 13) -- even though first-to-last is 23 min, over the
+    window. A 15:40 fixture starts a new cluster (22 min since 15:18)."""
+    a = _match("a", "2026-10-17T14:55:00Z")
+    b = _match("b", "2026-10-17T15:05:00Z")
+    c = _match("c", "2026-10-17T15:18:00Z")
+    d = _match("d", "2026-10-17T15:40:00Z")
+    clusters = cluster_fixtures_by_kickoff([a, b, c, d], window_minutes=15)
+    assert clusters == [[a, b, c], [d]]

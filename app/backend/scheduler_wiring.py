@@ -453,9 +453,38 @@ def next_day_date_str(now_fn: Callable[[], datetime] = lambda: sandbox_now(NY_TZ
     return (now_fn() + timedelta(days=1)).date().isoformat()
 
 
+def _kickoff_time(fixture: NormalizedMatch) -> datetime:
+    return datetime.fromisoformat(fixture.utc_date.replace("Z", "+00:00"))
+
+
 def t30_run_at(fixture: NormalizedMatch) -> datetime:
-    kickoff = datetime.fromisoformat(fixture.utc_date.replace("Z", "+00:00"))
-    return kickoff - timedelta(minutes=30)
+    return _kickoff_time(fixture) - timedelta(minutes=30)
+
+
+T30_BATCH_WINDOW_MINUTES = 15
+
+
+def cluster_fixtures_by_kickoff(
+    fixtures: list[NormalizedMatch], window_minutes: int = T30_BATCH_WINDOW_MINUTES
+) -> list[list[NormalizedMatch]]:
+    """Chained clustering, not a fixed grid: sorted by kickoff, a fixture
+    joins the current cluster if it's within `window_minutes` of the
+    *previous* fixture in sort order -- so a cluster can span more than
+    window_minutes end-to-end if kickoffs chain closely together (a run at
+    14:55/15:05/15:18 stays one cluster even though the ends are 23 min
+    apart; only each consecutive gap is checked against the window)."""
+    if not fixtures:
+        return []
+    ordered = sorted(fixtures, key=lambda f: f.utc_date)
+    clusters: list[list[NormalizedMatch]] = [[ordered[0]]]
+    for fixture in ordered[1:]:
+        previous = clusters[-1][-1]
+        gap = _kickoff_time(fixture) - _kickoff_time(previous)
+        if gap <= timedelta(minutes=window_minutes):
+            clusters[-1].append(fixture)
+        else:
+            clusters.append([fixture])
+    return clusters
 
 
 def build_schedule_t30(
