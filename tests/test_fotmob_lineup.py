@@ -305,6 +305,38 @@ def test_backfill_respects_the_requested_league_not_hardcoded_e0():
     assert mock_fetch.call_args.kwargs["league_id"] == LEAGUE_IDS["D1"]
 
 
+def test_backfill_uses_watermark_not_full_history_on_second_run():
+    """BUG-080: a run that already scanned through raw_matches' latest date
+    must not re-scan years of history on the next trigger -- only the days
+    since the last run's watermark."""
+    from datetime import date
+
+    db = _InMemoryDBManager()
+    db._conn.execute("CREATE TABLE raw_matches (date DATE)")
+    db._conn.execute(
+        "INSERT INTO raw_matches VALUES ('2021-01-01'), ('2026-01-05')"
+    )
+    with db.connection() as conn:
+        _create_lineup_table(conn)
+
+    with patch("src.ingestion.fotmob.fetcher.fetch_finished_match_ids", return_value=[]) as mock_fetch:
+        backfill_lineups_from_player_stats(db, delay=0)
+        first_run_calls = mock_fetch.call_count
+        mock_fetch.reset_mock()
+
+        db._conn.execute("INSERT INTO raw_matches VALUES ('2026-01-06')")
+        backfill_lineups_from_player_stats(db, delay=0)
+        second_run_calls = mock_fetch.call_count
+
+    # First run is bounded by the lookback window, not the full
+    # 2021-01-01..2026-01-05 range (1800+ days).
+    assert first_run_calls == 31
+    # Second run only scans the one new day (2026-01-06), picking up from
+    # the watermark left by the first run, not re-scanning from 2021 again.
+    assert second_run_calls == 1
+    assert mock_fetch.call_args.args[0] == date(2026, 1, 6)
+
+
 # ---------------------------------------------------------------------------
 # A130: live pre-kickoff lineup verification -- resolve_fotmob_match_id,
 # get_confirmed_lineup

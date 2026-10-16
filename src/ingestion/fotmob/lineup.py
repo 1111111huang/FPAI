@@ -382,6 +382,21 @@ def discover_match_ids_multi_league(
     return ids
 
 
+# BUG-080 (found live 2026-10-16): with no per-day watermark, every
+# refresh-data trigger (nightly, and every redeploy's scheduler catch-up)
+# re-scanned raw_matches' *entire* date range -- for a league with years of
+# history that's one real HTTP request per calendar day, hours long, run
+# sequentially per league. Confirmed live: a redeploy's catch-up was still
+# grinding through E0 one day at a time starting from 2021 while the app
+# struggled to serve /api/fixtures (502s) on the same box. Mirrors
+# run_fetch_nonleague_matches_incremental's watermark pattern (main.py) --
+# first run looks back a bounded window instead of the full history (still
+# available as a deliberate one-off via the fetch-lineups CLI's explicit
+# --date-from/--date-to), every later run scans forward from where the last
+# one left off.
+_LINEUP_WATERMARK_FIRST_RUN_LOOKBACK_DAYS = 30
+
+
 def backfill_lineups_from_player_stats(
     db_manager: "DuckDBManager", league: str = "E0", delay: float = 1.0
 ) -> int:
@@ -389,17 +404,18 @@ def backfill_lineups_from_player_stats(
 
     The ``raw_player_match_stats`` table stores an internal hashed ``match_id``
     (not a FotMob ID), so we cannot resolve FotMob IDs from it directly.
-    Instead we derive the full date range covered by ``raw_matches`` and then
-    use ``fetch_finished_match_ids`` -- the same mechanism as the forward-going
+    Instead we derive the date range covered by ``raw_matches`` and then use
+    ``fetch_finished_match_ids`` -- the same mechanism as the forward-going
     ``fetch-lineups`` command -- to discover FotMob match IDs.
 
-    This will re-issue HTTP requests for match-list pages every run (no
-    per-day watermark) but avoids storing duplicate state, and (BUG-064)
-    skips any match ID already present in ``match_lineups`` -- a fully
-    historical match's starting lineup is a fixed fact once fetched once,
-    so re-fetching it on every ``refresh-data`` trigger was pure waste.
-    For a targeted historical backfill, prefer the ``fetch-lineups`` CLI
-    with explicit ``--date-from`` / ``--date-to`` flags.
+    BUG-080: the scan window is bounded by a per-league watermark
+    (``fotmob_lineup_scan_watermark``) rather than re-scanning raw_matches'
+    full history every run -- see that table/constant's own comment above.
+    (BUG-064) skips any match ID already present in ``match_lineups`` -- a
+    fully historical match's starting lineup is a fixed fact once fetched
+    once, so re-fetching it on every ``refresh-data`` trigger was pure
+    waste. For a targeted historical backfill, prefer the ``fetch-lineups``
+    CLI with explicit ``--date-from`` / ``--date-to`` flags.
 
     BUG-064: `league` was previously hardcoded to "E0" regardless of what
     was actually passed to ``refresh-data`` -- confirmed live 2026-09-08
@@ -427,8 +443,33 @@ def backfill_lineups_from_player_stats(
         )
         return 0
 
-    date_from: _date = bounds[0]
     date_to: _date = bounds[1]
+
+    with db_manager.connection() as conn:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS fotmob_lineup_scan_watermark (
+                league TEXT PRIMARY KEY,
+                last_scanned_date DATE
+            )
+            """
+        )
+        watermark_row = conn.execute(
+            "SELECT last_scanned_date FROM fotmob_lineup_scan_watermark WHERE league = ?", [league]
+        ).fetchone()
+
+    date_from: _date = (
+        watermark_row[0] + timedelta(days=1) if watermark_row is not None and watermark_row[0] is not None
+        else max(bounds[0], date_to - timedelta(days=_LINEUP_WATERMARK_FIRST_RUN_LOOKBACK_DAYS))
+    )
+
+    if date_from > date_to:
+        LOGGER.info(
+            "backfill_lineups_from_player_stats: already scanned through %s (league=%s) -- nothing new.",
+            date_to, league,
+        )
+        return 0
+
     LOGGER.info(
         "backfill_lineups_from_player_stats: scanning %s .. %s for FotMob match IDs (league=%s)",
         date_from,
@@ -446,6 +487,15 @@ def backfill_lineups_from_player_stats(
         except Exception as exc:  # noqa: BLE001
             LOGGER.warning("backfill: failed to fetch match list for %s: %s", current, exc)
         current += timedelta(days=1)
+
+    with db_manager.connection() as conn:
+        conn.execute(
+            """
+            INSERT INTO fotmob_lineup_scan_watermark (league, last_scanned_date) VALUES (?, ?)
+            ON CONFLICT (league) DO UPDATE SET last_scanned_date = excluded.last_scanned_date
+            """,
+            [league, date_to],
+        )
 
     with db_manager.connection() as conn:
         _create_lineup_table(conn)  # idempotent (CREATE TABLE IF NOT EXISTS) -- safe on a fresh DB too
