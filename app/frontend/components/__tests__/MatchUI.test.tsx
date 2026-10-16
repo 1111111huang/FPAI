@@ -1220,6 +1220,30 @@ describe("MatchAnalysisPage -- cache-first load (W47)", () => {
     expect(modelFill.style.flexBasis).toBe(`${(60 / (60 + 54.6)) * 100}%`);
   });
 
+  it("no_bet mode's closest-read heading names which team's goals, not a bare 'Under 1.5' that reads as total_goals", async () => {
+    // home_goals/away_goals both use a 1.5 line, same as total_goals uses
+    // 2.5 -- a bare "Under 1.5" heading is indistinguishable from a totals
+    // market and was found live to read as one. The heading must say which
+    // team's own goal count this is.
+    const rec = makeRecommendation({
+      overall: "no_bet",
+      candidates: [
+        {
+          market: "away_goals", selection: "under_1.5", recommendation_type: "no_bet",
+          current_odds: 1.65, min_odds: 1.6, ml_probability: 0.642, implied_probability: 0.549,
+          value_edge: 0.093, composite_score: 0.3, reason: "n/a",
+        },
+      ],
+      recommendation_pick: null,
+      no_bet_read: "Too close a read to put money behind.",
+    });
+    vi.mocked(getCachedRecommendation).mockResolvedValue(rec);
+
+    render(<MatchAnalysisPage id="m1" home="Le Mans" away="Toulouse" date="2026-08-22" />);
+
+    expect(await screen.findByText("Away Goals Under 1.5 — closest read")).toBeInTheDocument();
+  });
+
   it("W227: PickBanner renders a market label (not a team name) for a non-result_3way pick", async () => {
     // LogBetButton renders "Sign in to log this bet" when unauthenticated
     // -- authenticate so its real "Log Bet" pill text is what's checked.

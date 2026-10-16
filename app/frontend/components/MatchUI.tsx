@@ -2573,10 +2573,10 @@ const _MARKET_SELECTION_TITLE: Record<string, string> = {
   "total_goals:under_2.5": "Under 2.5",
   "total_corners:over_9.5": "Corners Over 9.5",
   "total_corners:under_9.5": "Corners Under 9.5",
-  "home_goals:over_1.5": "Over 1.5",
-  "home_goals:under_1.5": "Under 1.5",
-  "away_goals:over_1.5": "Over 1.5",
-  "away_goals:under_1.5": "Under 1.5",
+  "home_goals:over_1.5": "Home Goals Over 1.5",
+  "home_goals:under_1.5": "Home Goals Under 1.5",
+  "away_goals:over_1.5": "Away Goals Over 1.5",
+  "away_goals:under_1.5": "Away Goals Under 1.5",
 };
 function marketSelectionTitle(market: string, selection: string): string {
   const known = _MARKET_SELECTION_TITLE[`${market}:${selection}`];
