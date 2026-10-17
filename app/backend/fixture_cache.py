@@ -114,13 +114,30 @@ def fixtures_call_type(league: str) -> str:
     return f"fixtures{_CALL_TYPE_SUFFIX_BY_LEAGUE[league]}"
 
 
-# BUG-086: eager construction is cheap (just CREATE TABLE IF NOT EXISTS,
-# no meaningful I/O) -- the expensive/risky parts (load_all(), the
-# per-write store_day() calls) are what matter for test isolation, and
-# those are handled at their own call sites (see load_from_disk()'s own
-# ENABLE_SCHEDULER gate in main.py, and test_fixture_cache.py's
-# _clear_cache fixture monkeypatching this attribute per test).
-_store = FixtureCacheStore()
+# BUG-086 follow-up (found in final review): constructing eagerly at
+# import time meant ANY import of this module -- not just the
+# ENABLE_SCHEDULER-gated boot path -- touched the real data/fixture_cache.db
+# as a side effect (confirmed live: a standalone CLI tool that explicitly
+# documents "never writes into the app's cache" recreated the file just by
+# importing scheduler_wiring.py, which imports this module transitively),
+# and a corrupted/unreadable db file would crash that import outright
+# (sqlite3.DatabaseError from _init_schema()) rather than failing only
+# within the gated code path that actually uses it. Lazy construction
+# (mirroring main.py's own get_fixtures_client() pattern) confines both
+# risks to only the call sites that actually need a store: load_from_disk()
+# (ENABLE_SCHEDULER-gated, never test-exercised) and store_day() (only
+# reached by a real cache write). Tests still monkeypatch the module-level
+# `_store` attribute directly (see test_fixture_cache.py's _clear_cache
+# fixture) -- _get_store() only constructs when `_store` is still None, so
+# a monkeypatched instance is used as-is, unchanged from before.
+_store: FixtureCacheStore | None = None
+
+
+def _get_store() -> FixtureCacheStore:
+    global _store
+    if _store is None:
+        _store = FixtureCacheStore()
+    return _store
 
 # (call_type, day) -> (monotonic expiry, that day's matches). Guarded by
 # _cache_lock -- see this module's own docstring for why: the
@@ -182,8 +199,9 @@ def load_from_disk() -> None:
     ENABLE_SCHEDULER same as that function's other boot-time hooks (see
     its own comment there) -- never exercised by the test suite."""
     cutoff = (wall_clock_now().date() - timedelta(days=RETENTION_DAYS)).isoformat()
-    _store.prune_older_than(cutoff)
-    persisted = _store.load_all()
+    store = _get_store()
+    store.prune_older_than(cutoff)
+    persisted = store.load_all()
     now = now_monotonic()
     with _cache_lock:
         for (call_type, day), matches in persisted.items():
@@ -194,7 +212,7 @@ def store_day(call_type: str, day: str, matches: list[NormalizedMatch]) -> None:
     ttl = compute_ttl_seconds(matches, wall_clock_now())
     with _cache_lock:
         _cache[(call_type, day)] = (now_monotonic() + ttl, matches)
-    _store.store_day(call_type, day, matches)
+    _get_store().store_day(call_type, day, matches)
 
 
 def _read_days(call_type: str, days: list[str]) -> list[NormalizedMatch]:
