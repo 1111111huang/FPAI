@@ -1,6 +1,10 @@
 import { useEffect, useRef, useState } from "react";
 
-const REFRESH_THRESHOLD_PX = 70;
+// Exported so PullToRefreshIndicator.tsx can match the same lock-trigger
+// distance in its own height/progress math -- previously duplicated as two
+// separate constants, found in final review (risk: a future threshold
+// tweak in only one file silently desyncing the indicator from the gesture).
+export const REFRESH_THRESHOLD_PX = 70;
 const MAX_PULL_PX = 100;
 const PULL_RESISTANCE = 0.5;
 // Tailwind's default `lg` breakpoint (no override in tailwind.config.js) --

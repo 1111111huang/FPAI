@@ -1729,10 +1729,17 @@ export function DashboardPage() {
       try {
         const to = addDays(asOf, 90, sandboxMode);
         const fixtures = await getFixtures(today, dateString(to, sandboxMode));
-        if (cancelled) {
-          setRefreshing(false);
-          return;
-        }
+        // W238 follow-up (final review): deliberately does NOT reset
+        // `refreshing` here. A run reaching this guard was cancelled by a
+        // *different*, superseding load() run (e.g. useLiveMatchPolling's
+        // interval firing retryTick while a pull-to-refresh fetch is still
+        // in flight) -- that superseding run always reaches one of its own
+        // three exit points and resets `refreshing` itself. Resetting it
+        // here too (tried once, reverted) let the stale run's own
+        // completion collapse the spinner early, before the real
+        // in-flight fetch that will actually produce the refreshed data
+        // had finished.
+        if (cancelled) return;
         const sorted = fixtures
           .map((f) => fixtureToMatch(f, asOf, sandboxMode))
           // Direct user request: a live match, or one completed earlier

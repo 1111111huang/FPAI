@@ -2,7 +2,7 @@
 
 import { ArrowClockwise } from "@phosphor-icons/react";
 
-const REFRESH_THRESHOLD_PX = 70;
+import { REFRESH_THRESHOLD_PX } from "@/lib/usePullToRefresh";
 
 /** Visual half of usePullToRefresh (lib/usePullToRefresh.ts) -- a small
  * spinner that grows in from the top as the page is pulled down, locks
