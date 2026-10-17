@@ -333,6 +333,17 @@ function setDashboardMatchesCache(key: string, matches: Match[]): void {
   dashboardMatchesCache.set(key, { matches, fetchedAt: now, ttlMs });
 }
 
+/** Forces the next load() run for `key` to skip the TTL short-circuit and
+ * actually re-fetch -- used by DashboardPage's pull-to-refresh handler
+ * (W238 follow-up). Unlike __resetDashboardMatchesCacheForTests below,
+ * this is real app code, not a test-only escape hatch: it clears exactly
+ * one day's entry rather than the whole cache, so a refresh triggered
+ * while looking at "today" doesn't also throw away an unrelated day's
+ * still-fresh cached list. */
+export function invalidateDashboardMatchesCache(key: string): void {
+  dashboardMatchesCache.delete(key);
+}
+
 /** Direct user request (2026-10-10): a live match's card doesn't update on
  * its own today -- the TTL split above only shortens how long stale data
  * survives the *next* fetch, nothing actually triggers one while the user
