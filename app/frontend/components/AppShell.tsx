@@ -281,8 +281,17 @@ export function AppShell({
       {/* W114: bottom-tab-bar nav for small screens -- the sidebar-nav
           metaphor above is unfamiliar to a bottom-tab/vertical-feed mental
           model (Instagram/TikTok/X). Hidden at `lg` and up, where the
-          desktop sidebar nav (above) is the only nav shown. */}
-      <nav className="fixed inset-x-0 bottom-0 z-20 flex items-center justify-around border-t border-border bg-page px-2 pb-[calc(0.375rem+env(safe-area-inset-bottom))] pt-1.5 lg:hidden">
+          desktop sidebar nav (above) is the only nav shown.
+          BUG-088 (found live 2026-10-17): on iOS, a `fixed` element sharing
+          its layer with the scrolling document can visibly detach during a
+          fast/momentum scroll -- WebKit keeps painting it at its last known
+          position instead of the true viewport edge until scrolling settles,
+          so the bar appears to float over mid-page content. `transform-gpu`
+          forces this onto its own compositing layer, the standard fix --
+          composited independently of the scrolling content, so WebKit keeps
+          it pinned to the real viewport bottom throughout the scroll instead
+          of only re-settling once it stops. */}
+      <nav className="fixed inset-x-0 bottom-0 z-20 flex transform-gpu items-center justify-around border-t border-border bg-page px-2 pb-[calc(0.375rem+env(safe-area-inset-bottom))] pt-1.5 lg:hidden">
         {NAV_ITEMS.map((item) => {
           const Icon = item.icon;
           const isActive = active === item.key;

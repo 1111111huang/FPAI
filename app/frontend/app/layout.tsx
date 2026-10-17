@@ -15,6 +15,15 @@ export const metadata: Metadata = {
 
 export const viewport: Viewport = {
   themeColor: "#0a0a0d",
+  // Found live (2026-10-17): missing entirely, so iOS never rendered the
+  // page edge-to-edge in standalone PWA mode -- every env(safe-area-inset-*)
+  // used throughout the app (e.g. AppShell.tsx's bottom tab bar) resolved
+  // to 0 instead of the real notch/home-indicator inset, and the viewport
+  // WebKit laid out against didn't actually match the real screen. The
+  // bottom tab bar's fixed positioning visibly glitching mid-scroll
+  // (detaching and floating over mid-page content instead of staying
+  // pinned to the true viewport bottom) traces back to this same gap.
+  viewportFit: "cover",
 };
 
 // Direct user spec (2026-09-17): Inter (400-800, the default for
