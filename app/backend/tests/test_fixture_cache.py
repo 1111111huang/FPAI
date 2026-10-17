@@ -207,6 +207,36 @@ def test_get_range_reraises_and_cleans_up_pending_when_fetch_raises():
         ok_fetch.assert_called_once()
 
 
+def test_get_range_serves_stale_data_when_a_refetch_fails():
+    """BUG-084 (found live 2026-10-17): a match that was already cached
+    successfully must not vanish from the response just because a LATER
+    refetch (TTL expired, upstream rate-limited) failed -- the user
+    reported the dashboard's match count flapping between reloads, a day
+    sometimes missing entirely and sometimes not. Serving the stale list
+    instead of nothing is strictly better than the match disappearing.
+    The pre-existing cold-cache-raises contract
+    (test_get_range_reraises_and_cleans_up_pending_when_fetch_raises,
+    above) still holds -- this only changes behavior when there's a stale
+    entry to fall back on."""
+    ok_fetch = MagicMock(return_value=[_future_match("2026-08-21", hour=10)])
+    with patch("app.backend.fixture_cache.wall_clock_now", return_value=_NOW):
+        first = asyncio.run(get_range("fixtures", ok_fetch, date_from="2026-08-21", date_to="2026-08-21"))
+        assert len(first) == 1
+
+        # Expire the cached entry, then make the next refetch fail.
+        with fixture_cache._cache_lock:
+            key = ("fixtures", "2026-08-21")
+            _, matches = fixture_cache._cache[key]
+            fixture_cache._cache[key] = (fixture_cache.now_monotonic() - 1, matches)
+
+        failing_fetch = MagicMock(side_effect=RuntimeError("upstream rate-limited"))
+        second = asyncio.run(get_range("fixtures", failing_fetch, date_from="2026-08-21", date_to="2026-08-21"))
+
+    failing_fetch.assert_called_once()
+    assert len(second) == 1
+    assert second[0].match_id == first[0].match_id
+
+
 def test_force_refresh_range_always_fetches_even_if_cached():
     fetch = MagicMock(return_value=[])
     with patch("app.backend.fixture_cache.wall_clock_now", return_value=_NOW):

@@ -24,6 +24,9 @@ from starlette.concurrency import run_in_threadpool
 
 from app.backend.date_range_utils import contiguous_date_ranges, date_range
 from app.backend.football_data_client import NormalizedMatch
+from src.utils.logger import get_logger
+
+LOGGER = get_logger(__name__)
 
 TTL_FLOOR_SECONDS = 60.0
 TTL_CEILING_SECONDS = 4 * 3600.0
@@ -150,12 +153,21 @@ def store_day(call_type: str, day: str, matches: list[NormalizedMatch]) -> None:
 
 
 def _read_days(call_type: str, days: list[str]) -> list[NormalizedMatch]:
+    """Serves whatever is cached for each day, regardless of whether its TTL
+    has expired -- BUG-084: staleness only governs whether to ATTEMPT a
+    refetch (_missing_days, below), not whether to return what's already
+    there. A successful refetch already overwrites the entry (via
+    store_day()) before this is ever called, so in the common case this
+    never actually serves stale data -- it only matters when get_range()'s
+    own refetch attempt for an expired day FAILED (e.g. an upstream rate
+    limit), where serving the last-known-good list beats the match silently
+    vanishing from the response on every reload until the upstream budget
+    recovers."""
     matches: list[NormalizedMatch] = []
-    now = now_monotonic()
     with _cache_lock:
         for day in days:
             entry = _cache.get((call_type, day))
-            if entry is not None and entry[0] > now:
+            if entry is not None:
                 matches.extend(entry[1])
     return matches
 
@@ -164,6 +176,16 @@ def _missing_days(call_type: str, days: list[str]) -> list[str]:
     now = now_monotonic()
     with _cache_lock:
         return [d for d in days if (call_type, d) not in _cache or _cache[(call_type, d)][0] <= now]
+
+
+def _any_day_cached(call_type: str, days: list[str]) -> bool:
+    """True if at least one of `days` already has a cached entry for
+    call_type, fresh or expired -- used by get_range() to decide whether a
+    failed refetch should degrade to serving that stale data (BUG-084) or
+    propagate the failure as before (a genuinely cold cache, nothing to
+    fall back on)."""
+    with _cache_lock:
+        return any((call_type, day) in _cache for day in days)
 
 
 async def _fetch_and_store(
@@ -214,6 +236,21 @@ async def get_range(
             _pending[key] = task
         try:
             await task
+        except Exception:
+            # BUG-084 (found live 2026-10-17): don't let a failed refetch
+            # (e.g. upstream rate-limit) blank out a day this cache already
+            # has stale-but-real data for -- _read_days() below now serves
+            # whatever's present regardless of TTL, so swallowing here and
+            # falling through just means that stale data gets returned
+            # instead of nothing. Only re-raise when every day in this span
+            # is genuinely cold (never successfully fetched before) -- same
+            # "propagate, nothing to fall back on" behavior as always.
+            if not _any_day_cached(call_type, date_range(sub_from, sub_to)):
+                raise
+            LOGGER.warning(
+                "fixture_cache: live fetch failed for %s [%s..%s] -- serving stale cached data instead.",
+                call_type, sub_from, sub_to, exc_info=True,
+            )
         finally:
             if _pending.get(key) is task:
                 del _pending[key]
