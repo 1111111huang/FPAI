@@ -47,7 +47,7 @@ _LIVE_STATUSES = frozenset({"LIVE", "IN_PLAY", "PAUSED"})
 _UPCOMING_STATUSES = frozenset({"SCHEDULED", "TIMED"})
 
 
-def compute_ttl_seconds(matches: list[NormalizedMatch], now: datetime) -> float:
+def compute_ttl_seconds(matches: list[NormalizedMatch], now: datetime, day: str | None = None) -> float:
     """How long a single day's cached fixture/result list stays valid,
     computed from the matches it actually contains:
 
@@ -67,10 +67,21 @@ def compute_ttl_seconds(matches: list[NormalizedMatch], now: datetime) -> float:
       treated the same as FINISHED, not as "about to kick off".
     - Everything else (only FINISHED matches, or an unparseable utc_date)
       is effectively immutable from this cache's point of view -- the
-      ceiling. Postponement/reschedule is NOT covered by this TTL at all;
-      that is register_fixture_reconciliation_job's job (a periodic live
-      re-check independent of this cache's own expiry), not this
-      function's."""
+      ceiling, UNLESS `day` is today: a results_call_type fetch is
+      FINISHED-only by construction (football-data.org's own
+      status=FINISHED filter), so it always lands in this branch even on
+      a day that's still producing newly-finished matches as later
+      kickoffs complete (BUG-089, found live 2026-10-17 -- AS Roma v
+      Genoa, 18:45 UTC kickoff, stayed missing from the dashboard for
+      hours after finishing because the day's results entry had already
+      been fetched, and ceiling-TTL'd, before Roma's match finished).
+      Mirrors the exact "immutable once set" trap
+      FootballDataClient.get_results()'s own is_today bypass already
+      avoids at its own, lower cache layer -- falls back to the same
+      default as the empty-day case above instead. Postponement/
+      reschedule is NOT covered by this TTL at all; that is
+      register_fixture_reconciliation_job's job (a periodic live re-check
+      independent of this cache's own expiry), not this function's."""
     if not matches:
         return TTL_DEFAULT_SECONDS
 
@@ -89,6 +100,8 @@ def compute_ttl_seconds(matches: list[NormalizedMatch], now: datetime) -> float:
             upcoming_kickoffs.append(kickoff)
 
     if not upcoming_kickoffs:
+        if day is not None and day == now.date().isoformat():
+            return TTL_DEFAULT_SECONDS
         return TTL_CEILING_SECONDS
 
     seconds_to_earliest = (min(upcoming_kickoffs) - now).total_seconds()
@@ -209,7 +222,7 @@ def load_from_disk() -> None:
 
 
 def store_day(call_type: str, day: str, matches: list[NormalizedMatch]) -> None:
-    ttl = compute_ttl_seconds(matches, wall_clock_now())
+    ttl = compute_ttl_seconds(matches, wall_clock_now(), day=day)
     with _cache_lock:
         _cache[(call_type, day)] = (now_monotonic() + ttl, matches)
     _get_store().store_day(call_type, day, matches)

@@ -106,6 +106,32 @@ def test_an_unparseable_utc_date_is_ignored_rather_than_raising():
     assert compute_ttl_seconds([bad], _NOW) == TTL_CEILING_SECONDS
 
 
+def test_todays_finished_only_day_does_not_get_the_ceiling():
+    # BUG-089 (found live 2026-10-17): a results_call_type fetch is FINISHED-
+    # only by construction (football-data.org's own status=FINISHED filter),
+    # so every match in it always looks "immutable" to this function -- the
+    # ceiling branch above. Fine for a genuinely past day, wrong for today:
+    # later kickoffs the same day keep finishing and need to show up, the
+    # exact "immutable once set" trap FootballDataClient.get_results()'s own
+    # is_today bypass already exists to avoid at its lower cache layer.
+    # Confirmed live: AS Roma v Genoa (18:45 UTC kickoff) stayed missing from
+    # the dashboard for hours after finishing, while earlier same-day results
+    # (Bologna v Inter, 16:00 UTC) rendered fine -- the day's cache entry had
+    # already been fetched (and ceiling-TTL'd) before Roma's match finished.
+    matches = [_match("FINISHED", -5), _match("FINISHED", -3)]
+    today = _NOW.date().isoformat()
+    assert compute_ttl_seconds(matches, _NOW, day=today) == TTL_DEFAULT_SECONDS
+
+
+def test_a_genuinely_past_days_finished_matches_still_get_the_ceiling():
+    # The `day` param only changes behavior for *today* -- a real past day's
+    # results really are immutable, same as before this function took `day`
+    # at all (every other test above omits it entirely).
+    matches = [_match("FINISHED", -5), _match("FINISHED", -3)]
+    yesterday = (_NOW.date() - timedelta(days=1)).isoformat()
+    assert compute_ttl_seconds(matches, _NOW, day=yesterday) == TTL_CEILING_SECONDS
+
+
 def _future_match(day: str, hour: int = 15) -> NormalizedMatch:
     return NormalizedMatch(
         match_id=f"m-{day}-{hour}", utc_date=f"{day}T{hour:02d}:00:00Z", status="SCHEDULED",
