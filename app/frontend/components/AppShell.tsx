@@ -187,8 +187,19 @@ export function AppShell({
           replacing the sidebar's content that used to always render inline
           and push the page down. Direct feedback: the whole left panel
           (menu/footer) should collapse behind this, and expand as an
-          overlay on top of the main content, not inline above it. */}
-      <div className="flex items-center justify-between border-b border-border bg-surface px-4 pb-3 pt-[calc(0.75rem+env(safe-area-inset-top))] lg:hidden">
+          overlay on top of the main content, not inline above it.
+          Direct user request (2026-10-17): pinned in place while scrolling,
+          matching the bottom tab bar's own fixed behavior below -- `sticky`
+          rather than `fixed` so it keeps reserving its own space in normal
+          flow (no separate spacer/padding needed on the content below to
+          avoid it, unlike the bottom tab bar's `pb-20` on <main>).
+          transform-gpu applied preemptively, same BUG-088 fix as the bottom
+          tab bar, so this doesn't visibly detach during a fast scroll
+          either once it's the thing staying pinned. z-20 matches the bottom
+          tab bar's own stacking tier -- both sit above normal scrolled
+          content but below the menu overlay's backdrop (z-40) and drawer
+          (z-50), so opening the menu still covers this header. */}
+      <div className="sticky top-0 z-20 flex transform-gpu items-center justify-between border-b border-border bg-surface px-4 pb-3 pt-[calc(0.75rem+env(safe-area-inset-top))] lg:hidden">
         <div className="flex items-center gap-2">
           <OddseyLogo size={36} />
           <span className="text-base font-semibold tracking-tight text-ink">Oddsey</span>
