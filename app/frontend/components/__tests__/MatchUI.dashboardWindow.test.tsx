@@ -53,6 +53,7 @@ describe("Dashboard always shows the next 10 matches (date-grouped, not today-on
     // with (sandbox_mode: false means the hook's setState call is skipped
     // entirely) so these tests exercise a single, non-racing effect run.
     vi.mocked(getSandboxStatus).mockResolvedValue({ sandbox_mode: false, as_of: "" });
+    vi.mocked(getCachedRecommendationsBulk).mockClear();
   });
 
   it("queries a single 90-day-forward window (not a same-day-only query)", async () => {
@@ -286,10 +287,7 @@ describe("Dashboard always shows the next 10 matches (date-grouped, not today-on
     // resolves to (resolveCachedRecommendations in MatchUI.tsx already
     // handles an undefined result via optional chaining, same as every
     // other test in this file that never configures it either). Its call
-    // *count* does need clearing, though -- unlike getFixtures/getSandboxStatus,
-    // nothing resets it between tests, so by this (the file's last) test
-    // it already carries calls from every earlier test's own render.
-    vi.mocked(getCachedRecommendationsBulk).mockClear();
+    // *count* is already reset by the shared beforeEach above.
 
     render(<DashboardPage />);
     await screen.findByText("match-0");

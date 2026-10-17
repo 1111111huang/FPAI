@@ -1729,7 +1729,10 @@ export function DashboardPage() {
       try {
         const to = addDays(asOf, 90, sandboxMode);
         const fixtures = await getFixtures(today, dateString(to, sandboxMode));
-        if (cancelled) return;
+        if (cancelled) {
+          setRefreshing(false);
+          return;
+        }
         const sorted = fixtures
           .map((f) => fixtureToMatch(f, asOf, sandboxMode))
           // Direct user request: a live match, or one completed earlier

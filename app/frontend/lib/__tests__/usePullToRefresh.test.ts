@@ -159,4 +159,31 @@ describe("usePullToRefresh", () => {
 
     expect(callCount.current).toBe(1);
   });
+
+  it("a bare tap after a successful refresh does not spuriously call onRefresh again (regression)", () => {
+    const onRefresh = vi.fn();
+    const { rerender } = renderHook(
+      ({ refreshing }) => usePullToRefresh({ onRefresh, refreshing }),
+      { initialProps: { refreshing: false } },
+    );
+
+    // A full pull-to-refresh, same as the other threshold-clearing test.
+    dispatchTouch("touchstart", 0);
+    dispatchTouch("touchmove", 200);
+    dispatchTouch("touchend");
+    expect(onRefresh).toHaveBeenCalledTimes(1);
+
+    // Caller's refresh finishes.
+    rerender({ refreshing: true });
+    rerender({ refreshing: false });
+
+    // A later bare tap at scrollY === 0 -- touchstart immediately followed
+    // by touchend, no intervening touchmove at all (an ordinary tap, not a
+    // drag). Must not re-trigger onRefresh just because a stale pull
+    // distance was left over from the previous successful gesture.
+    dispatchTouch("touchstart", 0);
+    dispatchTouch("touchend");
+
+    expect(onRefresh).toHaveBeenCalledTimes(1);
+  });
 });

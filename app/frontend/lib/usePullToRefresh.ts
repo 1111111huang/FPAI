@@ -59,6 +59,7 @@ export function usePullToRefresh({
       if (refreshing || window.scrollY !== 0) return;
       armedRef.current = true;
       startYRef.current = e.touches[0].clientY;
+      pullDistanceRef.current = 0;
       setDragging(true);
     }
 
