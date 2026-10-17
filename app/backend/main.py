@@ -358,6 +358,18 @@ async def lifespan(app: FastAPI):
     # note ("built last, right before going live").
     scheduler: RecoverableScheduler | None = None
     if os.environ.get("ENABLE_SCHEDULER", "").lower() in ("1", "true", "yes"):
+        # BUG-086: hydrate fixture_cache's in-memory cache from its
+        # on-disk store before anything else in this block -- every
+        # redeploy otherwise starts the cache fully cold, forcing a full
+        # re-fetch storm against football-data.org's shared rate-limited
+        # budget (confirmed live, 2026-10-17: several redeploys in a row
+        # each caused the same cold-start cascade, competitions missing
+        # for minutes at a time). Gated behind this same ENABLE_SCHEDULER
+        # check as every other boot-time hook in this block, for the
+        # identical reason the pregenerate-recommendations hook below
+        # already documents: unconditional here would fire on every test
+        # file's `with TestClient(app)` too.
+        fixture_cache.load_from_disk()
         # W29: sandbox mode routes JobRunLog to a scratch path so it never touches real dev data.
         run_log = JobRunLog(db_path=_SANDBOX_JOB_RUNS_DB_PATH) if sandbox_clock.is_sandbox_mode() else None
         scheduler = RecoverableScheduler(run_log=run_log)
