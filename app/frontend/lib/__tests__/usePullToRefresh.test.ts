@@ -1,4 +1,5 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
+import { useState } from "react";
 import { act, renderHook } from "@testing-library/react";
 import { usePullToRefresh } from "../usePullToRefresh";
 
@@ -137,5 +138,25 @@ describe("usePullToRefresh", () => {
     dispatchTouch("touchend");
 
     expect(onRefresh).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not double-fire onRefresh when the caller's onRefresh triggers a state update on the same render (regression)", () => {
+    const callCount = { current: 0 };
+    function useHarness() {
+      const [, setTick] = useState(0);
+      const onRefresh = () => {
+        callCount.current += 1;
+        setTick((t) => t + 1); // a realistic caller: onRefresh updates its own component state
+      };
+      return usePullToRefresh({ onRefresh, refreshing: false });
+    }
+
+    renderHook(() => useHarness());
+
+    dispatchTouch("touchstart", 0);
+    dispatchTouch("touchmove", 200);
+    dispatchTouch("touchend");
+
+    expect(callCount.current).toBe(1);
   });
 });

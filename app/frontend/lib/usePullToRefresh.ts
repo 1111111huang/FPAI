@@ -38,6 +38,7 @@ export function usePullToRefresh({
   const [dragging, setDragging] = useState(false);
   const armedRef = useRef(false);
   const startYRef = useRef(0);
+  const pullDistanceRef = useRef(0);
 
   useEffect(() => {
     if (!refreshing) {
@@ -67,25 +68,27 @@ export function usePullToRefresh({
       if (deltaY <= 0) {
         armedRef.current = false;
         setDragging(false);
+        pullDistanceRef.current = 0;
         setPullDistance(0);
         return;
       }
       e.preventDefault();
-      setPullDistance(Math.min(deltaY * PULL_RESISTANCE, MAX_PULL_PX));
+      const next = Math.min(deltaY * PULL_RESISTANCE, MAX_PULL_PX);
+      pullDistanceRef.current = next;
+      setPullDistance(next);
     }
 
     function handleTouchEnd(): void {
       if (!armedRef.current) return;
       armedRef.current = false;
       setDragging(false);
-      setPullDistance((current) => {
-        if (current >= REFRESH_THRESHOLD_PX) {
-          setLocked(true);
-          onRefresh();
-          return REFRESH_THRESHOLD_PX;
-        }
-        return 0;
-      });
+      if (pullDistanceRef.current >= REFRESH_THRESHOLD_PX) {
+        setLocked(true);
+        setPullDistance(REFRESH_THRESHOLD_PX);
+        onRefresh();
+      } else {
+        setPullDistance(0);
+      }
     }
 
     window.addEventListener("touchstart", handleTouchStart, { passive: true });
