@@ -112,4 +112,30 @@ describe("usePullToRefresh", () => {
     expect(result.current.locked).toBe(false);
     expect(result.current.pullDistance).toBe(0);
   });
+
+  it("does not re-arm a new drag while a previous refresh is still in flight (refreshing true)", () => {
+    const onRefresh = vi.fn();
+    const { rerender } = renderHook(
+      ({ refreshing }) => usePullToRefresh({ onRefresh, refreshing }),
+      { initialProps: { refreshing: false } },
+    );
+
+    dispatchTouch("touchstart", 0);
+    dispatchTouch("touchmove", 200);
+    dispatchTouch("touchend");
+    expect(onRefresh).toHaveBeenCalledTimes(1);
+
+    // Caller sets refreshing true (as DashboardPage's handlePullToRefresh
+    // does) while the triggered reload is still in flight.
+    rerender({ refreshing: true });
+
+    // A second drag starts and clears the threshold again while still
+    // refreshing -- must not re-arm, so onRefresh must not fire a second
+    // time.
+    dispatchTouch("touchstart", 0);
+    dispatchTouch("touchmove", 200);
+    dispatchTouch("touchend");
+
+    expect(onRefresh).toHaveBeenCalledTimes(1);
+  });
 });

@@ -50,7 +50,12 @@ export function usePullToRefresh({
     if (!isMobileViewport()) return;
 
     function handleTouchStart(e: TouchEvent): void {
-      if (window.scrollY !== 0) return;
+      // Found in code review: without this guard, starting a new drag while
+      // a previous pull-to-refresh is still locked/in flight (refreshing
+      // still true) and clearing the threshold again would call onRefresh()
+      // a second time concurrently -- not destructive, but a redundant
+      // concurrent refresh the design never intended.
+      if (refreshing || window.scrollY !== 0) return;
       armedRef.current = true;
       startYRef.current = e.touches[0].clientY;
       setDragging(true);
@@ -91,7 +96,7 @@ export function usePullToRefresh({
       window.removeEventListener("touchmove", handleTouchMove);
       window.removeEventListener("touchend", handleTouchEnd);
     };
-  }, [onRefresh]);
+  }, [onRefresh, refreshing]);
 
   return { pullDistance, locked, dragging };
 }
