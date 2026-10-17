@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 import sys
 import threading
@@ -16,13 +16,21 @@ from app.backend.fixture_cache import (
     TTL_CEILING_SECONDS, TTL_DEFAULT_SECONDS, TTL_FLOOR_SECONDS, clear, compute_ttl_seconds,
     fixtures_call_type, force_refresh_range, get_range, results_call_type,
 )
+from app.backend.fixture_cache_store import FixtureCacheStore
 from app.backend.football_data_client import NormalizedMatch
 
 _NOW = datetime(2026, 8, 21, 12, 0, tzinfo=timezone.utc)
 
 
 @pytest.fixture(autouse=True)
-def _clear_cache():
+def _clear_cache(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    # BUG-086: fixture_cache now write-through persists to a module-level
+    # _store -- point it at a throwaway tmp_path file for every test in
+    # this file, fully isolating these tests from the real
+    # data/fixture_cache.db (same tmp_path-scoped-db convention already
+    # used elsewhere in this codebase, e.g. JobRunLog/RecommendationCache
+    # in other test files).
+    monkeypatch.setattr(fixture_cache, "_store", FixtureCacheStore(db_path=tmp_path / "fixture_cache_test.db"))
     clear()
     yield
     clear()
@@ -300,3 +308,45 @@ def test_results_call_type_and_fixtures_call_type_naming():
     assert fixtures_call_type("E0") == "fixtures"
     assert results_call_type("SP1") == "results_sp1"
     assert fixtures_call_type("SWE") == "fixtures_swe"
+
+
+def test_store_day_persists_to_the_store():
+    with patch("app.backend.fixture_cache.wall_clock_now", return_value=_NOW):
+        fixture_cache.store_day("fixtures", "2026-08-21", [_future_match("2026-08-21")])
+
+    persisted = fixture_cache._store.load_all()
+    assert persisted[("fixtures", "2026-08-21")][0].match_id == "m-2026-08-21-15"
+
+
+def test_load_from_disk_seeds_the_in_memory_cache_already_expired():
+    fixture_cache._store.store_day("fixtures", "2026-08-21", [_future_match("2026-08-21")])
+
+    with patch("app.backend.fixture_cache.wall_clock_now", return_value=_NOW):
+        fixture_cache.load_from_disk()
+
+    # Already expired -- _missing_days() wants to refetch it on next use...
+    assert fixture_cache._missing_days("fixtures", ["2026-08-21"]) == ["2026-08-21"]
+    # ...but _read_days() (BUG-084) still serves it immediately regardless.
+    assert fixture_cache._read_days("fixtures", ["2026-08-21"])[0].match_id == "m-2026-08-21-15"
+
+
+def test_load_from_disk_prunes_entries_older_than_retention_before_loading():
+    old_day = (date.today() - timedelta(days=fixture_cache.RETENTION_DAYS + 1)).isoformat()
+    fixture_cache._store.store_day("fixtures", old_day, [_future_match(old_day)])
+
+    fixture_cache.load_from_disk()
+
+    assert fixture_cache._read_days("fixtures", [old_day]) == []
+    assert fixture_cache._store.load_all() == {}
+
+
+def test_a_real_get_range_call_also_persists_to_the_store():
+    """End-to-end: the existing get_range() path (not a direct store_day()
+    call) must also reach the persisted store -- proves the write-through
+    is wired into the actual fetch flow, not just the low-level function."""
+    fetch = MagicMock(return_value=[_future_match("2026-08-21")])
+    with patch("app.backend.fixture_cache.wall_clock_now", return_value=_NOW):
+        asyncio.run(get_range("fixtures", fetch, date_from="2026-08-21", date_to="2026-08-21"))
+
+    persisted = fixture_cache._store.load_all()
+    assert persisted[("fixtures", "2026-08-21")][0].match_id == "m-2026-08-21-15"

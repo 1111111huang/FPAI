@@ -15,7 +15,7 @@ docstrings for how each is made safe."""
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import threading
 import time
 from typing import Callable
@@ -23,6 +23,7 @@ from typing import Callable
 from starlette.concurrency import run_in_threadpool
 
 from app.backend.date_range_utils import contiguous_date_ranges, date_range
+from app.backend.fixture_cache_store import FixtureCacheStore
 from app.backend.football_data_client import NormalizedMatch
 from src.utils.logger import get_logger
 
@@ -31,6 +32,17 @@ LOGGER = get_logger(__name__)
 TTL_FLOOR_SECONDS = 60.0
 TTL_CEILING_SECONDS = 4 * 3600.0
 TTL_DEFAULT_SECONDS = 15 * 60.0
+# BUG-086: how far back persisted (call_type, day) entries are kept --
+# fixtures aren't immutable the way ResultsCache's FINISHED results are
+# (a postponement/reschedule, or simply a day far enough in the past that
+# nothing will ever query it through this cache again), so this table
+# can't just grow forever the way that one safely does. Pruned once per
+# boot (load_from_disk(), below) rather than on a dedicated schedule --
+# this app redeploys often enough in practice for that to be sufficient
+# (direct user decision, 2026-10-17); revisit with a scheduled prune job
+# (mirroring register_recommendation_cache_prune_job) only if a single
+# deployment is ever expected to stay up for weeks uninterrupted.
+RETENTION_DAYS = 14
 _LIVE_STATUSES = frozenset({"LIVE", "IN_PLAY", "PAUSED"})
 _UPCOMING_STATUSES = frozenset({"SCHEDULED", "TIMED"})
 
@@ -102,6 +114,14 @@ def fixtures_call_type(league: str) -> str:
     return f"fixtures{_CALL_TYPE_SUFFIX_BY_LEAGUE[league]}"
 
 
+# BUG-086: eager construction is cheap (just CREATE TABLE IF NOT EXISTS,
+# no meaningful I/O) -- the expensive/risky parts (load_all(), the
+# per-write store_day() calls) are what matter for test isolation, and
+# those are handled at their own call sites (see load_from_disk()'s own
+# ENABLE_SCHEDULER gate in main.py, and test_fixture_cache.py's
+# _clear_cache fixture monkeypatching this attribute per test).
+_store = FixtureCacheStore()
+
 # (call_type, day) -> (monotonic expiry, that day's matches). Guarded by
 # _cache_lock -- see this module's own docstring for why: the
 # reconciliation job (scheduler_wiring.py) writes here from APScheduler's
@@ -140,16 +160,41 @@ def wall_clock_now() -> datetime:
 
 def clear() -> None:
     """Test-only reset -- mirrors main.py's existing module-level-cache
-    test fixtures (_fixture_cache.clear() etc.)."""
+    test fixtures (_fixture_cache.clear() etc.). Clears only the
+    in-memory cache, not the persisted store -- tests that care about the
+    store's own contents manage it directly (see test_fixture_cache.py's
+    _clear_cache fixture, which points _store at a fresh tmp_path file per
+    test instead)."""
     with _cache_lock:
         _cache.clear()
     _pending.clear()
+
+
+def load_from_disk() -> None:
+    """Boot-time hydration (BUG-086): prunes anything older than
+    RETENTION_DAYS, then seeds the in-memory cache with everything that
+    remains, each entry marked already-expired (now_monotonic() - 1) --
+    not a real monotonic-time TTL carried across the restart (a monotonic
+    clock means nothing across a process boundary), just enough to make
+    _missing_days() attempt a background refresh on first use while
+    _read_days() (BUG-084) still serves it immediately in the meantime.
+    Called once from main.py's lifespan startup, gated behind
+    ENABLE_SCHEDULER same as that function's other boot-time hooks (see
+    its own comment there) -- never exercised by the test suite."""
+    cutoff = (wall_clock_now().date() - timedelta(days=RETENTION_DAYS)).isoformat()
+    _store.prune_older_than(cutoff)
+    persisted = _store.load_all()
+    now = now_monotonic()
+    with _cache_lock:
+        for (call_type, day), matches in persisted.items():
+            _cache[(call_type, day)] = (now - 1, matches)
 
 
 def store_day(call_type: str, day: str, matches: list[NormalizedMatch]) -> None:
     ttl = compute_ttl_seconds(matches, wall_clock_now())
     with _cache_lock:
         _cache[(call_type, day)] = (now_monotonic() + ttl, matches)
+    _store.store_day(call_type, day, matches)
 
 
 def _read_days(call_type: str, days: list[str]) -> list[NormalizedMatch]:
