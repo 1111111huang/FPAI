@@ -19,6 +19,7 @@ import pytest
 import requests
 
 from app.backend import fixture_cache
+from app.backend.fixture_cache_store import FixtureCacheStore
 from app.backend.football_data_client import NormalizedMatch
 from app.backend.odds_api_client import CreditCounter, FileCreditCounterStore
 from app.backend.push_subscriptions import PushSubscriptionStore
@@ -1108,7 +1109,16 @@ def test_register_data_refresh_job_skips_the_rebuild_when_every_league_fails_to_
 
 
 @pytest.fixture(autouse=True)
-def _clear_fixture_cache_between_reconciliation_tests():
+def _clear_fixture_cache_between_reconciliation_tests(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    # BUG-086 follow-up: also points fixture_cache's write-through
+    # persisted store at a throwaway tmp_path file for every test in this
+    # file -- without this, a mocked-fetch test here still writes
+    # fabricated match data through to the REAL data/fixture_cache.db
+    # (confirmed live: deleting that file and running the suite recreated
+    # it full of fake match rows on dates spanning the real current day),
+    # which a future boot-time load would then serve as if it were real
+    # upstream data.
+    monkeypatch.setattr(fixture_cache, "_store", FixtureCacheStore(db_path=tmp_path / "fixture_cache_test.db"))
     fixture_cache.clear()
     yield
     fixture_cache.clear()

@@ -20,17 +20,26 @@ import requests
 from fastapi.testclient import TestClient
 
 from app.backend import fixture_cache
+from app.backend.fixture_cache_store import FixtureCacheStore
 from app.backend.football_data_client import NormalizedMatch, RateLimitWouldBlock
 from app.backend.main import _split_fixture_date_range, app
 
 
 @pytest.fixture(autouse=True)
-def _clear_fixture_cache():
+def _clear_fixture_cache(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     """W52/W249: the TTL cache (and its in-flight-request tracking dict)
     is module-level state in fixture_cache.py -- clear it before every
     test so identical date ranges reused across unrelated test cases in
     this file don't leak cached results (or a stuck pending entry)
-    between them."""
+    between them. BUG-086 follow-up: also points fixture_cache's
+    write-through persisted store at a throwaway tmp_path file for every
+    test in this file -- without this, a mocked-fetch test here still
+    writes fabricated match data through to the REAL data/fixture_cache.db
+    (confirmed live: deleting that file and running this suite recreated
+    it full of fake "Arsenal"/"Everton"/"A"/"B" rows on dates spanning the
+    real current day), which a future boot-time load would then serve as
+    if it were real upstream data."""
+    monkeypatch.setattr(fixture_cache, "_store", FixtureCacheStore(db_path=tmp_path / "fixture_cache_test.db"))
     fixture_cache.clear()
     yield
     fixture_cache.clear()
