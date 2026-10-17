@@ -14,7 +14,7 @@
  * messaging already covers this honestly.
  */
 
-import { type Dispatch, type SetStateAction, useEffect, useMemo, useState } from "react";
+import { type Dispatch, type SetStateAction, useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { usePathname, useSearchParams } from "next/navigation";
 import { useSession } from "next-auth/react";
@@ -54,10 +54,12 @@ import {
 } from "@/lib/api";
 import type { Bet, Fixture, MatchRecommendationOut } from "@/lib/types";
 import { useSandboxAsOf } from "@/lib/useSandboxAsOf";
+import { usePullToRefresh } from "@/lib/usePullToRefresh";
 import { groupByDate, groupByLeague, sortMatches, LEAGUE_COUNTRY, LEAGUE_LABEL, type MatchSort } from "@/lib/dashboardMetrics";
 import { AppShell } from "./AppShell";
 import { DashboardRail } from "./DashboardRail";
 import { LogBetModal } from "./LogBetModal";
+import { PullToRefreshIndicator } from "./PullToRefreshIndicator";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -1682,6 +1684,20 @@ export function DashboardPage() {
   // inline section of the page itself. Unaffected at `lg` and up, where
   // the rail is the permanent sticky side-by-side column it always was.
   const [railOpen, setRailOpen] = useState(false);
+  // W238: true while a pull-to-refresh-triggered reload is in flight --
+  // read by usePullToRefresh below to know when to release its lock, and
+  // reset to false at every exit point of load()'s own effect (cache hit,
+  // success, error).
+  const [refreshing, setRefreshing] = useState(false);
+  const handlePullToRefresh = useCallback(() => {
+    invalidateDashboardMatchesCache(dateString(asOf, sandboxMode));
+    setRefreshing(true);
+    setRetryTick((t) => t + 1);
+  }, [asOf, sandboxMode]);
+  const { pullDistance, locked, dragging } = usePullToRefresh({
+    onRefresh: handlePullToRefresh,
+    refreshing,
+  });
 
   useEffect(() => {
     let cancelled = false;
@@ -1706,6 +1722,7 @@ export function DashboardPage() {
       const cached = getDashboardMatchesCache(today);
       if (cached) {
         setMatches(cached);
+        setRefreshing(false);
         return;
       }
       setMatches(null);
@@ -1754,9 +1771,13 @@ export function DashboardPage() {
           if (cancelled) return;
           setMatches(resolvedMatches);
           setDashboardMatchesCache(today, resolvedMatches);
+          setRefreshing(false);
         });
       } catch (err) {
-        if (!cancelled) setError(err instanceof ApiError ? err.message : "Could not load fixtures.");
+        if (!cancelled) {
+          setError(err instanceof ApiError ? err.message : "Could not load fixtures.");
+          setRefreshing(false);
+        }
       }
     }
 
@@ -1823,6 +1844,7 @@ export function DashboardPage() {
             BUG-046 fix this depends on). */}
         <div className="lg:-mt-8 lg:flex lg:items-start lg:gap-6">
           <div className="min-w-0 flex-1">
+            <PullToRefreshIndicator pullDistance={pullDistance} locked={locked} dragging={dragging} />
             {/* Direct feedback: title/subtitle/toggle stay stationary while
                 only the match list below scrolls -- sticky within <main>'s
                 own scroll region (AppShell.tsx), not the whole page. */}

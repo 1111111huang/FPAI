@@ -9,7 +9,7 @@
  * labeled "Today".
  */
 import { describe, expect, it, vi, beforeEach } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { DashboardPage, dateString, __resetDashboardMatchesCacheForTests } from "../MatchUI";
 import { getCachedRecommendationsBulk, getFixtures, getSandboxStatus } from "@/lib/api";
@@ -275,6 +275,42 @@ describe("Dashboard always shows the next 10 matches (date-grouped, not today-on
 
     await user.click(screen.getByText("Actionable only"));
     expect(screen.getByText("not-yet-generated-match")).toBeInTheDocument();
+  });
+
+  it("a completed pull-to-refresh forces a real re-fetch even though the client cache is still fresh", async () => {
+    vi.mocked(getFixtures).mockResolvedValue([fixture("match-0", "2026-09-01T15:00:00Z")]);
+    // getCachedRecommendationsBulk is left on its default auto-mock (resolves
+    // undefined) rather than given an explicit .mockResolvedValue here --
+    // this file doesn't reset what it *resolves* between tests, and the
+    // only thing this test checks about it is call *count*, not what it
+    // resolves to (resolveCachedRecommendations in MatchUI.tsx already
+    // handles an undefined result via optional chaining, same as every
+    // other test in this file that never configures it either). Its call
+    // *count* does need clearing, though -- unlike getFixtures/getSandboxStatus,
+    // nothing resets it between tests, so by this (the file's last) test
+    // it already carries calls from every earlier test's own render.
+    vi.mocked(getCachedRecommendationsBulk).mockClear();
+
+    render(<DashboardPage />);
+    await screen.findByText("match-0");
+    // dashboardMatchesCache is now warm for today (W233) -- without the
+    // pull-to-refresh bypass, nothing would trigger a second call here.
+    expect(getFixtures).toHaveBeenCalledTimes(1);
+
+    act(() => {
+      window.dispatchEvent(
+        Object.assign(new Event("touchstart", { bubbles: true }), { touches: [{ clientY: 0 }] })
+      );
+      window.dispatchEvent(
+        Object.assign(new Event("touchmove", { bubbles: true, cancelable: true }), { touches: [{ clientY: 200 }] })
+      );
+      window.dispatchEvent(new Event("touchend", { bubbles: true }));
+    });
+
+    await waitFor(() => expect(getFixtures).toHaveBeenCalledTimes(2));
+    // Proves the cache bypass specifically, not just an unrelated second
+    // call: the fetch ran again despite nothing having expired.
+    expect(getCachedRecommendationsBulk).toHaveBeenCalledTimes(2);
   });
 });
 
