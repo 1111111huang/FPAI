@@ -1013,7 +1013,53 @@ async def get_fixtures(date_from: str | None = None, date_to: str | None = None)
     # each call the same way historical_results_from_raw_matches already
     # does for SWE's DB-lookup path -- one failure degrades, it doesn't
     # blank the whole response.
-    results = await asyncio.gather(*calls, return_exceptions=True)
+    #
+    # BUG-087 (found live 2026-10-17): that same shared FootballDataClient
+    # guards every outbound call with ONE per-instance threading.Lock
+    # (W250's anti-thundering-herd fix) -- so with blocking=False, at most
+    # ONE of any simultaneously-dispatched football-data.org calls can
+    # ever win that lock's non-blocking acquire; every other one
+    # immediately raises RateLimitWouldBlock, regardless of which
+    # competition it's for. Firing all of them at once via one flat
+    # asyncio.gather (as this function did until now) therefore guarantees
+    # most of them self-fail on every request that needs more than one
+    # live football-data.org call simultaneously -- confirmed live via a
+    # Premier League match stuck on its pre-kickoff snapshot long after
+    # kickoff, and a Bundesliga pregenerate pass that failed for every
+    # league at once on a cold cache, despite nothing actually being wrong
+    # upstream. Running the football-data.org calls one at a time instead
+    # costs nothing beyond what the shared lock already serializes at the
+    # network level -- it only stops wasting the other calls on a
+    # guaranteed self-inflicted failure. SWE's own call(s) use a wholly
+    # separate client (Odds API, no shared lock), so they still run
+    # concurrently with this sequential football-data.org batch.
+    football_data_calls = [
+        (i, call) for i, (competition, call) in enumerate(zip(competitions, calls)) if competition != "SWE"
+    ]
+    swe_calls = [
+        (i, call) for i, (competition, call) in enumerate(zip(competitions, calls)) if competition == "SWE"
+    ]
+
+    async def _run_sequential(indexed_calls: list[tuple[int, Any]]) -> list[tuple[int, Any]]:
+        outcomes: list[tuple[int, Any]] = []
+        for index, call in indexed_calls:
+            try:
+                outcomes.append((index, await call))
+            except BaseException as exc:  # noqa: BLE001 -- mirrors gather(return_exceptions=True) below
+                outcomes.append((index, exc))
+        return outcomes
+
+    async def _run_concurrent(indexed_calls: list[tuple[int, Any]]) -> list[tuple[int, Any]]:
+        if not indexed_calls:
+            return []
+        outcomes = await asyncio.gather(*(call for _, call in indexed_calls), return_exceptions=True)
+        return list(zip((index for index, _ in indexed_calls), outcomes))
+
+    sequential_results, concurrent_results = await asyncio.gather(
+        _run_sequential(football_data_calls), _run_concurrent(swe_calls),
+    )
+    results_by_index = dict(sequential_results + concurrent_results)
+    results = [results_by_index[i] for i in range(len(calls))]
     matches: list[NormalizedMatch] = []
     any_failed = False
     for competition, result in zip(competitions, results):

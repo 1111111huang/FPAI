@@ -410,6 +410,62 @@ def test_fixtures_endpoint_degrades_fast_instead_of_blocking_on_an_exhausted_rat
     assert {m["home_team"] for m in body} == {"Malmo FF"}
 
 
+def test_fixtures_endpoint_runs_football_data_calls_sequentially_not_concurrently(
+    sweden_client_mock, la_liga_client_mock, new_leagues_client_mock,
+):
+    """BUG-087 (found live 2026-10-17): E0/SP1/I1/D1/F1 all share ONE real
+    FootballDataClient instance in production (W213's singleton), which
+    guards every outbound call with a single per-instance threading.Lock
+    (W250's anti-thundering-herd fix). Firing these calls concurrently (this
+    endpoint's previous behavior) meant at most one could ever win that
+    lock's non-blocking acquire with blocking=False -- every other one
+    immediately self-failed with RateLimitWouldBlock, regardless of which
+    competition it was for. Confirmed live via a Premier League match stuck
+    on its pre-kickoff snapshot long after kickoff, and a Bundesliga
+    pregenerate pass that failed for every league at once on a cold cache.
+
+    Each competition's client is mocked independently here, so this can't
+    exercise the real shared lock directly -- instead it proves the fix at
+    the level that matters: this endpoint no longer *dispatches*
+    football-data.org calls concurrently at all, so a real shared lock
+    downstream would never see more than one in flight."""
+    active = {"football_data": 0}
+    overlapped = {"value": False}
+    lock = threading.Lock()
+
+    def make_football_data_fetch():
+        def _fetch(*args, **kwargs):
+            with lock:
+                active["football_data"] += 1
+                if active["football_data"] > 1:
+                    overlapped["value"] = True
+            time.sleep(0.05)
+            with lock:
+                active["football_data"] -= 1
+            return []
+        return _fetch
+
+    sweden_client_mock.get_fixtures.return_value = []
+    la_liga_client_mock.get_fixtures.side_effect = make_football_data_fetch()
+    new_leagues_client_mock["I1"].get_fixtures.side_effect = make_football_data_fetch()
+    new_leagues_client_mock["D1"].get_fixtures.side_effect = make_football_data_fetch()
+    new_leagues_client_mock["F1"].get_fixtures.side_effect = make_football_data_fetch()
+
+    with patch("app.backend.main._current_real_date", return_value=date(2026, 7, 19)):
+        with patch("app.backend.main.get_fixtures_client") as mock_get_client:
+            mock_get_client.return_value.get_fixtures.side_effect = make_football_data_fetch()
+            with TestClient(app) as client:
+                response = client.get(
+                    "/api/fixtures", params={"date_from": "2026-08-21", "date_to": "2026-08-28"}
+                )
+
+    assert response.status_code == 200
+    assert overlapped["value"] is False, (
+        "two football-data.org-backed calls were in flight at the same time -- this is exactly "
+        "what makes them self-collide on the real shared client lock in production"
+    )
+
+
 def test_fixtures_endpoint_concurrent_requests_dedupe_to_a_single_upstream_call():
     """Code review follow-up (post-21e6bf9): the sequential dedup test above
     only proves a *second* request arriving after the first has already
