@@ -237,6 +237,41 @@ def test_get_range_serves_stale_data_when_a_refetch_fails():
     assert second[0].match_id == first[0].match_id
 
 
+def test_get_range_a_cold_failing_span_does_not_discard_a_sibling_spans_cached_data():
+    """BUG-085 (found live 2026-10-17): a wide range (e.g. Dashboard's own
+    90-day-forward window) can split into several missing spans in one
+    get_range() call -- a near one this cache already has data for, a far
+    one still genuinely cold. Previously, the far cold span's failure
+    raised immediately and aborted the whole function, discarding the
+    near span's perfectly good data along with it (confirmed live: a
+    league with today's matches already cached came back completely
+    empty on a fresh page load, because the rest of the 90-day window's
+    own fetch happened to fail). The near span's stale data must survive
+    even when a *different*, unrelated span in the same call hard-fails."""
+    # 2026-08-21: cached once, then expired (BUG-084's "stale fallback"
+    # case). 2026-08-22: cached and still fresh (untouched by the missing-
+    # day computation at all). 2026-08-23: never cached (genuinely cold).
+    warm_then_stale_fetch = MagicMock(return_value=[_future_match("2026-08-21", hour=9)])
+    fresh_fetch = MagicMock(return_value=[_future_match("2026-08-22", hour=9)])
+    with patch("app.backend.fixture_cache.wall_clock_now", return_value=_NOW):
+        asyncio.run(get_range("fixtures", warm_then_stale_fetch, date_from="2026-08-21", date_to="2026-08-21"))
+        asyncio.run(get_range("fixtures", fresh_fetch, date_from="2026-08-22", date_to="2026-08-22"))
+
+        with fixture_cache._cache_lock:
+            key = ("fixtures", "2026-08-21")
+            _, matches = fixture_cache._cache[key]
+            fixture_cache._cache[key] = (fixture_cache.now_monotonic() - 1, matches)
+
+        failing_fetch = MagicMock(side_effect=RuntimeError("upstream rate-limited"))
+        result = asyncio.run(get_range("fixtures", failing_fetch, date_from="2026-08-21", date_to="2026-08-23"))
+
+    # Both the 08-21 span and the 08-23 span hit the same failing fetch --
+    # confirms this is genuinely a two-span call, not a fluke of caching.
+    assert failing_fetch.call_count == 2
+    match_ids = {m.match_id for m in result}
+    assert match_ids == {"m-2026-08-21-9", "m-2026-08-22-9"}
+
+
 def test_force_refresh_range_always_fetches_even_if_cached():
     fetch = MagicMock(return_value=[])
     with patch("app.backend.fixture_cache.wall_clock_now", return_value=_NOW):

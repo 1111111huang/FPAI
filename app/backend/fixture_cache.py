@@ -228,6 +228,19 @@ async def get_range(
     days = date_range(date_from, date_to)
     missing = _missing_days(call_type, days)
 
+    # BUG-085 (found live 2026-10-17): a wide range (e.g. Dashboard's own
+    # 90-day-forward window) can split into several missing spans -- a
+    # near one already warmed by an earlier request, a far one still cold.
+    # Previously, a cold span's failure `raise`d immediately and aborted
+    # this whole function, discarding the near span's perfectly good,
+    # already-cached data along with it (confirmed live: a league with
+    # today's matches already cached came back completely empty on a
+    # fresh page load, because *tomorrow+*'s span happened to fail). Each
+    # span's failure is now handled independently -- a hard failure (no
+    # fallback at all for that span, BUG-084's own condition) is recorded
+    # but doesn't stop the loop, so every other span still gets its chance
+    # to populate the cache and contribute to the final result.
+    hard_failure: Exception | None = None
     for sub_from, sub_to in contiguous_date_ranges(missing):
         key = (call_type, sub_from, sub_to)
         task = _pending.get(key)
@@ -236,26 +249,39 @@ async def get_range(
             _pending[key] = task
         try:
             await task
-        except Exception:
-            # BUG-084 (found live 2026-10-17): don't let a failed refetch
-            # (e.g. upstream rate-limit) blank out a day this cache already
-            # has stale-but-real data for -- _read_days() below now serves
-            # whatever's present regardless of TTL, so swallowing here and
-            # falling through just means that stale data gets returned
-            # instead of nothing. Only re-raise when every day in this span
-            # is genuinely cold (never successfully fetched before) -- same
-            # "propagate, nothing to fall back on" behavior as always.
-            if not _any_day_cached(call_type, date_range(sub_from, sub_to)):
-                raise
-            LOGGER.warning(
-                "fixture_cache: live fetch failed for %s [%s..%s] -- serving stale cached data instead.",
-                call_type, sub_from, sub_to, exc_info=True,
-            )
+        except Exception as exc:
+            # BUG-084: don't let a failed refetch (e.g. upstream rate-limit)
+            # blank out a day this cache already has stale-but-real data
+            # for -- _read_days() below now serves whatever's present
+            # regardless of TTL, so logging and continuing here just means
+            # that stale data gets returned instead of nothing.
+            if _any_day_cached(call_type, date_range(sub_from, sub_to)):
+                LOGGER.warning(
+                    "fixture_cache: live fetch failed for %s [%s..%s] -- serving stale cached data instead.",
+                    call_type, sub_from, sub_to, exc_info=True,
+                )
+            else:
+                hard_failure = exc
+                LOGGER.warning(
+                    "fixture_cache: live fetch failed for %s [%s..%s] -- no cached fallback for this span.",
+                    call_type, sub_from, sub_to, exc_info=True,
+                )
         finally:
             if _pending.get(key) is task:
                 del _pending[key]
 
-    return _read_days(call_type, days)
+    result = _read_days(call_type, days)
+    # Only propagate a hard failure (and only the most recent one -- any
+    # earlier hard failure in this same call already logged its own
+    # warning above) when the whole requested range ends up with nothing
+    # at all to show -- same "genuinely cold, nothing to fall back on"
+    # contract BUG-084 preserved for the single-span case, now extended to
+    # the multi-span one: a caller with *some* real data (even if a
+    # distant, less important span of the range failed) should get that
+    # data back, not an exception that discards all of it.
+    if hard_failure is not None and not result:
+        raise hard_failure
+    return result
 
 
 async def force_refresh_range(
