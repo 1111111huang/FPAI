@@ -162,7 +162,10 @@ describe("AppShell", () => {
         <p>page content</p>
       </AppShell>
     );
-    const bottomNav = container.querySelector("nav.fixed");
+    // BUG-088 follow-up: no longer `position: fixed` (see AppShell.tsx's own
+    // comment) -- `lg:hidden` is what distinguishes it from the desktop
+    // sidebar's own <nav> now.
+    const bottomNav = container.querySelector("nav.lg\\:hidden");
     expect(bottomNav).not.toBeNull();
     // W210 follow-up: NAV_ITEMS grew to 3 (Bets re-added).
     expect(bottomNav?.querySelectorAll("a")).toHaveLength(3);

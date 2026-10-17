@@ -3,8 +3,20 @@ import { useState } from "react";
 import { act, renderHook } from "@testing-library/react";
 import { usePullToRefresh } from "../usePullToRefresh";
 
-function setScrollY(value: number): void {
-  Object.defineProperty(window, "scrollY", { value, configurable: true });
+// BUG-088 follow-up (found live 2026-10-17): transform-gpu alone didn't
+// stop the bottom tab bar/header from detaching during a fast scroll on
+// iOS -- the real fix is a dedicated scroll container (<main>) instead of
+// document-level body scroll, same architecture desktop already used.
+// usePullToRefresh's own "are we at the top" gate now checks that
+// container's scrollTop instead of window.scrollY, which no longer moves
+// at all once <main> is the thing scrolling.
+function setScrollTop(value: number): void {
+  let main = document.querySelector("main");
+  if (!main) {
+    main = document.createElement("main");
+    document.body.appendChild(main);
+  }
+  Object.defineProperty(main, "scrollTop", { value, configurable: true });
 }
 
 function setDesktopViewport(isDesktop: boolean): void {
@@ -28,16 +40,17 @@ function dispatchTouch(type: "touchstart" | "touchmove" | "touchend", clientY?: 
 
 describe("usePullToRefresh", () => {
   beforeEach(() => {
-    setScrollY(0);
+    setScrollTop(0);
   });
 
   afterEach(() => {
     // @ts-expect-error -- deleting a test-only stub, not a real browser API removal
     delete window.matchMedia;
+    document.querySelector("main")?.remove();
   });
 
   it("a drag starting at scrollY > 0 never arms -- no refresh on release past the threshold", () => {
-    setScrollY(50);
+    setScrollTop(50);
     const onRefresh = vi.fn();
     renderHook(() => usePullToRefresh({ onRefresh, refreshing: false }));
 

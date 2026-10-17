@@ -129,13 +129,21 @@ export function AppShell({
     </div>
   );
 
-  // Direct feedback: only the middle (page) content should scroll on
-  // desktop -- sidebar, search bar, and (per-page) sticky chrome stay put.
-  // lg:h-screen + lg:overflow-hidden bounds the shell to the viewport so
-  // <main> below (lg:overflow-y-auto) becomes the one scrolling region,
-  // instead of the whole document scrolling.
+  // Direct feedback: only the middle (page) content should scroll, on
+  // mobile and desktop alike -- header/sidebar, search bar, and the bottom
+  // tab bar stay put. h-screen + overflow-hidden bounds the shell to the
+  // viewport so <main> below (overflow-y-auto) becomes the one scrolling
+  // region, instead of the whole document scrolling.
+  // BUG-088 follow-up (found live 2026-10-17): mobile used to scroll via
+  // the document body instead, with the header/bottom tab bar pinned via
+  // `sticky`/`fixed` + transform-gpu -- on iOS that still visibly detached
+  // from the viewport during a fast scroll (confirmed live: transform-gpu
+  // alone did not fix it). A dedicated scroll container, the same
+  // architecture desktop already used, avoids that whole bug class: the
+  // header/tab bar are simply outside the scrolling region, so they never
+  // need `fixed`/`sticky` positioning at all.
   return (
-    <div className="min-h-screen lg:flex lg:h-screen lg:overflow-hidden">
+    <div className="flex h-screen flex-col overflow-hidden lg:flex-row">
       {/* Desktop sidebar -- unchanged content, now hidden lg:flex instead of
           always visible: below `lg` the whole panel (menu/footer) collapses
           behind the mobile header bar + overlay drawer below instead of
@@ -148,7 +156,7 @@ export function AppShell({
         <div>
           {brandBlock}
           {/* W114: desktop-only -- below `lg` this list is replaced by the
-              fixed bottom tab bar, not shown alongside it. Mockup point 2:
+              bottom tab bar, not shown alongside it. Mockup point 2:
               each link gets its own icon, matching NAV_ITEMS' icon field
               (previously only used by the mobile bottom tab bar). */}
           <nav className="mt-6 flex flex-col gap-1 text-sm">
@@ -189,17 +197,12 @@ export function AppShell({
           (menu/footer) should collapse behind this, and expand as an
           overlay on top of the main content, not inline above it.
           Direct user request (2026-10-17): pinned in place while scrolling,
-          matching the bottom tab bar's own fixed behavior below -- `sticky`
-          rather than `fixed` so it keeps reserving its own space in normal
-          flow (no separate spacer/padding needed on the content below to
-          avoid it, unlike the bottom tab bar's `pb-20` on <main>).
-          transform-gpu applied preemptively, same BUG-088 fix as the bottom
-          tab bar, so this doesn't visibly detach during a fast scroll
-          either once it's the thing staying pinned. z-20 matches the bottom
-          tab bar's own stacking tier -- both sit above normal scrolled
-          content but below the menu overlay's backdrop (z-40) and drawer
-          (z-50), so opening the menu still covers this header. */}
-      <div className="sticky top-0 z-20 flex transform-gpu items-center justify-between border-b border-border bg-surface px-4 pb-3 pt-[calc(0.75rem+env(safe-area-inset-top))] lg:hidden">
+          matching the bottom tab bar below. `shrink-0` is all this needs
+          now -- it's a plain flex child outside <main>'s own scroll region
+          (see this component's own top-level comment, BUG-088 follow-up),
+          so it's never in motion at all; no `fixed`/`sticky` positioning
+          or spacer/padding compensation required. */}
+      <div className="flex shrink-0 items-center justify-between border-b border-border bg-surface px-4 pb-3 pt-[calc(0.75rem+env(safe-area-inset-top))] lg:hidden">
         <div className="flex items-center gap-2">
           <OddseyLogo size={36} />
           <span className="text-base font-semibold tracking-tight text-ink">Oddsey</span>
@@ -210,7 +213,10 @@ export function AppShell({
       </div>
 
       {/* Mobile overlay drawer -- backdrop + slide-in panel, above the
-          fixed bottom tab bar (z-20) and the search dropdown (z-10). */}
+          search dropdown (z-10). The bottom tab bar/header no longer carry
+          a z-index at all (BUG-088 follow-up) -- they're plain flex
+          siblings now, not overlaid content, so stacking order is already
+          correct from DOM order alone. */}
       {menuOpen && (
         <>
           <div
@@ -237,7 +243,7 @@ export function AppShell({
         </>
       )}
 
-      <div className="flex min-w-0 flex-1 flex-col lg:min-h-0">
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col">
         <div className="flex shrink-0 items-center gap-2 border-b border-border px-4 py-3 sm:px-6">
           <div className="relative min-w-0 max-w-md flex-1">
             <MagnifyingGlass size={16} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-muted" />
@@ -269,22 +275,21 @@ export function AppShell({
 
         <InstallAppBanner />
 
-        {/* Direct feedback: <main> is now the one scrolling region on
-            desktop (lg:min-h-0 + lg:overflow-y-auto, paired with the shell's
-            own lg:h-screen above) -- sidebar and this search bar (shrink-0)
-            never move. A page can additionally pin its own chrome (e.g.
-            DashboardPage's title/rail) with sticky *within* this region.
-            W114: pb-20 clears the fixed bottom tab bar below `lg`; back to
-            the original py-8 at `lg` and up, where that bar doesn't render. */}
+        {/* Direct feedback: <main> is the one scrolling region, on mobile
+            and desktop alike (min-h-0 + overflow-y-auto, paired with the
+            shell's own h-screen above) -- header/sidebar, this search bar
+            (shrink-0), and the bottom tab bar never move. A page can
+            additionally pin its own chrome (e.g. DashboardPage's
+            title/rail) with sticky *within* this region. */}
         {/* pt-8 lives on this inner div, not on <main> itself: <main> is the
-            scroll container (lg:overflow-y-auto), and padding on a scroll
+            scroll container (overflow-y-auto), and padding on a scroll
             container sits *inside* its scrollport, so scrolled content slides
             up through it -- nothing covers that strip above a sticky child's
             own box. A page's sticky title (e.g. DashboardPage's) then has a
             gap above it that scrolled cards bleed through. Padding on a
             non-scrolling descendant just scrolls away with the content, so a
             sticky child's `top-0` lands flush with the true scrollport edge. */}
-        <main className="flex-1 px-4 pb-20 [view-transition-name:main-content] sm:px-6 lg:min-h-0 lg:overflow-y-auto lg:pb-8">
+        <main className="min-h-0 flex-1 overflow-y-auto px-4 pb-8 [view-transition-name:main-content] sm:px-6">
           <div className="pt-8">{children}</div>
         </main>
       </div>
@@ -292,17 +297,12 @@ export function AppShell({
       {/* W114: bottom-tab-bar nav for small screens -- the sidebar-nav
           metaphor above is unfamiliar to a bottom-tab/vertical-feed mental
           model (Instagram/TikTok/X). Hidden at `lg` and up, where the
-          desktop sidebar nav (above) is the only nav shown.
-          BUG-088 (found live 2026-10-17): on iOS, a `fixed` element sharing
-          its layer with the scrolling document can visibly detach during a
-          fast/momentum scroll -- WebKit keeps painting it at its last known
-          position instead of the true viewport edge until scrolling settles,
-          so the bar appears to float over mid-page content. `transform-gpu`
-          forces this onto its own compositing layer, the standard fix --
-          composited independently of the scrolling content, so WebKit keeps
-          it pinned to the real viewport bottom throughout the scroll instead
-          of only re-settling once it stops. */}
-      <nav className="fixed inset-x-0 bottom-0 z-20 flex transform-gpu items-center justify-around border-t border-border bg-page px-2 pb-[calc(0.375rem+env(safe-area-inset-bottom))] pt-1.5 lg:hidden">
+          desktop sidebar nav (above) is the only nav shown. `shrink-0` is
+          all this needs now -- see this component's own top-level comment
+          (BUG-088 follow-up): it's a plain flex child outside <main>'s own
+          scroll region, never in motion, so no `fixed` positioning or
+          transform-gpu compositing trick is needed at all. */}
+      <nav className="flex shrink-0 items-center justify-around border-t border-border bg-page px-2 pb-[calc(0.375rem+env(safe-area-inset-bottom))] pt-1.5 lg:hidden">
         {NAV_ITEMS.map((item) => {
           const Icon = item.icon;
           const isActive = active === item.key;

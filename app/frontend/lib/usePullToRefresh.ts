@@ -18,12 +18,24 @@ function isMobileViewport(): boolean {
   return typeof window.matchMedia !== "function" || !window.matchMedia(`(min-width: ${DESKTOP_MIN_WIDTH_PX}px)`).matches;
 }
 
+// BUG-088 follow-up (found live 2026-10-17): AppShell.tsx's <main> is now
+// the one scroll container on every screen size (mobile included) -- see
+// its own comment for why (transform-gpu alone didn't stop the bottom tab
+// bar/header from detaching during a fast scroll on iOS; a dedicated
+// scroll container instead of document-level body scroll avoids the bug
+// class entirely). window.scrollY no longer moves at all, so "are we at
+// the top" has to ask <main> directly instead.
+function scrollContainerTop(): number {
+  return document.querySelector("main")?.scrollTop ?? 0;
+}
+
 /**
  * Mobile-only pull-to-refresh gesture, driven by native TouchEvents on
- * `window` -- the page scrolls via the document body below the `lg`
- * breakpoint (AppShell.tsx's `<main>` only becomes its own scroll
- * container at `lg` and up), so there's no single scrollable element to
- * attach to, and no native gesture to replace at `lg` and up anyway.
+ * `window` rather than a listener on the scroll container itself -- a
+ * touch starting anywhere still bubbles up to `window`, and this way the
+ * gesture doesn't depend on exactly which element AppShell.tsx makes
+ * scrollable. No native gesture to replace at `lg` and up anyway, where
+ * this hook no-ops entirely (isMobileViewport() below).
  *
  * `refreshing` is caller-controlled: true while the caller's own triggered
  * refresh is in flight. The indicator stays locked at the threshold height
@@ -60,7 +72,7 @@ export function usePullToRefresh({
       // still true) and clearing the threshold again would call onRefresh()
       // a second time concurrently -- not destructive, but a redundant
       // concurrent refresh the design never intended.
-      if (refreshing || window.scrollY !== 0) return;
+      if (refreshing || scrollContainerTop() !== 0) return;
       armedRef.current = true;
       startYRef.current = e.touches[0].clientY;
       pullDistanceRef.current = 0;
