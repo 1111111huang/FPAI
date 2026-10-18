@@ -2,6 +2,13 @@ import { act, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { LogBetModal } from "../LogBetModal";
+import { ApiError } from "@/lib/api";
+
+// lib/api.ts's ApiError constructor calls next-auth/react's getSession() on
+// a 401 (BUG-090) -- mocked here (this file imports the real ApiError, not
+// a mocked lib/api) so constructing one in these tests doesn't attempt a
+// real network call.
+vi.mock("next-auth/react", () => ({ getSession: vi.fn() }));
 
 const baseProps = {
   open: true,
@@ -225,5 +232,17 @@ describe("LogBetModal", () => {
 
     expect(await screen.findByText("Could not log bet.")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /confirm bet/i })).toBeInTheDocument();
+  });
+
+  it("BUG-090: shows a clear session-expired message, not the raw status, when onSubmit rejects with a 401", async () => {
+    const onSubmit = vi.fn().mockRejectedValue(new ApiError("Failed to log bet (401)", 401));
+    const user = userEvent.setup();
+    render(<LogBetModal {...baseProps} locked market="result_3way" selection="draw" odds={4.0} onSubmit={onSubmit} />);
+
+    await user.type(screen.getByLabelText(/^stake$/i), "10");
+    await user.click(screen.getByRole("button", { name: /confirm bet/i }));
+
+    expect(await screen.findByText("Your session expired -- sign in again, then retry.")).toBeInTheDocument();
+    expect(screen.queryByText("Failed to log bet (401)")).not.toBeInTheDocument();
   });
 });

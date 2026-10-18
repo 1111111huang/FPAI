@@ -1,3 +1,5 @@
+import { getSession } from "next-auth/react";
+
 import type {
   AgentPerformanceDashboard,
   Bet,
@@ -20,6 +22,19 @@ export class ApiError extends Error {
   constructor(message: string, public status?: number) {
     super(message);
     this.name = "ApiError";
+    // BUG-090 (found live 2026-10-17): backendProxy.ts's getServerSession()
+    // (every /api/bets/* proxy route) re-reads the real session cookie
+    // fresh on every call, but the client-side useSession() hook (UserMenu
+    // and every other consumer) only reflects whatever it last fetched --
+    // so a session that's actually expired can still show "signed in" in
+    // the sidebar while the same request 401s against that same expired
+    // session. getSession() forces every useSession() consumer app-wide to
+    // refetch and catch up with the real state immediately, instead of
+    // waiting for NextAuth's own next refetch (window focus, polling
+    // interval, etc).
+    if (status === 401) {
+      void getSession();
+    }
   }
 }
 

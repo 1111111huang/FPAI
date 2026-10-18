@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Plus, WarningCircle, X } from "@phosphor-icons/react";
 import { TeamBadge, marketLabel } from "./MatchUI";
+import { ApiError } from "@/lib/api";
 import { showToast } from "@/lib/toast";
 
 // W218: the one closed set of valid market/selection pairs -- duplicated
@@ -156,7 +157,18 @@ export function LogBetModal({
       await onSubmit({ market, selection, odds: parsedOdds, stake: parsedStake });
       showToast("Bet logged");
     } catch (err) {
-      setErrorMsg(err instanceof Error ? err.message : "Could not log bet.");
+      // BUG-090 (found live 2026-10-17): a raw "Failed to log bet (401)"
+      // told the user nothing actionable -- same session-expiry case
+      // BetTracker.tsx's own needsAuth state already has a clear message
+      // for elsewhere on this page. The sidebar (UserMenu) now also
+      // reflects this immediately (lib/api.ts's ApiError constructor), so
+      // "sign in again" here is guaranteed to actually work, not contradict
+      // a stale "still signed in" shown next to it.
+      if (err instanceof ApiError && err.status === 401) {
+        setErrorMsg("Your session expired -- sign in again, then retry.");
+      } else {
+        setErrorMsg(err instanceof Error ? err.message : "Could not log bet.");
+      }
     } finally {
       setSaving(false);
     }
