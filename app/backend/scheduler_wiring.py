@@ -56,6 +56,12 @@ _ODDS_CREDIT_COUNTER_PATHS_4_TO_8 = {
 CREDIT_COUNTER_PATH_ODDSPAPI = Path(__file__).parent.parent.parent / "data" / "oddspapi_credit_counter.json"
 CREDIT_COUNTER_PATH_ODDSPAPI_2 = Path(__file__).parent.parent.parent / "data" / "oddspapi_credit_counter_2.json"
 CREDIT_COUNTER_PATH_ODDSPAPI_3 = Path(__file__).parent.parent.parent / "data" / "oddspapi_credit_counter_3.json"
+# _4/_5 (2026-10-19): same per-key credit file, generated rather than
+# hardcoded -- same convention as the Odds API's own _4.._8 slots above.
+_ODDSPAPI_CREDIT_COUNTER_PATHS_4_TO_5 = {
+    i: Path(__file__).parent.parent.parent / "data" / f"oddspapi_credit_counter_{i}.json"
+    for i in range(4, 6)
+}
 EOD_JOB_ID = "eod_batch_generation"
 EOD_HOUR = 23
 EOD_MINUTE = 0
@@ -435,13 +441,18 @@ def build_oddspapi_client() -> OddsPapiClient | FallbackOddsPapiClient | None:
     ODDS_API_KEY_2/_3 pattern) -- unlike that one, _3 does NOT default to the
     primary key when unset (that was a specific dev-convenience workaround
     for BUG-056, not a general convention); an unset key here is simply
-    omitted."""
+    omitted. ODDSPAPI_API_KEY_4/_5 (2026-10-19), when set, are additional
+    fallbacks -- same convention as the Odds API's own _4..._8 slots."""
     if sandbox_date() is not None:
         return None
     keys_and_paths = [
         (os.environ.get("ODDSPAPI_API_KEY", ""), CREDIT_COUNTER_PATH_ODDSPAPI),
         (os.environ.get("ODDSPAPI_API_KEY_2", ""), CREDIT_COUNTER_PATH_ODDSPAPI_2),
         (os.environ.get("ODDSPAPI_API_KEY_3", ""), CREDIT_COUNTER_PATH_ODDSPAPI_3),
+        *(
+            (os.environ.get(f"ODDSPAPI_API_KEY_{i}", ""), path)
+            for i, path in _ODDSPAPI_CREDIT_COUNTER_PATHS_4_TO_5.items()
+        ),
     ]
     clients = [_build_persisting_oddspapi_client(key, path) for key, path in keys_and_paths if key]
     if not clients:

@@ -151,6 +151,8 @@ def test_build_oddspapi_client_returns_none_when_no_api_key(monkeypatch) -> None
     monkeypatch.delenv("ODDSPAPI_API_KEY", raising=False)
     monkeypatch.delenv("ODDSPAPI_API_KEY_2", raising=False)
     monkeypatch.delenv("ODDSPAPI_API_KEY_3", raising=False)
+    monkeypatch.delenv("ODDSPAPI_API_KEY_4", raising=False)
+    monkeypatch.delenv("ODDSPAPI_API_KEY_5", raising=False)
 
     assert build_oddspapi_client() is None
 
@@ -178,6 +180,8 @@ def test_build_oddspapi_client_wires_a_single_key_without_fallback_wrapper(monke
     monkeypatch.setenv("ODDSPAPI_API_KEY", "primary-key")
     monkeypatch.delenv("ODDSPAPI_API_KEY_2", raising=False)
     monkeypatch.delenv("ODDSPAPI_API_KEY_3", raising=False)
+    monkeypatch.delenv("ODDSPAPI_API_KEY_4", raising=False)
+    monkeypatch.delenv("ODDSPAPI_API_KEY_5", raising=False)
 
     client = build_oddspapi_client()
 
@@ -193,6 +197,8 @@ def test_build_oddspapi_client_wires_multiple_keys_as_fallback_chain(monkeypatch
     monkeypatch.setenv("ODDSPAPI_API_KEY", "primary-key")
     monkeypatch.setenv("ODDSPAPI_API_KEY_2", "secondary-key")
     monkeypatch.delenv("ODDSPAPI_API_KEY_3", raising=False)
+    monkeypatch.delenv("ODDSPAPI_API_KEY_4", raising=False)
+    monkeypatch.delenv("ODDSPAPI_API_KEY_5", raising=False)
 
     client = build_oddspapi_client()
 
@@ -204,10 +210,27 @@ def test_build_oddspapi_client_honors_explicit_third_key(monkeypatch) -> None:
     monkeypatch.setenv("ODDSPAPI_API_KEY", "primary-key")
     monkeypatch.setenv("ODDSPAPI_API_KEY_2", "secondary-key")
     monkeypatch.setenv("ODDSPAPI_API_KEY_3", "third-key")
+    monkeypatch.delenv("ODDSPAPI_API_KEY_4", raising=False)
+    monkeypatch.delenv("ODDSPAPI_API_KEY_5", raising=False)
 
     client = build_oddspapi_client()
 
     assert _wired_oddspapi_api_keys(client) == ["primary-key", "secondary-key", "third-key"]
+
+
+def test_build_oddspapi_client_honors_oddspapi_api_key_4_through_5(monkeypatch) -> None:
+    monkeypatch.delenv("SANDBOX_MODE", raising=False)
+    monkeypatch.setenv("ODDSPAPI_API_KEY", "primary-key")
+    monkeypatch.setenv("ODDSPAPI_API_KEY_2", "secondary-key")
+    monkeypatch.setenv("ODDSPAPI_API_KEY_3", "third-key")
+    monkeypatch.setenv("ODDSPAPI_API_KEY_4", "fourth-key")
+    monkeypatch.setenv("ODDSPAPI_API_KEY_5", "fifth-key")
+
+    client = build_oddspapi_client()
+
+    assert _wired_oddspapi_api_keys(client) == [
+        "primary-key", "secondary-key", "third-key", "fourth-key", "fifth-key",
+    ]
 
 
 def test_sandbox_job_runs_db_path_lives_under_app_data_sandbox_not_app_backend_data() -> None:
