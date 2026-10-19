@@ -131,7 +131,7 @@ export function AppShell({
 
   // Direct feedback: only the middle (page) content should scroll, on
   // mobile and desktop alike -- header/sidebar, search bar, and the bottom
-  // tab bar stay put. h-screen + overflow-hidden bounds the shell to the
+  // tab bar stay put. h-dvh + overflow-hidden bounds the shell to the
   // viewport so <main> below (overflow-y-auto) becomes the one scrolling
   // region, instead of the whole document scrolling.
   // BUG-088 follow-up (found live 2026-10-17): mobile used to scroll via
@@ -142,8 +142,19 @@ export function AppShell({
   // architecture desktop already used, avoids that whole bug class: the
   // header/tab bar are simply outside the scrolling region, so they never
   // need `fixed`/`sticky` positioning at all.
+  // BUG-089 (found live 2026-10-19): `h-screen` (100vh) is the *layout*
+  // viewport, which on mobile Safari is sized as if the address-bar
+  // toolbar were already collapsed -- bigger than the actually-visible
+  // area while the toolbar is still showing (e.g. right after a page
+  // load). The bottom tab bar, a plain flex sibling positioned after
+  // <main> rather than inside its scrollport, rendered below that
+  // currently-visible fold -- invisible until some scroll/touch gesture
+  // made Safari collapse the toolbar and grow the real viewport to match.
+  // `h-dvh` (100dvh, the *dynamic* viewport height Tailwind 3.4+ ships)
+  // tracks the real visible area continuously instead, so the shell never
+  // allocates more height than is actually on screen.
   return (
-    <div className="flex h-screen flex-col overflow-hidden lg:flex-row">
+    <div className="flex h-dvh flex-col overflow-hidden lg:flex-row">
       {/* Desktop sidebar -- unchanged content, now hidden lg:flex instead of
           always visible: below `lg` the whole panel (menu/footer) collapses
           behind the mobile header bar + overlay drawer below instead of

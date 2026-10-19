@@ -47,6 +47,17 @@ describe("AppShell", () => {
     expect(screen.getByText("page content")).toBeInTheDocument();
   });
 
+  it("BUG-089: shell uses the dynamic viewport height, not the static one -- 100vh (h-screen) is sized as if mobile Safari's toolbar were already collapsed, so the bottom tab bar (a plain flex sibling after <main>, not inside its scrollport) rendered below the actually-visible fold until a scroll gesture collapsed the toolbar", () => {
+    const { container } = render(
+      <AppShell active="dashboard">
+        <p>page content</p>
+      </AppShell>
+    );
+    const shell = container.firstChild as HTMLElement;
+    expect(shell.className).toContain("h-dvh");
+    expect(shell.className).not.toContain("h-screen");
+  });
+
   it("BUG-046: keeps top padding off <main> itself -- it's the lg:overflow-y-auto scroll container, so padding there sits inside the scrollport, letting scrolled content slide up through the gap above a page's sticky header instead of being hidden behind it", () => {
     render(
       <AppShell active="dashboard">
