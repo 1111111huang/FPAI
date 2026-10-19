@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 from datetime import datetime, timedelta, timezone
+import functools
 import threading
 import time
 from typing import Callable
@@ -298,6 +299,28 @@ async def _fetch_and_store(
         store_day(call_type, day, day_matches)
 
 
+def _on_background_fetch_done(call_type: str, sub_from: str, sub_to: str, task: "asyncio.Task[None]") -> None:
+    """BUG-091: get_range()'s own _pending cleanup/failure-logging (the
+    try/except/finally around an *awaited* task) never runs for a span this
+    function chose to background instead -- nothing there ever awaits it.
+    This is that same bookkeeping, driven by the task's own completion
+    instead. A background failure never needs a hard_failure equivalent:
+    get_range() already required stale data to exist for this exact span
+    before choosing to background it at all, so there's always something
+    already in the cache to keep serving."""
+    key = (call_type, sub_from, sub_to)
+    if _pending.get(key) is task:
+        del _pending[key]
+    if task.cancelled():
+        return
+    exc = task.exception()
+    if exc is not None:
+        LOGGER.warning(
+            "fixture_cache: background live fetch failed for %s [%s..%s] -- stale cached data stays in place.",
+            call_type, sub_from, sub_to, exc_info=exc,
+        )
+
+
 async def get_range(
     call_type: str,
     fetch: Callable[..., list[NormalizedMatch]],
@@ -319,7 +342,19 @@ async def get_range(
 
     In-flight de-dup (via _pending) only coordinates calls on the SAME
     event loop -- see force_refresh_range()'s own docstring for why the
-    reconciliation job's calls don't participate in it."""
+    reconciliation job's calls don't participate in it.
+
+    BUG-091 (found live 2026-10-19): a span with stale-but-present data for
+    every one of its days no longer blocks this response on the live
+    refetch at all -- see the loop's own comment below. Direct user report:
+    the Dashboard sometimes took 6-7s to load. Traced to several leagues'
+    TTL having expired at once, each needing its own live football-data.org
+    round trip, run one at a time (BUG-087, which serializes them on
+    purpose to stop them self-colliding on a shared rate-limit lock) --
+    paying for all of them synchronously, for data this cache already had a
+    perfectly good (if slightly stale) answer for, is exactly what made
+    those loads slow. A genuinely cold span (nothing cached at all) still
+    blocks below, same as always -- there's nothing else to show."""
     if date_from is None or date_to is None:
         return await run_in_threadpool(fetch, date_from=date_from, date_to=date_to, **fetch_kwargs)
 
@@ -341,10 +376,26 @@ async def get_range(
     hard_failure: Exception | None = None
     for sub_from, sub_to in contiguous_date_ranges(missing):
         key = (call_type, sub_from, sub_to)
+        span_days = date_range(sub_from, sub_to)
         task = _pending.get(key)
         if task is None:
             task = asyncio.ensure_future(_fetch_and_store(call_type, sub_from, sub_to, fetch, fetch_kwargs))
             _pending[key] = task
+
+        if _any_day_cached(call_type, span_days):
+            # BUG-091: stale-while-revalidate -- every day in this span
+            # already has *something* to show, so don't make this request
+            # wait on the live refetch at all. Let it keep running in the
+            # background (still deduped via _pending the same as the
+            # blocking path -- a second concurrent request for this exact
+            # span reuses this same task rather than firing its own); the
+            # next request sees the refreshed data once store_day() lands.
+            # _on_background_fetch_done handles this task's own _pending
+            # cleanup and failure logging, since nothing here will ever
+            # reach this loop's own try/finally for it.
+            task.add_done_callback(functools.partial(_on_background_fetch_done, call_type, sub_from, sub_to))
+            continue
+
         try:
             await task
         except Exception as exc:
@@ -353,7 +404,7 @@ async def get_range(
             # for -- _read_days() below now serves whatever's present
             # regardless of TTL, so logging and continuing here just means
             # that stale data gets returned instead of nothing.
-            if _any_day_cached(call_type, date_range(sub_from, sub_to)):
+            if _any_day_cached(call_type, span_days):
                 LOGGER.warning(
                     "fixture_cache: live fetch failed for %s [%s..%s] -- serving stale cached data instead.",
                     call_type, sub_from, sub_to, exc_info=True,

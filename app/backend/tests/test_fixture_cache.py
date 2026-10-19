@@ -261,7 +261,7 @@ def test_get_range_reraises_and_cleans_up_pending_when_fetch_raises():
         ok_fetch.assert_called_once()
 
 
-def test_get_range_serves_stale_data_when_a_refetch_fails():
+def test_get_range_serves_stale_data_while_a_background_refetch_fails():
     """BUG-084 (found live 2026-10-17): a match that was already cached
     successfully must not vanish from the response just because a LATER
     refetch (TTL expired, upstream rate-limited) failed -- the user
@@ -271,7 +271,15 @@ def test_get_range_serves_stale_data_when_a_refetch_fails():
     The pre-existing cold-cache-raises contract
     (test_get_range_reraises_and_cleans_up_pending_when_fetch_raises,
     above) still holds -- this only changes behavior when there's a stale
-    entry to fall back on."""
+    entry to fall back on.
+
+    BUG-091 follow-up: this exact scenario (stale data already present for
+    every day in the span) is now backgrounded, not awaited inside
+    get_range() itself -- the failing refetch no longer runs synchronously,
+    so this test explicitly waits for it (via the same _pending handle
+    get_range() itself uses) before asserting it actually ran. The
+    response itself (stale data, returned without waiting on the refetch
+    at all) is unchanged from BUG-084's own original contract."""
     ok_fetch = MagicMock(return_value=[_future_match("2026-08-21", hour=10)])
     with patch("app.backend.fixture_cache.wall_clock_now", return_value=_NOW):
         first = asyncio.run(get_range("fixtures", ok_fetch, date_from="2026-08-21", date_to="2026-08-21"))
@@ -284,11 +292,94 @@ def test_get_range_serves_stale_data_when_a_refetch_fails():
             fixture_cache._cache[key] = (fixture_cache.now_monotonic() - 1, matches)
 
         failing_fetch = MagicMock(side_effect=RuntimeError("upstream rate-limited"))
-        second = asyncio.run(get_range("fixtures", failing_fetch, date_from="2026-08-21", date_to="2026-08-21"))
+
+        async def _run():
+            result = await get_range("fixtures", failing_fetch, date_from="2026-08-21", date_to="2026-08-21")
+            # The refetch is backgrounded -- captured here (synchronously,
+            # before anything else has had a chance to run and remove it)
+            # via the exact same _pending dict get_range() itself uses, and
+            # waited on so the assertions below are deterministic instead
+            # of racing the background task.
+            background_task = fixture_cache._pending.get(("fixtures", "2026-08-21", "2026-08-21"))
+            if background_task is not None:
+                await asyncio.gather(background_task, return_exceptions=True)
+            return result
+
+        second = asyncio.run(_run())
 
     failing_fetch.assert_called_once()
     assert len(second) == 1
     assert second[0].match_id == first[0].match_id
+
+
+def test_get_range_returns_stale_data_immediately_without_waiting_on_the_background_refetch():
+    """BUG-091: the whole point of backgrounding an already-stale span's
+    refetch -- it must not block this response at all. Proven with a fetch
+    that blocks on a real Event until explicitly released; wait_for's own
+    timeout turns "get_range() incorrectly waited for it" into a clear,
+    fast test failure instead of a hang."""
+    release = threading.Event()
+
+    def slow_fetch(date_from=None, date_to=None):
+        assert release.wait(timeout=5), "release was never signalled -- test deadlocked"
+        return [_future_match("2026-08-21", hour=12)]
+
+    with patch("app.backend.fixture_cache.wall_clock_now", return_value=_NOW):
+        ok_fetch = MagicMock(return_value=[_future_match("2026-08-21", hour=10)])
+        asyncio.run(get_range("fixtures", ok_fetch, date_from="2026-08-21", date_to="2026-08-21"))
+        with fixture_cache._cache_lock:
+            key = ("fixtures", "2026-08-21")
+            _, matches = fixture_cache._cache[key]
+            fixture_cache._cache[key] = (fixture_cache.now_monotonic() - 1, matches)
+
+        async def _run():
+            result = await asyncio.wait_for(
+                get_range("fixtures", slow_fetch, date_from="2026-08-21", date_to="2026-08-21"),
+                timeout=1,
+            )
+            release.set()
+            background_task = fixture_cache._pending.get(("fixtures", "2026-08-21", "2026-08-21"))
+            if background_task is not None:
+                await asyncio.gather(background_task, return_exceptions=True)
+            return result
+
+        result = asyncio.run(_run())
+
+    # The OLD stale match (hour=10) -- not slow_fetch's hour=12 one, which
+    # hadn't landed yet by the time get_range() already returned.
+    assert len(result) == 1
+    assert result[0].match_id == "m-2026-08-21-10"
+
+
+def test_get_range_a_background_refetch_updates_the_cache_for_the_next_call():
+    """The other half of BUG-091: the backgrounded refetch isn't a no-op --
+    once it completes, the NEXT get_range() call for this span sees the
+    refreshed data, not the stale snapshot forever."""
+    with patch("app.backend.fixture_cache.wall_clock_now", return_value=_NOW):
+        ok_fetch = MagicMock(return_value=[_future_match("2026-08-21", hour=10)])
+        asyncio.run(get_range("fixtures", ok_fetch, date_from="2026-08-21", date_to="2026-08-21"))
+        with fixture_cache._cache_lock:
+            key = ("fixtures", "2026-08-21")
+            _, matches = fixture_cache._cache[key]
+            fixture_cache._cache[key] = (fixture_cache.now_monotonic() - 1, matches)
+
+        fresh_fetch = MagicMock(return_value=[_future_match("2026-08-21", hour=14)])
+
+        async def _run():
+            first = await get_range("fixtures", fresh_fetch, date_from="2026-08-21", date_to="2026-08-21")
+            background_task = fixture_cache._pending.get(("fixtures", "2026-08-21", "2026-08-21"))
+            if background_task is not None:
+                await asyncio.gather(background_task, return_exceptions=True)
+            # A plain, unpatched cache read -- not get_range() again, so
+            # this doesn't trigger yet another refetch and genuinely proves
+            # what store_day() left behind.
+            return first, fixture_cache._read_days("fixtures", ["2026-08-21"])
+
+        first, after_background_completes = asyncio.run(_run())
+
+    assert first[0].match_id == "m-2026-08-21-10"  # stale, served immediately
+    assert after_background_completes[0].match_id == "m-2026-08-21-14"  # refreshed, once the background fetch lands
+    fresh_fetch.assert_called_once()
 
 
 def test_get_range_a_cold_failing_span_does_not_discard_a_sibling_spans_cached_data():
