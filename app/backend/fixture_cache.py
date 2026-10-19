@@ -32,6 +32,11 @@ LOGGER = get_logger(__name__)
 TTL_FLOOR_SECONDS = 60.0
 TTL_CEILING_SECONDS = 4 * 3600.0
 TTL_DEFAULT_SECONDS = 15 * 60.0
+# BUG-090: mirrors scheduler_wiring.py's RECONCILIATION_WINDOW_DAYS_BACK/
+# FORWARD (that job only ever re-checks [today-2, today+2]) -- the empty-day
+# TTL rule below only protects a day the reconciliation job will actually
+# revisit; keep these in sync with that job's own window.
+_RECONCILIATION_WINDOW_DAYS = 2
 # BUG-086: how far back persisted (call_type, day) entries are kept --
 # fixtures aren't immutable the way ResultsCache's FINISHED results are
 # (a postponement/reschedule, or simply a day far enough in the past that
@@ -51,10 +56,20 @@ def compute_ttl_seconds(matches: list[NormalizedMatch], now: datetime, day: str 
     """How long a single day's cached fixture/result list stays valid,
     computed from the matches it actually contains:
 
-    - Empty day (nothing fetched for it): the plain default -- nothing to
+    - Empty day (nothing fetched for it) within the reconciliation job's
+      own [today-2, today+2] window: the plain default -- nothing to
       compute a kickoff-driven expiry from, but not worth the ceiling
-      either in case a fixture gets added before the reconciliation job's
-      own next cycle notices.
+      either in case a fixture gets added before that job's own next cycle
+      notices. Outside that window (BUG-090, found live 2026-10-19): the
+      ceiling -- the reconciliation job never revisits a day that far out
+      anyway, so the short default bought no protection there, only
+      constant real re-fetches of what's almost always still nothing (most
+      days in a season have no fixture for a given single league/day). A
+      request spanning many such days (e.g. the frontend's 90-day-forward
+      search prefetch) was draining football-data.org's per-key rate limit
+      continuously -- confirmed live: Serie A's 3 keys all stayed
+      exhausted, so fixture_cache kept serving stale data on every request
+      and the dashboard's live match status stopped updating entirely.
     - Any live/in-progress match (LIVE/IN_PLAY/PAUSED): the floor --
       scores update continuously, this cache layer must not sit on stale
       data for long.
@@ -83,6 +98,13 @@ def compute_ttl_seconds(matches: list[NormalizedMatch], now: datetime, day: str 
       register_fixture_reconciliation_job's job (a periodic live re-check
       independent of this cache's own expiry), not this function's."""
     if not matches:
+        if day is not None:
+            try:
+                day_date = datetime.fromisoformat(day).date()
+            except ValueError:
+                day_date = None
+            if day_date is not None and abs((day_date - now.date()).days) > _RECONCILIATION_WINDOW_DAYS:
+                return TTL_CEILING_SECONDS
         return TTL_DEFAULT_SECONDS
 
     if any(m.status in _LIVE_STATUSES for m in matches):

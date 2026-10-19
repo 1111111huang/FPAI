@@ -48,6 +48,26 @@ def test_empty_day_gets_the_plain_default():
     assert compute_ttl_seconds([], _NOW) == TTL_DEFAULT_SECONDS
 
 
+def test_empty_day_within_the_reconciliation_window_still_gets_the_default():
+    # [today-2, today+2] is exactly what register_fixture_reconciliation_job
+    # re-checks -- the short default TTL still buys real protection there.
+    for offset in (-2, -1, 0, 1, 2):
+        day = (_NOW.date() + timedelta(days=offset)).isoformat()
+        assert compute_ttl_seconds([], _NOW, day=day) == TTL_DEFAULT_SECONDS
+
+
+def test_empty_day_outside_the_reconciliation_window_gets_the_ceiling():
+    # BUG-090 (found live 2026-10-19): the reconciliation job never revisits
+    # a day this far out, so the short default bought no real protection --
+    # only constant real re-fetches of what's almost always still nothing.
+    # A wide request (e.g. the frontend's 90-day-forward search prefetch)
+    # spans dozens of these, draining football-data.org's per-key rate limit
+    # continuously until live match status stopped updating at all.
+    for offset in (-3, 3, 90):
+        day = (_NOW.date() + timedelta(days=offset)).isoformat()
+        assert compute_ttl_seconds([], _NOW, day=day) == TTL_CEILING_SECONDS
+
+
 def test_a_live_match_gets_the_floor():
     assert compute_ttl_seconds([_match("LIVE", -0.5)], _NOW) == TTL_FLOOR_SECONDS
 
