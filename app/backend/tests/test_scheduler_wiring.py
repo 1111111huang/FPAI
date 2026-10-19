@@ -34,6 +34,7 @@ from app.backend.scheduler_wiring import (
     EOD_JOB_ID,
     FallbackOddsClient,
     FallbackOddsPapiClient,
+    _last_slack_alert_at,
     LESSONS_HOUR,
     LESSONS_JOB_ID,
     LESSONS_WEEKLY_DAY_OF_WEEK,
@@ -366,6 +367,69 @@ def test_fallback_odds_client_logs_a_final_warning_only_once_every_key_is_exhaus
     assert "all 2 configured key(s) exhausted or failed" in caplog.text
 
 
+def test_all_keys_exhausted_posts_a_slack_alert_when_webhook_configured(monkeypatch) -> None:
+    # BUG-091: direct user request (2026-10-19) -- alert when every
+    # configured odds key is drained, not just log it, so a sustained
+    # outage (confirmed live: all 5 Odds API keys 401'd for days) gets
+    # noticed instead of silently serving stale odds forever.
+    monkeypatch.setenv("SLACK_ALERT_WEBHOOK_URL", "https://hooks.slack.test/fake")
+    _last_slack_alert_at.clear()
+    primary, secondary = MagicMock(), MagicMock()
+    primary.get_odds.return_value = None
+    secondary.get_odds.return_value = None
+
+    with patch("app.backend.scheduler_wiring.requests.post") as mock_post:
+        result = FallbackOddsClient([primary, secondary]).get_odds()
+
+    assert result is None
+    mock_post.assert_called_once()
+    _, kwargs = mock_post.call_args
+    assert kwargs["json"]["text"].startswith(":rotating_light: The Odds API:")
+    assert "all 2 configured key(s)" in kwargs["json"]["text"]
+
+
+def test_no_slack_alert_without_the_webhook_env_var(monkeypatch) -> None:
+    monkeypatch.delenv("SLACK_ALERT_WEBHOOK_URL", raising=False)
+    _last_slack_alert_at.clear()
+    primary = MagicMock()
+    primary.get_odds.return_value = None
+
+    with patch("app.backend.scheduler_wiring.requests.post") as mock_post:
+        FallbackOddsClient([primary]).get_odds()
+
+    mock_post.assert_not_called()
+
+
+def test_slack_alert_is_debounced_within_the_cooldown_window(monkeypatch) -> None:
+    # A sustained outage re-triggers this exact condition on every single
+    # call -- without debouncing this would send one Slack message per
+    # request for as long as the outage lasts.
+    monkeypatch.setenv("SLACK_ALERT_WEBHOOK_URL", "https://hooks.slack.test/fake")
+    _last_slack_alert_at.clear()
+    primary = MagicMock()
+    primary.get_odds.return_value = None
+
+    with patch("app.backend.scheduler_wiring.requests.post") as mock_post:
+        FallbackOddsClient([primary]).get_odds()
+        FallbackOddsClient([primary]).get_odds()
+
+    mock_post.assert_called_once()
+
+
+def test_slack_alert_failure_does_not_raise(monkeypatch) -> None:
+    # The alert is a side effect of reporting a real failure -- a broken
+    # webhook URL must not turn into a second, unrelated crash on top.
+    monkeypatch.setenv("SLACK_ALERT_WEBHOOK_URL", "https://hooks.slack.test/fake")
+    _last_slack_alert_at.clear()
+    primary = MagicMock()
+    primary.get_odds.return_value = None
+
+    with patch("app.backend.scheduler_wiring.requests.post", side_effect=requests.ConnectionError("down")):
+        result = FallbackOddsClient([primary]).get_odds()
+
+    assert result is None
+
+
 def test_fallback_odds_client_get_event_odds_falls_back_the_same_way() -> None:
     """W164: get_event_odds() shares _try_each_client with get_odds() --
     one test proving the shared plumbing forwards args/falls back correctly
@@ -513,6 +577,22 @@ def test_fallback_oddspapi_client_returns_none_when_every_client_fails() -> None
     result = FallbackOddsPapiClient([primary, secondary]).get_corners_odds(fixture_id="555")
 
     assert result is None
+
+
+def test_oddspapi_all_keys_exhausted_posts_its_own_slack_alert(monkeypatch) -> None:
+    # Same BUG-091 alert, wired separately for this vendor -- confirms the
+    # vendor label is passed through correctly rather than hardcoded.
+    monkeypatch.setenv("SLACK_ALERT_WEBHOOK_URL", "https://hooks.slack.test/fake")
+    _last_slack_alert_at.clear()
+    primary = MagicMock()
+    primary.get_corners_odds.return_value = None
+
+    with patch("app.backend.scheduler_wiring.requests.post") as mock_post:
+        FallbackOddsPapiClient([primary]).get_corners_odds(fixture_id="555")
+
+    mock_post.assert_called_once()
+    _, kwargs = mock_post.call_args
+    assert kwargs["json"]["text"].startswith(":rotating_light: OddsPapi:")
 
 
 def test_fallback_oddspapi_client_get_fixtures_falls_back_on_raise() -> None:

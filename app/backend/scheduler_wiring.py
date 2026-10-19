@@ -14,6 +14,7 @@ from pathlib import Path
 import subprocess
 import sys
 import threading
+import time
 from typing import Callable
 
 import requests
@@ -235,6 +236,44 @@ class PersistingOddsClient:
         return result
 
 
+_SLACK_ALERT_COOLDOWN_SECONDS = 3600.0
+# BUG-091: this condition recurs on every single call while an outage
+# lasts (confirmed live 2026-10-19 -- all 5 Odds API keys stayed 401'd for
+# days), so alerting on every occurrence would spam one Slack message per
+# request. Debounced per vendor instead: one alert per cooldown window,
+# not one per call.
+_last_slack_alert_at: dict[str, float] = {}
+
+
+def _alert_all_keys_exhausted(vendor: str, op_name: str, key_count: int) -> None:
+    """Posts to SLACK_ALERT_WEBHOOK_URL when every configured key for a
+    vendor has failed/exhausted -- a no-op if that env var isn't set (same
+    "off unless explicitly configured" pattern as APP_ACCESS_TOKEN). Never
+    raises: a failed alert POST must not break the actual odds fallback
+    it's reporting on."""
+    webhook_url = os.environ.get("SLACK_ALERT_WEBHOOK_URL")
+    if not webhook_url:
+        return
+    now = time.monotonic()
+    last = _last_slack_alert_at.get(vendor)
+    if last is not None and now - last < _SLACK_ALERT_COOLDOWN_SECONDS:
+        return
+    _last_slack_alert_at[vendor] = now
+    try:
+        requests.post(
+            webhook_url,
+            json={
+                "text": (
+                    f":rotating_light: {vendor}: all {key_count} configured key(s) exhausted or "
+                    f"failed ({op_name}) -- serving stale odds until a key recovers."
+                ),
+            },
+            timeout=5,
+        )
+    except requests.RequestException:
+        LOGGER.warning("Slack alert POST failed for %s key-exhaustion", vendor, exc_info=True)
+
+
 class FallbackOddsClient:
     """Tries each wrapped PersistingOddsClient (one per ODDS_API_KEY[_2] env
     var) in order, moving to the next when one is exhausted -- either
@@ -279,6 +318,7 @@ class FallbackOddsClient:
             "FallbackOddsClient.%s: all %d configured key(s) exhausted or failed -- keeping last-known odds.",
             op_name, len(self._clients),
         )
+        _alert_all_keys_exhausted("The Odds API", op_name, len(self._clients))
         return None
 
     def get_odds(self, sport_key: str = "soccer_epl", date: str | None = None):
@@ -412,6 +452,7 @@ class FallbackOddsPapiClient:
             "FallbackOddsPapiClient.%s: all %d configured key(s) exhausted or failed -- keeping last-known odds.",
             op_name, len(self._clients),
         )
+        _alert_all_keys_exhausted("OddsPapi", op_name, len(self._clients))
         return None
 
     def get_fixtures(self, tournament_id: int, status_id: int = 0):
