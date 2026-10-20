@@ -1318,6 +1318,45 @@ def test_register_fixture_reconciliation_job_resyncs_t30_for_every_not_yet_kicke
     assert _wait_until(lambda: run_log.has_run("t30_m1", t30_run_at(fixture).isoformat()))
 
 
+def test_register_fixture_reconciliation_job_resyncs_t30_notify_for_every_not_yet_kicked_off_fixture(
+    tmp_path: Path,
+) -> None:
+    """A backend restart between the nightly EOD run and a match's T-30
+    mark wipes RecoverableScheduler's in-memory APScheduler job for that
+    match's "Kickoff soon" push (scheduler.py has no persistent jobstore,
+    see RecoverableScheduler's own docstring). The test directly above
+    already confirms the reconciliation job re-registers the T-30
+    *refresh* job for every still-upcoming fixture after such a restart --
+    this confirms it must do the same for the T-30 *notify* job, which it
+    currently never re-registers at all, silently losing that push
+    forever once a restart beats it to the punch."""
+    fixture = NormalizedMatch(
+        match_id="m1", utc_date=f"{_FUTURE_DAY_STR}T15:00:00Z", status="SCHEDULED",
+        home_team="Arsenal", away_team="Everton", home_goals=None, away_goals=None,
+    )
+    run_log = JobRunLog(db_path=tmp_path / "job_runs.db")
+    now = datetime(_FUTURE_DAY.year, _FUTURE_DAY.month, _FUTURE_DAY.day, 23, 30, tzinfo=NY_TZ)
+    scheduler = RecoverableScheduler(run_log=run_log, now_fn=lambda: now)
+    fixtures_client = MagicMock()
+    fixtures_client.get_fixtures.return_value = [fixture]
+    fixtures_client.get_results.return_value = []
+    cache = RecommendationCache(db_path=tmp_path / "cache.db")
+    config = AgentConfig.default()
+    push_store = PushSubscriptionStore(db_path=tmp_path / "push.db")
+    push_store.add(user_id=1, endpoint="https://push.example/a", p256dh="k", auth="a")
+
+    with patch("app.backend.scheduler_wiring.send_to_all_subscribers") as mock_send:
+        register_fixture_reconciliation_job(
+            scheduler, fixtures_client=fixtures_client, odds_client=None, cache=cache, config=config,
+            now_fn=lambda: now, hours=(23,), push_store=push_store,
+        )
+        _fire_scheduled_job_now(scheduler, "fixture_reconciliation_23")
+        assert _wait_until(lambda: mock_send.called)
+
+    titles = [kwargs["title"] for _, kwargs in mock_send.call_args_list]
+    assert "Kickoff soon" in titles
+
+
 def test_register_fixture_reconciliation_job_keys_a_future_day_fixture_under_its_own_date_not_todays(
     tmp_path: Path,
 ) -> None:

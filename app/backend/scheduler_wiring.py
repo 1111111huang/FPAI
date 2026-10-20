@@ -896,6 +896,7 @@ def register_fixture_reconciliation_job(
     minute: int = RECONCILIATION_MINUTE,
     days_back: int = RECONCILIATION_WINDOW_DAYS_BACK,
     days_forward: int = RECONCILIATION_WINDOW_DAYS_FORWARD,
+    push_store: PushSubscriptionStore | None = None,
 ) -> None:
     """Registers the periodic fixture-reconciliation job (W249) at each of
     `hours` (RecoverableScheduler's own fixed-hour trick for "every N
@@ -983,6 +984,15 @@ def register_fixture_reconciliation_job(
                 )
                 for fixture in date_fixtures:
                     schedule_t30(fixture)
+                # Restores the "Kickoff soon" push job the exact same way
+                # the line above restores the T-30 refresh job -- both are
+                # one-shot APScheduler jobs with no persistent jobstore
+                # (scheduler.py), so a restart between the nightly EOD run
+                # and a fixture's T-30 mark wipes both equally; only the
+                # refresh job had a restart-recovery path before this.
+                if push_store is not None:
+                    for cluster in cluster_fixtures_by_kickoff(date_fixtures):
+                        _schedule_t30_batch_notify(scheduler, push_store, cluster, date_str)
 
     # W251: catch_up=False on every slot -- see schedule_daily()'s own
     # docstring for why. Registering the same job body at 6 fixed hours

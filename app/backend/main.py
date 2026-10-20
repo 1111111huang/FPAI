@@ -415,6 +415,7 @@ async def lifespan(app: FastAPI):
             serie_a_fixtures_client=get_serie_a_fixtures_client(),
             bundesliga_fixtures_client=get_bundesliga_fixtures_client(),
             ligue1_fixtures_client=get_ligue1_fixtures_client(),
+            push_store=get_push_store(),
         )
         register_lessons_job(
             scheduler,
