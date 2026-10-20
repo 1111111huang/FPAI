@@ -53,8 +53,24 @@ BASE_URL = "https://api.oddspapi.io"
 # Global, not per-key: the vendor's error message doesn't say whether the
 # limit is per-key or per-IP, and a global throttle is correct either way
 # (just possibly more conservative than strictly required if it's per-key).
-# A small margin over the vendor's own observed 1.52s.
-_MIN_REQUEST_INTERVAL_SECONDS = 1.6
+#
+# BUG-091 follow-up (found live 2026-10-20): 1.6s (a small margin over the
+# vendor's own observed-once 1.52s) still isn't enough -- a single EOD batch
+# run needs one get_fixtures() per league plus one get_corners_odds() per
+# fixture (eod_batch.py's add_secondary_odds), ~60-70 calls/night across a
+# full slate. Even paced at 1.6s that's a sustained ~37 req/min for nearly
+# two minutes straight, and all 5 configured keys (including two brand-new
+# ones, confirmed live via an isolated call succeeding instantly on one)
+# still cycled through 429s -- so "1.52s" was evidently just the minimum
+# instantaneous spacing, not a safe sustained rate. OddsPapi doesn't publish
+# a documented requests/minute limit to size this against, so this is a
+# deliberately conservative empirical widening rather than a derived value --
+# the BUG-091 Slack alert (scheduler_wiring.py) will say if even this isn't
+# enough.
+# ponytail: a flat global interval, not a real token-bucket/rate limiter --
+# revisit with a proper rate limiter (or a published vendor limit to size
+# against) if this value needs tuning again.
+_MIN_REQUEST_INTERVAL_SECONDS = 5.0
 _throttle_lock = threading.Lock()
 _last_request_at = 0.0
 
