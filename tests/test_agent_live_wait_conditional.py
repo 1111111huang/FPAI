@@ -206,6 +206,49 @@ def test_custom_target_odds_is_respected_not_hardcoded():
     assert rec["candidates"][0]["recommendation_type"] == "conditional"
 
 
+def test_not_promoted_when_edge_already_clears_at_the_current_price():
+    """BUG-086, found live (2026-10-21) via two real matches (Sassuolo v
+    Milan, Cagliari v Juventus, both total_goals/over_2.5): current_odds
+    already inside the normal direct_bet range with a value_edge (0.121/
+    0.122) that clears min_value_edge RIGHT NOW -- there is no 'later' to
+    wait for, which is exactly why A52's target_odds computation produced
+    None for both (target_price <= current_odds). The LLM itself had
+    called these 'no_bet' (self-reported composite_score as low as 0.08,
+    with real qualitative doubts in its own limitations text) -- but this
+    rule promoted them to 'conditional' anyway, using only the edge-at-
+    TARGET check, never checking whether edge-at-CURRENT already clears
+    the bar. Net effect live: a card reading 'conditional -- wait for a
+    better price' with no price shown to wait for, overriding the LLM's
+    own lower-trust judgment with a check that doesn't actually apply to
+    an already-qualifying candidate. Must stay 'no_bet' -- promoting it
+    doesn't make it a genuine live-wait pick, it just hides the LLM's own
+    caution behind a confusing, un-actionable badge."""
+    candidate = {
+        **_VALID_CANDIDATE, "current_odds": 1.78, "ml_probability": 0.6828, "value_edge": 0.121,
+    }
+    data = {**_VALID, "candidates": [candidate]}
+
+    rec = extract_recommendation(_wrap_json(data), live_wait_min_odds=_LIVE_WAIT_MIN_ODDS, min_value_edge=0.05)
+
+    assert rec["candidates"][0]["recommendation_type"] == "no_bet"
+    assert rec["limitations"] == []
+
+
+def test_still_promoted_when_edge_at_current_price_is_genuinely_below_floor():
+    """Mirror of the above, confirming the new check doesn't just disable
+    the whole rule: ml_probability 0.56 at current_odds 1.75 (implied
+    0.571) is a NEGATIVE edge right now (-0.011, genuinely below
+    min_value_edge) but clears 0.05 at the live-wait target (2.0) -- a
+    real 'wait for it to drift' candidate, same as this file's existing
+    test_promoted_when_edge_at_target_price_clears_min_value_edge."""
+    candidate = {**_VALID_CANDIDATE, "ml_probability": 0.56}
+    data = {**_VALID, "candidates": [candidate]}
+
+    rec = extract_recommendation(_wrap_json(data), live_wait_min_odds=_LIVE_WAIT_MIN_ODDS, min_value_edge=0.05)
+
+    assert rec["candidates"][0]["recommendation_type"] == "conditional"
+
+
 def test_survives_the_stricter_general_conditional_floor():
     """The core conflict this rule resolves: the general conditional floor
     (min_conditional_odds_threshold, prod default 1.71 / -140) is STRICTER

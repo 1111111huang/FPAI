@@ -568,6 +568,16 @@ def _promote_favorite_to_conditional_for_live_wait(
             continue
         if odds < live_wait_min_odds or odds >= live_wait_target_odds:
             continue
+        # BUG-086: an edge that already clears min_value_edge AT THE CURRENT
+        # price has nothing left to wait for -- confirmed live via two real
+        # matches where this promoted a 'no_bet' (the LLM's own, lower-trust
+        # call per its self-reported composite_score) into a 'conditional'
+        # with no target_odds (A52 correctly computes None when the price
+        # already clears the bar), a dead-end "wait for a better price" card
+        # with no price to wait for. Only a genuine not-yet-qualifying
+        # candidate belongs to this rule.
+        if prob - (1 / odds) >= min_value_edge:
+            continue
         edge_at_target = prob - implied_at_target
         if edge_at_target >= min_value_edge:
             candidate["recommendation_type"] = "conditional"
