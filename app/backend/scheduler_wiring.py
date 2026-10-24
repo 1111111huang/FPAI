@@ -736,13 +736,28 @@ def register_eod_job(
             schedule_t30 = build_schedule_t30(
                 scheduler, odds_client, cache, config, date_str, league=league, fixtures=fixtures,
             )
-            asyncio.run(
-                run_eod_batch(
-                    fixtures_client=fixtures_client, odds_client=odds_client, cache=cache, config=config,
-                    schedule_t30=schedule_t30, date_str=date_str, fixtures=fixtures, league=league,
-                    oddspapi_client=oddspapi_client,
+            # BUG-093: run_eod_batch itself (not just fixture discovery
+            # above) had no try/except here -- an exception escaping it
+            # (now rare after BUG-093's own fix inside run_eod_batch, but
+            # not impossible) propagated straight out of this function,
+            # aborting the `for league in COMPETITIONS` loop entirely --
+            # every competition listed after the one that failed never even
+            # got attempted that night. Same isolation contract as the
+            # fixture-discovery try/except just above.
+            try:
+                asyncio.run(
+                    run_eod_batch(
+                        fixtures_client=fixtures_client, odds_client=odds_client, cache=cache, config=config,
+                        schedule_t30=schedule_t30, date_str=date_str, fixtures=fixtures, league=league,
+                        oddspapi_client=oddspapi_client,
+                    )
                 )
-            )
+            except Exception:
+                LOGGER.warning(
+                    "EOD batch: run_eod_batch failed for league=%s -- skipping this competition for "
+                    "tonight, other competitions unaffected.", league, exc_info=True,
+                )
+                continue
 
         # None (the default, and every pre-existing caller) means push
         # notifications aren't wired for this run -- skip entirely rather

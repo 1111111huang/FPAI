@@ -19,6 +19,7 @@ import pytest
 import requests
 
 from app.backend import fixture_cache
+from app.backend.eod_batch import run_eod_batch
 from app.backend.fixture_cache_store import FixtureCacheStore
 from app.backend.football_data_client import NormalizedMatch
 from app.backend.odds_api_client import CreditCounter, FileCreditCounterStore
@@ -799,6 +800,62 @@ def test_register_eod_job_one_competitions_fixture_fetch_failure_does_not_block_
 
     assert mock_run_agent.call_count == 1
     assert mock_run_agent.call_args.kwargs["match_info"]["league"] == "E0"
+
+
+def test_register_eod_job_one_competitions_run_eod_batch_failure_does_not_block_the_others(tmp_path: Path) -> None:
+    """BUG-093: unlike the sibling test above (a fixture-DISCOVERY failure,
+    already guarded by its own try/except), run_eod_batch ITSELF -- the
+    actual generation call -- had no try/except around it in _eod_job's
+    per-competition loop. An exception escaping run_eod_batch (e.g. BUG-093's
+    now-fixed odds-fetch crash, or any other bug inside it) propagated
+    straight out of `asyncio.run(run_eod_batch(...))`, aborting _eod_job's
+    `for league in COMPETITIONS` loop entirely -- every competition listed
+    AFTER the one that failed never even got attempted that night. COMPETITIONS
+    order is (E0, SWE, SP1, ...) -- E0's run_eod_batch is made to raise here,
+    and SP1 (listed after it) must still run."""
+    e0_fixture = NormalizedMatch(
+        match_id="m1", utc_date=f"{_FUTURE_DAY_STR}T15:00:00Z", status="SCHEDULED",
+        home_team="Arsenal", away_team="Everton", home_goals=None, away_goals=None,
+    )
+    sp1_fixture = NormalizedMatch(
+        match_id="sp1", utc_date=f"{_FUTURE_DAY_STR}T19:00:00Z", status="SCHEDULED",
+        home_team="Real Madrid", away_team="Sevilla FC", home_goals=None, away_goals=None,
+    )
+    fixtures_client = MagicMock()
+    fixtures_client.get_fixtures.return_value = [e0_fixture]
+    la_liga_fixtures_client = MagicMock()
+    la_liga_fixtures_client.get_fixtures.return_value = [sp1_fixture]
+    cache = RecommendationCache(db_path=tmp_path / "cache.db")
+    config = AgentConfig.default()
+    run_log = JobRunLog(db_path=tmp_path / "job_runs.db")
+    now = datetime(_FUTURE_DAY.year, _FUTURE_DAY.month, _FUTURE_DAY.day, 23, 30, tzinfo=NY_TZ)
+    scheduler = RecoverableScheduler(run_log=run_log, now_fn=lambda: now)
+
+    recommendation = {
+        "match": {"home": "A", "away": "B", "date": "2026-08-22", "league": "E0"},
+        "overall": "no_bet", "markets": [], "explanation": "test", "confidence": "low",
+        "limitations": [], "prediction_basis": "market_odds_only",
+    }
+    real_run_eod_batch = run_eod_batch
+
+    async def _run_eod_batch_side_effect(*args, **kwargs):
+        if kwargs.get("league") == "E0":
+            raise RuntimeError("secondary odds vendor exploded")
+        return await real_run_eod_batch(*args, **kwargs)
+
+    with patch("app.backend.recommendations.run_agent", return_value=recommendation) as mock_run_agent, patch(
+        "app.backend.scheduler_wiring.list_display_enabled_competition_ids", return_value=["E0", "SP1"]
+    ), patch("app.backend.scheduler_wiring.run_eod_batch", side_effect=_run_eod_batch_side_effect):
+        register_eod_job(
+            scheduler, fixtures_client=fixtures_client, odds_client=None,
+            cache=cache, config=config, now_fn=lambda: now,
+            la_liga_fixtures_client=la_liga_fixtures_client,
+        )
+        assert _wait_until(lambda: run_log.has_run(EOD_JOB_ID, _FUTURE_DAY_STR))
+
+    leagues_seen = {call.kwargs["match_info"]["league"] for call in mock_run_agent.call_args_list}
+    assert leagues_seen == {"SP1"}
+    assert run_log.has_run("t30_sp1", t30_run_at(sp1_fixture).isoformat())
 
 
 def test_register_eod_job_processes_e0_swe_and_sp1_when_all_clients_configured(tmp_path: Path) -> None:

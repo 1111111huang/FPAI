@@ -302,6 +302,49 @@ def test_fixtures_endpoint_today_only_query_checks_both_finished_and_scheduled()
     mock_client.get_fixtures.assert_called_once_with(date_from="2025-03-10", date_to="2025-03-10", blocking=False)
 
 
+def test_fixtures_endpoint_dedupes_same_match_shown_by_both_results_and_fixtures():
+    """BUG-092, found live 2026-10-23 via direct user report ("duplicate
+    matches on the app right now"). Root cause: get_results()/get_fixtures()
+    for 'today' are two INDEPENDENTLY cached, independently TTL'd entries
+    (fixture_cache.py) -- a match that has actually finished can still be
+    served by a stale-but-not-yet-refetched fixtures_call_type entry
+    (fixture_cache._read_days serves stale data past TTL expiry by design,
+    BUG-084) at the exact same time results_call_type has already picked it
+    up as FINISHED (refreshed independently, every 15min for 'today' per
+    BUG-089). get_fixtures() here just concatenates every call's matches
+    with zero dedup -- so the SAME match_id (stable across a provider's own
+    status transitions -- see NormalizedMatch.match_id) can appear twice:
+    once FINISHED (real, fresh), once SCHEDULED (stale echo of an earlier
+    snapshot). Must collapse to the single, most-authoritative entry -- the
+    FINISHED one, never the stale SCHEDULED one it's superseding."""
+    with patch("app.backend.main._current_real_date", return_value=date(2025, 3, 10)):
+        with patch("app.backend.main.get_fixtures_client") as mock_get_client:
+            mock_client = mock_get_client.return_value
+            mock_client.get_results.return_value = [
+                NormalizedMatch(
+                    match_id="42", utc_date="2025-03-10T12:30:00Z", status="FINISHED",
+                    home_team="Liverpool", away_team="Man City", home_goals=2, away_goals=1,
+                )
+            ]
+            mock_client.get_fixtures.return_value = [
+                NormalizedMatch(
+                    match_id="42", utc_date="2025-03-10T12:30:00Z", status="SCHEDULED",
+                    home_team="Liverpool", away_team="Man City", home_goals=None, away_goals=None,
+                )
+            ]
+            with TestClient(app) as client:
+                response = client.get(
+                    "/api/fixtures", params={"date_from": "2025-03-10", "date_to": "2025-03-10"}
+                )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert len(body) == 1
+    assert body[0]["match_id"] == "42"
+    assert body[0]["status"] == "FINISHED"
+    assert body[0]["home_goals"] == 2
+
+
 # ---------------------------------------------------------------------------
 # W52: football-data.org's free tier (~10 req/min) was getting exhausted by
 # repeated frontend navigation (Dashboard -> Match Explorer -> Bet form, each

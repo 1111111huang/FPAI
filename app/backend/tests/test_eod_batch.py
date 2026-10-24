@@ -113,6 +113,64 @@ def test_one_erroring_match_is_skipped_not_fatal(tmp_path: Path) -> None:
     assert len(scheduled) == 2
 
 
+def test_one_matchs_odds_fetch_error_is_skipped_not_fatal_to_the_whole_batch(tmp_path: Path) -> None:
+    """BUG-093, found live 2026-10-24 via a direct user report ("a bunch of
+    not generated matches in the app"): add_secondary_odds() (real network
+    calls to two odds vendors) is called with no try/except around it in
+    _generate_one, inside a bare `asyncio.gather(*[_generate_one(fixture)
+    for fixture in fixtures])` with no return_exceptions=True -- unlike the
+    LLM call just below it, which IS already individually caught (see
+    test_one_erroring_match_is_skipped_not_fatal above). A single fixture's
+    odds-fetch error (timeout, malformed response, a transient 429) was
+    therefore not just fatal to that one fixture -- it aborted the entire
+    gather, cancelling every other still-in-progress fixture in the same
+    league's batch, with nothing generated for any of them that night.
+    Cross-checked live against production (fpai-production.up.railway.app):
+    34/43 upcoming fixtures across all 5 leagues had no cached recommendation
+    at all. Must match the existing LLM-call precedent exactly: one fixture's
+    odds error is skipped, every sibling fixture still generates normally."""
+    fixtures_client = MagicMock()
+    fixtures_client.get_fixtures.return_value = [
+        _fixture("m1", "Arsenal", "Everton"),
+        _fixture("m2", "Chelsea", "Fulham"),
+    ]
+    odds_client = MagicMock()
+    odds_client.get_odds.return_value = [
+        NormalizedOdds(
+            home_team="Arsenal", away_team="Everton", commence_time="2026-08-22T15:00:00Z",
+            home_odds=1.8, draw_odds=3.6, away_odds=4.5, event_id="evt1",
+        ),
+        NormalizedOdds(
+            home_team="Chelsea", away_team="Fulham", commence_time="2026-08-22T15:00:00Z",
+            home_odds=1.5, draw_odds=4.0, away_odds=6.0, event_id="evt2",
+        ),
+    ]
+
+    def _get_event_odds_side_effect(sport_key, event_id, **kwargs):
+        if event_id == "evt1":
+            raise TimeoutError("odds vendor timed out")
+        return NormalizedSecondaryOdds(total_goals=None, btts=None)
+
+    odds_client.get_event_odds.side_effect = _get_event_odds_side_effect
+    cache = RecommendationCache(db_path=tmp_path / "cache.db")
+    config = AgentConfig.default()
+    scheduled: list[NormalizedMatch] = []
+
+    with patch("app.backend.recommendations.run_agent", return_value=_RECOMMENDATION):
+        result = asyncio.run(
+            run_eod_batch(
+                fixtures_client=fixtures_client, odds_client=odds_client, cache=cache, config=config,
+                schedule_t30=scheduled.append, date_str=_future_date(1),
+            )
+        )
+
+    assert result.generated == 1
+    assert result.skipped == 1
+    agent_config_hash = compute_agent_config_hash(config)
+    assert cache.get_latest("m1", _future_date(1), agent_config_hash) is None
+    assert cache.get_latest("m2", _future_date(1), agent_config_hash) is not None
+
+
 def test_fixture_already_kicked_off_is_skipped_and_not_scheduled_for_t30(tmp_path: Path) -> None:
     """A pre-match recommendation is meaningless once a match has already
     started -- "current odds" at that point reflect in-game state, not a

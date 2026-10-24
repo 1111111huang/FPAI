@@ -433,11 +433,30 @@ async def run_eod_batch(
         odds = match_odds(fixture, odds_by_teams)
         if odds is not None:
             match_info["odds"] = odds
-            add_secondary_odds(
-                match_info, odds, odds_client, cache, fixture, fixture_date,
-                agent_config_hash, sport_key, odds_by_teams,
-                oddspapi_client=oddspapi_client, oddspapi_fixtures_by_teams=oddspapi_fixtures_by_teams,
-            )
+            # BUG-093: add_secondary_odds makes real network calls to two
+            # odds vendors -- previously uncaught here, so a single
+            # fixture's transient odds-vendor failure (timeout, malformed
+            # response, a 429 past the throttle) propagated straight out of
+            # this coroutine and through the bare asyncio.gather() below,
+            # cancelling every OTHER still-in-progress fixture in this same
+            # league's batch too. Same skip-and-continue contract the LLM
+            # call below already has -- one fixture's odds failure costs
+            # only that fixture, never its siblings.
+            try:
+                add_secondary_odds(
+                    match_info, odds, odds_client, cache, fixture, fixture_date,
+                    agent_config_hash, sport_key, odds_by_teams,
+                    oddspapi_client=oddspapi_client, oddspapi_fixtures_by_teams=oddspapi_fixtures_by_teams,
+                )
+            except Exception as exc:
+                LOGGER.warning(
+                    "EOD batch: skipping match_id=%s (%s v %s) -- secondary odds fetch failed: %s",
+                    fixture.match_id, fixture.home_team, fixture.away_team, exc,
+                )
+                result.skipped += 1
+                if on_progress is not None:
+                    on_progress(fixture, "skipped")
+                return
 
         # W151: a prior pass (boot pregenerate, or tonight's own EOD run
         # catching a fixture pregenerate already covered) already produced
@@ -478,7 +497,21 @@ async def run_eod_batch(
         if on_progress is not None:
             on_progress(fixture, "generated")
 
-    await asyncio.gather(*[_generate_one(fixture) for fixture in fixtures])
+    # BUG-093: return_exceptions=True -- defense in depth alongside the two
+    # try/excepts above (LLM call, odds fetch), covering the few remaining
+    # unguarded steps (match_odds, cache.record_generation,
+    # validate_and_degrade) so a single fixture's failure ANYWHERE in this
+    # function can never again cancel every other fixture's own in-progress
+    # generation. An exception surfacing here (rather than being handled
+    # per-fixture above) means a fixture was never counted as generated OR
+    # skipped -- logged so it's still visible, not silently dropped.
+    outcomes = await asyncio.gather(*[_generate_one(fixture) for fixture in fixtures], return_exceptions=True)
+    for fixture, outcome in zip(fixtures, outcomes):
+        if isinstance(outcome, BaseException):
+            LOGGER.warning(
+                "EOD batch: match_id=%s (%s v %s) failed outside the normal skip path: %s",
+                fixture.match_id, fixture.home_team, fixture.away_team, outcome, exc_info=outcome,
+            )
 
     now = sandbox_now(timezone.utc)
     for fixture in fixtures:

@@ -872,6 +872,31 @@ def _split_fixture_date_range(
     return (date_from, today.isoformat()), (today.isoformat(), date_to)
 
 
+def _dedupe_matches(matches: list[NormalizedMatch]) -> list[NormalizedMatch]:
+    """BUG-092: results_call_type and fixtures_call_type for 'today' are two
+    independently cached, independently TTL'd fixture_cache entries (see
+    that module's own docstrings) -- a match can finish while the
+    fixtures-side entry is still serving an older, stale SCHEDULED/LIVE
+    snapshot of it (fixture_cache._read_days deliberately serves stale data
+    past TTL expiry, BUG-084), landing the same match_id in `matches` twice
+    with two different statuses. match_id is the provider's own raw id,
+    stable across a match's whole lifecycle regardless of status, so it's
+    the right key to collapse on. Prefers a FINISHED entry over any other
+    status for the same id -- it's the real, settled outcome superseding a
+    stale echo, never the other way around. Keeps first-seen order
+    otherwise (no FINISHED duplicate, or no duplicate at all)."""
+    best: dict[str, NormalizedMatch] = {}
+    order: list[str] = []
+    for match in matches:
+        existing = best.get(match.match_id)
+        if existing is None:
+            order.append(match.match_id)
+            best[match.match_id] = match
+        elif match.status == "FINISHED" and existing.status != "FINISHED":
+            best[match.match_id] = match
+    return [best[match_id] for match_id in order]
+
+
 @app.get("/api/fixtures")
 async def get_fixtures(date_from: str | None = None, date_to: str | None = None) -> list[NormalizedMatch]:
     """Thin wrapper over W05's FootballDataClient -- gives the frontend a real
@@ -1079,6 +1104,7 @@ async def get_fixtures(date_from: str | None = None, date_to: str | None = None)
         if isinstance(result, BaseException):
             raise result
         matches += _tag(result, competition)
+    matches = _dedupe_matches(matches)
     if any_failed and not matches:
         # Every competition that could have had something to show either
         # failed or came back empty -- nothing real to return, so say so
