@@ -455,6 +455,79 @@ def test_store_day_persists_to_the_store():
     assert persisted[("fixtures", "2026-08-21")][0].match_id == "m-2026-08-21-15"
 
 
+def test_store_day_rejects_a_write_whose_fetch_started_before_the_currently_cached_entrys():
+    """BUG-094, confirmed live 2026-10-24: two independent fetches for the
+    same (call_type, day) can be in flight at once -- e.g. two differently-
+    spanned get_range() calls that both cover this day (_pending's in-flight
+    dedup is keyed by the exact requested span, not the day), or
+    force_refresh_range() racing a regular get_range() background refetch
+    (it deliberately bypasses _pending entirely). Nothing previously stopped
+    an OLDER fetch (one that started asking the upstream API earlier) from
+    overwriting a NEWER one's already-cached result just because it happened
+    to finish writing later -- live symptom: a real FINISHED 0-2 scoreline
+    reverted to TIMED with no score 21 minutes after the correct result was
+    already cached. `fetched_at` is each fetch's own START time (not
+    completion time) -- a fetch that started later reflects strictly
+    fresher ground truth regardless of which one's write lands first."""
+    newer_match = _future_match("2026-08-21", hour=18)
+    older_match = _future_match("2026-08-21", hour=10)
+    fetch_t1 = _NOW
+    fetch_t2 = _NOW + timedelta(seconds=5)
+
+    with patch("app.backend.fixture_cache.wall_clock_now", return_value=_NOW):
+        # The newer fetch (started at t2) lands first...
+        fixture_cache.store_day("fixtures", "2026-08-21", [newer_match], fetched_at=fetch_t2)
+        # ...then the older, slower-to-complete fetch (started at t1) arrives late.
+        fixture_cache.store_day("fixtures", "2026-08-21", [older_match], fetched_at=fetch_t1)
+
+    assert fixture_cache._read_days("fixtures", ["2026-08-21"])[0].match_id == newer_match.match_id
+
+
+def test_store_day_accepts_a_write_whose_fetch_started_after_the_currently_cached_entrys():
+    """Mirror of the rejection test above -- a genuinely newer fetch must
+    still win normally, confirming the ordering check isn't just a blanket
+    freeze on the first write."""
+    older_match = _future_match("2026-08-21", hour=10)
+    newer_match = _future_match("2026-08-21", hour=18)
+    fetch_t1 = _NOW
+    fetch_t2 = _NOW + timedelta(seconds=5)
+
+    with patch("app.backend.fixture_cache.wall_clock_now", return_value=_NOW):
+        fixture_cache.store_day("fixtures", "2026-08-21", [older_match], fetched_at=fetch_t1)
+        fixture_cache.store_day("fixtures", "2026-08-21", [newer_match], fetched_at=fetch_t2)
+
+    assert fixture_cache._read_days("fixtures", ["2026-08-21"])[0].match_id == newer_match.match_id
+
+
+def test_store_day_without_fetched_at_preserves_pre_bug_094_unconditional_overwrite():
+    """Backward compatibility: every pre-existing caller (direct store_day()
+    calls in this file and elsewhere, and any future one that doesn't pass
+    fetched_at) must keep today's exact unconditional-overwrite behavior --
+    the ordering check is opt-in via fetched_at, not a universal default."""
+    first = _future_match("2026-08-21", hour=18)
+    second = _future_match("2026-08-21", hour=10)
+
+    with patch("app.backend.fixture_cache.wall_clock_now", return_value=_NOW):
+        fixture_cache.store_day("fixtures", "2026-08-21", [first])
+        fixture_cache.store_day("fixtures", "2026-08-21", [second])
+
+    assert fixture_cache._read_days("fixtures", ["2026-08-21"])[0].match_id == second.match_id
+
+
+def test_fetch_and_store_passes_its_own_start_time_as_fetched_at():
+    """Wiring check: _fetch_and_store (the function both get_range() and
+    force_refresh_range() funnel every real fetch through) must capture
+    fetched_at as when IT started asking the upstream API -- not when
+    store_day() happens to actually run -- so the ordering check above
+    reflects each fetch's real start time, not its write time."""
+    fetch = MagicMock(return_value=[_future_match("2026-08-21", hour=15)])
+    t1 = _NOW
+    with patch("app.backend.fixture_cache.wall_clock_now", return_value=t1):
+        asyncio.run(fixture_cache._fetch_and_store("fixtures", "2026-08-21", "2026-08-21", fetch, {}))
+
+    assert fixture_cache._last_fetch_started_at[("fixtures", "2026-08-21")] == t1
+
+
 def test_load_from_disk_seeds_the_in_memory_cache_already_expired():
     fixture_cache._store.store_day("fixtures", "2026-08-21", [_future_match("2026-08-21")])
 

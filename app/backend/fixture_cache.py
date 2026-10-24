@@ -185,6 +185,23 @@ def _get_store() -> FixtureCacheStore:
 _cache: dict[tuple[str, str], tuple[float, list[NormalizedMatch]]] = {}
 _cache_lock = threading.Lock()
 
+# BUG-094: (call_type, day) -> the wall-clock time the most recently
+# ACCEPTED write's own fetch started asking the upstream API (not when it
+# finished, not when it wrote) -- lets store_day() reject a write from a
+# fetch that started before the one already reflected in _cache, even if
+# that older fetch happens to finish (and call store_day()) later. Two
+# independent fetches for the same (call_type, day) can genuinely be in
+# flight at once -- two differently-spanned get_range() calls both covering
+# this day (_pending's in-flight dedup is keyed by the exact requested
+# span, not the day), or force_refresh_range() racing a regular get_range()
+# background refetch (it deliberately bypasses _pending). Without this,
+# last-write-wins meant a slow, already-stale-when-it-started fetch could
+# clobber a fresher result that landed first -- confirmed live 2026-10-24:
+# a real FINISHED 0-2 scoreline reverted to TIMED with no score 21 minutes
+# after the correct result was already cached. Guarded by the same
+# _cache_lock as _cache -- always written/read together with it.
+_last_fetch_started_at: dict[tuple[str, str], datetime] = {}
+
 # call_type+span -> in-flight asyncio.Task. Deliberately NOT lock-guarded
 # -- unlike _cache above, this dict is only ever touched by get_range()
 # (the HTTP-route path), never by force_refresh_range() (the
@@ -220,6 +237,7 @@ def clear() -> None:
     test instead)."""
     with _cache_lock:
         _cache.clear()
+        _last_fetch_started_at.clear()
     _pending.clear()
 
 
@@ -244,9 +262,22 @@ def load_from_disk() -> None:
             _cache[(call_type, day)] = (now - 1, matches)
 
 
-def store_day(call_type: str, day: str, matches: list[NormalizedMatch]) -> None:
-    ttl = compute_ttl_seconds(matches, wall_clock_now(), day=day)
+def store_day(call_type: str, day: str, matches: list[NormalizedMatch], fetched_at: datetime | None = None) -> None:
+    """BUG-094: `fetched_at` (optional, defaulting to None) is the calling
+    fetch's own start time -- when supplied, a write whose fetch started
+    strictly BEFORE the most recently accepted write's own start time is
+    rejected outright (in-memory and persisted both), so a slow, already-
+    stale-when-it-started fetch can never clobber a fresher result that
+    already landed. None (every pre-existing caller, and any direct test
+    poke) preserves the exact prior unconditional-overwrite behavior --
+    this check is opt-in, not a new universal default."""
     with _cache_lock:
+        if fetched_at is not None:
+            last = _last_fetch_started_at.get((call_type, day))
+            if last is not None and fetched_at < last:
+                return
+            _last_fetch_started_at[(call_type, day)] = fetched_at
+        ttl = compute_ttl_seconds(matches, wall_clock_now(), day=day)
         _cache[(call_type, day)] = (now_monotonic() + ttl, matches)
     _get_store().store_day(call_type, day, matches)
 
@@ -291,12 +322,18 @@ async def _fetch_and_store(
     call_type: str, sub_from: str, sub_to: str,
     fetch: Callable[..., list[NormalizedMatch]], fetch_kwargs: dict,
 ) -> None:
+    # BUG-094: captured BEFORE the actual upstream call, not after it
+    # returns -- this is "when we asked the question", the right ordering
+    # key for store_day()'s fetched_at check. A fetch that started later
+    # reflects strictly fresher ground truth regardless of how long it then
+    # takes to complete.
+    fetched_at = wall_clock_now()
     matches = await run_in_threadpool(fetch, date_from=sub_from, date_to=sub_to, **fetch_kwargs)
     by_day: dict[str, list[NormalizedMatch]] = {day: [] for day in date_range(sub_from, sub_to)}
     for match in matches:
         by_day.setdefault(match.utc_date[:10], []).append(match)
     for day, day_matches in by_day.items():
-        store_day(call_type, day, day_matches)
+        store_day(call_type, day, day_matches, fetched_at=fetched_at)
 
 
 def _on_background_fetch_done(call_type: str, sub_from: str, sub_to: str, task: "asyncio.Task[None]") -> None:
