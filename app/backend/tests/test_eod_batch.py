@@ -408,7 +408,10 @@ def test_secondary_odds_fetched_and_threaded_into_match_info_and_odds_dedup_key(
         )
 
     assert odds_client.get_event_odds.call_count == 2
-    odds_client.get_event_odds.assert_any_call(sport_key="soccer_epl", event_id="evt1")
+    odds_client.get_event_odds.assert_any_call(
+        sport_key="soccer_epl", event_id="evt1", markets=("totals", "btts", "spreads"),
+        home_team="Arsenal", away_team="Everton",
+    )
     assert captured_match_info["total_goals_odds"] == {"over_2.5": 1.9, "under_2.5": 1.95}
     assert captured_match_info["btts_odds"] == {"yes": 1.7, "no": 2.1}
 
@@ -484,6 +487,7 @@ def test_secondary_odds_reused_from_cache_not_refetched_when_h2h_unchanged(tmp_p
             "home": 1.8, "draw": 3.6, "away": 4.5,
             "total_goals": {"over_2.5": 1.9, "under_2.5": 1.95}, "btts": {"yes": 1.7, "no": 2.1},
             "home_goals": {"over_1.5": 1.6, "under_1.5": 2.2}, "away_goals": {"over_1.5": 2.5, "under_1.5": 1.5},
+            "asian_handicap": {"line": -0.75, "home": 1.95, "away": 1.95},
         },
         recommendation=_RECOMMENDATION, triggered_by="scheduled",
     )
@@ -596,7 +600,10 @@ def test_secondary_odds_refetched_when_h2h_odds_moved(tmp_path: Path) -> None:
         )
 
     assert odds_client.get_event_odds.call_count == 2
-    odds_client.get_event_odds.assert_any_call(sport_key="soccer_epl", event_id="evt1")
+    odds_client.get_event_odds.assert_any_call(
+        sport_key="soccer_epl", event_id="evt1", markets=("totals", "btts", "spreads"),
+        home_team="Arsenal", away_team="Everton",
+    )
     assert captured_match_info["total_goals_odds"] == {"over_2.5": 1.95, "under_2.5": 1.9}
 
 
@@ -633,7 +640,10 @@ def test_secondary_odds_backfilled_once_for_a_cache_row_that_predates_the_featur
         )
 
     assert odds_client.get_event_odds.call_count == 2
-    odds_client.get_event_odds.assert_any_call(sport_key="soccer_epl", event_id="evt1")
+    odds_client.get_event_odds.assert_any_call(
+        sport_key="soccer_epl", event_id="evt1", markets=("totals", "btts", "spreads"),
+        home_team="Arsenal", away_team="Everton",
+    )
     assert captured_match_info["total_goals_odds"] == {"over_2.5": 1.9, "under_2.5": 1.95}
 
 
@@ -1412,3 +1422,71 @@ def test_generation_persists_reasoning_trace_and_forecast_payload_a107(tmp_path:
     entry = cache.get_latest("m1", _future_date(1), compute_agent_config_hash(config))
     assert entry.reasoning_trace == [{"role": "ai", "content": "Away win looks like value here."}]
     assert entry.forecast_payload == {"result_3way": {"probabilities": {"home": 0.5}}}
+
+
+def test_asian_handicap_odds_fetched_and_threaded_into_match_info(tmp_path: Path) -> None:
+    """BUG-096: the totals/btts call also requests "spreads", so the
+    forecast gets a real Asian handicap line (the MKT_LAMBDA_* inputs)."""
+    fixtures_client = MagicMock()
+    fixtures_client.get_fixtures.return_value = [_fixture("m1", "Arsenal", "Everton")]
+    odds_client = _seeded_odds_client()
+    odds_client.get_event_odds.return_value = NormalizedSecondaryOdds(
+        total_goals={"over_2.5": 1.9, "under_2.5": 1.95}, btts=None,
+        asian_handicap={"line": -1.0, "home": 1.92, "away": 1.98},
+    )
+    cache = RecommendationCache(db_path=tmp_path / "cache.db")
+    config = AgentConfig.default()
+    captured_match_info = {}
+
+    def _capture(match_info, config):
+        captured_match_info.update(match_info)
+        return _RECOMMENDATION
+
+    with patch("app.backend.recommendations.run_agent", side_effect=_capture):
+        asyncio.run(
+            run_eod_batch(
+                fixtures_client=fixtures_client, odds_client=odds_client, cache=cache, config=config,
+                schedule_t30=lambda f: None, date_str=_future_date(1),
+            )
+        )
+
+    assert captured_match_info["asian_handicap_odds"] == {"line": -1.0, "home": 1.92, "away": 1.98}
+    cached = cache.get_latest("m1", _future_date(1), compute_agent_config_hash(config))
+    assert cached.odds["asian_handicap"] == {"line": -1.0, "home": 1.92, "away": 1.98}
+
+
+def test_secondary_odds_refetched_once_for_a_cache_row_without_asian_handicap(tmp_path: Path) -> None:
+    """BUG-096: a cache row written before spreads was fetched has no
+    "asian_handicap" key at all. It gets one re-fetch even with h2h
+    unchanged, so the line is picked up."""
+    fixtures_client = MagicMock()
+    fixtures_client.get_fixtures.return_value = [_fixture("m1", "Arsenal", "Everton")]
+    odds_client = _seeded_odds_client()
+    odds_client.get_event_odds.return_value = NormalizedSecondaryOdds(
+        total_goals={"over_2.5": 1.9, "under_2.5": 1.95}, btts={"yes": 1.7, "no": 2.1},
+        asian_handicap={"line": -0.75, "home": 1.95, "away": 1.95},
+    )
+    cache = RecommendationCache(db_path=tmp_path / "cache.db")
+    config = AgentConfig.default()
+    cache.record_generation(
+        match_id="m1", date=_future_date(1), agent_config_hash=compute_agent_config_hash(config),
+        odds={
+            "home": 1.8, "draw": 3.6, "away": 4.5,
+            "total_goals": {"over_2.5": 1.9, "under_2.5": 1.95}, "btts": {"yes": 1.7, "no": 2.1},
+            "home_goals": {"over_1.5": 1.6, "under_1.5": 2.2}, "away_goals": {"over_1.5": 2.5, "under_1.5": 1.5},
+        },
+        recommendation=_RECOMMENDATION, triggered_by="scheduled",
+    )
+
+    with patch("app.backend.recommendations.run_agent", return_value=_RECOMMENDATION):
+        asyncio.run(
+            run_eod_batch(
+                fixtures_client=fixtures_client, odds_client=odds_client, cache=cache, config=config,
+                schedule_t30=lambda f: None, date_str=_future_date(1),
+            )
+        )
+
+    odds_client.get_event_odds.assert_any_call(
+        sport_key="soccer_epl", event_id="evt1", markets=("totals", "btts", "spreads"),
+        home_team="Arsenal", away_team="Everton",
+    )

@@ -95,6 +95,58 @@ def _compute_shap_contributions(model: Any, feature_row: pd.DataFrame, top_n: in
         return None
 
 
+# BUG-096: the goal-market features derived from over/under 2.5 and Asian
+# handicap prices. A live forecast with none of them real cannot price any
+# goal market from the market's own view.
+_GOAL_MARKET_FEATURES = ("MKT_IMPLIED_OVER25", "MKT_LAMBDA_HOME", "MKT_LAMBDA_AWAY")
+
+
+# Mirrors ModelManager.prepare_training_data's own list of model types
+# trained WITHOUT dropping NaN-feature rows. By class name, so this module
+# doesn't import every model wrapper just to check.
+_NAN_TRAINED_MODEL_CLASSES = frozenset({
+    "XGBClassifier", "XGBRegressor", "XGBoostModel", "XGBoostRegressorModel",
+    "TwoStageResultModel", "SkellamResultModel", "QuantileIntervalModel", "EnsembleResultModel",
+})
+
+
+def _handles_nan_natively(model: Any) -> bool:
+    return type(model).__name__ in _NAN_TRAINED_MODEL_CLASSES
+
+
+def _goal_market_features_available(feature_row: pd.DataFrame) -> bool:
+    """True only when every _GOAL_MARKET_FEATURES column holds a real,
+    non-NaN value BEFORE any imputation. Historical rows from feature_store
+    usually do; a live row only does when real O/U 2.5 and AH odds were
+    passed in."""
+    for col in _GOAL_MARKET_FEATURES:
+        if col not in feature_row.columns:
+            return False
+        value = pd.to_numeric(feature_row[col], errors="coerce").iloc[0]
+        if pd.isna(value):
+            return False
+    return True
+
+
+def _market_nan_frame(imputed: pd.DataFrame, unimputed: pd.DataFrame) -> pd.DataFrame:
+    """BUG-096: `imputed`, but with every MKT_* column restored to its
+    pre-imputation value -- so a genuinely missing market price stays NaN.
+
+    Before this, a missing MKT_* value was filled with the league's
+    feature_store mean, or with a flat 0.0 when that mean was NULL. Both are
+    wrong for market features: a league mean makes every match look
+    identical, and 0.0 is a real-looking signal ("the market expects zero
+    goals") that pushed team-goal models hard toward under 1.5 in E0/SP1.
+    NaN instead lets tree models use the missing-value routing they learned
+    in training, where these columns are NaN whenever a season's CSV lacked
+    the market. _compute_shap_contributions already reports NaN as "not
+    observed" (value None)."""
+    frame = imputed.copy()
+    market_cols = [col for col in frame.columns if col.startswith("MKT_")]
+    frame[market_cols] = unimputed[market_cols]
+    return frame
+
+
 def _apply_calibration(raw_proba: np.ndarray, sidecar: dict[str, Any] | None) -> np.ndarray:
     """US#186: apply a model's own saved calibration sidecar (produced by
     ModelManager._fit_and_save_calibrator, computed for every classifier
@@ -569,11 +621,33 @@ class ForecastService:
         loaded: dict[str, tuple[TargetDefinition, Any, dict[str, Any]]],
         row: pd.Series,
         feature_names: list[str],
+        preferred_frame: pd.DataFrame | None = None,
     ) -> tuple[dict[str, Any], dict[str, Any]]:
-        """Run prediction across all loaded targets for a single feature row."""
+        """Run prediction across all loaded targets for a single feature row.
+
+        BUG-096: when `preferred_frame` is given (the same row, but with
+        missing MKT_* values left as NaN), models that were trained on NaN
+        (the XGBoost family, per ModelManager.prepare_training_data) are
+        scored on it. Every other model keeps the fully imputed
+        `feature_frame` -- the exact pre-BUG-096 behavior -- since it never
+        saw a NaN in training. A NaN-trained model that still raises falls
+        back the same way."""
         forecast: dict[str, Any] = {}
         metadata_by_target = {t: data[2] for t, data in loaded.items()}
         for target, (definition, model, metadata) in loaded.items():
+            if (
+                preferred_frame is not None
+                and _handles_nan_natively(model)
+                and not preferred_frame.equals(feature_frame)
+            ):
+                try:
+                    forecast[target] = self._predict_target(definition, model, metadata, preferred_frame)
+                    continue
+                except ValueError:
+                    LOGGER.info(
+                        "BUG-096: %s model rejected NaN market features -- scoring on imputed row instead.",
+                        target,
+                    )
             forecast[target] = self._predict_target(definition, model, metadata, feature_frame)
         return forecast, metadata_by_target
 
@@ -709,6 +783,11 @@ class ForecastService:
                 feature_row[col] = float("nan")
         feature_frame = feature_row[feature_names_used].apply(pd.to_numeric, errors="coerce").astype(float)
         feature_count = feature_frame.notna().sum().sum()
+        # BUG-096: snapshot BEFORE imputation. Market features that are
+        # genuinely missing (no real price for this match) stay NaN in the
+        # frame models are scored on -- see _market_nan_frame below.
+        unimputed_frame = feature_frame.copy()
+        goal_market_features_available = _goal_market_features_available(feature_row)
 
         # Impute column means for any remaining NaN (cold-start)
         still_missing = [col for col in feature_frame.columns if feature_frame[col].isna().any()]
@@ -733,7 +812,10 @@ class ForecastService:
                 feature_frame[col] = feature_frame[col].fillna(0.0)
 
         row_series = feature_frame.iloc[0]
-        forecast_result, metadata_by_target = self._score_targets(feature_frame, loaded, row_series, feature_names_used)
+        forecast_result, metadata_by_target = self._score_targets(
+            feature_frame, loaded, row_series, feature_names_used,
+            preferred_frame=_market_nan_frame(feature_frame, unimputed_frame),
+        )
 
         completeness = round(float(feature_count) / max(len(feature_names_used), 1), 6)
         caveat = (
@@ -776,6 +858,11 @@ class ForecastService:
                 "feature_count": int(feature_count),
                 "unknown_team": unknown_team,
                 "caveat": caveat,
+                # BUG-096: False means no real over/under 2.5 or Asian
+                # handicap price reached this forecast, so every goal-market
+                # target scored without its strongest inputs. The agent's
+                # schema guardrail blocks goal-market bets on that basis.
+                "goal_market_features_available": goal_market_features_available,
             },
         }
         validate_forecast_payload(payload)
@@ -818,11 +905,17 @@ class ForecastService:
                 return np.nan
 
         lam_total = _solve_lambda(mkt_over25)
-        ah_abs = abs(ah_line) if ah_line is not None else np.nan
-        lam_home = (lam_total + ah_abs) / 2.0 if not np.isnan(lam_total) and not np.isnan(ah_abs) else np.nan
-        lam_away = max((lam_total - ah_abs) / 2.0, 0.0) if not np.isnan(lam_total) and not np.isnan(ah_abs) else np.nan
-        btts_prob = (1.0 - np.exp(-lam_home)) * (1.0 - np.exp(-lam_away)) if not np.isnan(lam_home) else np.nan
-        lam_ah_diff = (lam_total - ah_abs) if not np.isnan(lam_total) and not np.isnan(ah_abs) else np.nan
+        ah_signed = float(ah_line) if ah_line is not None else np.nan
+        have_split = not np.isnan(lam_total) and not np.isnan(ah_signed)
+        # BUG-096: signed split, matching FeatureFactory's BUG-075 fix. This
+        # path still used abs(ah_line), crediting the home side with the
+        # boost even when the away side was favored. Harmless while live
+        # calls never passed ah_line; wrong as soon as they do.
+        # AH_LINE convention: negative = home favored.
+        lam_home = max((lam_total - ah_signed) / 2.0, 0.0) if have_split else np.nan
+        lam_away = max((lam_total + ah_signed) / 2.0, 0.0) if have_split else np.nan
+        btts_prob = (1.0 - np.exp(-lam_home)) * (1.0 - np.exp(-lam_away)) if have_split else np.nan
+        lam_ah_diff = (lam_total - abs(ah_signed)) if have_split else np.nan
 
         return pd.DataFrame([{
             "MKT_IMPLIED_HOME": mkt_h,

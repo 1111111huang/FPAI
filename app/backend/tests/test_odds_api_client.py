@@ -543,3 +543,50 @@ def test_get_event_odds_passes_home_and_away_team_through_to_normalize_secondary
     )
 
     assert result.home_goals == {"over_1.5": 1.83, "under_1.5": 1.95}
+
+
+def test_normalize_secondary_reads_the_main_asian_handicap_line() -> None:
+    """BUG-096: spreads outcomes are named by team, each with its own
+    point. The home point is the line (negative = home favored, the
+    project's MKT_AH_LINE convention). With several lines, the one whose
+    two prices are closest is the main line."""
+    payload = {
+        "home_team": "Arsenal", "away_team": "Everton",
+        "bookmakers": [{"markets": [{"key": "spreads", "outcomes": [
+            {"name": "Arsenal", "price": 1.55, "point": -0.5},
+            {"name": "Everton", "price": 2.45, "point": 0.5},
+            {"name": "Arsenal", "price": 1.94, "point": -1.0},
+            {"name": "Everton", "price": 1.96, "point": 1.0},
+        ]}]}],
+    }
+
+    result = _normalize_secondary(payload, home_team="Arsenal", away_team="Everton")
+
+    assert result.asian_handicap == {"line": -1.0, "home": 1.94, "away": 1.96}
+
+
+def test_normalize_secondary_reads_an_away_favored_line_as_positive() -> None:
+    payload = {
+        "home_team": "Leeds", "away_team": "Arsenal",
+        "bookmakers": [{"markets": [{"key": "spreads", "outcomes": [
+            {"name": "Leeds", "price": 1.90, "point": 1.0},
+            {"name": "Arsenal", "price": 2.00, "point": -1.0},
+        ]}]}],
+    }
+
+    result = _normalize_secondary(payload, home_team="Leeds", away_team="Arsenal")
+
+    assert result.asian_handicap == {"line": 1.0, "home": 1.90, "away": 2.00}
+
+
+def test_normalize_secondary_asian_handicap_none_without_team_names_or_market() -> None:
+    payload = {
+        "home_team": "Arsenal", "away_team": "Everton",
+        "bookmakers": [{"markets": [{"key": "spreads", "outcomes": [
+            {"name": "Arsenal", "price": 1.94, "point": -1.0},
+            {"name": "Everton", "price": 1.96, "point": 1.0},
+        ]}]}],
+    }
+
+    assert _normalize_secondary(payload).asian_handicap is None
+    assert _normalize_secondary({"bookmakers": []}, home_team="Arsenal", away_team="Everton").asian_handicap is None

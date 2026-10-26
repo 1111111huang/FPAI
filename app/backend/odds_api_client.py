@@ -119,6 +119,47 @@ class NormalizedSecondaryOdds:
     btts: dict[str, float] | None  # {"yes": .., "no": ..}
     home_goals: dict[str, float] | None = None  # {"over_1.5": .., "under_1.5": ..}
     away_goals: dict[str, float] | None = None
+    # BUG-096: The Odds API's "spreads" market (soccer's Asian handicap).
+    # {"line": .., "home": .., "away": ..} -- "line" is the HOME side's own
+    # handicap point, which is this project's MKT_AH_LINE convention
+    # (football-data.co.uk's AHh: negative = home favored). Feeds the
+    # MKT_LAMBDA_* goal-split features, which need a real line per match.
+    asian_handicap: dict[str, float] | None = None
+
+
+def _parse_asian_handicap(
+    bookmakers: list[dict], home_team: str | None, away_team: str | None,
+) -> dict[str, float] | None:
+    """BUG-096: the first bookmaker's main spreads line, as
+    {"line", "home", "away"}. A book can list more than one line; the pair
+    whose two prices are closest to each other is the main (balanced) line,
+    the same "AHh" football-data.co.uk ships for training data. None when no
+    book priced spreads, or the outcomes can't be matched to both teams."""
+    if not home_team or not away_team:
+        return None
+    outcomes = _first_priced_outcomes(bookmakers, "spreads")
+    if not outcomes:
+        return None
+    home_by_point: dict[float, float] = {}
+    away_by_point: dict[float, float] = {}
+    for outcome in outcomes:
+        name, price, point = outcome.get("name"), outcome.get("price"), outcome.get("point")
+        if price is None or point is None:
+            continue
+        if name == home_team:
+            home_by_point[float(point)] = float(price)
+        elif name == away_team:
+            away_by_point[float(point)] = float(price)
+    # A home line of -0.5 pairs with an away line of +0.5.
+    pairs = [
+        (home_point, home_price, away_by_point[-home_point])
+        for home_point, home_price in home_by_point.items()
+        if -home_point in away_by_point
+    ]
+    if not pairs:
+        return None
+    line, home_price, away_price = min(pairs, key=lambda pair: abs(pair[1] - pair[2]))
+    return {"line": line, "home": home_price, "away": away_price}
 
 
 def _normalize_secondary(
@@ -161,7 +202,12 @@ def _normalize_secondary(
             elif team == away_team:
                 away_goals = {**(away_goals or {}), key: price}
 
-    return NormalizedSecondaryOdds(total_goals=total_goals, btts=btts, home_goals=home_goals, away_goals=away_goals)
+    asian_handicap = _parse_asian_handicap(bookmakers, home_team, away_team)
+
+    return NormalizedSecondaryOdds(
+        total_goals=total_goals, btts=btts, home_goals=home_goals, away_goals=away_goals,
+        asian_handicap=asian_handicap,
+    )
 
 
 def _month_key(moment: datetime) -> str:

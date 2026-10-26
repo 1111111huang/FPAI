@@ -238,9 +238,14 @@ def add_secondary_odds(
     # stuck on a cached home_goals/away_goals=None from an early EOD run,
     # while The Odds API demonstrably had real team_totals prices by the
     # time of a later regen -- this fixture just never got asked again.
-    already_checked_secondary = cached_entry is not None and (
+    # BUG-096: spreads (Asian handicap) is fetched in the same call as
+    # totals/btts. A cache row from before BUG-096 has no "asian_handicap"
+    # key at all, so it needs one re-fetch to pick up the line. Key presence
+    # (not truthiness) here, so a book that never posts spreads doesn't
+    # force a paid totals/btts re-fetch on every single run.
+    already_checked_secondary = cached_entry is not None and bool(
         cached_entry.odds.get("total_goals") or cached_entry.odds.get("btts")
-    )
+    ) and "asian_handicap" in cached_entry.odds
     already_checked_team_totals = cached_entry is not None and (
         cached_entry.odds.get("home_goals") or cached_entry.odds.get("away_goals")
     )
@@ -252,18 +257,32 @@ def add_secondary_odds(
             match_info["total_goals_odds"] = cached_entry.odds["total_goals"]
         if cached_entry.odds.get("btts"):
             match_info["btts_odds"] = cached_entry.odds["btts"]
+        if cached_entry.odds.get("asian_handicap"):
+            match_info["asian_handicap_odds"] = cached_entry.odds["asian_handicap"]
         odds["total_goals"] = cached_entry.odds.get("total_goals")
         odds["btts"] = cached_entry.odds.get("btts")
+        odds["asian_handicap"] = cached_entry.odds.get("asian_handicap")
     else:
         if get_event_odds is not None and odds_event is not None and odds_event.event_id:
-            secondary = get_event_odds(sport_key=sport_key, event_id=odds_event.event_id)
+            # BUG-096: "spreads" added so the forecast gets a real Asian
+            # handicap line (the MKT_LAMBDA_* inputs). home_team/away_team
+            # are needed to tell the two spreads outcomes apart. Costs one
+            # extra market x region per fixture.
+            secondary = get_event_odds(
+                sport_key=sport_key, event_id=odds_event.event_id,
+                markets=("totals", "btts", "spreads"),
+                home_team=odds_event.home_team, away_team=odds_event.away_team,
+            )
             if secondary is not None:
                 if secondary.total_goals:
                     match_info["total_goals_odds"] = secondary.total_goals
                 if secondary.btts:
                     match_info["btts_odds"] = secondary.btts
+                if secondary.asian_handicap:
+                    match_info["asian_handicap_odds"] = secondary.asian_handicap
                 odds["total_goals"] = secondary.total_goals
                 odds["btts"] = secondary.btts
+                odds["asian_handicap"] = secondary.asian_handicap
 
     if h2h_unchanged and already_checked_team_totals:
         if cached_entry.odds.get("home_goals"):

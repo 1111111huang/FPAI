@@ -339,6 +339,11 @@ def _build_recommendation(
             live_wait_target_odds=config.live_wait_target_odds,
             home_team=match_info.get("home_team"),
             away_team=match_info.get("away_team"),
+            # BUG-096: None for payloads from before this field existed
+            # (e.g. replayed snapshots), which leaves the gate off.
+            goal_market_features_available=((forecast_payload or {}).get("data_quality") or {}).get(
+                "goal_market_features_available"
+            ),
         )
         _LOG.info("output_node | parse=success | overall=%s", recommendation.get("overall"))
     except RecommendationParseError as exc:

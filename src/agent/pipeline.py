@@ -238,6 +238,24 @@ def _format_evidence_message(
     return "\n".join(lines)
 
 
+def goal_market_odds_kwargs(match_info: dict) -> dict:
+    """BUG-096: the goal-market prices forecast_upcoming needs for
+    MKT_IMPLIED_OVER25, MKT_AH_* and MKT_LAMBDA_*, pulled from match_info's
+    total_goals_odds (W164) and asian_handicap_odds (BUG-096). Only keys with
+    a real value are returned, so a missing market stays missing (NaN)
+    rather than being sent as an explicit None."""
+    kwargs: dict = {}
+    over25 = (match_info.get("total_goals_odds") or {}).get("over_2.5")
+    if over25:
+        kwargs["over25_odds"] = float(over25)
+    ah = match_info.get("asian_handicap_odds") or {}
+    if ah.get("line") is not None and ah.get("home") and ah.get("away"):
+        kwargs["ah_line"] = float(ah["line"])
+        kwargs["ah_home_odds"] = float(ah["home"])
+        kwargs["ah_away_odds"] = float(ah["away"])
+    return kwargs
+
+
 def forecast_node(state: dict, suppress_uncertainty: bool = False) -> dict:
     """A31: the ML forecast is now a required deterministic step, not
     something the LLM chooses (or fails) to call. Odds are sourced in
@@ -269,17 +287,26 @@ def forecast_node(state: dict, suppress_uncertainty: bool = False) -> dict:
     from src.agent.tools import _forecast_international_impl, _forecast_league_impl, get_snapshot_store
 
     store = get_snapshot_store()
+    tool_name = "forecast_league" if recommended_tool == "forecast_league" else "forecast_international"
+    # BUG-096: live forecasts only. Replay/record runs score already-played
+    # matches, whose feature_store rows already carry the real historical
+    # goal-market features -- and adding kwargs there would change every
+    # existing snapshot key and make the whole corpus unreplayable
+    # (BUG-072's failure mode).
+    extra_odds = goal_market_odds_kwargs(match_info) if store.effective_mode(tool_name) == "live" else {}
     if recommended_tool == "forecast_league":
         raw = store.wrap("forecast_league", _forecast_league_impl)(
             home_team=match_info["home_team"], away_team=match_info["away_team"],
             date=match_info["date"], league=match_info.get("league", ""),
             odds_h=odds["home"], odds_d=odds["draw"], odds_a=odds["away"],
+            **extra_odds,
         )
     else:
         raw = store.wrap("forecast_international", _forecast_international_impl)(
             home_team=match_info["home_team"], away_team=match_info["away_team"],
             date=match_info["date"],
             odds_h=odds["home"], odds_d=odds["draw"], odds_a=odds["away"],
+            **extra_odds,
         )
 
     payload = json.loads(raw)

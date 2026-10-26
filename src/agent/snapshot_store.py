@@ -226,6 +226,11 @@ class SnapshotStore:
     def tool_mode_overrides(self) -> dict[str, SnapshotMode]:
         return self._tool_overrides_var.get()
 
+    def effective_mode(self, tool: str) -> SnapshotMode:
+        """The mode wrap() will actually use for `tool`: its per-tool
+        override if one is set, otherwise the store-wide mode."""
+        return self.tool_mode_overrides.get(tool, self.mode)
+
     def set_mode(self, mode: SnapshotMode) -> None:
         if mode not in _VALID_MODES:
             raise ValueError(f"Unknown snapshot mode: {mode!r}")
@@ -292,7 +297,7 @@ class SnapshotStore:
         """Return a callable that records or replays fn's output based on the current mode."""
 
         def wrapped(**kwargs: Any) -> str:
-            mode = self.tool_mode_overrides.get(tool, self.mode)
+            mode = self.effective_mode(tool)
             if mode == "live":
                 return fn(**kwargs)
 

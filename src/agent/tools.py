@@ -284,7 +284,19 @@ def _forecast_league_impl(
     odds_h: float,
     odds_d: float,
     odds_a: float,
+    over25_odds: float | None = None,
+    ah_line: float | None = None,
+    ah_home_odds: float | None = None,
+    ah_away_odds: float | None = None,
 ) -> str:
+    """BUG-096: over25_odds/ah_line/ah_home_odds/ah_away_odds are the real
+    goal-market prices behind MKT_IMPLIED_OVER25, MKT_AH_* and every
+    MKT_LAMBDA_* feature. Before this they were never passed, so every live
+    forecast saw a league-average (or 0.0) placeholder for all of them."""
+    goal_market_odds = {
+        "over25_odds": over25_odds, "ah_line": ah_line,
+        "ah_home_odds": ah_home_odds, "ah_away_odds": ah_away_odds,
+    }
     try:
         from src.forecast.forecast_service import ForecastService
         svc = ForecastService()
@@ -298,6 +310,7 @@ def _forecast_league_impl(
                 odds_d=odds_d,
                 odds_a=odds_a,
                 match_type="league",
+                **goal_market_odds,
             )
             return json.dumps(result, default=str)
         except FileNotFoundError:
@@ -312,6 +325,7 @@ def _forecast_league_impl(
                 odds_d=odds_d,
                 odds_a=odds_a,
                 match_type="international",
+                **goal_market_odds,
             )
             result.setdefault("data_quality", {})["prediction_basis"] = "market_odds_only_league_fallback"
             return json.dumps(result, default=str)
@@ -359,6 +373,10 @@ def _forecast_international_impl(
     odds_h: float,
     odds_d: float,
     odds_a: float,
+    over25_odds: float | None = None,
+    ah_line: float | None = None,
+    ah_home_odds: float | None = None,
+    ah_away_odds: float | None = None,
 ) -> str:
     try:
         from src.forecast.forecast_service import ForecastService
@@ -372,6 +390,10 @@ def _forecast_international_impl(
             odds_d=odds_d,
             odds_a=odds_a,
             match_type="international",
+            over25_odds=over25_odds,
+            ah_line=ah_line,
+            ah_home_odds=ah_home_odds,
+            ah_away_odds=ah_away_odds,
         )
         return json.dumps(result, default=str)
     except Exception as exc:
