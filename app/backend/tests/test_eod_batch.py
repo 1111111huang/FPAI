@@ -759,6 +759,7 @@ def test_corners_odds_reused_from_cache_not_refetched_when_h2h_unchanged(tmp_pat
         odds={
             "home": 1.8, "draw": 3.6, "away": 4.5,
             "total_goals": None, "btts": None, "home_goals": None, "away_goals": None,
+            "asian_handicap": None,  # BUG-096 cache shape
             "corners": {"over_9.5": 1.85, "under_9.5": 2.0},
         },
         recommendation=_RECOMMENDATION, triggered_by="scheduled",

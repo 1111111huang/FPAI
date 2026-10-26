@@ -322,3 +322,39 @@ def test_goal_market_conditional_also_downgraded():
     assert rec["candidates"][0]["recommendation_type"] == "no_bet"
     assert rec["candidates"][0]["target_odds"] is None
     assert rec["overall"] == "no_bet"
+
+
+# --- diagnostic script -----------------------------------------------------
+
+
+def test_coverage_script_flags_a_league_missing_ah_lambdas(capsys):
+    """Mirrors what production looked like: E0's raw ah_line is present but
+    feature_store's MKT_LAMBDA_HOME is all NULL; I1 is fine."""
+    import contextlib
+
+    import duckdb
+
+    from scripts import check_market_feature_coverage as script
+
+    conn = duckdb.connect(":memory:")
+    conn.execute("CREATE TABLE raw_matches (match_id VARCHAR, league VARCHAR, date DATE, over25_odds FLOAT, ah_line FLOAT, ah_home_odds FLOAT, ah_away_odds FLOAT)")
+    conn.execute('CREATE TABLE feature_store (match_id VARCHAR, "MKT_IMPLIED_OVER25" FLOAT, "MKT_AH_LINE" FLOAT, "MKT_LAMBDA_HOME" FLOAT, "MKT_LAMBDA_AWAY" FLOAT)')
+    conn.execute("INSERT INTO raw_matches VALUES ('e1','E0','2026-01-01',1.9,-0.5,1.9,1.95), ('i1','I1','2026-01-01',1.9,-0.5,1.9,1.95)")
+    conn.execute("INSERT INTO feature_store VALUES ('e1',0.52,-0.5,NULL,NULL), ('i1',0.52,-0.5,1.6,1.2)")
+
+    class _FakeDb:
+        @contextlib.contextmanager
+        def connection(self, read_only=False):
+            yield conn
+
+    coverage = script.coverage_by_league(_FakeDb())
+    assert coverage["E0"]["raw"]["ah_line"] == 1.0
+    assert coverage["E0"]["features"]["MKT_LAMBDA_HOME"] == 0.0
+    assert coverage["I1"]["features"]["MKT_LAMBDA_HOME"] == 1.0
+
+    with patch.object(script, "DuckDBManager", return_value=_FakeDb()):
+        exit_code = script.main([])
+    out = capsys.readouterr().out
+    assert exit_code == 2
+    assert "E0: raw ah_line is fine but feature_store MKT_LAMBDA_HOME coverage is 0%" in out
+    assert "I1:" not in out.split("Problems")[1]
