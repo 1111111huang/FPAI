@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import dataclasses
 from datetime import date, datetime, timedelta, timezone
+import os
 from pathlib import Path
 import sys
 import threading
@@ -1109,3 +1110,58 @@ def test_fixtures_endpoint_shares_overlapping_days_across_two_different_requeste
     mock_client.get_fixtures.assert_called_once_with(date_from="2026-08-20", date_to="2026-08-21", blocking=False)
     assert len(second.json()) == 1
     assert second.json()[0]["home_team"] == "Arsenal"
+
+
+# ---------------------------------------------------------------------------
+# BUG-095: get_live_status_fixtures_client() -- a dedicated key/instance for
+# the fixture-reconciliation job, kept separate from get_fixtures_client()'s
+# routine traffic so live-status refresh is never queued behind it.
+# ---------------------------------------------------------------------------
+
+
+def test_live_status_client_uses_its_own_dedicated_key_not_in_the_routine_clients_fallback():
+    import app.backend.main as main
+
+    with patch.dict(
+        os.environ,
+        {
+            "FOOTBALL_DATA_API_KEY": "routine-key-1",
+            "FOOTBALL_DATA_API_KEY_2": "routine-key-2",
+            "FOOTBALL_DATA_API_KEY_3": "live-status-key",
+        },
+    ):
+        with patch.object(main, "_fixtures_client", None), patch.object(main, "_live_status_fixtures_client", None):
+            routine = main.get_fixtures_client()
+            live = main.get_live_status_fixtures_client()
+
+    assert routine._api_keys == ("routine-key-1", "routine-key-2")
+    assert live._api_keys == ("live-status-key",)
+
+
+def test_live_status_client_is_a_separate_instance_with_its_own_lock():
+    """The whole point: a different FootballDataClient instance means a
+    different _request_lock, so contention on one can never block the
+    other -- the exact BUG-095 fix. Same env as above, no need to repeat it
+    here since __init__ doesn't touch os.environ at all."""
+    import app.backend.main as main
+
+    with patch.object(main, "_fixtures_client", None), patch.object(main, "_live_status_fixtures_client", None):
+        routine = main.get_fixtures_client()
+        live = main.get_live_status_fixtures_client()
+
+    assert routine is not live
+    assert routine._request_lock is not live._request_lock
+
+
+def test_get_fixtures_client_singleton_unaffected_by_repeated_calls():
+    """Regression guard: get_fixtures_client() must still be a lazy
+    singleton (same instance on every call) after the BUG-095 split --
+    confirms the fallback_api_keys change above didn't accidentally turn
+    this into a fresh-client-per-call function."""
+    import app.backend.main as main
+
+    with patch.object(main, "_fixtures_client", None):
+        first = main.get_fixtures_client()
+        second = main.get_fixtures_client()
+
+    assert first is second

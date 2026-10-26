@@ -81,15 +81,49 @@ def get_fixtures_client() -> FootballDataClient:
         # W213: shared by every football-data.org-covered league (E0/SP1/
         # I1/D1/F1 all reuse this same singleton, differentiated only by
         # competition_code per call) -- one ResultsCache covers all of them.
+        #
+        # BUG-095: FOOTBALL_DATA_API_KEY_3 deliberately NOT included here
+        # any more -- see get_live_status_fixtures_client() below, which
+        # reserves it exclusively for the fixture-reconciliation job.
+        # FootballDataClient._request_lock serializes every call through ONE
+        # instance, with zero priority between callers -- confirmed live
+        # 2026-10-24/25: a match that finished hours earlier kept showing
+        # pre-kickoff status because every background live-status refresh
+        # (blocking=False, so it just gives up instead of waiting) kept
+        # losing the lock to lower-urgency traffic sharing this same
+        # instance (EOD's own fixture discovery, odds-adjacent fetches,
+        # admin pregenerate backfills) -- only the periodic reconciliation
+        # job (blocking=True, patient enough to eventually get a turn) ever
+        # reliably got through, and only once every ~4 hours. Splitting the
+        # reconciliation job onto its own dedicated key/instance means its
+        # calls never queue behind this routine instance's traffic again.
         _fixtures_client = FootballDataClient(
             api_key=os.environ.get("FOOTBALL_DATA_API_KEY", ""),
             results_cache=ResultsCache(),
-            fallback_api_keys=(
-                os.environ.get("FOOTBALL_DATA_API_KEY_2", ""),
-                os.environ.get("FOOTBALL_DATA_API_KEY_3", ""),
-            ),
+            fallback_api_keys=(os.environ.get("FOOTBALL_DATA_API_KEY_2", ""),),
         )
     return _fixtures_client
+
+
+_live_status_fixtures_client: FootballDataClient | None = None
+
+
+def get_live_status_fixtures_client() -> FootballDataClient:
+    """BUG-095: a SEPARATE FootballDataClient instance (own _request_lock,
+    own dedicated API key -- FOOTBALL_DATA_API_KEY_3, no fallback of its
+    own) used exclusively by register_fixture_reconciliation_job (the W249
+    job that periodically re-checks live/recent match status). Reserving
+    one of the three already-configured keys for this one purpose means its
+    calls are never queued behind get_fixtures_client()'s own routine
+    traffic (EOD discovery, T-30, odds-adjacent fetches, per-request
+    background refresh, admin pregenerate) -- see get_fixtures_client()'s
+    own comment for the live incident this fixes. No ResultsCache of its
+    own: that cache is specifically for get_results()'s SANDBOX_DATE replay
+    path (W213), irrelevant to this client's only real caller."""
+    global _live_status_fixtures_client
+    if _live_status_fixtures_client is None:
+        _live_status_fixtures_client = FootballDataClient(api_key=os.environ.get("FOOTBALL_DATA_API_KEY_3", ""))
+    return _live_status_fixtures_client
 
 
 def get_la_liga_fixtures_client() -> FootballDataClient:
@@ -404,17 +438,23 @@ async def lifespan(app: FastAPI):
         # W249: periodic postponement/reschedule safety net + ±2-day
         # fixture-cache warming -- see scheduler_wiring.py's
         # register_fixture_reconciliation_job docstring.
+        # BUG-095: every football-data.org-backed league gets the SAME
+        # dedicated live-status client here (not get_fixtures_client()/its
+        # per-league wrappers, all of which share the routine instance) --
+        # see get_live_status_fixtures_client()'s own docstring. SWE stays
+        # on its existing Odds-API-backed client, unaffected (this is a
+        # football-data.org contention fix specifically).
         register_fixture_reconciliation_job(
             scheduler,
-            fixtures_client=get_fixtures_client(),
+            fixtures_client=get_live_status_fixtures_client(),
             odds_client=build_odds_client(),
             cache=recommendations.get_cache(),
             config=config,
             sweden_fixtures_client=get_sweden_fixtures_client(),
-            la_liga_fixtures_client=get_la_liga_fixtures_client(),
-            serie_a_fixtures_client=get_serie_a_fixtures_client(),
-            bundesliga_fixtures_client=get_bundesliga_fixtures_client(),
-            ligue1_fixtures_client=get_ligue1_fixtures_client(),
+            la_liga_fixtures_client=get_live_status_fixtures_client(),
+            serie_a_fixtures_client=get_live_status_fixtures_client(),
+            bundesliga_fixtures_client=get_live_status_fixtures_client(),
+            ligue1_fixtures_client=get_live_status_fixtures_client(),
             push_store=get_push_store(),
         )
         register_lessons_job(
