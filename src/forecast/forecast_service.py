@@ -143,8 +143,10 @@ def _market_nan_frame(imputed: pd.DataFrame, unimputed: pd.DataFrame) -> pd.Data
     missing value at each split was fit on almost no missing rows. A NaN
     lands somewhere arbitrary-but-in-range; 0.0 lands far outside anything
     training saw (real lambdas sit around 0.5-3). Forecasts scored this way
-    are still unreliable -- the BUG-096 schema guardrail keys off
-    data_quality.goal_market_features_available to keep them out of bets.
+    are still unreliable. Bets are not blocked on this (a missing live
+    price only blocks the market it prices, via the edge calculation);
+    missing live odds raise a Slack alert instead (app/backend/missing_odds_alert.py),
+    and data_quality.goal_market_features_available records it per forecast.
     _compute_shap_contributions reports NaN as "not observed" (value None)."""
     frame = imputed.copy()
     market_cols = [col for col in frame.columns if col.startswith("MKT_")]
@@ -864,9 +866,9 @@ class ForecastService:
                 "unknown_team": unknown_team,
                 "caveat": caveat,
                 # BUG-096: False means no real over/under 2.5 or Asian
-                # handicap price reached this forecast, so every goal-market
-                # target scored without its strongest inputs. The agent's
-                # schema guardrail blocks goal-market bets on that basis.
+                # handicap price reached this forecast, so every goal target
+                # (and result_3way, built from them) scored on placeholder
+                # market features. Informational only -- nothing blocks on it.
                 "goal_market_features_available": goal_market_features_available,
             },
         }

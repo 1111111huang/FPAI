@@ -9,8 +9,9 @@ Covers the four parts of the fix:
 1. forecast_node passes real O/U 2.5 and AH odds from match_info (live only).
 2. Missing MKT_* values stay NaN for NaN-trained (XGBoost-family) models.
 3. The market-only path's goal split is signed (BUG-075's fix, ported).
-4. The schema guardrail blocks goal-market bets when the forecast had no
-   real goal-market features.
+4. (Removed 2026-10-27, by request) a feature-based guardrail on goal
+   bets. Missing live odds now raise a Slack alert instead -- see
+   app/backend/tests/test_missing_odds_alert.py.
 """
 from __future__ import annotations
 
@@ -23,7 +24,6 @@ import pytest
 
 from src.agent import tools as agent_tools
 from src.agent.pipeline import forecast_node, goal_market_odds_kwargs
-from src.agent.schema import extract_recommendation
 from src.forecast.forecast_service import (
     ForecastService,
     _goal_market_features_available,
@@ -233,95 +233,6 @@ def test_market_only_goal_split_stays_nan_without_a_line():
     assert not pd.isna(row["MKT_LAMBDA_TOTAL"])
     assert pd.isna(row["MKT_LAMBDA_HOME"])
     assert pd.isna(row["MKT_POISSON_BTTS_PROB"])
-
-
-# --- 4. goal-market guardrail ----------------------------------------------
-
-
-_UNDER_CANDIDATE = {
-    "market": "home_goals",
-    "selection": "under_1.5",
-    "recommendation_type": "direct_bet",
-    "current_odds": 2.0,
-    "min_odds": 1.7,
-    "ml_probability": 0.65,
-    "implied_probability": 0.50,
-    "value_edge": 0.15,
-    "composite_score": 0.6,
-    "reason": "Model leans toward a low-scoring home side.",
-}
-_HOME_WIN_CANDIDATE = {
-    **_UNDER_CANDIDATE,
-    "market": "result_3way",
-    "selection": "home",
-    "current_odds": 1.5,
-    "ml_probability": 0.72,
-    "implied_probability": 0.64,
-    "value_edge": 0.08,
-    "composite_score": 0.5,
-}
-
-
-def _rec(candidates: list[dict], pick: dict) -> str:
-    data = {
-        "match": {"home": "Liverpool", "away": "Brighton", "date": "2026-10-25", "league": "E0"},
-        "overall": "direct_bet",
-        "candidates": candidates,
-        "recommendation_pick": pick,
-        "explanation": "Test.",
-        "confidence": "medium",
-        "limitations": [],
-        "prediction_basis": "team_history_and_market",
-    }
-    return f"```json\n{json.dumps(data)}\n```"
-
-
-def test_goal_market_direct_bet_downgraded_when_goal_market_features_missing():
-    rec = extract_recommendation(
-        _rec([_UNDER_CANDIDATE], {"market": "home_goals", "selection": "under_1.5"}),
-        goal_market_features_available=False,
-    )
-
-    assert rec["candidates"][0]["recommendation_type"] == "no_bet"
-    assert rec["overall"] == "no_bet"
-    assert rec["recommendation_pick"] is None
-    assert any("BUG-096" in note for note in rec["limitations"])
-
-
-def test_goal_market_direct_bet_kept_when_features_available_or_unknown():
-    for available in (True, None):
-        rec = extract_recommendation(
-            _rec([_UNDER_CANDIDATE], {"market": "home_goals", "selection": "under_1.5"}),
-            goal_market_features_available=available,
-        )
-        assert rec["candidates"][0]["recommendation_type"] == "direct_bet"
-
-
-def test_result_market_unaffected_by_missing_goal_market_features():
-    rec = extract_recommendation(
-        _rec([_HOME_WIN_CANDIDATE, _UNDER_CANDIDATE], {"market": "result_3way", "selection": "home"}),
-        goal_market_features_available=False,
-    )
-
-    by_market = {c["market"]: c for c in rec["candidates"]}
-    assert by_market["result_3way"]["recommendation_type"] == "direct_bet"
-    assert by_market["home_goals"]["recommendation_type"] == "no_bet"
-    assert rec["overall"] == "direct_bet"
-
-
-def test_goal_market_conditional_also_downgraded():
-    conditional = {
-        **_UNDER_CANDIDATE, "market": "total_goals", "selection": "over_2.5",
-        "recommendation_type": "conditional", "current_odds": 1.75, "value_edge": 0.03,
-    }
-    rec = extract_recommendation(
-        _rec([conditional], {"market": "total_goals", "selection": "over_2.5"}),
-        goal_market_features_available=False,
-    )
-
-    assert rec["candidates"][0]["recommendation_type"] == "no_bet"
-    assert rec["candidates"][0]["target_odds"] is None
-    assert rec["overall"] == "no_bet"
 
 
 # --- diagnostic script -----------------------------------------------------

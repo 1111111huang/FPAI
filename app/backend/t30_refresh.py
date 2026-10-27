@@ -31,6 +31,7 @@ from app.backend.eod_batch import (
     LEAGUE_CODE, _TEAM_MAPPING_PATH, add_secondary_odds, has_kicked_off, match_odds, odds_lookup,
 )
 from app.backend.football_data_client import NormalizedMatch
+from app.backend.missing_odds_alert import alert_missing_live_odds_for_match, missing_live_odds
 from app.backend.odds_api_client import OddsAPIClient
 from app.backend.odds_sport_keys import ODDS_SPORT_KEY_BY_COMPETITION
 from app.backend.recommendation_cache import RecommendationCache
@@ -171,5 +172,9 @@ def refresh_match_at_t30(
         # A107: same tracing agent-train/agent-backtest already persist to
         # agent_telemetry -- see recommendations.run_agent's docstring.
         reasoning_trace=reasoning_trace, forecast_payload=forecast_payload,
+    )
+    # BUG-096 follow-up: notify, don't block.
+    alert_missing_live_odds_for_match(
+        league, fixture.match_id, fixture.home_team, fixture.away_team, missing_live_odds(match_info),
     )
     return T30RefreshResult(match_id=fixture.match_id, outcome="refreshed")

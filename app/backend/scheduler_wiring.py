@@ -33,6 +33,7 @@ from app.backend.recommendation_cache import RecommendationCache
 from app.backend.recommendation_outcomes import RecommendationOutcomeStore, resolve_pending_recommendations
 from app.backend.scheduler import NY_TZ, RecoverableScheduler
 from app.backend.sandbox_clock import sandbox_date, sandbox_now
+from app.backend.slack_alerts import _last_slack_alert_at, post_slack_alert  # noqa: F401 (re-export)
 from app.backend.sweden_fixtures_client import SwedenFixturesClient
 from app.backend.t30_refresh import refresh_match_at_t30
 from src.agent.agent_config import AgentConfig
@@ -236,13 +237,13 @@ class PersistingOddsClient:
         return result
 
 
-_SLACK_ALERT_COOLDOWN_SECONDS = 3600.0
 # BUG-091: this condition recurs on every single call while an outage
 # lasts (confirmed live 2026-10-19 -- all 5 Odds API keys stayed 401'd for
 # days), so alerting on every occurrence would spam one Slack message per
 # request. Debounced per vendor instead: one alert per cooldown window,
-# not one per call.
-_last_slack_alert_at: dict[str, float] = {}
+# not one per call. BUG-096: the webhook/debounce mechanics now live in
+# app/backend/slack_alerts.py (imported above) so eod_batch/t30_refresh can
+# alert too; _last_slack_alert_at is re-exported from there unchanged.
 
 
 def _alert_all_keys_exhausted(vendor: str, op_name: str, key_count: int) -> None:
@@ -251,27 +252,11 @@ def _alert_all_keys_exhausted(vendor: str, op_name: str, key_count: int) -> None
     "off unless explicitly configured" pattern as APP_ACCESS_TOKEN). Never
     raises: a failed alert POST must not break the actual odds fallback
     it's reporting on."""
-    webhook_url = os.environ.get("SLACK_ALERT_WEBHOOK_URL")
-    if not webhook_url:
-        return
-    now = time.monotonic()
-    last = _last_slack_alert_at.get(vendor)
-    if last is not None and now - last < _SLACK_ALERT_COOLDOWN_SECONDS:
-        return
-    _last_slack_alert_at[vendor] = now
-    try:
-        requests.post(
-            webhook_url,
-            json={
-                "text": (
-                    f":rotating_light: {vendor}: all {key_count} configured key(s) exhausted or "
-                    f"failed ({op_name}) -- serving stale odds until a key recovers."
-                ),
-            },
-            timeout=5,
-        )
-    except requests.RequestException:
-        LOGGER.warning("Slack alert POST failed for %s key-exhaustion", vendor, exc_info=True)
+    post_slack_alert(
+        f":rotating_light: {vendor}: all {key_count} configured key(s) exhausted or "
+        f"failed ({op_name}) -- serving stale odds until a key recovers.",
+        debounce_key=vendor,
+    )
 
 
 class FallbackOddsClient:

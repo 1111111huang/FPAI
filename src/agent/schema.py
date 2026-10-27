@@ -346,42 +346,6 @@ def _downgrade_direct_bet_btts_no(data: dict) -> dict:
     return data
 
 
-_GOAL_MARKETS = frozenset({"total_goals", "home_goals", "away_goals", "btts"})
-
-
-def _downgrade_goal_markets_without_market_inputs(data: dict, goal_market_features_available: bool | None) -> dict:
-    """BUG-096: a goal-market bet needs the forecast to have seen real
-    over/under 2.5 and Asian handicap prices -- the MKT_IMPLIED_OVER25 and
-    MKT_LAMBDA_* features every goal model leans on most. When the forecast
-    payload says it didn't (data_quality.goal_market_features_available is
-    False), any total_goals/home_goals/away_goals/btts direct_bet or
-    conditional is downgraded to no_bet. Measured live before this fix:
-    team-goal direct bets went 5/21 (-53% ROI) with these inputs missing.
-
-    Runs AFTER the live-wait promotion and target-odds passes, so a no_bet
-    can't be re-promoted to conditional afterward, and BEFORE pick
-    resolution, so `overall`/`recommendation_pick` re-sync to what's left.
-    None (the default, and every pre-BUG-096 caller) skips the check."""
-    if goal_market_features_available is not False:
-        return data
-    limitations = list(data.get("limitations") or [])
-    for candidate in data.get("candidates", []):
-        if candidate["market"] not in _GOAL_MARKETS:
-            continue
-        if candidate["recommendation_type"] not in {"direct_bet", "conditional"}:
-            continue
-        previous = candidate["recommendation_type"]
-        candidate["recommendation_type"] = "no_bet"
-        candidate["target_odds"] = None
-        limitations.append(
-            f"Downgraded {candidate['market']!r}/{candidate['selection']!r} from {previous} to no_bet: "
-            "the ML forecast had no real over/under 2.5 or Asian handicap odds for this match (BUG-096), "
-            "so its goal-market probabilities rest on placeholder market features."
-        )
-    data["limitations"] = limitations
-    return data
-
-
 def _downgrade_direct_bet_with_null_odds(data: dict) -> dict:
     """BUG-013: recommendation_type='direct_bet' requires a non-null
     current_odds -- downgrade to 'no_bet' (the only other value valid for this
@@ -1040,7 +1004,6 @@ def extract_recommendation(
     live_wait_target_odds: float = 2.0,
     home_team: str | None = None,
     away_team: str | None = None,
-    goal_market_features_available: bool | None = None,
 ) -> MatchRecommendation:
     """Extract and validate a MatchRecommendation JSON block from agent output text.
 
@@ -1148,7 +1111,6 @@ def extract_recommendation(
             data, live_wait_min_odds, live_wait_target_odds, min_value_edge,
         )
         data = _compute_target_odds(data, min_value_edge)
-        data = _downgrade_goal_markets_without_market_inputs(data, goal_market_features_available)
         data = _downgrade_recommendation_below_top_composite_score(data)
         data = _downgrade_pick_dominated_by_another_candidate(data)
         data = _prefer_higher_probability_conditional_pick(data)

@@ -42,6 +42,7 @@ from app.backend.football_data_client import FootballDataClient, NormalizedMatch
 from app.backend.odds_api_client import NormalizedOdds, OddsAPIClient
 from app.backend.oddspapi_client import LEAGUE_TOURNAMENT_IDS, OddsPapiClient, OddsPapiFixture
 from app.backend.football_data_competition_codes import FOOTBALL_DATA_CODE_BY_LEAGUE
+from app.backend.missing_odds_alert import alert_missing_live_odds_for_batch, missing_live_odds
 from app.backend.odds_sport_keys import ODDS_SPORT_KEY_BY_COMPETITION
 from app.backend.recommendation_cache import RecommendationCache
 from app.backend.recommendations import validate_and_degrade
@@ -430,6 +431,9 @@ async def run_eod_batch(
     agent_config_hash = compute_agent_config_hash(config)
     semaphore = asyncio.Semaphore(concurrency)
     result = EodBatchResult(fixtures=list(fixtures))
+    # BUG-096 follow-up: (home, away, missing markets) for every fixture
+    # generated without some live prices -- one Slack summary after the batch.
+    missing_odds_reports: list[tuple[str, str, list[str]]] = []
 
     async def _generate_one(fixture: NormalizedMatch) -> None:
         if has_kicked_off(fixture, sandbox_now(timezone.utc)):
@@ -513,6 +517,9 @@ async def run_eod_batch(
             reasoning_trace=reasoning_trace, forecast_payload=forecast_payload,
         )
         result.generated += 1
+        missing = missing_live_odds(match_info)
+        if missing:
+            missing_odds_reports.append((fixture.home_team, fixture.away_team, missing))
         if on_progress is not None:
             on_progress(fixture, "generated")
 
@@ -531,6 +538,11 @@ async def run_eod_batch(
                 "EOD batch: match_id=%s (%s v %s) failed outside the normal skip path: %s",
                 fixture.match_id, fixture.home_team, fixture.away_team, outcome, exc_info=outcome,
             )
+
+    # BUG-096 follow-up: notify, don't block. Only fixtures actually
+    # generated this run are reported -- an "unchanged" one keeps a
+    # recommendation that was already reported when it was generated.
+    alert_missing_live_odds_for_batch(league, date_str, missing_odds_reports, total_fixtures=result.generated)
 
     now = sandbox_now(timezone.utc)
     for fixture in fixtures:
