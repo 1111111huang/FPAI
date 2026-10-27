@@ -358,3 +358,64 @@ def test_coverage_script_flags_a_league_missing_ah_lambdas(capsys):
     assert exit_code == 2
     assert "E0: raw ah_line is fine but feature_store MKT_LAMBDA_HOME coverage is 0%" in out
     assert "I1:" not in out.split("Problems")[1]
+
+
+# --- backfill script -------------------------------------------------------
+
+
+def test_backfill_fills_only_null_goal_market_columns_and_never_inserts(tmp_path, capsys):
+    """Production E0/SP1 rows were stored without ah_line, and CSVLoader's
+    INSERT OR IGNORE + processed-file skip means a later CSV never fills
+    them. The backfill must fill NULLs only: no overwrite, no new rows."""
+    import duckdb
+    import yaml
+
+    from scripts import backfill_goal_market_odds as backfill
+    from src.ingestion.football_data.loader import CSVLoader
+
+    raw_dir = tmp_path / "raw"
+    db_path = tmp_path / "prod.db"
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        yaml.safe_dump({"paths": {"database_path": str(db_path), "raw_data_dir": str(raw_dir)}}),
+        encoding="utf-8",
+    )
+
+    # 1) How the production row got there: an older CSV with no AH columns.
+    old_csv = tmp_path / "old_E0.csv"
+    old_csv.write_text(
+        "Date,HomeTeam,AwayTeam,FTHG,FTAG,B365H,B365D,B365A,Avg>2.5,Avg<2.5\n"
+        "15/08/2025,Liverpool,Bournemouth,4,2,1.3,6.0,8.5,1.35,3.20\n",
+        encoding="utf-8",
+    )
+    CSVLoader(config_path=str(config_path)).process_v1_csv(file_path=str(old_csv), league_code="E0")
+
+    # 2) The CSV now on disk has AH odds, a different over25 price, and a
+    #    match the real table doesn't have yet.
+    csv_dir = raw_dir / "football_data"
+    csv_dir.mkdir(parents=True, exist_ok=True)
+    (csv_dir / "E0_2526.csv").write_text(
+        "Date,HomeTeam,AwayTeam,FTHG,FTAG,B365H,B365D,B365A,Avg>2.5,Avg<2.5,AHh,AvgAHH,AvgAHA\n"
+        "15/08/2025,Liverpool,Bournemouth,4,2,1.3,6.0,8.5,1.40,3.10,-1.25,1.92,1.98\n"
+        "16/08/2025,Aston Villa,Newcastle,0,0,2.25,3.5,3.1,1.61,2.15,0.0,1.92,1.90\n",
+        encoding="utf-8",
+    )
+
+    def _rows():
+        with duckdb.connect(str(db_path)) as conn:
+            return conn.execute(
+                "SELECT home_team, over25_odds, ah_line, ah_home_odds, ah_away_odds FROM raw_matches ORDER BY home_team"
+            ).fetchall()
+
+    assert backfill.main(["--leagues", "E0", "--config", str(config_path)]) == 0
+    assert "Dry run: 3 NULL value(s) would be filled" in capsys.readouterr().out
+    assert _rows()[0][2] is None  # dry run wrote nothing
+
+    assert backfill.main(["--leagues", "E0", "--config", str(config_path), "--apply"]) == 0
+    rows = _rows()
+    assert len(rows) == 1  # Aston Villa v Newcastle was NOT inserted
+    home, over25, ah_line, ah_home, ah_away = rows[0]
+    assert home == "Liverpool"
+    assert over25 == pytest.approx(1.35)  # existing value kept, not overwritten by 1.40
+    assert ah_line == pytest.approx(-1.25)
+    assert (ah_home, ah_away) == (pytest.approx(1.92), pytest.approx(1.98))

@@ -137,10 +137,15 @@ def _market_nan_frame(imputed: pd.DataFrame, unimputed: pd.DataFrame) -> pd.Data
     wrong for market features: a league mean makes every match look
     identical, and 0.0 is a real-looking signal ("the market expects zero
     goals") that pushed team-goal models hard toward under 1.5 in E0/SP1.
-    NaN instead lets tree models use the missing-value routing they learned
-    in training, where these columns are NaN whenever a season's CSV lacked
-    the market. _compute_shap_contributions already reports NaN as "not
-    observed" (value None)."""
+    NaN is the least-bad fallback, not a learned one: these columns are
+    ~100% populated in E0/SP1/I1/D1/F1 training data (BUG-075 measured
+    3,799/3,800 E0 rows with ah_line), so XGBoost's default branch for a
+    missing value at each split was fit on almost no missing rows. A NaN
+    lands somewhere arbitrary-but-in-range; 0.0 lands far outside anything
+    training saw (real lambdas sit around 0.5-3). Forecasts scored this way
+    are still unreliable -- the BUG-096 schema guardrail keys off
+    data_quality.goal_market_features_available to keep them out of bets.
+    _compute_shap_contributions reports NaN as "not observed" (value None)."""
     frame = imputed.copy()
     market_cols = [col for col in frame.columns if col.startswith("MKT_")]
     frame[market_cols] = unimputed[market_cols]

@@ -18,11 +18,17 @@ Run it against production's DB:
     python scripts/check_market_feature_coverage.py --since 2024-07-01
 
 Reading the output:
-- raw_matches ah_line/over25 coverage low for a league -> the CSV ingest
-  is missing those columns; re-run `python main.py refresh-data --league XX`.
+- raw_matches ah_line/over25 coverage low for a league -> those rows were
+  stored without the columns. Re-running refresh-data does NOT fix this:
+  CSVLoader skips already-processed files and inserts with INSERT OR
+  IGNORE, so existing rows are never updated. Use
+  `python scripts/backfill_goal_market_odds.py --leagues XX` (dry run
+  first, then --apply), then rebuild feature_store.
 - raw_matches coverage fine but feature_store MKT_LAMBDA_HOME coverage low
   -> feature_store is stale; regenerate it with `python main.py ingest`
   (same step BUG-075's fix used).
+- Never use `python main.py ingest --force` in production for either case:
+  it deletes all of raw_matches and rebuilds only from CSVs on disk.
 """
 
 from __future__ import annotations
@@ -114,7 +120,10 @@ def main(argv: list[str] | None = None) -> int:
         feat_cells = "  ".join(f"{_flag(feats.get(c)):>18}" for c in _FEATURE_COLUMNS)
         print(f"{league:<6}  {raw.get('n_rows', 0):>5}  {raw_cells}   |  {feat_cells}")
         if (raw.get("ah_line") or 0) < _WARN_COVERAGE:
-            flagged.append(f"{league}: raw_matches.ah_line coverage {raw.get('ah_line', 0):.0%} -- re-run refresh-data for it.")
+            flagged.append(
+                f"{league}: raw_matches.ah_line coverage {raw.get('ah_line', 0):.0%} -- fill it with "
+                f"`python scripts/backfill_goal_market_odds.py --leagues {league}` (refresh-data won't update existing rows)."
+            )
         elif (feats.get("MKT_LAMBDA_HOME") or 0) < _WARN_COVERAGE:
             flagged.append(
                 f"{league}: raw ah_line is fine but feature_store MKT_LAMBDA_HOME coverage is "
