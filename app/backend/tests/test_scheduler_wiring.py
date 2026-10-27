@@ -48,7 +48,7 @@ from app.backend.scheduler_wiring import (
     RECOMMENDATION_CACHE_PRUNE_MINUTE,
     RECOMMENDATION_CACHE_RETENTION_DAYS,
     RECONCILIATION_HOURS,
-    RECONCILIATION_MINUTE,
+    RECONCILIATION_MINUTES,
     PersistingOddsClient,
     PersistingOddsPapiClient,
     build_batch_notification_body,
@@ -95,7 +95,7 @@ def _wait_until(predicate, timeout: float = 2.0, interval: float = 0.01) -> bool
 
 
 def _fire_scheduled_job_now(scheduler: RecoverableScheduler, job_id: str) -> None:
-    """W251: register_fixture_reconciliation_job's 6 hourly slots register
+    """W251: register_fixture_reconciliation_job's fixed-time slots register
     with catch_up=False (see its own comment -- a boot-time redeploy used
     to stampede every already-passed slot at once), so there's no longer a
     catch-up path for these tests to lean on to exercise the job body.
@@ -1279,7 +1279,7 @@ def test_register_fixture_reconciliation_job_does_not_stampede_every_passed_slot
 
     register_fixture_reconciliation_job(
         scheduler, fixtures_client=fixtures_client, odds_client=None, cache=cache, config=config,
-        now_fn=lambda: now, hours=(0, 4, 8, 12, 16),
+        now_fn=lambda: now, hours=(0, 4, 8, 12, 16), minutes=(30,),
     )
 
     # No background catch-up thread exists in this path at all (see
@@ -1288,13 +1288,13 @@ def test_register_fixture_reconciliation_job_does_not_stampede_every_passed_slot
     fixtures_client.get_fixtures.assert_not_called()
     fixtures_client.get_results.assert_not_called()
     for hour in (0, 4, 8, 12, 16):
-        assert not run_log.has_run(f"fixture_reconciliation_{hour:02d}", _FUTURE_DAY_STR)
+        assert not run_log.has_run(f"fixture_reconciliation_{hour:02d}30", _FUTURE_DAY_STR)
 
     # Still genuinely registered for its own future trigger, just not
     # firing yet -- catch_up=False must not mean "never runs at all".
     job_ids = {job.id for job in scheduler._scheduler.get_jobs()}
     for hour in (0, 4, 8, 12, 16):
-        assert f"fixture_reconciliation_{hour:02d}" in job_ids
+        assert f"fixture_reconciliation_{hour:02d}30" in job_ids
 
 
 def test_register_fixture_reconciliation_job_registers_one_job_per_hour(tmp_path: Path) -> None:
@@ -1309,12 +1309,49 @@ def test_register_fixture_reconciliation_job_registers_one_job_per_hour(tmp_path
 
     register_fixture_reconciliation_job(
         scheduler, fixtures_client=fixtures_client, odds_client=None, cache=cache, config=config,
-        now_fn=lambda: now, hours=(0, 4),
+        now_fn=lambda: now, hours=(0, 4), minutes=(30,),
     )
 
     job_ids = {job.id for job in scheduler._scheduler.get_jobs()}
-    assert "fixture_reconciliation_00" in job_ids
-    assert "fixture_reconciliation_04" in job_ids
+    assert "fixture_reconciliation_0030" in job_ids
+    assert "fixture_reconciliation_0430" in job_ids
+
+
+def test_register_fixture_reconciliation_job_defaults_to_a_15_minute_cadence(tmp_path: Path) -> None:
+    """BUG-098: the 6-fixed-hour default (RECONCILIATION_HOURS) left live
+    match status wrong for up to 4 hours in the worst case -- confirmed
+    live twice (2026-10-24/25 Inter v Fiorentina, 2026-10-27 Sassuolo v
+    Lazio), a match that finished between cycles sat wrong until the next
+    one. The dedicated live-status API key (BUG-095) has real headroom for
+    a much tighter cadence (10 req/min budget; one cycle costs ~10 calls
+    across 5 leagues) -- default is now every hour, at 4 quarter-hour
+    slots, so no match sits wrong for more than ~15 minutes in the worst
+    case instead of up to 4 hours."""
+    run_log = JobRunLog(db_path=tmp_path / "job_runs.db")
+    now = datetime(_FUTURE_DAY.year, _FUTURE_DAY.month, _FUTURE_DAY.day, 1, 0, tzinfo=NY_TZ)
+    scheduler = RecoverableScheduler(run_log=run_log, now_fn=lambda: now)
+    fixtures_client = MagicMock()
+    fixtures_client.get_fixtures.return_value = []
+    fixtures_client.get_results.return_value = []
+    cache = RecommendationCache(db_path=tmp_path / "cache.db")
+    config = AgentConfig.default()
+
+    register_fixture_reconciliation_job(
+        scheduler, fixtures_client=fixtures_client, odds_client=None, cache=cache, config=config,
+        now_fn=lambda: now,
+    )
+
+    job_ids = {job.id for job in scheduler._scheduler.get_jobs()}
+    # Every hour of the day, not just a handful.
+    assert "fixture_reconciliation_0000" in job_ids
+    assert "fixture_reconciliation_1300" in job_ids
+    assert "fixture_reconciliation_2300" in job_ids
+    # Four quarter-hour slots within one hour.
+    assert {"fixture_reconciliation_0900", "fixture_reconciliation_0915",
+            "fixture_reconciliation_0930", "fixture_reconciliation_0945"} <= job_ids
+    # Exactly 24 * 4 = 96 slots, nothing duplicated or missing.
+    reconciliation_ids = {j for j in job_ids if j.startswith("fixture_reconciliation_")}
+    assert len(reconciliation_ids) == 96
 
 
 def test_register_fixture_reconciliation_job_warms_the_fixture_cache(tmp_path: Path) -> None:
@@ -1336,9 +1373,9 @@ def test_register_fixture_reconciliation_job_warms_the_fixture_cache(tmp_path: P
 
     register_fixture_reconciliation_job(
         scheduler, fixtures_client=fixtures_client, odds_client=None, cache=cache, config=config,
-        now_fn=lambda: now, hours=(0,),
+        now_fn=lambda: now, hours=(0,), minutes=(30,),
     )
-    _fire_scheduled_job_now(scheduler, "fixture_reconciliation_00")
+    _fire_scheduled_job_now(scheduler, "fixture_reconciliation_0030")
 
     import asyncio as _asyncio
     cached = _asyncio.run(fixture_cache.get_range(
@@ -1365,9 +1402,9 @@ def test_register_fixture_reconciliation_job_resyncs_t30_for_every_not_yet_kicke
 
     register_fixture_reconciliation_job(
         scheduler, fixtures_client=fixtures_client, odds_client=None, cache=cache, config=config,
-        now_fn=lambda: now, hours=(23,),
+        now_fn=lambda: now, hours=(23,), minutes=(30,),
     )
-    _fire_scheduled_job_now(scheduler, "fixture_reconciliation_23")
+    _fire_scheduled_job_now(scheduler, "fixture_reconciliation_2330")
     # The T-30 job this triggers is its own separate schedule_once()
     # catch-up (wait=False, fire-and-forget on its own thread) --
     # unaffected by W251/catch_up=False (that's schedule_daily()-only),
@@ -1405,9 +1442,9 @@ def test_register_fixture_reconciliation_job_resyncs_t30_notify_for_every_not_ye
     with patch("app.backend.scheduler_wiring.send_to_all_subscribers") as mock_send:
         register_fixture_reconciliation_job(
             scheduler, fixtures_client=fixtures_client, odds_client=None, cache=cache, config=config,
-            now_fn=lambda: now, hours=(23,), push_store=push_store,
+            now_fn=lambda: now, hours=(23,), minutes=(30,), push_store=push_store,
         )
-        _fire_scheduled_job_now(scheduler, "fixture_reconciliation_23")
+        _fire_scheduled_job_now(scheduler, "fixture_reconciliation_2330")
         assert _wait_until(lambda: mock_send.called)
 
     titles = [kwargs["title"] for _, kwargs in mock_send.call_args_list]
@@ -1449,9 +1486,9 @@ def test_register_fixture_reconciliation_job_keys_a_future_day_fixture_under_its
     with patch("app.backend.scheduler_wiring.refresh_match_at_t30") as mock_refresh:
         register_fixture_reconciliation_job(
             scheduler, fixtures_client=fixtures_client, odds_client=None, cache=cache, config=config,
-            now_fn=lambda: now, hours=(23,),
+            now_fn=lambda: now, hours=(23,), minutes=(30,),
         )
-        _fire_scheduled_job_now(scheduler, "fixture_reconciliation_23")
+        _fire_scheduled_job_now(scheduler, "fixture_reconciliation_2330")
         # The T-30 job this triggers is its own separate schedule_once()
         # catch-up (wait=False, fire-and-forget on its own thread) --
         # unaffected by W251/catch_up=False (that's schedule_daily()-only),
@@ -1496,9 +1533,9 @@ def test_register_fixture_reconciliation_job_does_not_resync_an_already_kicked_o
 
     register_fixture_reconciliation_job(
         scheduler, fixtures_client=fixtures_client, odds_client=None, cache=cache, config=config,
-        now_fn=lambda: now, hours=(0,),
+        now_fn=lambda: now, hours=(0,), minutes=(30,),
     )
-    _fire_scheduled_job_now(scheduler, "fixture_reconciliation_00")
+    _fire_scheduled_job_now(scheduler, "fixture_reconciliation_0030")
 
     job_ids = {job.id for job in scheduler._scheduler.get_jobs()}
     assert "t30_m1" in job_ids  # the still-upcoming fixture WAS re-synced
@@ -1535,9 +1572,9 @@ def test_register_fixture_reconciliation_job_one_leagues_failure_does_not_block_
     ):
         register_fixture_reconciliation_job(
             scheduler, fixtures_client=fixtures_client, odds_client=None, cache=cache, config=config,
-            now_fn=lambda: now, sweden_fixtures_client=sweden_fixtures_client, hours=(0,),
+            now_fn=lambda: now, sweden_fixtures_client=sweden_fixtures_client, hours=(0,), minutes=(30,),
         )
-        _fire_scheduled_job_now(scheduler, "fixture_reconciliation_00")
+        _fire_scheduled_job_now(scheduler, "fixture_reconciliation_0030")
 
     # T-30's own schedule_once() catch-up is fire-and-forget (wait=False)
     # on its own thread, async relative to _fire_scheduled_job_now()

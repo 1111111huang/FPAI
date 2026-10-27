@@ -97,12 +97,24 @@ DATA_REFRESH_MINUTE = 0
 # one-shot T-30 job would ever notice a kickoff time changing outside
 # their own normal cadence), merged with proactively warming the ±N-day
 # window most users actually look at. RecoverableScheduler has no
-# interval trigger -- registered at a handful of fixed hours instead,
-# the same trick register_data_refresh_job's own single-hour registration
-# generalizes trivially.
+# interval trigger -- registered at a set of fixed hour:minute slots
+# instead, the same trick register_data_refresh_job's own single-hour
+# registration generalizes trivially (now nested two levels, hour x
+# minute, to approximate a real interval).
+#
+# BUG-098: every hour, at 4 quarter-hour slots -- was 6 fixed hours (every
+# 4h). Confirmed live TWICE (2026-10-24/25 Inter v Fiorentina, 2026-10-27
+# Sassuolo v Lazio) that a match finishing between two reconciliation
+# cycles sat on its pre-kickoff/mid-match status for up to the full 4h gap
+# before this job's own next cycle corrected it -- BUG-095's dedicated
+# live-status API key removed the lock-contention problem but left this
+# cadence untouched. One cycle costs ~10 calls across 5 football-data.org
+# leagues (results+fixtures), comfortably inside that key's own 10 req/min
+# budget even run this often -- worst-case staleness drops from 4h to
+# ~15min.
 RECONCILIATION_JOB_ID_PREFIX = "fixture_reconciliation"
-RECONCILIATION_HOURS: tuple[int, ...] = (0, 4, 8, 12, 16, 20)
-RECONCILIATION_MINUTE = 30
+RECONCILIATION_HOURS: tuple[int, ...] = tuple(range(24))
+RECONCILIATION_MINUTES: tuple[int, ...] = (0, 15, 30, 45)
 RECONCILIATION_WINDOW_DAYS_BACK = 2
 RECONCILIATION_WINDOW_DAYS_FORWARD = 2
 _REPO_ROOT = Path(__file__).parent.parent.parent
@@ -896,7 +908,7 @@ def register_fixture_reconciliation_job(
     bundesliga_fixtures_client: FootballDataClient | None = None,
     ligue1_fixtures_client: FootballDataClient | None = None,
     hours: tuple[int, ...] = RECONCILIATION_HOURS,
-    minute: int = RECONCILIATION_MINUTE,
+    minutes: tuple[int, ...] = RECONCILIATION_MINUTES,
     days_back: int = RECONCILIATION_WINDOW_DAYS_BACK,
     days_forward: int = RECONCILIATION_WINDOW_DAYS_FORWARD,
     push_store: PushSubscriptionStore | None = None,
@@ -998,21 +1010,24 @@ def register_fixture_reconciliation_job(
                         _schedule_t30_batch_notify(scheduler, push_store, cluster, date_str)
 
     # W251: catch_up=False on every slot -- see schedule_daily()'s own
-    # docstring for why. Registering the same job body at 6 fixed hours
-    # (the only way this scheduler can approximate "every N hours", no
-    # interval trigger exists) means every slot whose hour has already
-    # passed today would otherwise catch up independently at boot --
-    # found live, a 16:16 redeploy fired 4 simultaneous reconciliation
-    # runs (every slot before 16:00) that then kept colliding with a 5th
-    # at the normal 16:30 trigger, all serializing through the same
-    # rate-limited client for the better part of an hour. A missed cycle
-    # here is fine to skip -- this is a periodic defensive check, not a
-    # once-daily job that must still happen today -- it picks back up at
-    # its own next natural slot regardless.
+    # docstring for why. Registering the same job body at a set of fixed
+    # hour:minute slots (the only way this scheduler can approximate "every
+    # N minutes", no interval trigger exists -- BUG-098 widened this from 6
+    # fixed hours to every hour x 4 quarter-hours) means every slot whose
+    # time has already passed today would otherwise catch up independently
+    # at boot -- found live, a 16:16 redeploy fired 4 simultaneous
+    # reconciliation runs (every slot before 16:00) that then kept
+    # colliding with a 5th at the normal 16:30 trigger, all serializing
+    # through the same rate-limited client for the better part of an hour.
+    # A missed cycle here is fine to skip -- this is a periodic defensive
+    # check, not a once-daily job that must still happen today -- it picks
+    # back up at its own next natural slot regardless.
     for hour in hours:
-        scheduler.schedule_daily(
-            f"{RECONCILIATION_JOB_ID_PREFIX}_{hour:02d}", _reconcile_job, hour=hour, minute=minute, catch_up=False,
-        )
+        for minute in minutes:
+            scheduler.schedule_daily(
+                f"{RECONCILIATION_JOB_ID_PREFIX}_{hour:02d}{minute:02d}",
+                _reconcile_job, hour=hour, minute=minute, catch_up=False,
+            )
 
 
 def register_lessons_job(
