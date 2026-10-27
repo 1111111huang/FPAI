@@ -195,6 +195,16 @@ class OddsPapiClient:
         return _parse_fixtures(response.json())
 
     def get_corners_odds(self, fixture_id: str) -> dict[str, float] | None:
+        """Returns, by design, three distinct results:
+        - {"over_9.5": .., "under_9.5": ..}: a real price.
+        - {} (empty dict): the call succeeded, but Pinnacle hasn't posted a
+          9.5 corners line for this fixture yet. A real answer -- the
+          credit is spent, and asking another key won't change it.
+        - None: this key's local budget is spent; no call was made.
+        BUG-097: both "no line yet" and "budget spent" used to return None,
+        so FallbackOddsPapiClient read an unposted line as an exhausted key
+        and paid every remaining key for the same answer (up to 5 credits
+        per fixture per run), then fired a false "all keys exhausted" alert."""
         cost = 1  # one /v4/odds call returns every market for the fixture, not per-market billing
 
         if self._credit_counter.would_exceed(cost, self._credit_limit, self._safety_margin):
@@ -214,4 +224,4 @@ class OddsPapiClient:
         response.raise_for_status()
         self._credit_counter.record_usage(cost)
 
-        return _parse_corners_odds(response.json())
+        return _parse_corners_odds(response.json()) or {}

@@ -141,7 +141,17 @@ def already_fresh(
     # once this says there's nothing to do.
     if cached.recommendation.get("overall") == "insufficient_data":
         return False
-    return cached.odds == (odds or {})
+    return _comparable_odds(cached.odds) == _comparable_odds(odds or {})
+
+
+def _comparable_odds(odds: dict) -> dict:
+    """BUG-097: an empty corners answer ({}) is new cache state, not a
+    price move -- treat it the same as no "corners" key, so caching it
+    doesn't trigger a (real-money) LLM regeneration of every fixture whose
+    corners line isn't posted yet."""
+    if odds.get("corners") == {}:
+        return {k: v for k, v in odds.items() if k != "corners"}
+    return odds
 
 
 def _fixture_date(fixture: NormalizedMatch) -> str:
@@ -184,6 +194,27 @@ def match_odds(
     if odds is None or odds.home_odds is None or odds.draw_odds is None or odds.away_odds is None:
         return None
     return {"home": odds.home_odds, "draw": odds.draw_odds, "away": odds.away_odds}
+
+
+# BUG-097: how long an empty OddsPapi corners answer ({}) is trusted
+# before it's asked again. 12h covers the burst of passes a redeploy
+# session triggers (boot pregenerate each time) while still letting the
+# next nightly EOD retry.
+_CORNERS_EMPTY_RETRY_HOURS = 12.0
+
+
+def _within_hours(iso_timestamp: str | None, hours: float) -> bool:
+    if not iso_timestamp:
+        return False
+    try:
+        moment = datetime.fromisoformat(str(iso_timestamp).replace("Z", "+00:00"))
+    except ValueError:
+        return False
+    if moment.tzinfo is None:
+        moment = moment.replace(tzinfo=timezone.utc)
+    # generated_at is real wall-clock UTC (RecommendationCache), so compare
+    # against the real clock, not sandbox_now().
+    return (datetime.now(timezone.utc) - moment).total_seconds() < hours * 3600
 
 
 def add_secondary_odds(
@@ -306,11 +337,22 @@ def add_secondary_odds(
                 odds["home_goals"] = team_totals.home_goals
                 odds["away_goals"] = team_totals.away_goals
 
-    already_checked_corners = cached_entry is not None and bool(cached_entry.odds.get("corners"))
+    # BUG-097: a cached {} means "OddsPapi answered, no 9.5 line posted
+    # yet". Before, only a real price counted as checked, so an unposted
+    # line was re-fetched (and paid for) on every pass -- nightly EOD, every
+    # boot pregenerate on each redeploy, every admin pregenerate. Now an
+    # empty answer is reused for _CORNERS_EMPTY_RETRY_HOURS after the cached
+    # generation, then retried once per pass. A real price is still reused
+    # for as long as h2h odds don't move, unchanged.
+    cached_corners = cached_entry.odds.get("corners") if cached_entry is not None else None
+    already_checked_corners = cached_entry is not None and (
+        bool(cached_corners)
+        or (cached_corners == {} and _within_hours(cached_entry.generated_at, _CORNERS_EMPTY_RETRY_HOURS))
+    )
     if h2h_unchanged and already_checked_corners:
-        if cached_entry.odds.get("corners"):
-            match_info["corners_odds"] = cached_entry.odds["corners"]
-        odds["corners"] = cached_entry.odds.get("corners")
+        if cached_corners:
+            match_info["corners_odds"] = cached_corners
+        odds["corners"] = cached_corners
     else:
         get_corners_odds = getattr(oddspapi_client, "get_corners_odds", None)
         fixture_id = matched_oddspapi_fixture_id(fixture, oddspapi_fixtures_by_teams or {})
@@ -318,6 +360,7 @@ def add_secondary_odds(
             corners = get_corners_odds(fixture_id)
             if corners:
                 match_info["corners_odds"] = corners
+            if corners is not None:  # {} = answered, no line yet -- cache it
                 odds["corners"] = corners
 
 

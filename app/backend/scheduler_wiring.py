@@ -409,7 +409,10 @@ class FallbackOddsPapiClient:
     """Same multi-key fallback contract as FallbackOddsClient above, one
     PersistingOddsPapiClient per ODDSPAPI_API_KEY[_2/_3] env var -- moves to
     the next key once one is exhausted (locally predicted, get_corners_odds()
-    returns None) or actually rejected by the API (a raised RequestException)."""
+    returns None) or actually rejected by the API (a raised RequestException).
+    BUG-097: an empty dict from get_corners_odds() means "answered, no line
+    posted yet" -- not None, so it's returned as-is and no other key is paid
+    for the same answer."""
 
     def __init__(self, clients: list[PersistingOddsPapiClient]) -> None:
         self._clients = clients
