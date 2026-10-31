@@ -48,21 +48,23 @@ LOGGER = get_logger(__name__)
 CREDIT_COUNTER_PATH = Path(__file__).parent.parent.parent / "data" / "odds_api_credit_counter.json"
 CREDIT_COUNTER_PATH_2 = Path(__file__).parent.parent.parent / "data" / "odds_api_credit_counter_2.json"
 CREDIT_COUNTER_PATH_3 = Path(__file__).parent.parent.parent / "data" / "odds_api_credit_counter_3.json"
-# _4.._8 (2026-10-08): same per-key credit file, generated rather than
-# hardcoded since there's no BUG-056-style default-to-primary quirk for
-# these slots (that quirk is _3-only, see build_odds_client()).
-_ODDS_CREDIT_COUNTER_PATHS_4_TO_8 = {
+# _4.._11 (2026-10-08, extended 2026-10-31): same per-key credit file,
+# generated rather than hardcoded since there's no BUG-056-style
+# default-to-primary quirk for these slots (that quirk is _3-only, see
+# build_odds_client()).
+_ODDS_CREDIT_COUNTER_PATHS_4_TO_11 = {
     i: Path(__file__).parent.parent.parent / "data" / f"odds_api_credit_counter_{i}.json"
-    for i in range(4, 9)
+    for i in range(4, 12)
 }
 CREDIT_COUNTER_PATH_ODDSPAPI = Path(__file__).parent.parent.parent / "data" / "oddspapi_credit_counter.json"
 CREDIT_COUNTER_PATH_ODDSPAPI_2 = Path(__file__).parent.parent.parent / "data" / "oddspapi_credit_counter_2.json"
 CREDIT_COUNTER_PATH_ODDSPAPI_3 = Path(__file__).parent.parent.parent / "data" / "oddspapi_credit_counter_3.json"
-# _4/_5 (2026-10-19): same per-key credit file, generated rather than
-# hardcoded -- same convention as the Odds API's own _4.._8 slots above.
-_ODDSPAPI_CREDIT_COUNTER_PATHS_4_TO_5 = {
+# _4.._10 (2026-10-19, extended 2026-10-31): same per-key credit file,
+# generated rather than hardcoded -- same convention as the Odds API's own
+# _4.._8 slots above.
+_ODDSPAPI_CREDIT_COUNTER_PATHS_4_TO_10 = {
     i: Path(__file__).parent.parent.parent / "data" / f"oddspapi_credit_counter_{i}.json"
-    for i in range(4, 6)
+    for i in range(4, 11)
 }
 EOD_JOB_ID = "eod_batch_generation"
 EOD_HOUR = 23
@@ -354,9 +356,9 @@ def build_odds_client() -> OddsAPIClient | HistoricalOddsClient | FallbackOddsCl
     falls back to ODDS_API_KEY's own value when unset, so local/dev setups that only
     ever configure one real key don't need a second env var just to exercise
     the 3-key code path; production sets ODDS_API_KEY_3 to a genuinely
-    distinct key. ODDS_API_KEY_4.._8, when set, are additional fallbacks --
-    simply omitted if unset, same convention as ODDSPAPI_API_KEY_2/_3 (no
-    default-to-primary quirk beyond _3)."""
+    distinct key. ODDS_API_KEY_4.._11 (extended 2026-10-31), when set, are
+    additional fallbacks -- simply omitted if unset, same convention as
+    ODDSPAPI_API_KEY_2/_3 (no default-to-primary quirk beyond _3)."""
     override_date = sandbox_date()
     if override_date is not None:
         return HistoricalOddsClient(sandbox_date=override_date.isoformat())
@@ -368,7 +370,7 @@ def build_odds_client() -> OddsAPIClient | HistoricalOddsClient | FallbackOddsCl
         (os.environ.get("ODDS_API_KEY_3") or primary_key, CREDIT_COUNTER_PATH_3),
         *(
             (os.environ.get(f"ODDS_API_KEY_{i}", ""), path)
-            for i, path in _ODDS_CREDIT_COUNTER_PATHS_4_TO_8.items()
+            for i, path in _ODDS_CREDIT_COUNTER_PATHS_4_TO_11.items()
         ),
     ]
     clients = [_build_persisting_odds_client(key, path) for key, path in keys_and_paths if key]
@@ -482,8 +484,9 @@ def build_oddspapi_client() -> OddsPapiClient | FallbackOddsPapiClient | None:
     ODDS_API_KEY_2/_3 pattern) -- unlike that one, _3 does NOT default to the
     primary key when unset (that was a specific dev-convenience workaround
     for BUG-056, not a general convention); an unset key here is simply
-    omitted. ODDSPAPI_API_KEY_4/_5 (2026-10-19), when set, are additional
-    fallbacks -- same convention as the Odds API's own _4..._8 slots."""
+    omitted. ODDSPAPI_API_KEY_4.._10 (2026-10-19, extended 2026-10-31), when
+    set, are additional fallbacks -- same convention as the Odds API's own
+    _4..._8 slots."""
     if sandbox_date() is not None:
         return None
     keys_and_paths = [
@@ -492,7 +495,7 @@ def build_oddspapi_client() -> OddsPapiClient | FallbackOddsPapiClient | None:
         (os.environ.get("ODDSPAPI_API_KEY_3", ""), CREDIT_COUNTER_PATH_ODDSPAPI_3),
         *(
             (os.environ.get(f"ODDSPAPI_API_KEY_{i}", ""), path)
-            for i, path in _ODDSPAPI_CREDIT_COUNTER_PATHS_4_TO_5.items()
+            for i, path in _ODDSPAPI_CREDIT_COUNTER_PATHS_4_TO_10.items()
         ),
     ]
     clients = [_build_persisting_oddspapi_client(key, path) for key, path in keys_and_paths if key]

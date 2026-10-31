@@ -96,7 +96,7 @@ def test_build_odds_client_odds_api_key_3_falls_back_to_primary_when_unset(monke
     monkeypatch.setenv("ODDS_API_KEY", "primary-key")
     monkeypatch.delenv("ODDS_API_KEY_2", raising=False)
     monkeypatch.delenv("ODDS_API_KEY_3", raising=False)
-    for i in range(4, 9):
+    for i in range(4, 12):
         monkeypatch.delenv(f"ODDS_API_KEY_{i}", raising=False)
 
     client = build_odds_client()
@@ -109,7 +109,7 @@ def test_build_odds_client_honors_explicit_odds_api_key_3(monkeypatch) -> None:
     monkeypatch.setenv("ODDS_API_KEY", "primary-key")
     monkeypatch.setenv("ODDS_API_KEY_2", "secondary-key")
     monkeypatch.setenv("ODDS_API_KEY_3", "third-key")
-    for i in range(4, 9):
+    for i in range(4, 12):
         monkeypatch.delenv(f"ODDS_API_KEY_{i}", raising=False)
 
     client = build_odds_client()
@@ -117,20 +117,19 @@ def test_build_odds_client_honors_explicit_odds_api_key_3(monkeypatch) -> None:
     assert _wired_api_keys(client) == ["primary-key", "secondary-key", "third-key"]
 
 
-def test_build_odds_client_honors_odds_api_key_4_through_8(monkeypatch) -> None:
+def test_build_odds_client_honors_odds_api_key_4_through_11(monkeypatch) -> None:
     monkeypatch.delenv("SANDBOX_MODE", raising=False)
     monkeypatch.setenv("ODDS_API_KEY", "primary-key")
     monkeypatch.setenv("ODDS_API_KEY_2", "secondary-key")
     monkeypatch.setenv("ODDS_API_KEY_3", "third-key")
-    monkeypatch.setenv("ODDS_API_KEY_4", "fourth-key")
-    monkeypatch.setenv("ODDS_API_KEY_5", "fifth-key")
-    for i in range(6, 9):
-        monkeypatch.delenv(f"ODDS_API_KEY_{i}", raising=False)
+    for i in range(4, 12):
+        monkeypatch.setenv(f"ODDS_API_KEY_{i}", f"key-{i}")
 
     client = build_odds_client()
 
     assert _wired_api_keys(client) == [
-        "primary-key", "secondary-key", "third-key", "fourth-key", "fifth-key",
+        "primary-key", "secondary-key", "third-key",
+        *(f"key-{i}" for i in range(4, 12)),
     ]
 
 
@@ -151,8 +150,8 @@ def test_build_oddspapi_client_returns_none_when_no_api_key(monkeypatch) -> None
     monkeypatch.delenv("ODDSPAPI_API_KEY", raising=False)
     monkeypatch.delenv("ODDSPAPI_API_KEY_2", raising=False)
     monkeypatch.delenv("ODDSPAPI_API_KEY_3", raising=False)
-    monkeypatch.delenv("ODDSPAPI_API_KEY_4", raising=False)
-    monkeypatch.delenv("ODDSPAPI_API_KEY_5", raising=False)
+    for i in range(4, 11):
+        monkeypatch.delenv(f"ODDSPAPI_API_KEY_{i}", raising=False)
 
     assert build_oddspapi_client() is None
 
@@ -180,8 +179,8 @@ def test_build_oddspapi_client_wires_a_single_key_without_fallback_wrapper(monke
     monkeypatch.setenv("ODDSPAPI_API_KEY", "primary-key")
     monkeypatch.delenv("ODDSPAPI_API_KEY_2", raising=False)
     monkeypatch.delenv("ODDSPAPI_API_KEY_3", raising=False)
-    monkeypatch.delenv("ODDSPAPI_API_KEY_4", raising=False)
-    monkeypatch.delenv("ODDSPAPI_API_KEY_5", raising=False)
+    for i in range(4, 11):
+        monkeypatch.delenv(f"ODDSPAPI_API_KEY_{i}", raising=False)
 
     client = build_oddspapi_client()
 
@@ -197,8 +196,8 @@ def test_build_oddspapi_client_wires_multiple_keys_as_fallback_chain(monkeypatch
     monkeypatch.setenv("ODDSPAPI_API_KEY", "primary-key")
     monkeypatch.setenv("ODDSPAPI_API_KEY_2", "secondary-key")
     monkeypatch.delenv("ODDSPAPI_API_KEY_3", raising=False)
-    monkeypatch.delenv("ODDSPAPI_API_KEY_4", raising=False)
-    monkeypatch.delenv("ODDSPAPI_API_KEY_5", raising=False)
+    for i in range(4, 11):
+        monkeypatch.delenv(f"ODDSPAPI_API_KEY_{i}", raising=False)
 
     client = build_oddspapi_client()
 
@@ -210,26 +209,27 @@ def test_build_oddspapi_client_honors_explicit_third_key(monkeypatch) -> None:
     monkeypatch.setenv("ODDSPAPI_API_KEY", "primary-key")
     monkeypatch.setenv("ODDSPAPI_API_KEY_2", "secondary-key")
     monkeypatch.setenv("ODDSPAPI_API_KEY_3", "third-key")
-    monkeypatch.delenv("ODDSPAPI_API_KEY_4", raising=False)
-    monkeypatch.delenv("ODDSPAPI_API_KEY_5", raising=False)
+    for i in range(4, 11):
+        monkeypatch.delenv(f"ODDSPAPI_API_KEY_{i}", raising=False)
 
     client = build_oddspapi_client()
 
     assert _wired_oddspapi_api_keys(client) == ["primary-key", "secondary-key", "third-key"]
 
 
-def test_build_oddspapi_client_honors_oddspapi_api_key_4_through_5(monkeypatch) -> None:
+def test_build_oddspapi_client_honors_oddspapi_api_key_4_through_10(monkeypatch) -> None:
     monkeypatch.delenv("SANDBOX_MODE", raising=False)
     monkeypatch.setenv("ODDSPAPI_API_KEY", "primary-key")
     monkeypatch.setenv("ODDSPAPI_API_KEY_2", "secondary-key")
     monkeypatch.setenv("ODDSPAPI_API_KEY_3", "third-key")
-    monkeypatch.setenv("ODDSPAPI_API_KEY_4", "fourth-key")
-    monkeypatch.setenv("ODDSPAPI_API_KEY_5", "fifth-key")
+    for i in range(4, 11):
+        monkeypatch.setenv(f"ODDSPAPI_API_KEY_{i}", f"key-{i}")
 
     client = build_oddspapi_client()
 
     assert _wired_oddspapi_api_keys(client) == [
-        "primary-key", "secondary-key", "third-key", "fourth-key", "fifth-key",
+        "primary-key", "secondary-key", "third-key",
+        *(f"key-{i}" for i in range(4, 11)),
     ]
 
 
