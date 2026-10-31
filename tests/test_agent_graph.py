@@ -656,6 +656,69 @@ def test_run_agent_raises_after_exhausting_all_retry_attempts():
     assert mock_llm.bind_tools.return_value.invoke.call_count == 3
 
 
+def test_output_node_synthesis_call_resolves_pending_tool_calls_before_budget_exhausted():
+    """BUG-100: found live 2026-10-31 -- when the tool-call budget runs out
+    on the exact turn the model also requested a tool call, should_continue
+    routes straight to "output" without ever running "tools", so the last
+    message in state has unresolved tool_calls with no matching ToolMessage.
+    output_node's "budget exhausted" branch used to send that straight to
+    the synthesis call with just a HumanMessage appended after it --
+    OpenAI-compatible providers (DeepSeek included) reject any request
+    where an assistant tool_calls message isn't immediately followed by a
+    tool message for every tool_call_id, a deterministic 400 on all 3
+    retries that silently skipped the match every single regen attempt.
+    This asserts the actual message list sent to the synthesis call has a
+    ToolMessage for the pending call_id before the HumanMessage."""
+    from unittest.mock import MagicMock, patch
+    from langchain_core.messages import AIMessage, ToolMessage
+    from src.agent.graph import run_agent
+
+    llm_json = json.dumps({
+        "match": {"home": "Man City", "away": "Arsenal", "date": "2026-06-21", "league": "E0"},
+        "overall": "no_bet", "candidates": [], "recommendation_pick": None, "explanation": "Balanced match.",
+        "confidence": "medium", "limitations": [], "prediction_basis": "team_history_and_market",
+    })
+    fake_forecast_result = {"result_3way": {"probabilities": {"home": 0.4}}, "data_quality": {"prediction_basis": "team_history_and_market"}}
+
+    with patch("src.agent.graph._build_llm") as mock_build_llm, \
+         patch("src.agent.graph._load_system_prompt", return_value="stub prompt"), \
+         patch("src.agent.tools._dated_web_search", return_value="No results found."), \
+         patch("src.forecast.forecast_service.ForecastService") as MockSvc, \
+         patch("src.agent.lessons.load_approved_lessons", return_value=[]), \
+         patch("src.utils.db_manager.DuckDBManager") as MockDB:
+        MockDB.return_value.connection.return_value.__enter__.return_value = MagicMock()
+        instance = MagicMock()
+        MockSvc.return_value = instance
+        instance.forecast_upcoming.return_value = fake_forecast_result
+
+        mock_llm = MagicMock()
+        # agent_node's one and only turn asks for a tool call, which alone
+        # exhausts a budget of 1 -- should_continue routes to "output"
+        # without ever running "tools", so this tool_call is never resolved.
+        mock_llm.bind_tools.return_value.invoke.return_value = AIMessage(
+            content="", tool_calls=[{"name": "stub_search", "args": {"query": "x"}, "id": "call_1"}],
+        )
+        # output_node's synthesis call uses the bare llm, not llm_with_tools.
+        mock_llm.invoke.return_value = AIMessage(content=llm_json)
+        mock_build_llm.return_value = mock_llm
+
+        cfg = _make_config(max_tool_calls=1)
+        recommendation = run_agent(
+            match_info={
+                "home_team": "Man City", "away_team": "Arsenal", "date": "2026-06-21", "league": "E0",
+                "odds": {"home": 2.0, "draw": 3.4, "away": 3.6},
+            },
+            config=cfg,
+            tools=[],
+        )
+
+    assert recommendation["overall"] == "no_bet"
+    synthesis_messages = mock_llm.invoke.call_args[0][0]
+    tool_call_index = next(i for i, m in enumerate(synthesis_messages) if isinstance(m, AIMessage) and m.tool_calls)
+    assert isinstance(synthesis_messages[tool_call_index + 1], ToolMessage)
+    assert synthesis_messages[tool_call_index + 1].tool_call_id == "call_1"
+
+
 def test_run_agent_degrades_when_llm_hallucinates_a_different_match():
     """BUG-023/024 end-to-end: the agent's LLM call hallucinated a
     "Manchester City vs Liverpool" analysis for a real Brentford vs

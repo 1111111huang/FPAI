@@ -5,7 +5,7 @@ import os
 from pathlib import Path
 from typing import Annotated, Any, Literal, TypedDict
 
-from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
+from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage, ToolMessage
 from langgraph.graph import StateGraph, END
 from langgraph.graph.message import add_messages
 from langgraph.prebuilt import ToolNode
@@ -442,13 +442,29 @@ def build_graph(config: AgentConfig, tools: list):
             # Budget was exhausted — last message is a tool call with no text content.
             # Make one final synthesis call (no tools) so the model can produce its JSON.
             _LOG.info("output_node | empty_content | forcing_synthesis_call")
+            # BUG-100: when the tool-call budget runs out on the exact turn
+            # the model also requested a tool call, should_continue routes
+            # here instead of to "tools" -- so `last` (the final message)
+            # has unresolved tool_calls that never got a ToolMessage. OpenAI-
+            # compatible providers (DeepSeek included) reject any request
+            # where an assistant tool_calls message isn't immediately
+            # followed by a tool message for every tool_call_id -- appending
+            # the synthesis HumanMessage straight after it violated that
+            # every time, a 400 on all 3 retries (deterministic, not
+            # transient), silently skipping the match. One placeholder
+            # ToolMessage per pending call satisfies the contract.
+            pending_tool_calls = getattr(last, "tool_calls", None) or []
+            synthesis_messages = state["messages"] + [
+                ToolMessage(tool_call_id=tc["id"], content="Tool call skipped: tool budget exhausted.")
+                for tc in pending_tool_calls
+            ]
             synthesis_prompt = (
                 "You have reached the tool call limit. "
                 "Based on all the information gathered above, output your final JSON recommendation now. "
                 "Include all required fields: match, overall, candidates, recommendation_pick, explanation, confidence, limitations, prediction_basis. "
                 "Output ONLY the JSON block -- no narrative report, no headers, no text before or after it."
             )
-            synthesis_response = _invoke_with_retry(llm, state["messages"] + [HumanMessage(content=synthesis_prompt)])
+            synthesis_response = _invoke_with_retry(llm, synthesis_messages + [HumanMessage(content=synthesis_prompt)])
             text = _extract_text(synthesis_response.content)
             _LOG.info("output_node | synthesis_length=%d | synthesis_output=%s", len(text), text)
 
