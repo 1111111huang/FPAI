@@ -196,6 +196,17 @@ class PersistingOddsClient:
         self._client = client
         self._counter = counter
         self._store = store
+        # BUG-099: this instance's counter/store are shared mutable state
+        # (credits_used += cost, then a file write) with zero locking of
+        # their own -- fine as long as only one coroutine at a time ever
+        # calls in, which was true only by accident (every call ran
+        # directly on the single asyncio event loop thread, never two at
+        # once). Once eod_batch.py's add_secondary_odds moved behind
+        # asyncio.to_thread (so a slow/exhausted vendor call can't freeze
+        # the whole app), two real OS threads can now call the same key
+        # concurrently -- a lock per instance keeps the check/call/record/
+        # save sequence atomic the way it always needed to be.
+        self._lock = threading.Lock()
 
     def is_available(self) -> bool:
         return self._counter.is_available()
@@ -221,12 +232,13 @@ class PersistingOddsClient:
         # code path ever ran, on this app's first live deployment. Local/
         # sandbox testing structurally never exercises this class at all --
         # build_odds_client() only returns it when SANDBOX_MODE is off.
-        try:
-            result = self._client.get_odds(sport_key=sport_key, date=date)
-        except requests.HTTPError as exc:
-            self._record_failure_and_reraise(exc)
-        self._store.save(self._counter)
-        return result
+        with self._lock:
+            try:
+                result = self._client.get_odds(sport_key=sport_key, date=date)
+            except requests.HTTPError as exc:
+                self._record_failure_and_reraise(exc)
+            self._store.save(self._counter)
+            return result
 
     def get_event_odds(
         self, sport_key: str, event_id: str, markets: tuple[str, ...] = ("totals", "btts"),
@@ -240,15 +252,16 @@ class PersistingOddsClient:
         # forwarded too, not just markets -- the exact same "wrapper drops a
         # newly-added param, crashes the first time production actually
         # calls it" bug W99 already found for get_odds()'s own `date` param.
-        try:
-            result = self._client.get_event_odds(
-                sport_key=sport_key, event_id=event_id, markets=markets,
-                regions=regions, home_team=home_team, away_team=away_team,
-            )
-        except requests.HTTPError as exc:
-            self._record_failure_and_reraise(exc)
-        self._store.save(self._counter)
-        return result
+        with self._lock:
+            try:
+                result = self._client.get_event_odds(
+                    sport_key=sport_key, event_id=event_id, markets=markets,
+                    regions=regions, home_team=home_team, away_team=away_team,
+                )
+            except requests.HTTPError as exc:
+                self._record_failure_and_reraise(exc)
+            self._store.save(self._counter)
+            return result
 
 
 # BUG-091: this condition recurs on every single call while an outage
@@ -389,6 +402,11 @@ class PersistingOddsPapiClient:
         self._client = client
         self._counter = counter
         self._store = store
+        # BUG-099: see PersistingOddsClient's own lock comment -- same
+        # shared-counter-under-real-concurrency fix, needed here for the
+        # exact same reason now that eod_batch.py's add_secondary_odds and
+        # its own get_fixtures() call run behind asyncio.to_thread.
+        self._lock = threading.Lock()
 
     def is_available(self) -> bool:
         return self._counter.is_available()
@@ -405,18 +423,20 @@ class PersistingOddsPapiClient:
         raise exc
 
     def get_fixtures(self, tournament_id: int, status_id: int = 0):
-        try:
-            return self._client.get_fixtures(tournament_id=tournament_id, status_id=status_id)
-        except requests.HTTPError as exc:
-            self._record_failure_and_reraise(exc)
+        with self._lock:
+            try:
+                return self._client.get_fixtures(tournament_id=tournament_id, status_id=status_id)
+            except requests.HTTPError as exc:
+                self._record_failure_and_reraise(exc)
 
     def get_corners_odds(self, fixture_id: str):
-        try:
-            result = self._client.get_corners_odds(fixture_id=fixture_id)
-        except requests.HTTPError as exc:
-            self._record_failure_and_reraise(exc)
-        self._store.save(self._counter)
-        return result
+        with self._lock:
+            try:
+                result = self._client.get_corners_odds(fixture_id=fixture_id)
+            except requests.HTTPError as exc:
+                self._record_failure_and_reraise(exc)
+            self._store.save(self._counter)
+            return result
 
 
 class FallbackOddsPapiClient:

@@ -448,28 +448,37 @@ async def run_eod_batch(
         for fixture in fixtures
         for name in (fixture.home_team, fixture.away_team)
     })
+    # BUG-099: odds_client.get_odds()/oddspapi_client.get_fixtures() can be
+    # FallbackOddsClient/FallbackOddsPapiClient (scheduler_wiring.py), whose
+    # exhausted-key fallback loop is a plain synchronous for-loop of
+    # blocking requests.get(..., timeout=10) calls -- up to N keys x ~10s
+    # (OddsPapi: x ~15s, its own throttle sleep included) fully serial.
+    # Calling that directly here, un-awaited, froze this whole process's
+    # single asyncio event loop for that entire duration whenever every key
+    # was genuinely down (confirmed live 2026-10-31) -- not just this
+    # league's own batch, every other concurrent request too, including
+    # unrelated ones like /api/health. asyncio.to_thread moves the blocking
+    # call to a worker thread, same fix already applied to the LLM call
+    # below.
     if odds_client is None:
         odds_by_teams_by_date: dict[str, dict] = {}
     else:
         if fixture_dates <= {date_str}:
-            odds_by_teams_by_date = {
-                date_str: odds_lookup(odds_client.get_odds(sport_key=sport_key) or [], fixture_team_candidates)
-            }
+            raw_odds = await asyncio.to_thread(odds_client.get_odds, sport_key=sport_key)
+            odds_by_teams_by_date = {date_str: odds_lookup(raw_odds or [], fixture_team_candidates)}
         else:
-            odds_by_teams_by_date = {
-                fixture_date: odds_lookup(
-                    odds_client.get_odds(sport_key=sport_key, date=fixture_date) or [], fixture_team_candidates
-                )
-                for fixture_date in fixture_dates
-            }
+            odds_by_teams_by_date = {}
+            for fixture_date in fixture_dates:
+                raw_odds = await asyncio.to_thread(odds_client.get_odds, sport_key=sport_key, date=fixture_date)
+                odds_by_teams_by_date[fixture_date] = odds_lookup(raw_odds or [], fixture_team_candidates)
 
     if oddspapi_client is None or league not in LEAGUE_TOURNAMENT_IDS:
         oddspapi_fixtures_by_teams: dict[tuple[str, str], str] = {}
     else:
-        oddspapi_fixtures_by_teams = oddspapi_fixture_lookup(
-            oddspapi_client.get_fixtures(tournament_id=LEAGUE_TOURNAMENT_IDS[league]) or [],
-            fixture_team_candidates,
+        oddspapi_fixtures = await asyncio.to_thread(
+            oddspapi_client.get_fixtures, tournament_id=LEAGUE_TOURNAMENT_IDS[league]
         )
+        oddspapi_fixtures_by_teams = oddspapi_fixture_lookup(oddspapi_fixtures or [], fixture_team_candidates)
 
     agent_config_hash = compute_agent_config_hash(config)
     semaphore = asyncio.Semaphore(concurrency)
@@ -509,7 +518,12 @@ async def run_eod_batch(
             # call below already has -- one fixture's odds failure costs
             # only that fixture, never its siblings.
             try:
-                add_secondary_odds(
+                # BUG-099: add_secondary_odds's own get_event_odds()/
+                # get_corners_odds() calls have the exact same blocking-
+                # fallback-loop issue as the two calls above -- to_thread
+                # for the same reason.
+                await asyncio.to_thread(
+                    add_secondary_odds,
                     match_info, odds, odds_client, cache, fixture, fixture_date,
                     agent_config_hash, sport_key, odds_by_teams,
                     oddspapi_client=oddspapi_client, oddspapi_fixtures_by_teams=oddspapi_fixtures_by_teams,
