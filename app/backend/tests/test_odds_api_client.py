@@ -391,6 +391,20 @@ def test_file_credit_counter_store_missing_file_starts_fresh(tmp_path: Path) -> 
     assert counter.credits_used == 0
 
 
+def test_file_credit_counter_store_corrupt_file_starts_fresh_instead_of_raising(tmp_path: Path) -> None:
+    """BUG-101: an empty file (e.g. a save() interrupted mid-write by a
+    redeploy) used to raise JSONDecodeError straight out of load() -- when
+    that happened inside build_odds_client() (scheduler_wiring.py), called
+    once outside any per-league try/except, one corrupt key file silently
+    killed pregenerate_recommendations for every league in that request,
+    not just this key. Degrades the same way a missing file already does."""
+    path = tmp_path / "odds_credit_usage.json"
+    path.write_text("", encoding="utf-8")
+    store = FileCreditCounterStore(path)
+    counter = store.load(now_fn=lambda: datetime(2026, 7, 11, tzinfo=timezone.utc))
+    assert counter.credits_used == 0
+
+
 def test_credit_counter_is_available_by_default() -> None:
     assert CreditCounter().is_available() is True
     assert CreditCounter().unavailable_reason is None

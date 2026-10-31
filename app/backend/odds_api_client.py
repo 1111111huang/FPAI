@@ -304,7 +304,22 @@ class FileCreditCounterStore:
     def load(self, now_fn: Callable[[], datetime] = lambda: datetime.now(timezone.utc)) -> CreditCounter:
         if not self._path.exists():
             return CreditCounter(now_fn=now_fn)
-        data = json.loads(self._path.read_text(encoding="utf-8"))
+        try:
+            data = json.loads(self._path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            # BUG-101: found live 2026-10-31 -- an empty/truncated file here
+            # (e.g. a save() interrupted mid-write by a redeploy) raised
+            # straight out of build_odds_client(), which main.py's
+            # _pregenerate_recommendations calls once, outside any
+            # per-league try/except -- one corrupt key file silently killed
+            # the whole pregenerate pass for every league, not just this
+            # key's own fallback slot. Degrade the same way a missing file
+            # already does: a fresh counter undercounts this key's usage
+            # by at most what was spent since its last successful save,
+            # which is a far smaller cost than losing every other key and
+            # every other league to an unhandled exception.
+            LOGGER.warning("FileCreditCounterStore.load: %s is corrupt/unreadable -- starting a fresh counter.", self._path)
+            return CreditCounter(now_fn=now_fn)
         return CreditCounter.from_dict(data, now_fn=now_fn)
 
     def save(self, counter: CreditCounter) -> None:
