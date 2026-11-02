@@ -100,3 +100,25 @@ def _default_failures_store(tmp_path, request, monkeypatch):
     run_isolated_module._singleton_store = None
     yield
     run_isolated_module._singleton_store = None
+
+
+@pytest.fixture(autouse=True)
+def _reset_circuit_breakers():
+    """The module-level odds/oddspapi circuit breakers in scheduler_wiring
+    are process-global singletons by design -- reset them before AND after
+    every test in the suite (not just test_scheduler_wiring.py) so one test
+    tripping a breaker can't leave it OPEN for an unrelated later test in
+    ANY file that touches this singleton (e.g. test_oddspapi_credit_burn.py
+    constructs FallbackOddsPapiClient without an explicit breaker override
+    and shares the same singleton). No live-marker opt-out here, unlike
+    _default_push_store/_default_failures_store above: those swap in a
+    fake dependency a live test would want left real, whereas this just
+    clears global mutable state, which is harmless (even desirable) for a
+    live test too."""
+    import app.backend.scheduler_wiring as scheduler_wiring_module
+    from app.backend.circuit_breaker import CircuitBreaker
+    scheduler_wiring_module._odds_api_circuit_breaker = CircuitBreaker()
+    scheduler_wiring_module._oddspapi_circuit_breaker = CircuitBreaker()
+    yield
+    scheduler_wiring_module._odds_api_circuit_breaker = CircuitBreaker()
+    scheduler_wiring_module._oddspapi_circuit_breaker = CircuitBreaker()

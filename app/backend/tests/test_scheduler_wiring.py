@@ -1339,22 +1339,6 @@ def test_register_data_refresh_job_skips_the_rebuild_when_every_league_fails_to_
 
 
 @pytest.fixture(autouse=True)
-def _reset_circuit_breakers():
-    """The module-level odds/oddspapi circuit breakers are process-global
-    singletons by design (2026-11-02) -- reset them before AND after each
-    test so one test tripping a breaker can't leave it OPEN for an
-    unrelated later test, in this file or (once other files start touching
-    this singleton) any other."""
-    import app.backend.scheduler_wiring as scheduler_wiring_module
-    from app.backend.circuit_breaker import CircuitBreaker
-    scheduler_wiring_module._odds_api_circuit_breaker = CircuitBreaker()
-    scheduler_wiring_module._oddspapi_circuit_breaker = CircuitBreaker()
-    yield
-    scheduler_wiring_module._odds_api_circuit_breaker = CircuitBreaker()
-    scheduler_wiring_module._oddspapi_circuit_breaker = CircuitBreaker()
-
-
-@pytest.fixture(autouse=True)
 def _clear_fixture_cache_between_reconciliation_tests(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     # BUG-086 follow-up: also points fixture_cache's write-through
     # persisted store at a throwaway tmp_path file for every test in this
