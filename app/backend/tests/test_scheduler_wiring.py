@@ -558,6 +558,58 @@ def test_fallback_oddspapi_client_records_failure_on_full_exhaustion() -> None:
     assert breaker.state == "open"
 
 
+def test_fallback_odds_client_shares_breaker_state_across_separately_constructed_instances() -> None:
+    """2026-11-02: the whole point of the module-level singleton default
+    (_odds_api_circuit_breaker) is that it survives build_odds_client()
+    being called fresh on every pregenerate/EOD invocation -- two
+    instances built with no explicit circuit_breaker= must share state,
+    not each get their own. Every other breaker test in this file passes
+    an explicit circuit_breaker= for isolation; this is the one test that
+    deliberately doesn't, to prove the default path itself works."""
+    import app.backend.scheduler_wiring as scheduler_wiring_module
+
+    client_a = MagicMock()
+    client_a.is_available.return_value = True
+    client_a.get_odds.return_value = None  # exhausted
+    first_instance = FallbackOddsClient([client_a])  # no circuit_breaker= -- uses the default
+
+    # Trip the shared singleton via the default threshold (3).
+    for _ in range(3):
+        first_instance.get_odds(sport_key="soccer_epl")
+    assert scheduler_wiring_module._odds_api_circuit_breaker.state == "open"
+
+    client_b = MagicMock()
+    second_instance = FallbackOddsClient([client_b])  # also no circuit_breaker= -- same singleton
+
+    result = second_instance.get_odds(sport_key="soccer_epl")
+
+    assert result is None
+    client_b.get_odds.assert_not_called()  # short-circuited -- proves shared state, not two independent breakers
+
+
+def test_fallback_oddspapi_client_shares_breaker_state_across_separately_constructed_instances() -> None:
+    """Same proof as the Odds API sibling test above, for OddsPapi's own
+    _oddspapi_circuit_breaker singleton."""
+    import app.backend.scheduler_wiring as scheduler_wiring_module
+
+    client_a = MagicMock()
+    client_a.is_available.return_value = True
+    client_a.get_corners_odds.return_value = None  # exhausted
+    first_instance = FallbackOddsPapiClient([client_a])  # no circuit_breaker= -- uses the default
+
+    for _ in range(3):
+        first_instance.get_corners_odds(fixture_id="abc123")
+    assert scheduler_wiring_module._oddspapi_circuit_breaker.state == "open"
+
+    client_b = MagicMock()
+    second_instance = FallbackOddsPapiClient([client_b])  # also no circuit_breaker= -- same singleton
+
+    result = second_instance.get_corners_odds(fixture_id="abc123")
+
+    assert result is None
+    client_b.get_corners_odds.assert_not_called()
+
+
 def test_persisting_oddspapi_client_saves_counter_after_get_corners_odds(tmp_path: Path) -> None:
     store = FileCreditCounterStore(tmp_path / "counter.json")
     counter = CreditCounter()
