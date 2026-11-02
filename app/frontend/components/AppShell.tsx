@@ -4,7 +4,7 @@ import Image from "next/image";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState, useEffect } from "react";
-import { House, List, ListBullets, MagnifyingGlass, Ticket, X, type Icon } from "@phosphor-icons/react";
+import { Gauge, House, List, ListBullets, MagnifyingGlass, Ticket, X, type Icon } from "@phosphor-icons/react";
 
 import { getFixtures } from "@/lib/api";
 import type { Fixture } from "@/lib/types";
@@ -24,12 +24,13 @@ function matchAnalysisHref(f: Fixture) {
 const NAV_ITEMS: {
   href: string;
   label: string;
-  key: "dashboard" | "matches" | "bets";
+  key: "dashboard" | "matches" | "bets" | "ops";
   icon: Icon;
 }[] = [
   { href: "/", label: "Daily Edges", key: "dashboard", icon: House },
   { href: "/matches", label: "All Matches", key: "matches", icon: ListBullets },
   { href: "/bets", label: "Bets", key: "bets", icon: Ticket },
+  { href: "/ops", label: "Ops", key: "ops", icon: Gauge },
 ];
 
 /** Rebrand (2026-08-13): FPAI -> Oddsey. Was a hand-recreated inline SVG
@@ -47,12 +48,11 @@ export function AppShell({
   railTrigger,
   children,
 }: {
-  // W174: "agent-performance" has no NAV_ITEMS entry (the page itself is
-  // unlinked -- direct-URL-only, matching "bets"'s own existing precedent:
-  // NAV_ITEMS omits it too, but "bets" stays a valid `active` value here
-  // for BetTrackerPage's own unaffected use). Adding a value here never
-  // requires a matching NAV_ITEMS entry -- the two are independent.
-  active: "dashboard" | "matches" | "bets" | "agent-performance";
+  // W174 follow-up: the agent-performance page is now reachable via the
+  // Performance tab inside /ops (Task 7 of the ops-dashboard plan), so its
+  // thin standalone-route wrapper passes active="ops" instead of its own
+  // dedicated value -- "agent-performance" is no longer a valid `active`.
+  active: "dashboard" | "matches" | "bets" | "ops";
   // Direct feedback: on small screens the right rail should "squish with
   // the top part with the search bar" instead of being its own section --
   // an optional slot next to the search input (mobile-only, lg:hidden) for
