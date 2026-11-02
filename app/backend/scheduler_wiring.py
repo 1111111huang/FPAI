@@ -55,6 +55,15 @@ LOGGER = get_logger(__name__)
 _odds_api_circuit_breaker = CircuitBreaker()
 _oddspapi_circuit_breaker = CircuitBreaker()
 
+
+def get_circuit_breaker_status() -> dict[str, dict[str, str]]:
+    """Read-only snapshot of both vendor circuit breakers' current state --
+    consumed by the /ops dashboard's failures tab (2026-11-02 design)."""
+    return {
+        "the_odds_api": {"state": _odds_api_circuit_breaker.state},
+        "oddspapi": {"state": _oddspapi_circuit_breaker.state},
+    }
+
 # W163: repo-root data/, not app/data/ -- see recommendation_cache.py's W163 note.
 CREDIT_COUNTER_PATH = Path(__file__).parent.parent.parent / "data" / "odds_api_credit_counter.json"
 CREDIT_COUNTER_PATH_2 = Path(__file__).parent.parent.parent / "data" / "odds_api_credit_counter_2.json"

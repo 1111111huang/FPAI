@@ -2058,3 +2058,13 @@ def test_build_schedule_t30_does_not_share_odds_across_different_clusters() -> N
             call.kwargs["get_odds_events"]()
 
     assert odds_client.get_odds.call_count == 2
+
+
+def test_get_circuit_breaker_status_reports_both_vendors() -> None:
+    from app.backend.scheduler_wiring import get_circuit_breaker_status
+
+    status = get_circuit_breaker_status()
+
+    assert set(status.keys()) == {"the_odds_api", "oddspapi"}
+    assert status["the_odds_api"]["state"] == "closed"
+    assert status["oddspapi"]["state"] == "closed"
