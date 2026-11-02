@@ -38,6 +38,29 @@ def missing_live_odds(match_info: dict) -> list[str]:
     return missing
 
 
+def missing_markets_from_cache_odds(odds: dict) -> list[str]:
+    """Same three-market check as missing_live_odds() above, adapted to
+    RecommendationCache's own flat odds-dict storage shape (home/draw/away
+    plus total_goals/asian_handicap/corners as sibling keys, set in place by
+    add_secondary_odds() -- see eod_batch.py) rather than match_info's
+    nested *_odds key shape. Also checks corners (total_corners), which
+    missing_live_odds() never covered -- OddsPapi wasn't in BUG-096's scope,
+    but it's the fourth market this app actually prices, and the /ops
+    odds-availability tab should show all four. Used to query already-cached
+    rows (2026-11-02 design) instead of only firing once at generation time."""
+    missing: list[str] = []
+    if not all(odds.get(k) for k in ("home", "draw", "away")):
+        missing.append("1X2")
+    if not (odds.get("total_goals") or {}).get("over_2.5"):
+        missing.append("over/under 2.5")
+    ah = odds.get("asian_handicap") or {}
+    if ah.get("line") is None or not ah.get("home") or not ah.get("away"):
+        missing.append("Asian handicap")
+    if not odds.get("corners"):
+        missing.append("total_corners")
+    return missing
+
+
 def _fixture_label(home_team: str, away_team: str) -> str:
     return f"{home_team} v {away_team}"
 

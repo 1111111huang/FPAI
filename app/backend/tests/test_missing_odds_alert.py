@@ -18,6 +18,7 @@ from app.backend.missing_odds_alert import (  # noqa: E402
     alert_missing_live_odds_for_batch,
     alert_missing_live_odds_for_match,
     missing_live_odds,
+    missing_markets_from_cache_odds,
 )
 from app.backend.odds_api_client import NormalizedOdds, NormalizedSecondaryOdds  # noqa: E402
 from app.backend.recommendation_cache import RecommendationCache  # noqa: E402
@@ -109,3 +110,59 @@ def test_eod_batch_alerts_on_generated_fixture_missing_asian_handicap(tmp_path: 
     assert result.generated == 1
     mock_post.assert_called_once()
     assert "Arsenal v Everton: Asian handicap" in mock_post.call_args.kwargs["json"]["text"]
+
+
+# missing_markets_from_cache_odds() -- the /ops odds-availability tab's
+# adapter from RecommendationCache's flat odds-dict storage shape to the
+# same three-market check missing_live_odds() does for match_info's nested
+# shape, plus a fourth corners check. 2026-11-02 design:
+# docs/superpowers/specs/2026-11-02-background-job-safety-net-design.md
+
+
+def test_missing_markets_from_cache_odds_reports_nothing_when_everything_present() -> None:
+    odds = {
+        "home": 2.1, "draw": 3.4, "away": 3.6,
+        "total_goals": {"over_2.5": 1.9, "under_2.5": 1.9},
+        "asian_handicap": {"line": -0.5, "home": 1.9, "away": 1.9},
+        "corners": {"over_9.5": 1.9, "under_9.5": 1.9},
+    }
+    assert missing_markets_from_cache_odds(odds) == []
+
+
+def test_missing_markets_from_cache_odds_reports_missing_1x2() -> None:
+    odds = {"home": None, "draw": None, "away": None}
+    assert "1X2" in missing_markets_from_cache_odds(odds)
+
+
+def test_missing_markets_from_cache_odds_reports_missing_over_under() -> None:
+    odds = {"home": 2.1, "draw": 3.4, "away": 3.6, "total_goals": None}
+    assert "over/under 2.5" in missing_markets_from_cache_odds(odds)
+
+
+def test_missing_markets_from_cache_odds_reports_missing_asian_handicap() -> None:
+    odds = {"home": 2.1, "draw": 3.4, "away": 3.6, "asian_handicap": {}}
+    assert "Asian handicap" in missing_markets_from_cache_odds(odds)
+
+
+def test_missing_markets_from_cache_odds_reports_missing_corners() -> None:
+    """corners is the one market missing_live_odds() (match_info-shaped)
+    never checked -- OddsPapi's total_corners wasn't part of BUG-096's own
+    scope. The /ops tab adds it since it's the fourth market this app
+    actually prices."""
+    odds = {
+        "home": 2.1, "draw": 3.4, "away": 3.6,
+        "total_goals": {"over_2.5": 1.9}, "asian_handicap": {"line": -0.5, "home": 1.9, "away": 1.9},
+        "corners": None,
+    }
+    assert missing_markets_from_cache_odds(odds) == ["total_corners"]
+
+
+def test_missing_markets_from_cache_odds_treats_empty_corners_dict_as_missing() -> None:
+    """{} means "OddsPapi answered, no line posted yet" (BUG-097) -- still
+    missing from the dashboard's point of view, just not a vendor failure."""
+    odds = {
+        "home": 2.1, "draw": 3.4, "away": 3.6,
+        "total_goals": {"over_2.5": 1.9}, "asian_handicap": {"line": -0.5, "home": 1.9, "away": 1.9},
+        "corners": {},
+    }
+    assert missing_markets_from_cache_odds(odds) == ["total_corners"]
