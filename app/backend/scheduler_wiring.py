@@ -31,6 +31,7 @@ from app.backend.push_notifications import send_to_all_subscribers
 from app.backend.push_subscriptions import PushSubscriptionStore
 from app.backend.recommendation_cache import RecommendationCache
 from app.backend.recommendation_outcomes import RecommendationOutcomeStore, resolve_pending_recommendations
+from app.backend.run_isolated import run_isolated
 from app.backend.scheduler import NY_TZ, RecoverableScheduler
 from app.backend.sandbox_clock import sandbox_date, sandbox_now
 from app.backend.slack_alerts import _last_slack_alert_at, post_slack_alert  # noqa: F401 (re-export)
@@ -786,12 +787,18 @@ def register_eod_job(
         # notifications aren't wired for this run -- skip entirely rather
         # than constructing a store no caller asked for.
         if push_store is not None:
-            send_to_all_subscribers(
-                store=push_store, title="New recommendations ready",
-                body=f"Tomorrow's picks ({date_str}) are in.", url="/",
+            run_isolated(
+                "eod_job", "push_notify:new_recommendations",
+                lambda: send_to_all_subscribers(
+                    store=push_store, title="New recommendations ready",
+                    body=f"Tomorrow's picks ({date_str}) are in.", url="/",
+                ) or True,
             )
             for cluster in cluster_fixtures_by_kickoff(all_fixtures):
-                _schedule_t30_batch_notify(scheduler, push_store, cluster, date_str)
+                run_isolated(
+                    "eod_job", "push_notify:t30_batch",
+                    lambda c=cluster: _schedule_t30_batch_notify(scheduler, push_store, c, date_str) or True,
+                )
 
     scheduler.schedule_daily(EOD_JOB_ID, _eod_job, hour=EOD_HOUR, minute=EOD_MINUTE)
 

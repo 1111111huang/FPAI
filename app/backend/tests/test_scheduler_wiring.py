@@ -1668,6 +1668,50 @@ def test_register_eod_job_notifies_subscribers_once_after_the_nightly_run(tmp_pa
     assert kwargs["title"] == "New recommendations ready"
 
 
+def test_eod_job_push_notify_failure_does_not_crash_the_job(tmp_path: Path) -> None:
+    """2026-11-02: send_to_all_subscribers (and the T-30 batch-notify loop
+    right after it) ran after the whole per-competition loop with no
+    try/except of its own -- a failure there (bad subscription, network
+    error) used to fail the whole _eod_job, which only the scheduler's own
+    outer catch (scheduler.py's _run_and_mark) caught, marking a run that
+    may have fully succeeded as a failed one."""
+    fixture = NormalizedMatch(
+        match_id="m1", utc_date=f"{_FUTURE_DAY_STR}T15:00:00Z", status="SCHEDULED",
+        home_team="Arsenal", away_team="Everton", home_goals=None, away_goals=None,
+    )
+    fixtures_client = MagicMock()
+    fixtures_client.get_fixtures.return_value = [fixture]
+    cache = RecommendationCache(db_path=tmp_path / "cache.db")
+    config = AgentConfig.default()
+    run_log = JobRunLog(db_path=tmp_path / "job_runs.db")
+    push_store = PushSubscriptionStore(db_path=tmp_path / "push.db")
+    push_store.add(user_id=1, endpoint="https://push.example/a", p256dh="k", auth="a")
+
+    now = datetime(_FUTURE_DAY.year, _FUTURE_DAY.month, _FUTURE_DAY.day, 23, 30, tzinfo=NY_TZ)
+    scheduler = RecoverableScheduler(run_log=run_log, now_fn=lambda: now)
+
+    recommendation = {
+        "match": {"home": "Arsenal", "away": "Everton", "date": "2026-08-22", "league": "E0"},
+        "overall": "no_bet", "markets": [], "explanation": "test", "confidence": "low",
+        "limitations": [], "prediction_basis": "market_odds_only",
+    }
+    with patch("app.backend.recommendations.run_agent", return_value=recommendation), \
+         patch("app.backend.scheduler_wiring.send_to_all_subscribers", side_effect=RuntimeError("push service down")):
+        register_eod_job(
+            scheduler, fixtures_client=fixtures_client, odds_client=None,
+            cache=cache, config=config, now_fn=lambda: now, push_store=push_store,
+        )
+        assert _wait_until(lambda: run_log.has_run(EOD_JOB_ID, _FUTURE_DAY_STR))
+
+    # The job must have run to completion and marked itself as having run
+    # (confirmed by the assert above) -- if the push-notify failure had
+    # propagated uncaught, run_log.has_run() would be False (the job body
+    # would have raised before _run_and_mark got to record it).
+    # Also confirm the cached recommendation itself was still written --
+    # generation succeeded even though notification failed.
+    assert cache.get_latest_any_config(match_id="m1", date=_FUTURE_DAY_STR) is not None
+
+
 def _match(match_id: str, kickoff: str) -> NormalizedMatch:
     return NormalizedMatch(
         match_id=match_id, utc_date=kickoff, status="SCHEDULED",
