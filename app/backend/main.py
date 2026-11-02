@@ -698,7 +698,8 @@ def get_ops_feature_health(
         diagnostics = entry.forecast_payload.get("diagnostics") or {}
         data_quality = entry.forecast_payload.get("data_quality") or {}
         bucket = by_league.setdefault(entry_league, {
-            "sample_size": 0, "cold_start_count": 0, "unknown_team_count": 0, "completeness_sum": 0.0,
+            "sample_size": 0, "cold_start_count": 0, "unknown_team_count": 0,
+            "completeness_sum": 0.0, "completeness_count": 0,
         })
         bucket["sample_size"] += 1
         if diagnostics.get("cold_start_risk"):
@@ -708,15 +709,17 @@ def get_ops_feature_health(
         completeness = diagnostics.get("feature_completeness")
         if completeness is not None:
             bucket["completeness_sum"] += completeness
+            bucket["completeness_count"] += 1
 
     result: dict[str, dict] = {}
     for league_code, bucket in by_league.items():
         n = bucket["sample_size"]
+        completeness_n = bucket["completeness_count"]
         result[league_code] = {
             "sample_size": n,
             "cold_start_risk_rate": round(bucket["cold_start_count"] / n, 6) if n else 0.0,
             "unknown_team_rate": round(bucket["unknown_team_count"] / n, 6) if n else 0.0,
-            "avg_feature_completeness": round(bucket["completeness_sum"] / n, 6) if n else None,
+            "avg_feature_completeness": round(bucket["completeness_sum"] / completeness_n, 6) if completeness_n else None,
         }
     return {"by_league": result}
 
