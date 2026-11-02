@@ -30,5 +30,5 @@ export default withAuth({
 });
 
 export const config = {
-  matcher: ["/bets/:path*"],
+  matcher: ["/bets/:path*", "/ops/:path*"],
 };
