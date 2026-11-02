@@ -36,6 +36,7 @@ from app.backend.odds_api_client import OddsAPIClient
 from app.backend.odds_sport_keys import ODDS_SPORT_KEY_BY_COMPETITION
 from app.backend.recommendation_cache import RecommendationCache
 from app.backend.recommendations import validate_and_degrade
+from app.backend.run_isolated import run_isolated
 from app.backend.sandbox_clock import sandbox_now
 from src.agent.agent_config import AgentConfig
 from src.ingestion.common.team_mapping import TeamNameMapper
@@ -153,10 +154,21 @@ def refresh_match_at_t30(
     # reuses a cached secondary-odds fetch when h2h is unchanged (its own
     # internal check, independent of the always-refresh change above) --
     # that's a real avoided API call, not a skipped generation.
-    add_secondary_odds(
-        match_info, fresh_odds, odds_client, cache, fixture, date_str,
-        agent_config_hash, ODDS_SPORT_KEY_BY_COMPETITION[league], odds_by_teams,
+    # 2026-11-02: add_secondary_odds makes real network calls to two odds
+    # vendors, same as eod_batch.py's own call -- that one's been wrapped
+    # since BUG-093, this one never was. An exception here used to
+    # propagate straight out of refresh_match_at_t30 with no
+    # T30RefreshResult produced at all.
+    secondary_odds_ok = run_isolated(
+        "t30", f"match_id={fixture.match_id}",
+        lambda: add_secondary_odds(
+            match_info, fresh_odds, odds_client, cache, fixture, date_str,
+            agent_config_hash, ODDS_SPORT_KEY_BY_COMPETITION[league], odds_by_teams,
+        ) or True,
+        league=league,
     )
+    if secondary_odds_ok is None:
+        return T30RefreshResult(match_id=fixture.match_id, outcome="skipped_error")
 
     try:
         agent_result = recommendations.run_agent(match_info=match_info, config=config)

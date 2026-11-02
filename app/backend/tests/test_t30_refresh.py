@@ -406,6 +406,31 @@ def test_secondary_odds_not_fetched_when_odds_client_lacks_get_event_odds(tmp_pa
     assert "btts_odds" not in captured_match_info
 
 
+def test_refresh_match_at_t30_isolates_a_failing_add_secondary_odds_call(tmp_path: Path) -> None:
+    """2026-11-02: add_secondary_odds used to be completely unguarded here
+    (unlike the identical call in eod_batch.py, wrapped since BUG-093) --
+    an exception propagated straight out of refresh_match_at_t30 with no
+    T30RefreshResult produced at all. run_isolated now catches it."""
+    config = AgentConfig.default()
+    cache = RecommendationCache(db_path=tmp_path / "cache.db")
+    _seed_cache(cache, config, odds={"home": 1.8, "draw": 3.6, "away": 4.5})
+
+    odds_client = MagicMock()
+    odds_client.get_odds.return_value = [
+        NormalizedOdds(home_team="Arsenal", away_team="Everton", commence_time="2026-08-22T15:00:00Z",
+                        home_odds=1.6, draw_odds=3.8, away_odds=5.0),  # moved -- would otherwise trigger a refresh
+    ]
+
+    with patch("app.backend.t30_refresh.add_secondary_odds", side_effect=RuntimeError("vendor exploded")), \
+         patch("app.backend.recommendations.run_agent") as mock_run_agent:
+        result = refresh_match_at_t30(_fixture(), odds_client=odds_client, cache=cache, config=config, date_str=_future_date(1))
+
+    assert result.outcome == "skipped_error"
+    mock_run_agent.assert_not_called()
+    agent_config_hash = compute_agent_config_hash(config)
+    assert len(cache.get_history("m1", _future_date(1), agent_config_hash)) == 1  # prior recommendation untouched
+
+
 def test_skips_refresh_when_kickoff_already_passed(tmp_path: Path) -> None:
     """A T-30 job scheduled while the fixture was genuinely pre-match can
     still execute late -- RecoverableScheduler's own catch-up path runs a
