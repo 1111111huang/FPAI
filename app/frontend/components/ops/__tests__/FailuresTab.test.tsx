@@ -48,4 +48,12 @@ describe("FailuresTab", () => {
 
     expect(await screen.findByText(/no failures/i)).toBeInTheDocument();
   });
+
+  it("shows an error state when the fetch fails", async () => {
+    vi.mocked(getOpsFailures).mockRejectedValue(new Error("boom"));
+
+    render(<FailuresTab />);
+
+    expect(await screen.findByText("boom")).toBeInTheDocument();
+  });
 });

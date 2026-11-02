@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 
 import { getOpsFailures } from "@/lib/api";
 import type { CircuitBreakerStatus, OpsFailuresResponse } from "@/lib/types";
+import { ErrorState } from "../MatchUI";
 
 const BREAKER_COLOR: Record<CircuitBreakerStatus["state"], string> = {
   open: "border-serious/40 bg-serious-dim text-serious",
@@ -24,6 +25,7 @@ function BreakerPill({ vendor, state }: { vendor: string; state: CircuitBreakerS
 export function FailuresTab({ league }: { league?: string }) {
   const [data, setData] = useState<OpsFailuresResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [retryTick, setRetryTick] = useState(0);
 
   useEffect(() => {
     let cancelled = false;
@@ -39,13 +41,13 @@ export function FailuresTab({ league }: { league?: string }) {
     return () => {
       cancelled = true;
     };
-  }, [league]);
+  }, [league, retryTick]);
 
   if (error) {
-    return <div className="rounded-lg border border-serious/40 p-3.5 text-sm text-serious">{error}</div>;
+    return <ErrorState message={error} onRetry={() => setRetryTick((t) => t + 1)} />;
   }
   if (!data) {
-    return <div className="text-sm text-muted">Loading...</div>;
+    return <div className="text-sm text-muted">Loading…</div>;
   }
 
   return (
