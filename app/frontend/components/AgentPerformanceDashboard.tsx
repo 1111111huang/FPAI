@@ -341,10 +341,10 @@ export function AgentPerformanceContent() {
 }
 
 // Thin wrapper kept for app/agent-performance/page.tsx's standalone route --
-// now shows the Ops nav item as active (the Performance tab lives under
-// /ops), not a dedicated "agent-performance" one. See Correction 3: AppShell's
-// `active` union doesn't include "ops" yet -- Task 7 widens it; until then
-// this is a known, expected type error, not a bug to fix here.
+// shows the Ops nav item as active (the Performance tab lives under /ops),
+// not a dedicated "agent-performance" one. AppShell's `active` union was
+// widened to include "ops" in Task 7 (and dropped "agent-performance"), so
+// this now type-checks cleanly.
 export function AgentPerformancePage() {
   return (
     <AppShell active="ops">

@@ -33,6 +33,15 @@ const NAV_ITEMS: {
   { href: "/ops", label: "Ops", key: "ops", icon: Gauge },
 ];
 
+// Production bug (2026-09-15): Next.js auto-prefetches a visible Link on
+// mount -- for a middleware-gated route (W210) that prefetch can fire before
+// the session cookie exists (e.g. right after landing on "/" pre-login) and
+// cache a "redirect to /login" result client-side, which a later real click
+// then replays even once truly signed in. Every middleware-gated nav key
+// goes here so a future gated route doesn't repeat the same oversight;
+// "/" and "/matches" aren't gated, so nothing to poison there.
+const PREFETCH_DISABLED_KEYS = new Set(["bets", "ops"]);
+
 /** Rebrand (2026-08-13): FPAI -> Oddsey. Was a hand-recreated inline SVG
  * (the original reference image's bytes weren't extractable through that
  * session's tools); replaced 2026-08-14 with the real provided logo file
@@ -177,15 +186,8 @@ export function AppShell({
                 <Link
                   key={item.key}
                   href={item.href}
-                  // Production bug (2026-09-15): Next.js auto-prefetches a
-                  // visible Link on mount -- for "/bets" (middleware-gated,
-                  // W210) that prefetch can fire before the session cookie
-                  // exists (e.g. right after landing on "/" pre-login) and
-                  // cache a "redirect to /login" result client-side, which
-                  // a later real click then replays even once truly signed
-                  // in. Only "/bets" needs this; "/" and "/matches" aren't
-                  // middleware-gated, so nothing to poison there.
-                  prefetch={item.key === "bets" ? false : undefined}
+                  // See PREFETCH_DISABLED_KEYS above for why.
+                  prefetch={PREFETCH_DISABLED_KEYS.has(item.key) ? false : undefined}
                   className={`flex items-center gap-2 rounded-md px-2 py-1.5 transition-colors duration-150 ${
                     active === item.key ? "bg-surface text-ink" : "text-ink-secondary hover:text-ink"
                   }`}
@@ -321,9 +323,8 @@ export function AppShell({
             <Link
               key={item.key}
               href={item.href}
-              // See the sidebar nav's own Link above -- same pre-login
-              // stale-prefetch-redirect issue applies to this mobile tab.
-              prefetch={item.key === "bets" ? false : undefined}
+              // See PREFETCH_DISABLED_KEYS above for why.
+              prefetch={PREFETCH_DISABLED_KEYS.has(item.key) ? false : undefined}
               onClick={(event) => handleTabClick(event, item.href)}
               className={`flex flex-col items-center gap-0.5 rounded-md px-4 py-1.5 text-[11px] font-medium transition-colors duration-150 ${
                 isActive ? "text-ink" : "text-ink-secondary"
