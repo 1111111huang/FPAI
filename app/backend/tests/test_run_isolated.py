@@ -4,9 +4,11 @@ its backing FailuresStore. Mirrors scheduler.py's JobRunLog test pattern
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
+from unittest.mock import patch
 
-from app.backend.run_isolated import FailuresStore
+from app.backend.run_isolated import FailuresStore, run_isolated, run_isolated_async
 
 
 def test_failures_store_records_a_failure(tmp_path: Path) -> None:
@@ -57,3 +59,64 @@ def test_failures_store_persists_across_instances(tmp_path: Path) -> None:
     rows = reloaded.list_recent()
     assert len(rows) == 1
     assert rows[0]["subsystem"] == "eod_batch"
+
+
+def test_run_isolated_returns_the_function_result_on_success(tmp_path: Path) -> None:
+    with patch("app.backend.run_isolated.get_failures_store") as mock_get_store:
+        result = run_isolated("eod_batch", "match_id=123", lambda: 42)
+    assert result == 42
+    mock_get_store.assert_not_called()
+
+
+def test_run_isolated_returns_none_and_records_on_failure(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr("app.backend.run_isolated.DEFAULT_DB_PATH", tmp_path / "failures.db")
+    import app.backend.run_isolated as run_isolated_module
+    run_isolated_module._singleton_store = None
+
+    def _raise():
+        raise ValueError("boom")
+
+    with patch("app.backend.run_isolated.post_slack_alert", return_value=False):
+        result = run_isolated("eod_batch", "match_id=123", _raise)
+
+    assert result is None
+    rows = run_isolated_module.get_failures_store().list_recent()
+    assert len(rows) == 1
+    assert rows[0]["exc_type"] == "ValueError"
+    assert rows[0]["unit_id"] == "match_id=123"
+
+
+def test_run_isolated_never_raises_even_if_recording_itself_fails(tmp_path: Path) -> None:
+    def _raise():
+        raise ValueError("boom")
+
+    with patch("app.backend.run_isolated.get_failures_store", side_effect=RuntimeError("store is down")):
+        result = run_isolated("eod_batch", "match_id=123", _raise)
+
+    assert result is None
+
+
+def test_run_isolated_async_returns_the_function_result_on_success() -> None:
+    async def _ok():
+        return "fine"
+
+    result = asyncio.run(run_isolated_async("t30", "match_id=558542", _ok))
+    assert result == "fine"
+
+
+def test_run_isolated_async_returns_none_and_records_on_failure(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr("app.backend.run_isolated.DEFAULT_DB_PATH", tmp_path / "failures.db")
+    import app.backend.run_isolated as run_isolated_module
+    run_isolated_module._singleton_store = None
+
+    async def _raise():
+        raise RuntimeError("vendor timeout")
+
+    with patch("app.backend.run_isolated.post_slack_alert", return_value=True):
+        result = asyncio.run(run_isolated_async("t30", "match_id=558542", _raise))
+
+    assert result is None
+    rows = run_isolated_module.get_failures_store().list_recent()
+    assert len(rows) == 1
+    assert rows[0]["exc_type"] == "RuntimeError"
+    assert rows[0]["alerted"] == 1
