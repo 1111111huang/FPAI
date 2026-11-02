@@ -58,7 +58,7 @@ from app.backend.scheduler_wiring import (
     register_data_refresh_job, register_eod_job, register_fixture_reconciliation_job, register_lessons_job,
     register_recommendation_cache_prune_job,
 )
-from app.backend.run_isolated import get_failures_store
+from app.backend.run_isolated import get_failures_store, run_isolated
 from app.backend.settlement import settle_open_bets
 from app.backend.push_notifications import send_to_user as send_push_to_user
 from app.backend.push_subscriptions import PushSubscriptionStore
@@ -343,7 +343,27 @@ async def _pregenerate_recommendations(
         # nothing generated for the leagues not requested.
         fixtures_by_league = {league_filter: fixtures_by_league.get(league_filter, [])}
 
-    odds_client = build_odds_client()
+    # 2026-11-02: design spec's call-site table (BUG-101's site) -- unlike
+    # get_fixtures() above and the per-league run_eod_batch() call below,
+    # this was unguarded: a raise here propagated straight out of this
+    # fire-and-forget background task as an unretrieved exception. Uses
+    # run_isolated (not a bare try/except) so a real failure also gets
+    # recorded to FailuresStore and alerted, matching this function's other
+    # two isolation points. No league= -- this runs once, before the
+    # per-league loop, with no single league to attribute it to.
+    #
+    # build_odds_client() itself returns None legitimately (no ODDS_API_KEY
+    # configured -- its own docstring) -- run_isolated's own None-on-failure
+    # return can't be told apart from that, so the 1-tuple wrap (unlike
+    # t30_refresh.py's `fn() or True` sites, which only care *whether* the
+    # call succeeded) keeps the real -- possibly None -- return value
+    # distinguishable from "the call raised".
+    odds_client_result = run_isolated("pregenerate", "build_odds_client", lambda: (build_odds_client(),))
+    if odds_client_result is None:
+        LOGGER.warning("Pregenerate: build_odds_client() failed -- skipping this pregenerate pass entirely.")
+        return {}
+    odds_client = odds_client_result[0]
+
     cache = recommendations.get_cache()
     config = AgentConfig.default()
     results: dict[str, dict] = {}

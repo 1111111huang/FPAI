@@ -345,6 +345,27 @@ def test_get_fixtures_failure_skips_the_whole_pass_instead_of_crashing_unretriev
     mock_run_eod_batch.assert_not_called()
 
 
+def test_build_odds_client_failure_skips_the_whole_pass_instead_of_crashing(monkeypatch):
+    """Design spec gap (2026-11-02-background-job-safety-net-design.md,
+    call-site table): build_odds_client() is called once, before the
+    per-league loop, with no surrounding protection -- unlike the
+    get_fixtures() call just above it (W179) or the per-league
+    run_eod_batch() call below it, a raise here used to propagate straight
+    out of this fire-and-forget background task as an unretrieved
+    exception instead of degrading gracefully."""
+    monkeypatch.delenv("APP_ACCESS_TOKEN", raising=False)
+    fixtures = [_fixture("m1", "E0")]
+
+    with patch("app.backend.main.get_fixtures", new=AsyncMock(return_value=fixtures)), \
+         patch("app.backend.main.build_odds_client", side_effect=RuntimeError("boom")), \
+         patch("app.backend.eod_batch.run_eod_batch") as mock_run_eod_batch:
+        import asyncio
+        results = asyncio.run(main._pregenerate_recommendations(days_ahead=5, scheduler=None))
+
+    assert results == {}
+    mock_run_eod_batch.assert_not_called()
+
+
 def test_admin_endpoint_returns_immediately_without_waiting_for_pregenerate(monkeypatch):
     monkeypatch.delenv("APP_ACCESS_TOKEN", raising=False)
     # _fire_and_forget itself deliberately left real here (not mocked) --
