@@ -20,6 +20,7 @@ from typing import Callable
 import requests
 
 from app.backend import fixture_cache
+from app.backend.circuit_breaker import CircuitBreaker
 from app.backend.eod_batch import COMPETITION_CODE, LEAGUE_CODE, has_kicked_off, run_eod_batch
 from app.backend.football_data_client import FootballDataClient, NormalizedMatch
 from app.backend.historical_odds_client import HistoricalOddsClient
@@ -44,6 +45,15 @@ from src.utils.db_manager import DuckDBManager
 from src.utils.logger import get_logger
 
 LOGGER = get_logger(__name__)
+
+# 2026-11-02: one breaker per vendor, held at module level so it survives
+# across build_odds_client()/build_oddspapi_client() being called fresh on
+# every pregenerate/EOD invocation -- a breaker created inside
+# FallbackOddsClient.__init__ would lose all memory of an ongoing outage
+# the instant the next call rebuilt the client, reproducing exactly the
+# "re-discover the outage every time" problem this exists to fix.
+_odds_api_circuit_breaker = CircuitBreaker()
+_oddspapi_circuit_breaker = CircuitBreaker()
 
 # W163: repo-root data/, not app/data/ -- see recommendation_cache.py's W163 note.
 CREDIT_COUNTER_PATH = Path(__file__).parent.parent.parent / "data" / "odds_api_credit_counter.json"
@@ -297,10 +307,14 @@ class FallbackOddsClient:
     mid-month. Returns None (the same "keep last-known odds" convention as a
     single exhausted client) only once every client has failed."""
 
-    def __init__(self, clients: list[PersistingOddsClient]) -> None:
+    def __init__(self, clients: list[PersistingOddsClient], circuit_breaker: CircuitBreaker | None = None) -> None:
         self._clients = clients
+        self._circuit = circuit_breaker if circuit_breaker is not None else _odds_api_circuit_breaker
 
     def _try_each_client(self, call: Callable[[PersistingOddsClient], object], op_name: str):
+        if not self._circuit.allow():
+            LOGGER.info("FallbackOddsClient.%s: circuit open -- short-circuiting, no keys attempted.", op_name)
+            return None
         # W254: stable sort by "currently in cooldown" -- available keys
         # keep their relative order and go first, cooling-down ones keep
         # theirs and go last, same "reorder, never hard-skip" discipline as
@@ -320,6 +334,7 @@ class FallbackOddsClient:
                 LOGGER.warning("FallbackOddsClient.%s: key #%d failed (%s) -- trying next key.", op_name, i + 1, exc)
                 continue
             if result is not None:
+                self._circuit.record_success()
                 return result
             LOGGER.info("FallbackOddsClient.%s: key #%d exhausted (local budget) -- trying next key.", op_name, i + 1)
         # W250: the per-key client's own "skipping call" warning fires on
@@ -331,6 +346,7 @@ class FallbackOddsClient:
             "FallbackOddsClient.%s: all %d configured key(s) exhausted or failed -- keeping last-known odds.",
             op_name, len(self._clients),
         )
+        self._circuit.record_failure()
         _alert_all_keys_exhausted("The Odds API", op_name, len(self._clients))
         return None
 

@@ -465,6 +465,54 @@ def test_fallback_odds_client_get_event_odds_forwards_regions_and_team_names() -
     )
 
 
+def test_fallback_odds_client_short_circuits_when_breaker_is_open() -> None:
+    """2026-11-02: when the circuit is OPEN, _try_each_client must not
+    touch a single client -- that's the whole point (zero network calls,
+    zero throttle wait) vs. today's full pass through every key."""
+    from app.backend.circuit_breaker import CircuitBreaker
+
+    breaker = CircuitBreaker(failure_threshold=1)
+    breaker.record_failure()  # opens it
+    client = MagicMock()
+    fallback = FallbackOddsClient([client], circuit_breaker=breaker)
+
+    result = fallback.get_odds(sport_key="soccer_epl")
+
+    assert result is None
+    client.get_odds.assert_not_called()
+
+
+def test_fallback_odds_client_records_success_on_the_breaker() -> None:
+    from app.backend.circuit_breaker import CircuitBreaker
+
+    breaker = CircuitBreaker()
+    client = MagicMock()
+    client.is_available.return_value = True
+    client.get_odds.return_value = ["some odds"]
+    fallback = FallbackOddsClient([client], circuit_breaker=breaker)
+
+    fallback.get_odds(sport_key="soccer_epl")
+
+    assert breaker.state == "closed"
+
+
+def test_fallback_odds_client_records_failure_on_full_exhaustion() -> None:
+    from app.backend.circuit_breaker import CircuitBreaker
+
+    breaker = CircuitBreaker(failure_threshold=3)
+    client = MagicMock()
+    client.is_available.return_value = True
+    client.get_odds.return_value = None  # exhausted, same as today's existing exhaustion tests
+
+    fallback = FallbackOddsClient([client], circuit_breaker=breaker)
+    fallback.get_odds(sport_key="soccer_epl")
+
+    assert breaker.state == "closed"  # 1 of 3
+    fallback.get_odds(sport_key="soccer_epl")
+    fallback.get_odds(sport_key="soccer_epl")
+    assert breaker.state == "open"  # 3 of 3 -- tripped
+
+
 def test_persisting_oddspapi_client_saves_counter_after_get_corners_odds(tmp_path: Path) -> None:
     store = FileCreditCounterStore(tmp_path / "counter.json")
     counter = CreditCounter()
@@ -1243,6 +1291,19 @@ def test_register_data_refresh_job_skips_the_rebuild_when_every_league_fails_to_
         assert _wait_until(lambda: run_log.has_run(DATA_REFRESH_JOB_ID, _FUTURE_DAY_STR))
 
     assert mock_popen.call_count == 2  # both leagues attempted, no 3rd (rebuild) call
+
+
+@pytest.fixture(autouse=True)
+def _reset_circuit_breakers():
+    """The module-level odds/oddspapi circuit breakers are process-global
+    singletons by design (2026-11-02) -- reset them before each test so one
+    test tripping a breaker can't leave it OPEN for an unrelated later test
+    in the same run."""
+    import app.backend.scheduler_wiring as scheduler_wiring_module
+    from app.backend.circuit_breaker import CircuitBreaker
+    scheduler_wiring_module._odds_api_circuit_breaker = CircuitBreaker()
+    scheduler_wiring_module._oddspapi_circuit_breaker = CircuitBreaker()
+    yield
 
 
 @pytest.fixture(autouse=True)
