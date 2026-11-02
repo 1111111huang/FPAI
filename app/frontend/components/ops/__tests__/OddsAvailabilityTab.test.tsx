@@ -31,7 +31,29 @@ describe("OddsAvailabilityTab", () => {
     expect(await screen.findByText(/Udinese/)).toBeInTheDocument();
     expect(screen.getByText(/Roma/)).toBeInTheDocument();
     expect(screen.getByText(/over\/under 2.5/)).toBeInTheDocument();
-    expect(screen.getByText(/circuit_open/)).toBeInTheDocument();
+    expect(screen.getByText(/circuit_open/)).toHaveClass("text-serious");
+  });
+
+  it("renders the benign not_posted cause neutrally, not as alarming", async () => {
+    vi.mocked(getOpsOddsAvailability).mockResolvedValue({
+      fixtures: [
+        {
+          match_id: "1",
+          date: "2026-11-02",
+          league: "I1",
+          home_team: "Udinese",
+          away_team: "Roma",
+          missing_markets: ["btts"],
+          likely_cause: "not_posted",
+        },
+      ],
+    });
+
+    render(<OddsAvailabilityTab dateFrom="2026-11-01" dateTo="2026-11-02" />);
+
+    const cause = await screen.findByText(/not_posted/);
+    expect(cause).toHaveClass("text-muted");
+    expect(cause).not.toHaveClass("text-serious");
   });
 
   it("renders an empty state with no missing markets", async () => {

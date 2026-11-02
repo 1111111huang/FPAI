@@ -6,6 +6,11 @@ import { getOpsOddsAvailability } from "@/lib/api";
 import type { OpsOddsAvailabilityResponse } from "@/lib/types";
 import { ErrorState } from "../MatchUI";
 
+const LIKELY_CAUSE_STYLE: Record<OpsOddsAvailabilityResponse["fixtures"][number]["likely_cause"], string> = {
+  circuit_open: "text-serious",
+  not_posted: "text-muted",
+};
+
 export function OddsAvailabilityTab({
   dateFrom,
   dateTo,
@@ -69,7 +74,7 @@ export function OddsAvailabilityTab({
               </td>
               <td className="py-2 pr-3 text-ink-secondary">{f.league ?? "—"}</td>
               <td className="py-2 pr-3 text-ink">{f.missing_markets.join(", ")}</td>
-              <td className="py-2 font-mono text-serious">{f.likely_cause}</td>
+              <td className={`py-2 font-mono ${LIKELY_CAUSE_STYLE[f.likely_cause]}`}>{f.likely_cause}</td>
             </tr>
           ))}
         </tbody>
