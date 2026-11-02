@@ -3,8 +3,11 @@
 /** 2026-11-02: /ops -- failures & circuit breakers, odds availability,
  * feature health, and recommendation performance (the existing, previously
  * unlinked agent-performance page, folded in here instead of rebuilt).
- * One shared date-range + league filter bar above all four tabs, so they
- * can't drift out of sync with each other.
+ * Shared date-range + league filter bar: fully wired into the Odds
+ * Availability and Feature Health tabs; Failures only honors the league
+ * filter (it isn't date-scoped); Performance manages its own date range
+ * and ignores this filter bar entirely (unmodified, linked-not-rebuilt
+ * page).
  * Design: docs/superpowers/specs/2026-11-02-background-job-safety-net-design.md */
 
 import { useState } from "react";

@@ -54,6 +54,22 @@ describe("FeatureHealthTab", () => {
     expect(safe).toHaveClass("text-good");
   });
 
+  it("flags a low avg_feature_completeness as serious, not the same as a high one", async () => {
+    vi.mocked(getOpsFeatureHealth).mockResolvedValue({
+      by_league: {
+        SP1: { sample_size: 10, cold_start_risk_rate: 0, unknown_team_rate: 0, avg_feature_completeness: 0.65 },
+        I1: { sample_size: 10, cold_start_risk_rate: 0, unknown_team_rate: 0, avg_feature_completeness: 0.95 },
+      },
+    });
+
+    render(<FeatureHealthTab dateFrom="2026-11-01" dateTo="2026-11-02" />);
+
+    const low = await screen.findByText(/65/);
+    expect(low).toHaveClass("text-serious");
+    const high = screen.getByText(/95/);
+    expect(high).toHaveClass("text-good");
+  });
+
   it("renders an empty state with no leagues", async () => {
     vi.mocked(getOpsFeatureHealth).mockResolvedValue({ by_league: {} });
 
