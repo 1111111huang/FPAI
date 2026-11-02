@@ -465,10 +465,14 @@ class FallbackOddsPapiClient:
     posted yet" -- not None, so it's returned as-is and no other key is paid
     for the same answer."""
 
-    def __init__(self, clients: list[PersistingOddsPapiClient]) -> None:
+    def __init__(self, clients: list[PersistingOddsPapiClient], circuit_breaker: CircuitBreaker | None = None) -> None:
         self._clients = clients
+        self._circuit = circuit_breaker if circuit_breaker is not None else _oddspapi_circuit_breaker
 
     def _try_each_client(self, call: Callable[[PersistingOddsPapiClient], object], op_name: str):
+        if not self._circuit.allow():
+            LOGGER.info("FallbackOddsPapiClient.%s: circuit open -- short-circuiting, no keys attempted.", op_name)
+            return None
         # W254: same reorder-not-skip cooldown discipline as
         # FallbackOddsClient._try_each_client -- see its own comment above.
         ordered = sorted(enumerate(self._clients), key=lambda pair: not pair[1].is_available())
@@ -484,6 +488,7 @@ class FallbackOddsPapiClient:
                 LOGGER.warning("FallbackOddsPapiClient.%s: key #%d failed (%s) -- trying next key.", op_name, i + 1, exc)
                 continue
             if result is not None:
+                self._circuit.record_success()
                 return result
             LOGGER.info("FallbackOddsPapiClient.%s: key #%d exhausted (local budget) -- trying next key.", op_name, i + 1)
         # W250: same rationale as FallbackOddsClient's own final log, above.
@@ -491,6 +496,7 @@ class FallbackOddsPapiClient:
             "FallbackOddsPapiClient.%s: all %d configured key(s) exhausted or failed -- keeping last-known odds.",
             op_name, len(self._clients),
         )
+        self._circuit.record_failure()
         _alert_all_keys_exhausted("OddsPapi", op_name, len(self._clients))
         return None
 

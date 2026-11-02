@@ -513,6 +513,51 @@ def test_fallback_odds_client_records_failure_on_full_exhaustion() -> None:
     assert breaker.state == "open"  # 3 of 3 -- tripped
 
 
+def test_fallback_oddspapi_client_short_circuits_when_breaker_is_open() -> None:
+    from app.backend.circuit_breaker import CircuitBreaker
+    from app.backend.scheduler_wiring import FallbackOddsPapiClient
+
+    breaker = CircuitBreaker(failure_threshold=1)
+    breaker.record_failure()
+    client = MagicMock()
+    fallback = FallbackOddsPapiClient([client], circuit_breaker=breaker)
+
+    result = fallback.get_corners_odds(fixture_id="abc123")
+
+    assert result is None
+    client.get_corners_odds.assert_not_called()
+
+
+def test_fallback_oddspapi_client_records_success_on_the_breaker() -> None:
+    from app.backend.circuit_breaker import CircuitBreaker
+    from app.backend.scheduler_wiring import FallbackOddsPapiClient
+
+    breaker = CircuitBreaker()
+    client = MagicMock()
+    client.is_available.return_value = True
+    client.get_corners_odds.return_value = {"over_9.5": 1.9, "under_9.5": 1.9}
+    fallback = FallbackOddsPapiClient([client], circuit_breaker=breaker)
+
+    fallback.get_corners_odds(fixture_id="abc123")
+
+    assert breaker.state == "closed"
+
+
+def test_fallback_oddspapi_client_records_failure_on_full_exhaustion() -> None:
+    from app.backend.circuit_breaker import CircuitBreaker
+    from app.backend.scheduler_wiring import FallbackOddsPapiClient
+
+    breaker = CircuitBreaker(failure_threshold=1)
+    client = MagicMock()
+    client.is_available.return_value = True
+    client.get_corners_odds.return_value = None
+
+    fallback = FallbackOddsPapiClient([client], circuit_breaker=breaker)
+    fallback.get_corners_odds(fixture_id="abc123")
+
+    assert breaker.state == "open"
+
+
 def test_persisting_oddspapi_client_saves_counter_after_get_corners_odds(tmp_path: Path) -> None:
     store = FileCreditCounterStore(tmp_path / "counter.json")
     counter = CreditCounter()
