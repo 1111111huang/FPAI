@@ -40,6 +40,7 @@ from app.backend.sweden_fixtures_client import (
     historical_results_from_raw_matches,
 )
 from app.backend.llm_check import check_llm_reachable
+from app.backend.missing_odds_alert import missing_markets_from_cache_odds
 from app.backend.recommendation_cache import DEFAULT_DB_PATH as RECOMMENDATION_CACHE_DB_PATH, RecommendationCache
 from app.backend.results_cache import ResultsCache
 from app.backend.recommendation_outcomes import (
@@ -625,6 +626,51 @@ def get_ops_failures(
     route."""
     failures = get_failures_store().list_recent(since=since, subsystem=subsystem, league=league)
     return {"failures": failures, "circuit_breakers": get_circuit_breaker_status()}
+
+
+@app.get("/api/admin/ops/odds-availability")
+def get_ops_odds_availability(
+    date_from: str,
+    date_to: str,
+    league: str | None = None,
+    cache: RecommendationCache = Depends(recommendations.get_cache),
+) -> dict:
+    """2026-11-02: /ops dashboard's odds-availability tab. Scans every
+    cached match's latest generation (list_latest_per_match already exists
+    for this exact "every match, not just ones I already know the key for"
+    shape -- recommendation_outcomes.py's own resolution job uses it the
+    same way) and reports which markets are missing, with a best-effort
+    cause: circuit_open when that market's vendor breaker is currently
+    open, not_posted otherwise (the common, benign case -- a book simply
+    hasn't priced it yet). Only reports on fixtures with a cache row;
+    there's no "fixture the pipeline hasn't reached yet" source of truth
+    independent of the cache itself."""
+    breaker_status = get_circuit_breaker_status()
+    odds_api_open = breaker_status["the_odds_api"]["state"] == "open"
+    oddspapi_open = breaker_status["oddspapi"]["state"] == "open"
+
+    fixtures: list[dict] = []
+    for entry in cache.list_latest_per_match():
+        if not (date_from <= entry.date <= date_to):
+            continue
+        match = entry.recommendation.get("match") or {}
+        entry_league = match.get("league")
+        if league is not None and entry_league != league:
+            continue
+        missing = missing_markets_from_cache_odds(entry.odds)
+        if not missing:
+            continue
+        likely_cause = "not_posted"
+        if "total_corners" in missing and oddspapi_open:
+            likely_cause = "circuit_open"
+        elif any(m in missing for m in ("1X2", "over/under 2.5", "Asian handicap")) and odds_api_open:
+            likely_cause = "circuit_open"
+        fixtures.append({
+            "match_id": entry.match_id, "date": entry.date, "league": entry_league,
+            "home_team": match.get("home"), "away_team": match.get("away"),
+            "missing_markets": missing, "likely_cause": likely_cause,
+        })
+    return {"fixtures": fixtures}
 
 
 @app.get("/api/admin/export-recommendations")
