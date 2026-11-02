@@ -81,3 +81,22 @@ def _default_push_store(tmp_path, request):
     app.dependency_overrides[get_push_store] = lambda: store
     yield
     app.dependency_overrides.pop(get_push_store, None)
+
+
+@pytest.fixture(autouse=True)
+def _default_failures_store(tmp_path, request, monkeypatch):
+    """Every test in this suite gets a tmp_path-scoped FailuresStore by
+    default (mirrors this file's own _default_push_store: a safety net so
+    no test exercising run_isolated()'s real failure path writes rows into
+    the real data/failures.db on disk). A test that specifically wants to
+    assert on recorded failures reads them back via
+    run_isolated.get_failures_store().list_recent() -- it'll see this same
+    tmp_path-scoped store, not a mock."""
+    if request.node.get_closest_marker("live"):
+        yield
+        return
+    import app.backend.run_isolated as run_isolated_module
+    monkeypatch.setattr(run_isolated_module, "DEFAULT_DB_PATH", tmp_path / "failures.db")
+    run_isolated_module._singleton_store = None
+    yield
+    run_isolated_module._singleton_store = None
