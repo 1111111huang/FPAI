@@ -209,7 +209,11 @@ const DAY_OPTIONS: { label: string; days: number }[] = [
   { label: "Last 30 days", days: 30 },
 ];
 
-export function AgentPerformancePage() {
+// 2026-11-02: extracted from AgentPerformancePage so OpsDashboard's
+// Performance tab can render this content inside its own single AppShell
+// instead of nesting a second one (AgentPerformancePage below still wraps
+// this in AppShell for the standalone /agent-performance route).
+export function AgentPerformanceContent() {
   const [days, setDays] = useState(3650);
   const [data, setData] = useState<AgentPerformanceDashboard | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -234,106 +238,117 @@ export function AgentPerformancePage() {
   const kelly = data?.kelly_roi_simulation;
 
   return (
-    <AppShell active="agent-performance">
-      <div className="pt-8">
-        <h1 className="text-xl font-semibold tracking-tight text-ink">Agent Performance</h1>
-        <p className="mt-1 text-sm text-ink-secondary">
-          All resolved live recommendations, Kelly-sized simulated stakes (UB)
-        </p>
+    <div className="pt-8">
+      <h1 className="text-xl font-semibold tracking-tight text-ink">Agent Performance</h1>
+      <p className="mt-1 text-sm text-ink-secondary">
+        All resolved live recommendations, Kelly-sized simulated stakes (UB)
+      </p>
 
-        <div className="mt-4 flex gap-2">
-          {DAY_OPTIONS.map((opt) => (
-            <button
-              key={opt.label}
-              type="button"
-              onClick={() => setDays(opt.days)}
-              className={`rounded-full border px-3 py-1 text-xs ${
-                days === opt.days ? "border-accent bg-accent text-white" : "border-border text-ink-secondary"
-              }`}
-            >
-              {opt.label}
-            </button>
-          ))}
-        </div>
-
-        {error && (
-          <div className="mt-6">
-            <ErrorState message={error} onRetry={() => setRetryTick((t) => t + 1)} />
-          </div>
-        )}
-
-        {!error && !data && <div className="mt-6 text-sm text-ink-secondary">Loading…</div>}
-
-        {data && kelly && (
-          <>
-            <div className="mt-6">
-              <div className="mb-2 text-sm font-semibold text-ink">Main Metrics</div>
-              <div className="flex flex-wrap gap-3">
-                <StatTile label="ROI" value={formatPct(kelly.roi)} colorClass={pnlColor(kelly.roi)} />
-                <StatTile label="Total Stake" value={formatUB(kelly.total_staked)} />
-                <StatTile
-                  label="Money Won"
-                  value={`${kelly.total_profit >= 0 ? "+" : ""}${kelly.total_profit.toFixed(1)} UB`}
-                  colorClass={pnlColor(kelly.total_profit)}
-                />
-                <StatTile label="Bets Placed" value={String(kelly.bets_placed)} />
-                <StatTile label="Hit %" value={formatPct(kelly.hit_rate)} />
-              </div>
-            </div>
-
-            <div className="mt-8">
-              <div className="mb-1 text-sm font-semibold text-ink">Segmentation</div>
-              <p className="mb-3 text-xs text-ink-secondary">
-                Same metrics, sliced by Market / Market+Direction / League
-              </p>
-              <div className="flex flex-wrap gap-4">
-                <BreakdownTable
-                  title="By Market"
-                  rows={Object.entries(data.by_market_metrics).map(([k, v]) => ({ label: marketLabel(k).label, metrics: v }))}
-                />
-                <BreakdownTable
-                  title="By Market + Direction"
-                  rows={Object.entries(data.by_market_selection_metrics).map(([k, v]) => {
-                    const [market, selection] = k.split(":");
-                    return { label: `${marketLabel(market).label} · ${formatSelection(selection)}`, metrics: v };
-                  })}
-                />
-                <BreakdownTable
-                  title="By League"
-                  rows={Object.entries(data.by_league_metrics).map(([k, v]) => ({ label: LEAGUE_LABEL[k] ?? k, metrics: v }))}
-                />
-              </div>
-            </div>
-
-            <div className="mt-8">
-              <div className="mb-3 text-sm font-semibold text-ink">Distributions</div>
-              <div className="flex flex-wrap gap-4">
-                <Histogram
-                  title="Odds Distribution"
-                  buckets={bucketize(data.staked_bets.map((b) => b.odds), ODDS_EDGES, ODDS_LABELS)}
-                />
-                <LeagueBarChart
-                  entries={Object.entries(data.by_league_metrics)
-                    .map(([league, m]) => ({ league, count: m.bets_placed }))
-                    .sort((a, b) => b.count - a.count)}
-                />
-                <Histogram
-                  title="Stake Distribution"
-                  buckets={bucketize(data.staked_bets.map((b) => b.stake), STAKE_EDGES, STAKE_LABELS)}
-                />
-              </div>
-            </div>
-
-            <div className="mb-8 mt-8">
-              <div className="mb-3 text-sm font-semibold text-ink">Top Winning &amp; Losing Bets</div>
-              <div className="flex flex-wrap gap-4">
-                <BetsExampleTable title="Top 5 Winners" bets={data.top_winners} colorClass="text-good" />
-                <BetsExampleTable title="Top 5 Losers" bets={data.top_losers} colorClass="text-serious" />
-              </div>
-            </div>
-          </>
-        )}
+      <div className="mt-4 flex gap-2">
+        {DAY_OPTIONS.map((opt) => (
+          <button
+            key={opt.label}
+            type="button"
+            onClick={() => setDays(opt.days)}
+            className={`rounded-full border px-3 py-1 text-xs ${
+              days === opt.days ? "border-accent bg-accent text-white" : "border-border text-ink-secondary"
+            }`}
+          >
+            {opt.label}
+          </button>
+        ))}
       </div>
+
+      {error && (
+        <div className="mt-6">
+          <ErrorState message={error} onRetry={() => setRetryTick((t) => t + 1)} />
+        </div>
+      )}
+
+      {!error && !data && <div className="mt-6 text-sm text-ink-secondary">Loading…</div>}
+
+      {data && kelly && (
+        <>
+          <div className="mt-6">
+            <div className="mb-2 text-sm font-semibold text-ink">Main Metrics</div>
+            <div className="flex flex-wrap gap-3">
+              <StatTile label="ROI" value={formatPct(kelly.roi)} colorClass={pnlColor(kelly.roi)} />
+              <StatTile label="Total Stake" value={formatUB(kelly.total_staked)} />
+              <StatTile
+                label="Money Won"
+                value={`${kelly.total_profit >= 0 ? "+" : ""}${kelly.total_profit.toFixed(1)} UB`}
+                colorClass={pnlColor(kelly.total_profit)}
+              />
+              <StatTile label="Bets Placed" value={String(kelly.bets_placed)} />
+              <StatTile label="Hit %" value={formatPct(kelly.hit_rate)} />
+            </div>
+          </div>
+
+          <div className="mt-8">
+            <div className="mb-1 text-sm font-semibold text-ink">Segmentation</div>
+            <p className="mb-3 text-xs text-ink-secondary">
+              Same metrics, sliced by Market / Market+Direction / League
+            </p>
+            <div className="flex flex-wrap gap-4">
+              <BreakdownTable
+                title="By Market"
+                rows={Object.entries(data.by_market_metrics).map(([k, v]) => ({ label: marketLabel(k).label, metrics: v }))}
+              />
+              <BreakdownTable
+                title="By Market + Direction"
+                rows={Object.entries(data.by_market_selection_metrics).map(([k, v]) => {
+                  const [market, selection] = k.split(":");
+                  return { label: `${marketLabel(market).label} · ${formatSelection(selection)}`, metrics: v };
+                })}
+              />
+              <BreakdownTable
+                title="By League"
+                rows={Object.entries(data.by_league_metrics).map(([k, v]) => ({ label: LEAGUE_LABEL[k] ?? k, metrics: v }))}
+              />
+            </div>
+          </div>
+
+          <div className="mt-8">
+            <div className="mb-3 text-sm font-semibold text-ink">Distributions</div>
+            <div className="flex flex-wrap gap-4">
+              <Histogram
+                title="Odds Distribution"
+                buckets={bucketize(data.staked_bets.map((b) => b.odds), ODDS_EDGES, ODDS_LABELS)}
+              />
+              <LeagueBarChart
+                entries={Object.entries(data.by_league_metrics)
+                  .map(([league, m]) => ({ league, count: m.bets_placed }))
+                  .sort((a, b) => b.count - a.count)}
+              />
+              <Histogram
+                title="Stake Distribution"
+                buckets={bucketize(data.staked_bets.map((b) => b.stake), STAKE_EDGES, STAKE_LABELS)}
+              />
+            </div>
+          </div>
+
+          <div className="mb-8 mt-8">
+            <div className="mb-3 text-sm font-semibold text-ink">Top Winning &amp; Losing Bets</div>
+            <div className="flex flex-wrap gap-4">
+              <BetsExampleTable title="Top 5 Winners" bets={data.top_winners} colorClass="text-good" />
+              <BetsExampleTable title="Top 5 Losers" bets={data.top_losers} colorClass="text-serious" />
+            </div>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+// Thin wrapper kept for app/agent-performance/page.tsx's standalone route --
+// now shows the Ops nav item as active (the Performance tab lives under
+// /ops), not a dedicated "agent-performance" one. See Correction 3: AppShell's
+// `active` union doesn't include "ops" yet -- Task 7 widens it; until then
+// this is a known, expected type error, not a bug to fix here.
+export function AgentPerformancePage() {
+  return (
+    <AppShell active="ops">
+      <AgentPerformanceContent />
     </AppShell>
   );
 }
