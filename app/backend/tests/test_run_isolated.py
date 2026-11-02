@@ -8,6 +8,8 @@ import asyncio
 from pathlib import Path
 from unittest.mock import patch
 
+import pytest
+
 from app.backend.run_isolated import FailuresStore, run_isolated, run_isolated_async
 
 
@@ -120,3 +122,14 @@ def test_run_isolated_async_returns_none_and_records_on_failure(tmp_path: Path, 
     assert len(rows) == 1
     assert rows[0]["exc_type"] == "RuntimeError"
     assert rows[0]["alerted"] == 1
+
+
+def test_run_isolated_async_lets_cancelled_error_propagate() -> None:
+    async def _cancel():
+        raise asyncio.CancelledError()
+
+    async def _run():
+        with pytest.raises(asyncio.CancelledError):
+            await run_isolated_async("t30", "x", _cancel)
+
+    asyncio.run(_run())
