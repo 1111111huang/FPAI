@@ -1451,6 +1451,51 @@ def test_register_fixture_reconciliation_job_resyncs_t30_notify_for_every_not_ye
     assert "Kickoff soon" in titles
 
 
+def test_reconcile_job_batch_notify_failure_does_not_crash_the_job(tmp_path: Path) -> None:
+    """2026-11-02: _schedule_t30_batch_notify had no try/except of its own
+    inside the reconciliation job's per-league/per-date loop -- a failure
+    here (bad subscription, network error) used to abort reconciliation
+    for every date/league processed after the failing cluster, not just
+    that one cluster's own notify. Unlike register_eod_job's two notify
+    calls (which run cross-league, after the whole `for league in
+    COMPETITIONS` loop finishes), this call site is still inside that
+    loop, so `league` is in scope and must be forwarded."""
+    fixture = NormalizedMatch(
+        match_id="m1", utc_date=f"{_FUTURE_DAY_STR}T15:00:00Z", status="SCHEDULED",
+        home_team="Arsenal", away_team="Everton", home_goals=None, away_goals=None,
+    )
+    run_log = JobRunLog(db_path=tmp_path / "job_runs.db")
+    now = datetime(_FUTURE_DAY.year, _FUTURE_DAY.month, _FUTURE_DAY.day, 23, 30, tzinfo=NY_TZ)
+    scheduler = RecoverableScheduler(run_log=run_log, now_fn=lambda: now)
+    fixtures_client = MagicMock()
+    fixtures_client.get_fixtures.return_value = [fixture]
+    fixtures_client.get_results.return_value = []
+    cache = RecommendationCache(db_path=tmp_path / "cache.db")
+    config = AgentConfig.default()
+    push_store = PushSubscriptionStore(db_path=tmp_path / "push.db")
+    push_store.add(user_id=1, endpoint="https://push.example/a", p256dh="k", auth="a")
+
+    with patch(
+        "app.backend.scheduler_wiring._schedule_t30_batch_notify", side_effect=RuntimeError("push service down"),
+    ) as mock_notify:
+        register_fixture_reconciliation_job(
+            scheduler, fixtures_client=fixtures_client, odds_client=None, cache=cache, config=config,
+            now_fn=lambda: now, hours=(23,), minutes=(30,), push_store=push_store,
+        )
+        _fire_scheduled_job_now(scheduler, "fixture_reconciliation_2330")
+        assert _wait_until(lambda: run_log.has_run("fixture_reconciliation_2330", _FUTURE_DAY_STR))
+
+    # Direct proof the failing code path was actually reached, not just
+    # that the job happened to complete.
+    assert mock_notify.called
+
+    # Reconciliation itself (the T-30 refresh re-registration) must not
+    # have been aborted by the notify failure -- same marker the sibling
+    # test_..._resyncs_t30_for_every_not_yet_kicked_off_fixture test uses
+    # to confirm T-30 was re-synced.
+    assert _wait_until(lambda: run_log.has_run("t30_m1", t30_run_at(fixture).isoformat()))
+
+
 def test_register_fixture_reconciliation_job_keys_a_future_day_fixture_under_its_own_date_not_todays(
     tmp_path: Path,
 ) -> None:

@@ -1037,7 +1037,11 @@ def register_fixture_reconciliation_job(
                 # refresh job had a restart-recovery path before this.
                 if push_store is not None:
                     for cluster in cluster_fixtures_by_kickoff(date_fixtures):
-                        _schedule_t30_batch_notify(scheduler, push_store, cluster, date_str)
+                        run_isolated(
+                            "fixture_reconciliation", f"push_notify:date={date_str}",
+                            lambda c=cluster: _schedule_t30_batch_notify(scheduler, push_store, c, date_str) or True,
+                            league=league,
+                        )
 
     # W251: catch_up=False on every slot -- see schedule_daily()'s own
     # docstring for why. Registering the same job body at a set of fixed
