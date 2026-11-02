@@ -673,6 +673,54 @@ def get_ops_odds_availability(
     return {"fixtures": fixtures}
 
 
+@app.get("/api/admin/ops/feature-health")
+def get_ops_feature_health(
+    date_from: str,
+    date_to: str,
+    league: str | None = None,
+    cache: RecommendationCache = Depends(recommendations.get_cache),
+) -> dict:
+    """2026-11-02: /ops dashboard's feature-health tab. feature_completeness/
+    cold_start_risk/unknown_team already live on every cached recommendation's
+    forecast_payload (A31 diagnostics, src/agent/graph.py's
+    _extract_forecast_diagnostics) -- nothing new to compute, only to
+    aggregate by league/date, which nothing does today."""
+    by_league: dict[str, dict] = {}
+    for entry in cache.list_latest_per_match():
+        if not (date_from <= entry.date <= date_to):
+            continue
+        match = entry.recommendation.get("match") or {}
+        entry_league = match.get("league")
+        if league is not None and entry_league != league:
+            continue
+        if entry_league is None or entry.forecast_payload is None:
+            continue
+        diagnostics = entry.forecast_payload.get("diagnostics") or {}
+        data_quality = entry.forecast_payload.get("data_quality") or {}
+        bucket = by_league.setdefault(entry_league, {
+            "sample_size": 0, "cold_start_count": 0, "unknown_team_count": 0, "completeness_sum": 0.0,
+        })
+        bucket["sample_size"] += 1
+        if diagnostics.get("cold_start_risk"):
+            bucket["cold_start_count"] += 1
+        if data_quality.get("unknown_team"):
+            bucket["unknown_team_count"] += 1
+        completeness = diagnostics.get("feature_completeness")
+        if completeness is not None:
+            bucket["completeness_sum"] += completeness
+
+    result: dict[str, dict] = {}
+    for league_code, bucket in by_league.items():
+        n = bucket["sample_size"]
+        result[league_code] = {
+            "sample_size": n,
+            "cold_start_risk_rate": round(bucket["cold_start_count"] / n, 6) if n else 0.0,
+            "unknown_team_rate": round(bucket["unknown_team_count"] / n, 6) if n else 0.0,
+            "avg_feature_completeness": round(bucket["completeness_sum"] / n, 6) if n else None,
+        }
+    return {"by_league": result}
+
+
 @app.get("/api/admin/export-recommendations")
 def export_recommendations(
     before: str | None = None,

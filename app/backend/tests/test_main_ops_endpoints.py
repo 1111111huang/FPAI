@@ -100,3 +100,38 @@ def test_get_ops_odds_availability_reports_missing_markets_with_cause(tmp_path: 
     assert row["league"] == "I1"
     assert "over/under 2.5" in row["missing_markets"]
     assert row["likely_cause"] == "circuit_open"
+
+
+def test_get_ops_feature_health_aggregates_by_league(tmp_path: Path) -> None:
+    from unittest.mock import MagicMock, patch
+    from app.backend.recommendation_cache import CacheEntry
+
+    entries = [
+        CacheEntry(
+            match_id="1", date="2026-11-02", agent_config_hash="a",
+            odds={}, recommendation={"match": {"league": "I1"}},
+            generated_at="2026-11-02T10:00:00+00:00", triggered_by="scheduled",
+            forecast_payload={"diagnostics": {"cold_start_risk": True, "feature_completeness": 0.4}, "data_quality": {"unknown_team": False}},
+        ),
+        CacheEntry(
+            match_id="2", date="2026-11-02", agent_config_hash="a",
+            odds={}, recommendation={"match": {"league": "I1"}},
+            generated_at="2026-11-02T11:00:00+00:00", triggered_by="scheduled",
+            forecast_payload={"diagnostics": {"cold_start_risk": False, "feature_completeness": 0.9}, "data_quality": {"unknown_team": False}},
+        ),
+    ]
+    mock_cache = MagicMock()
+    mock_cache.list_latest_per_match.return_value = entries
+
+    with TestClient(app) as client:
+        app.dependency_overrides[recommendations.get_cache] = lambda: mock_cache
+        try:
+            response = client.get("/api/admin/ops/feature-health", params={"date_from": "2026-11-02", "date_to": "2026-11-02"})
+        finally:
+            app.dependency_overrides.pop(recommendations.get_cache, None)
+
+    body = response.json()
+    assert body["by_league"]["I1"]["sample_size"] == 2
+    assert body["by_league"]["I1"]["cold_start_risk_rate"] == 0.5
+    assert body["by_league"]["I1"]["avg_feature_completeness"] == 0.65
+    assert body["by_league"]["I1"]["unknown_team_rate"] == 0.0
