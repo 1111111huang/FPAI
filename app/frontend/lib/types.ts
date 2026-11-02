@@ -217,3 +217,68 @@ export type AgentPerformanceDashboard = {
   top_winners: TopBet[];
   top_losers: TopBet[];
 };
+
+// 2026-11-02 (/ops dashboard): mirrors app/backend/run_isolated.py's
+// FailuresStore.list_recent() -- the dict is built straight from a sqlite3
+// row (dict(zip(_FAILURES_COLUMNS, row))) and returned as-is by
+// GET /api/admin/ops/failures (no Pydantic response model), so both
+// `retryable` and `alerted` cross the wire as the raw SQLite INTEGER
+// (0/1, or NULL for retryable, which is always NULL today -- see that
+// module's own docstring) -- not real JSON booleans. Typed as number here
+// to match reality rather than the column's intent.
+export type FailureRow = {
+  id: number;
+  ts: string;
+  subsystem: string;
+  unit_id: string;
+  league: string | null;
+  exc_type: string;
+  message: string;
+  traceback: string;
+  retryable: number | null;
+  alerted: number;
+};
+
+// Mirrors app/backend/scheduler_wiring.py's CircuitBreaker._state values.
+export type CircuitBreakerStatus = {
+  state: "closed" | "open" | "half_open";
+};
+
+// GET /api/admin/ops/failures response shape (app/backend/main.py's
+// get_ops_failures).
+export type OpsFailuresResponse = {
+  failures: FailureRow[];
+  circuit_breakers: {
+    the_odds_api: CircuitBreakerStatus;
+    oddspapi: CircuitBreakerStatus;
+  };
+};
+
+// GET /api/admin/ops/odds-availability response shape (app/backend/main.py's
+// get_ops_odds_availability).
+export type OddsAvailabilityFixture = {
+  match_id: string;
+  date: string;
+  league: string | null;
+  home_team: string | null;
+  away_team: string | null;
+  missing_markets: string[];
+  likely_cause: "circuit_open" | "not_posted";
+};
+
+export type OpsOddsAvailabilityResponse = {
+  fixtures: OddsAvailabilityFixture[];
+};
+
+// GET /api/admin/ops/feature-health response shape (app/backend/main.py's
+// get_ops_feature_health).
+export type FeatureHealthLeagueStats = {
+  sample_size: number;
+  cold_start_risk_rate: number;
+  unknown_team_rate: number;
+  avg_feature_completeness: number | null;
+};
+
+export type OpsFeatureHealthResponse = {
+  by_league: Record<string, FeatureHealthLeagueStats>;
+};

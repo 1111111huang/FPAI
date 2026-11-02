@@ -6,6 +6,9 @@ import type {
   BetStats,
   Fixture,
   MatchRecommendationOut,
+  OpsFailuresResponse,
+  OpsFeatureHealthResponse,
+  OpsOddsAvailabilityResponse,
   SandboxStatus,
   StatusResponse,
 } from "./types";
@@ -293,6 +296,52 @@ export async function getAgentPerformanceDashboard(
   const response = await apiFetch(`/api/recommendations/performance-dashboard${query ? `?${query}` : ""}`);
   if (!response.ok) {
     throw new ApiError(`Failed to load agent performance dashboard (${response.status})`, response.status);
+  }
+  return response.json();
+}
+
+/** 2026-11-02: /ops dashboard's failures & circuit breakers tab. */
+export async function getOpsFailures(
+  opts: { since?: string; league?: string; subsystem?: string } = {}
+): Promise<OpsFailuresResponse> {
+  const params = new URLSearchParams();
+  if (opts.since) params.set("since", opts.since);
+  if (opts.league) params.set("league", opts.league);
+  if (opts.subsystem) params.set("subsystem", opts.subsystem);
+  const query = params.toString();
+  const response = await apiFetch(`/api/admin/ops/failures${query ? `?${query}` : ""}`);
+  if (!response.ok) {
+    throw new ApiError(`Failed to load ops failures (${response.status})`, response.status);
+  }
+  return response.json();
+}
+
+/** 2026-11-02: /ops dashboard's odds-availability tab. */
+export async function getOpsOddsAvailability(opts: {
+  dateFrom: string;
+  dateTo: string;
+  league?: string;
+}): Promise<OpsOddsAvailabilityResponse> {
+  const params = new URLSearchParams({ date_from: opts.dateFrom, date_to: opts.dateTo });
+  if (opts.league) params.set("league", opts.league);
+  const response = await apiFetch(`/api/admin/ops/odds-availability?${params.toString()}`);
+  if (!response.ok) {
+    throw new ApiError(`Failed to load odds availability (${response.status})`, response.status);
+  }
+  return response.json();
+}
+
+/** 2026-11-02: /ops dashboard's feature-health tab. */
+export async function getOpsFeatureHealth(opts: {
+  dateFrom: string;
+  dateTo: string;
+  league?: string;
+}): Promise<OpsFeatureHealthResponse> {
+  const params = new URLSearchParams({ date_from: opts.dateFrom, date_to: opts.dateTo });
+  if (opts.league) params.set("league", opts.league);
+  const response = await apiFetch(`/api/admin/ops/feature-health?${params.toString()}`);
+  if (!response.ok) {
+    throw new ApiError(`Failed to load feature health (${response.status})`, response.status);
   }
   return response.json();
 }
