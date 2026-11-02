@@ -53,9 +53,11 @@ from app.backend.bet_stats import compute_bet_stats
 from app.backend.recommendations import MatchRecommendationOut, RecommendationRequest, validate_and_degrade
 from app.backend.scheduler import JobRunLog, RecoverableScheduler
 from app.backend.scheduler_wiring import (
-    build_odds_client, build_oddspapi_client, build_schedule_t30, register_data_refresh_job, register_eod_job,
-    register_fixture_reconciliation_job, register_lessons_job, register_recommendation_cache_prune_job,
+    build_odds_client, build_oddspapi_client, build_schedule_t30, get_circuit_breaker_status,
+    register_data_refresh_job, register_eod_job, register_fixture_reconciliation_job, register_lessons_job,
+    register_recommendation_cache_prune_job,
 )
+from app.backend.run_isolated import get_failures_store
 from app.backend.settlement import settle_open_bets
 from app.backend.push_notifications import send_to_user as send_push_to_user
 from app.backend.push_subscriptions import PushSubscriptionStore
@@ -610,6 +612,19 @@ async def restore_database(target: _RESTORE_TARGET_NAMES, source_url: str) -> di
 
     bytes_written = await run_in_threadpool(_download)
     return {"target": target, "path": str(target_path), "bytes_written": bytes_written}
+
+
+@app.get("/api/admin/ops/failures")
+def get_ops_failures(
+    since: str | None = None,
+    league: str | None = None,
+    subsystem: str | None = None,
+) -> dict:
+    """2026-11-02: /ops dashboard's failures & circuit breakers tab.
+    Protected by RequireAppTokenMiddleware like every other /api/admin/*
+    route."""
+    failures = get_failures_store().list_recent(since=since, subsystem=subsystem, league=league)
+    return {"failures": failures, "circuit_breakers": get_circuit_breaker_status()}
 
 
 @app.get("/api/admin/export-recommendations")
