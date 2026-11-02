@@ -431,6 +431,32 @@ def test_refresh_match_at_t30_isolates_a_failing_add_secondary_odds_call(tmp_pat
     assert len(cache.get_history("m1", _future_date(1), agent_config_hash)) == 1  # prior recommendation untouched
 
 
+def test_refresh_match_at_t30_isolates_a_failing_cache_write(tmp_path: Path) -> None:
+    """2026-11-02: cache.record_generation was also unguarded -- a DB write
+    failure here (disk full, lock contention) propagated out the same way
+    the add_secondary_odds gap did. Patches the real RecommendationCache's
+    bound method (rather than a MagicMock cache) so every other call --
+    odds_lookup, add_secondary_odds's own cache reads -- still behaves like
+    production."""
+    config = AgentConfig.default()
+    cache = RecommendationCache(db_path=tmp_path / "cache.db")
+    _seed_cache(cache, config, odds={"home": 1.8, "draw": 3.6, "away": 4.5})
+
+    odds_client = MagicMock()
+    odds_client.get_odds.return_value = [
+        NormalizedOdds(home_team="Arsenal", away_team="Everton", commence_time="2026-08-22T15:00:00Z",
+                        home_odds=1.6, draw_odds=3.8, away_odds=5.0),  # moved -- would otherwise trigger a refresh
+    ]
+
+    with patch.object(cache, "record_generation", side_effect=RuntimeError("disk full")), \
+         patch("app.backend.recommendations.run_agent", return_value=_RECOMMENDATION):
+        result = refresh_match_at_t30(_fixture(), odds_client=odds_client, cache=cache, config=config, date_str=_future_date(1))
+
+    assert result.outcome == "skipped_error"
+    agent_config_hash = compute_agent_config_hash(config)
+    assert len(cache.get_history("m1", _future_date(1), agent_config_hash)) == 1  # prior recommendation untouched
+
+
 def test_skips_refresh_when_kickoff_already_passed(tmp_path: Path) -> None:
     """A T-30 job scheduled while the fixture was genuinely pre-match can
     still execute late -- RecoverableScheduler's own catch-up path runs a

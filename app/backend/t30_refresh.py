@@ -178,13 +178,23 @@ def refresh_match_at_t30(
 
     raw, reasoning_trace, forecast_payload = recommendations.unwrap_agent_result(agent_result)
     degraded = validate_and_degrade(raw, fixture.home_team, fixture.away_team)
-    cache.record_generation(
-        match_id=fixture.match_id, date=date_str, agent_config_hash=agent_config_hash,
-        odds=fresh_odds, recommendation=degraded.model_dump(), triggered_by="scheduled",
-        # A107: same tracing agent-train/agent-backtest already persist to
-        # agent_telemetry -- see recommendations.run_agent's docstring.
-        reasoning_trace=reasoning_trace, forecast_payload=forecast_payload,
+    # 2026-11-02: cache.record_generation is a real DB write (disk full,
+    # lock contention) -- same unguarded-gap class as add_secondary_odds
+    # above, just below it in the function.
+    cache_write_ok = run_isolated(
+        "t30", f"match_id={fixture.match_id}",
+        lambda: cache.record_generation(
+            match_id=fixture.match_id, date=date_str, agent_config_hash=agent_config_hash,
+            odds=fresh_odds, recommendation=degraded.model_dump(), triggered_by="scheduled",
+            # A107: same tracing agent-train/agent-backtest already persist to
+            # agent_telemetry -- see recommendations.run_agent's docstring.
+            reasoning_trace=reasoning_trace, forecast_payload=forecast_payload,
+        ) or True,
+        league=league,
     )
+    if cache_write_ok is None:
+        return T30RefreshResult(match_id=fixture.match_id, outcome="skipped_error")
+
     # BUG-096 follow-up: notify, don't block.
     alert_missing_live_odds_for_match(
         league, fixture.match_id, fixture.home_team, fixture.away_team, missing_live_odds(match_info),
