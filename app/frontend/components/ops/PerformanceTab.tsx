@@ -27,9 +27,10 @@ function formatMetric(metric: Metric, value: number): string {
   return value.toFixed(1);
 }
 
-function formatDelta(isPercent: boolean, diff: number): string {
+function formatDelta(metric: Metric, isPercent: boolean, diff: number): string {
   const sign = diff >= 0 ? "+" : "";
   if (isPercent) return `${sign}${Math.round(diff * 100)}pp`;
+  if (metric === "bets_placed") return `${sign}${diff}`;
   return `${sign}${diff.toFixed(1)}`;
 }
 
@@ -60,6 +61,16 @@ function Chart({ weeks, metric, isPercent }: { weeks: PerformanceTrendWeek[]; me
   const values = weeks.map((w) => w[metric]);
   const rawMax = Math.max(...values, 0);
   const rawMin = Math.min(...values, 0);
+  // total_profit (and, in theory, roi) can go negative in a losing week, so
+  // the domain's floor isn't always 0: when the worst value is negative,
+  // domainMin is that same niceCeil rounding applied to its magnitude, then
+  // flipped negative (e.g. a -18 week floors to -20, not -18, same as the
+  // positive side rounds 18 up to 20). hit_rate/roi/bets_placed never go
+  // negative in practice, so domainMin is 0 for them.
+  // toY maps a domain value to its pixel y-coordinate (0 at the plot's top,
+  // CHART_H at its bottom); zeroY is specifically where value=0 lands, i.e.
+  // the chart's baseline -- bars for a positive value rise upward from it,
+  // bars for a negative value hang downward from it.
   const domainMax = isPercent ? Math.max(1, niceCeil(rawMax)) : niceCeil(Math.max(rawMax, 1));
   const domainMin = rawMin < 0 ? -niceCeil(-rawMin) : 0;
   const span = domainMax - domainMin || 1;
@@ -89,6 +100,11 @@ function Chart({ weeks, metric, isPercent }: { weeks: PerformanceTrendWeek[]; me
             </g>
           );
         })}
+        {/* All bars share one neutral fill -- fill-good/fill-serious are
+            reserved codebase-wide for a value's actual sign (profit vs.
+            loss, per AgentPerformanceDashboard.tsx/BetTracker.tsx/MatchUI.tsx),
+            so coloring only the most-recent bar green would misreport a
+            losing latest week as "good" just because of its position. */}
         {weeks.map((w, i) => {
           const value = w[metric];
           const x = AXIS_W + i * BAR_SLOT_W + 6;
@@ -96,15 +112,17 @@ function Chart({ weeks, metric, isPercent }: { weeks: PerformanceTrendWeek[]; me
           const vY = toY(value);
           const y = Math.min(vY, zeroY);
           const h = Math.max(Math.abs(vY - zeroY), 1);
-          const isLast = i === weeks.length - 1;
-          return <rect key={w.week_start} x={x} y={y} width={barW} height={h} className={isLast ? "fill-good" : "fill-accent"} />;
+          return <rect key={w.week_start} x={x} y={y} width={barW} height={h} className="fill-accent" />;
         })}
       </svg>
       <div className="flex" style={{ minWidth: svgWidth }}>
         <div style={{ width: AXIS_W }} />
         {weeks.map((w, i) => (
           <div key={w.week_start} className="flex flex-col items-center gap-0.5" style={{ width: BAR_SLOT_W }}>
-            <span className={`font-mono text-[10px] ${i === weeks.length - 1 ? "font-semibold text-good" : "text-ink"}`}>
+            {/* Bold marks "most recent," same neutral text-ink color as
+                every other week -- not tied to whether the value is good or
+                bad (see the fill-accent comment on the bars above). */}
+            <span className={`font-mono text-[10px] text-ink ${i === weeks.length - 1 ? "font-semibold" : ""}`}>
               {formatMetric(metric, w[metric])}
             </span>
             <span className="text-[9px] text-muted">{w.week_start.slice(5)}</span>
@@ -225,7 +243,7 @@ export function PerformanceTab({ weeks, league }: { weeks: number; league?: stri
             delta >= 0 ? "bg-good-dim text-good" : "bg-serious-dim text-serious"
           }`}
         >
-          {formatDelta(activeMetric.percent, delta)} vs previous week
+          {formatDelta(metric, activeMetric.percent, delta)} vs previous week
         </span>
       )}
     </div>
