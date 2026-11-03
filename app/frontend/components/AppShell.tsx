@@ -4,7 +4,7 @@ import Image from "next/image";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState, useEffect } from "react";
-import { Gauge, House, List, ListBullets, MagnifyingGlass, Ticket, X, type Icon } from "@phosphor-icons/react";
+import { House, List, ListBullets, MagnifyingGlass, Ticket, X, type Icon } from "@phosphor-icons/react";
 
 import { getFixtures } from "@/lib/api";
 import type { Fixture } from "@/lib/types";
@@ -24,13 +24,12 @@ function matchAnalysisHref(f: Fixture) {
 const NAV_ITEMS: {
   href: string;
   label: string;
-  key: "dashboard" | "matches" | "bets" | "ops";
+  key: "dashboard" | "matches" | "bets";
   icon: Icon;
 }[] = [
   { href: "/", label: "Daily Edges", key: "dashboard", icon: House },
   { href: "/matches", label: "All Matches", key: "matches", icon: ListBullets },
   { href: "/bets", label: "Bets", key: "bets", icon: Ticket },
-  { href: "/ops", label: "Ops", key: "ops", icon: Gauge },
 ];
 
 // Production bug (2026-09-15): Next.js auto-prefetches a visible Link on
@@ -40,7 +39,7 @@ const NAV_ITEMS: {
 // then replays even once truly signed in. Every middleware-gated nav key
 // goes here so a future gated route doesn't repeat the same oversight;
 // "/" and "/matches" aren't gated, so nothing to poison there.
-const PREFETCH_DISABLED_KEYS = new Set(["bets", "ops"]);
+const PREFETCH_DISABLED_KEYS = new Set(["bets"]);
 
 /** Rebrand (2026-08-13): FPAI -> Oddsey. Was a hand-recreated inline SVG
  * (the original reference image's bytes weren't extractable through that
@@ -58,9 +57,13 @@ export function AppShell({
   children,
 }: {
   // W174 follow-up: the agent-performance page is now reachable via the
-  // Performance tab inside /ops (Task 7 of the ops-dashboard plan), so its
-  // thin standalone-route wrapper passes active="ops" instead of its own
-  // dedicated value -- "agent-performance" is no longer a valid `active`.
+  // Performance tab inside /ops, so its thin standalone-route wrapper
+  // passes active="ops" instead of its own dedicated value --
+  // "agent-performance" is no longer a valid `active`. "ops" has no
+  // NAV_ITEMS entry (direct request: /ops is a deliberately unlinked,
+  // direct-URL-only review tool, not a discoverable part of the app --
+  // same "unlinked, not removed" precedent as AgentPerformanceDashboard.tsx's
+  // own W174 comment), so this value never lights up a nav highlight.
   active: "dashboard" | "matches" | "bets" | "ops";
   // Direct feedback: on small screens the right rail should "squish with
   // the top part with the search bar" instead of being its own section --

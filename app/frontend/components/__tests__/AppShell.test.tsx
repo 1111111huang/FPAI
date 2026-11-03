@@ -152,8 +152,7 @@ describe("AppShell", () => {
     // before this change and isn't inside an <aside> -- scope the query so
     // this doesn't pass by accident.
     const desktopNav = container.querySelector("aside nav");
-    // Task 7 follow-up: NAV_ITEMS grew to 4 (Ops added).
-    expect(desktopNav?.querySelectorAll("svg").length).toBe(4);
+    expect(desktopNav?.querySelectorAll("svg").length).toBe(3);
   });
 
   it("W210 follow-up: renders a Bets nav link -- re-enabled now that auth UX gaps are closed", () => {
@@ -178,8 +177,7 @@ describe("AppShell", () => {
     // sidebar's own <nav> now.
     const bottomNav = container.querySelector("nav.lg\\:hidden");
     expect(bottomNav).not.toBeNull();
-    // Task 7 follow-up: NAV_ITEMS grew to 4 (Ops added).
-    expect(bottomNav?.querySelectorAll("a")).toHaveLength(4);
+    expect(bottomNav?.querySelectorAll("a")).toHaveLength(3);
   });
 
   it("does not fetch fixtures on mount -- only once the search input is focused", async () => {
