@@ -10,8 +10,11 @@ type RankedMarket = { market: string; missing: number; total: number; pct: numbe
 
 const AXIS_TICKS = [0, 0.25, 0.5, 0.75, 1];
 
-// Same high-is-bad threshold scale as FeatureHealthTab's riskRateColor, as a
-// bar fill instead of text color.
+// High-is-bad threshold scale, as a bar fill (0.5/0.2 -- not the same
+// thresholds as FeatureHealthTab's riskRateColor, which uses 0.25/0.1).
+// Low tier is bg-muted (neutral), not text-good's green: a market missing
+// in <20% of fixtures still isn't "good," just not yet alarming -- green
+// would overstate it.
 function missingPctFill(pct: number): string {
   if (pct >= 0.5) return "bg-serious";
   if (pct >= 0.2) return "bg-warning";
@@ -81,7 +84,7 @@ export function OddsAvailabilityTab({ weeks, league }: { weeks: number; league?:
     <div className="flex flex-col gap-3 rounded-lg border border-border bg-surface p-4">
       {/* Shared axis: same w-40 label / flex-1 bar / w-12 readout columns as
           each row below, so its ticks line up over the bar track only. */}
-      <div className="flex items-center gap-3 text-[10px] text-muted">
+      <div aria-hidden="true" className="flex items-center gap-3 text-[10px] text-muted">
         <div className="w-40 shrink-0" />
         <div className="flex flex-1 justify-between">
           {AXIS_TICKS.map((t) => (
