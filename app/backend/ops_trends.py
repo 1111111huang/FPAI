@@ -10,6 +10,7 @@ from __future__ import annotations
 from collections import defaultdict
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
+from typing import Literal
 
 from app.backend.recommendation_outcomes import RecommendationOutcome
 from src.agent.backtest import BacktestRecord
@@ -226,7 +227,7 @@ def _feature_category(name: str) -> str:
 def build_week_records(
     outcomes: list[RecommendationOutcome],
     cached_candidates_by_key: dict[tuple[str, str], list[dict]],
-    pick_scope: str,
+    pick_scope: Literal["one_per_match", "all_direct"],
     include_conditional: bool,
 ) -> list[BacktestRecord]:
     """Builds one BacktestRecord per match, ready for
@@ -235,8 +236,15 @@ def build_week_records(
     - pick_scope="one_per_match": the single already-resolved outcome row
       *is* the bet -- same population compute_recommendation_stats already
       uses today (mirrors recommendation_stats.py's own
-      _to_backtest_records). `cached_candidates_by_key` is unused in this
-      mode (pass {} if you have nothing else handy).
+      _to_backtest_records), replaying whatever historically happened rather
+      than a candidate-selection strategy. `cached_candidates_by_key` is
+      unused in this mode (pass {} if you have nothing else handy), and so
+      is `include_conditional` -- there's no pool of candidates to filter/
+      retag here, just the one stored outcome row, whose own
+      recommendation_type passes through unchanged regardless of the flag.
+      A `conditional`-type stored outcome stays "conditional" either way,
+      so simulate_kelly_stake's direct_bet-only filter always drops it from
+      staking in this mode -- intentional, not a gap to fix in Task 5.
     - pick_scope="all_direct": every `direct_bet`-flagged candidate in that
       match's cached recommendation (looked up via
       `cached_candidates_by_key[(match_id, date)]`) is graded independently
@@ -245,17 +253,15 @@ def build_week_records(
       own stakeable unit, not just the one historically-chosen pick. A match
       with no cached_candidates_by_key entry, no stored final score, or no
       candidate that actually resolves, is skipped entirely (nothing to
-      grade).
-
-    include_conditional=True additionally includes `conditional`-flagged
-    candidates in the same population (either pick_scope), staked as if they
-    were direct_bet -- a deliberate, explicit user choice (design doc
-    section 7), not a claim this reflects real conditional-bet economics.
-    Re-tagged to recommendation_type="direct_bet" in the returned
-    market_results specifically so simulate_kelly_stake's own
-    `recommendation_type != "direct_bet": continue` filter picks them up
-    unmodified -- this function is the one place that distinction is made,
-    staking.py itself needs no change."""
+      grade). include_conditional=True additionally includes
+      `conditional`-flagged candidates in this pool, staked as if they were
+      direct_bet -- a deliberate, explicit user choice (design doc section
+      7), not a claim this reflects real conditional-bet economics.
+      Re-tagged to recommendation_type="direct_bet" in the returned
+      market_results specifically so simulate_kelly_stake's own
+      `recommendation_type != "direct_bet": continue` filter picks them up
+      unmodified -- this function is the one place that distinction is
+      made, staking.py itself needs no change."""
     if pick_scope == "one_per_match":
         return [
             BacktestRecord(
@@ -268,8 +274,9 @@ def build_week_records(
             )
             for o in outcomes
         ]
+    if pick_scope != "all_direct":
+        raise ValueError(f"unknown pick_scope: {pick_scope!r}")
 
-    # pick_scope == "all_direct"
     allowed_types = {"direct_bet", "conditional"} if include_conditional else {"direct_bet"}
     records: list[BacktestRecord] = []
     for outcome in outcomes:

@@ -194,6 +194,14 @@ def test_include_conditional_adds_conditional_candidates_staked_at_current_odds(
     assert conditional_result["correct"] is True  # 1-0 total=1, under_2.5 is correct
 
 
+def test_one_per_match_ignores_include_conditional_the_single_outcome_passes_through_unchanged():
+    outcome = _outcome("m1", "2026-10-09", "total_goals", "under_2.5", "conditional", 1.9, 0.03, True)
+    without = build_week_records([outcome], {}, pick_scope="one_per_match", include_conditional=False)
+    with_cond = build_week_records([outcome], {}, pick_scope="one_per_match", include_conditional=True)
+    assert without[0].market_results == with_cond[0].market_results
+    assert without[0].market_results[0]["recommendation_type"] == "conditional"  # never retagged in this mode
+
+
 def test_all_direct_skips_matches_with_no_known_final_score():
     outcome = _outcome("m1", "2026-10-09", "result_3way", "home", "direct_bet", 2.0, 0.1, True)
     outcome = dataclasses.replace(outcome, home_goals=None, away_goals=None)  # pre-W175 row, no stored score
