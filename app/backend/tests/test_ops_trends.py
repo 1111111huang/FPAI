@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 from datetime import date
 from pathlib import Path
 import sys
@@ -13,9 +14,11 @@ sys.path.append(str(Path(__file__).resolve().parents[3]))
 from app.backend.ops_trends import (
     FeatureWeekStats,
     aggregate_feature_weeks,
+    build_week_records,
     recent_week_starts,
     thursday_week_start,
 )
+from app.backend.recommendation_outcomes import RecommendationOutcome
 
 
 def test_thursday_maps_to_itself():
@@ -137,3 +140,66 @@ def test_feature_category_prefers_the_more_specific_def_anchor_prefix():
     assert _feature_category("DEF_ANCHOR_HOME") == "def_anchor"
     assert _feature_category("DEF_ANCHOR_AWAY") == "def_anchor"
     assert _feature_category("DEF_GOALS_CONCEDED_R5") == "def"
+
+
+def _outcome(match_id, date_, market, selection, rec_type, odds, edge, correct, home_goals=2, away_goals=1):
+    return RecommendationOutcome(
+        id=0, match_id=match_id, date=date_, competition="E0", market=market, selection=selection,
+        recommendation_type=rec_type, confidence="medium", odds=odds, value_edge=edge, correct=correct,
+        generated_at=f"{date_}T12:00:00Z", resolved_at=f"{date_}T13:00:00Z",
+        home_goals=home_goals, away_goals=away_goals,
+    )
+
+
+def test_one_per_match_uses_the_single_stored_outcome_directly():
+    outcomes = [_outcome("m1", "2026-10-09", "result_3way", "home", "direct_bet", 2.0, 0.1, True)]
+    records = build_week_records(outcomes, {}, pick_scope="one_per_match", include_conditional=False)
+    assert len(records) == 1
+    assert records[0].market_results == [
+        {"market": "result_3way", "selection": "home", "recommendation_type": "direct_bet", "current_odds": 2.0, "value_edge": 0.1, "correct": True},
+    ]
+
+
+def test_all_direct_grades_every_direct_bet_candidate_from_the_cached_recommendation():
+    outcome = _outcome("m1", "2026-10-09", "result_3way", "home", "direct_bet", 2.0, 0.1, True, home_goals=1, away_goals=0)
+    cached_candidates_by_key = {
+        ("m1", "2026-10-09"): [
+            {"market": "result_3way", "selection": "home", "recommendation_type": "direct_bet", "current_odds": 2.0, "value_edge": 0.1},
+            {"market": "btts", "selection": "no", "recommendation_type": "direct_bet", "current_odds": 1.8, "value_edge": 0.05},
+            {"market": "btts", "selection": "yes", "recommendation_type": "no_bet", "current_odds": 2.1, "value_edge": -0.1},
+        ],
+    }
+    records = build_week_records([outcome], cached_candidates_by_key, pick_scope="all_direct", include_conditional=False)
+    assert len(records) == 1
+    results = {(m["market"], m["selection"]): m for m in records[0].market_results}
+    assert len(results) == 2  # only the two direct_bet candidates, not the no_bet one
+    assert results[("result_3way", "home")]["correct"] is True  # home won 1-0
+    assert results[("btts", "no")]["correct"] is True  # 1-0 is indeed btts=no
+
+
+def test_include_conditional_adds_conditional_candidates_staked_at_current_odds():
+    outcome = _outcome("m1", "2026-10-09", "result_3way", "home", "direct_bet", 2.0, 0.1, True, home_goals=1, away_goals=0)
+    cached_candidates_by_key = {
+        ("m1", "2026-10-09"): [
+            {"market": "result_3way", "selection": "home", "recommendation_type": "direct_bet", "current_odds": 2.0, "value_edge": 0.1},
+            {"market": "total_goals", "selection": "under_2.5", "recommendation_type": "conditional", "current_odds": 1.9, "value_edge": 0.03},
+        ],
+    }
+    without = build_week_records([outcome], cached_candidates_by_key, pick_scope="all_direct", include_conditional=False)
+    with_cond = build_week_records([outcome], cached_candidates_by_key, pick_scope="all_direct", include_conditional=True)
+    assert len(without[0].market_results) == 1
+    assert len(with_cond[0].market_results) == 2
+    conditional_result = next(m for m in with_cond[0].market_results if m["market"] == "total_goals")
+    assert conditional_result["recommendation_type"] == "direct_bet"  # staked AS IF direct, per the user's chosen semantics
+    assert conditional_result["correct"] is True  # 1-0 total=1, under_2.5 is correct
+
+
+def test_all_direct_skips_matches_with_no_known_final_score():
+    outcome = _outcome("m1", "2026-10-09", "result_3way", "home", "direct_bet", 2.0, 0.1, True)
+    outcome = dataclasses.replace(outcome, home_goals=None, away_goals=None)  # pre-W175 row, no stored score
+    records = build_week_records(
+        [outcome],
+        {("m1", "2026-10-09"): [{"market": "result_3way", "selection": "home", "recommendation_type": "direct_bet", "current_odds": 2.0, "value_edge": 0.1}]},
+        pick_scope="all_direct", include_conditional=False,
+    )
+    assert records == []

@@ -11,6 +11,10 @@ from collections import defaultdict
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 
+from app.backend.recommendation_outcomes import RecommendationOutcome
+from src.agent.backtest import BacktestRecord
+from src.agent.market_resolution import build_actual_outcome, market_correct
+
 
 def thursday_week_start(date_str: str) -> str:
     """ISO date (YYYY-MM-DD) -> the ISO date of the Thursday that starts its
@@ -217,3 +221,82 @@ def _feature_category(name: str) -> str:
         if name.startswith(prefix):
             return prefix.rstrip("_").lower()
     return "other"
+
+
+def build_week_records(
+    outcomes: list[RecommendationOutcome],
+    cached_candidates_by_key: dict[tuple[str, str], list[dict]],
+    pick_scope: str,
+    include_conditional: bool,
+) -> list[BacktestRecord]:
+    """Builds one BacktestRecord per match, ready for
+    src.agent.staking.simulate_kelly_stake, under one of two strategies:
+
+    - pick_scope="one_per_match": the single already-resolved outcome row
+      *is* the bet -- same population compute_recommendation_stats already
+      uses today (mirrors recommendation_stats.py's own
+      _to_backtest_records). `cached_candidates_by_key` is unused in this
+      mode (pass {} if you have nothing else handy).
+    - pick_scope="all_direct": every `direct_bet`-flagged candidate in that
+      match's cached recommendation (looked up via
+      `cached_candidates_by_key[(match_id, date)]`) is graded independently
+      against the match's own known final score (from the outcome row's
+      stored home_goals/away_goals) via market_correct() -- each becomes its
+      own stakeable unit, not just the one historically-chosen pick. A match
+      with no cached_candidates_by_key entry, no stored final score, or no
+      candidate that actually resolves, is skipped entirely (nothing to
+      grade).
+
+    include_conditional=True additionally includes `conditional`-flagged
+    candidates in the same population (either pick_scope), staked as if they
+    were direct_bet -- a deliberate, explicit user choice (design doc
+    section 7), not a claim this reflects real conditional-bet economics.
+    Re-tagged to recommendation_type="direct_bet" in the returned
+    market_results specifically so simulate_kelly_stake's own
+    `recommendation_type != "direct_bet": continue` filter picks them up
+    unmodified -- this function is the one place that distinction is made,
+    staking.py itself needs no change."""
+    if pick_scope == "one_per_match":
+        return [
+            BacktestRecord(
+                match_id=o.match_id, home_team="", away_team="", date=o.date, league=o.competition or "",
+                recommendation={"confidence": o.confidence}, actual={},
+                market_results=[{
+                    "market": o.market, "selection": o.selection, "recommendation_type": o.recommendation_type,
+                    "current_odds": o.odds, "value_edge": o.value_edge, "correct": o.correct,
+                }],
+            )
+            for o in outcomes
+        ]
+
+    # pick_scope == "all_direct"
+    allowed_types = {"direct_bet", "conditional"} if include_conditional else {"direct_bet"}
+    records: list[BacktestRecord] = []
+    for outcome in outcomes:
+        if outcome.home_goals is None or outcome.away_goals is None:
+            continue
+        candidates = cached_candidates_by_key.get((outcome.match_id, outcome.date))
+        if not candidates:
+            continue
+        actual = build_actual_outcome(outcome.home_goals, outcome.away_goals)
+        market_results: list[dict] = []
+        for candidate in candidates:
+            if candidate.get("recommendation_type") not in allowed_types:
+                continue
+            correct = market_correct(candidate, actual)
+            if correct is None:
+                continue  # unresolvable market, or actual lacks the needed field -- never coerce to a loss
+            market_results.append({
+                "market": candidate.get("market"), "selection": candidate.get("selection"),
+                "recommendation_type": "direct_bet",  # see docstring -- staking.py's own filter expects this literal value
+                "current_odds": candidate.get("current_odds"), "value_edge": candidate.get("value_edge"),
+                "correct": correct,
+            })
+        if not market_results:
+            continue
+        records.append(BacktestRecord(
+            match_id=outcome.match_id, home_team="", away_team="", date=outcome.date,
+            league=outcome.competition or "", recommendation={"confidence": outcome.confidence}, actual={},
+            market_results=market_results,
+        ))
+    return records
