@@ -2,72 +2,58 @@ import { render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
 import { OddsAvailabilityTab } from "../OddsAvailabilityTab";
-import { getOpsOddsAvailability } from "@/lib/api";
-import type { OpsOddsAvailabilityResponse } from "@/lib/types";
+import { getOpsOddsAvailabilityTrend } from "@/lib/api";
+import type { OpsOddsAvailabilityTrendResponse } from "@/lib/types";
 
 vi.mock("@/lib/api", () => ({
-  getOpsOddsAvailability: vi.fn(),
+  getOpsOddsAvailabilityTrend: vi.fn(),
 }));
 
 describe("OddsAvailabilityTab", () => {
-  it("renders fixtures with missing markets and likely cause", async () => {
-    const response: OpsOddsAvailabilityResponse = {
-      fixtures: [
+  it("ranks markets by % of fixtures missing them across the window", async () => {
+    const response: OpsOddsAvailabilityTrendResponse = {
+      weeks: [
         {
-          match_id: "558542",
-          date: "2026-11-02",
-          league: "I1",
-          home_team: "Udinese",
-          away_team: "Roma",
-          missing_markets: ["over/under 2.5"],
-          likely_cause: "circuit_open",
+          week_start: "2026-10-08",
+          total_fixtures: 50,
+          by_market: { total_corners: { missing: 40, circuit_open: 30, not_posted: 10 } },
+        },
+        {
+          week_start: "2026-10-15",
+          total_fixtures: 50,
+          by_market: {
+            total_corners: { missing: 36, circuit_open: 20, not_posted: 16 },
+            asian_handicap: { missing: 5, circuit_open: 0, not_posted: 5 },
+          },
         },
       ],
     };
-    vi.mocked(getOpsOddsAvailability).mockResolvedValue(response);
+    vi.mocked(getOpsOddsAvailabilityTrend).mockResolvedValue(response);
 
-    render(<OddsAvailabilityTab dateFrom="2026-11-01" dateTo="2026-11-02" />);
+    render(<OddsAvailabilityTab weeks={8} />);
 
-    expect(await screen.findByText(/Udinese/)).toBeInTheDocument();
-    expect(screen.getByText(/Roma/)).toBeInTheDocument();
-    expect(screen.getByText(/over\/under 2.5/)).toBeInTheDocument();
-    expect(screen.getByText(/circuit_open/)).toHaveClass("text-serious");
+    expect(await screen.findByText("total_corners")).toBeInTheDocument();
+    // (40+36) missing / (50+50) total = 76%
+    expect(screen.getByText("76%")).toBeInTheDocument();
+    // 5 missing / 100 total = 5%
+    expect(screen.getByText("asian_handicap")).toBeInTheDocument();
+    expect(screen.getByText("5%")).toBeInTheDocument();
   });
 
-  it("renders the benign not_posted cause neutrally, not as alarming", async () => {
-    vi.mocked(getOpsOddsAvailability).mockResolvedValue({
-      fixtures: [
-        {
-          match_id: "1",
-          date: "2026-11-02",
-          league: "I1",
-          home_team: "Udinese",
-          away_team: "Roma",
-          missing_markets: ["btts"],
-          likely_cause: "not_posted",
-        },
-      ],
+  it("renders an empty state with no missing markets anywhere in the window", async () => {
+    vi.mocked(getOpsOddsAvailabilityTrend).mockResolvedValue({
+      weeks: [{ week_start: "2026-10-08", total_fixtures: 10, by_market: {} }],
     });
 
-    render(<OddsAvailabilityTab dateFrom="2026-11-01" dateTo="2026-11-02" />);
-
-    const cause = await screen.findByText(/not_posted/);
-    expect(cause).toHaveClass("text-muted");
-    expect(cause).not.toHaveClass("text-serious");
-  });
-
-  it("renders an empty state with no missing markets", async () => {
-    vi.mocked(getOpsOddsAvailability).mockResolvedValue({ fixtures: [] });
-
-    render(<OddsAvailabilityTab dateFrom="2026-11-01" dateTo="2026-11-02" />);
+    render(<OddsAvailabilityTab weeks={8} />);
 
     expect(await screen.findByText(/no missing markets/i)).toBeInTheDocument();
   });
 
   it("shows an error state when the fetch fails", async () => {
-    vi.mocked(getOpsOddsAvailability).mockRejectedValue(new Error("boom"));
+    vi.mocked(getOpsOddsAvailabilityTrend).mockRejectedValue(new Error("boom"));
 
-    render(<OddsAvailabilityTab dateFrom="2026-11-01" dateTo="2026-11-02" />);
+    render(<OddsAvailabilityTab weeks={8} />);
 
     expect(await screen.findByText("boom")).toBeInTheDocument();
   });

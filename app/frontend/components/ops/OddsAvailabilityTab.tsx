@@ -2,25 +2,43 @@
 
 import { useEffect, useState } from "react";
 
-import { getOpsOddsAvailability } from "@/lib/api";
-import type { OpsOddsAvailabilityResponse } from "@/lib/types";
+import { getOpsOddsAvailabilityTrend } from "@/lib/api";
+import type { OpsOddsAvailabilityTrendResponse } from "@/lib/types";
 import { ErrorState } from "../MatchUI";
 
-const LIKELY_CAUSE_STYLE: Record<OpsOddsAvailabilityResponse["fixtures"][number]["likely_cause"], string> = {
-  circuit_open: "text-serious",
-  not_posted: "text-muted",
-};
+type RankedMarket = { market: string; missing: number; total: number; pct: number };
 
-export function OddsAvailabilityTab({
-  dateFrom,
-  dateTo,
-  league,
-}: {
-  dateFrom: string;
-  dateTo: string;
-  league?: string;
-}) {
-  const [data, setData] = useState<OpsOddsAvailabilityResponse | null>(null);
+// Same high-is-bad threshold scale as FeatureHealthTab's riskRateColor.
+function missingPctColor(pct: number): string {
+  if (pct >= 0.5) return "text-serious";
+  if (pct >= 0.2) return "text-warning";
+  return "text-good";
+}
+
+// One overall % per market across the whole window (not per-week): sum each
+// market's `missing` count and the window's total fixture count across all
+// weeks, then divide once.
+function aggregateByMarket(data: OpsOddsAvailabilityTrendResponse): RankedMarket[] {
+  const missingByMarket: Record<string, number> = {};
+  let totalFixtures = 0;
+  for (const week of data.weeks) {
+    totalFixtures += week.total_fixtures;
+    for (const [market, stats] of Object.entries(week.by_market)) {
+      missingByMarket[market] = (missingByMarket[market] ?? 0) + stats.missing;
+    }
+  }
+  return Object.entries(missingByMarket)
+    .map(([market, missing]) => ({
+      market,
+      missing,
+      total: totalFixtures,
+      pct: totalFixtures > 0 ? missing / totalFixtures : 0,
+    }))
+    .sort((a, b) => b.pct - a.pct);
+}
+
+export function OddsAvailabilityTab({ weeks, league }: { weeks: number; league?: string }) {
+  const [data, setData] = useState<OpsOddsAvailabilityTrendResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [retryTick, setRetryTick] = useState(0);
 
@@ -28,17 +46,17 @@ export function OddsAvailabilityTab({
     let cancelled = false;
     setData(null);
     setError(null);
-    getOpsOddsAvailability({ dateFrom, dateTo, league })
+    getOpsOddsAvailabilityTrend({ weeks, league })
       .then((result) => {
         if (!cancelled) setData(result);
       })
       .catch((err) => {
-        if (!cancelled) setError(err instanceof Error ? err.message : "Failed to load odds availability");
+        if (!cancelled) setError(err instanceof Error ? err.message : "Failed to load odds availability trend");
       });
     return () => {
       cancelled = true;
     };
-  }, [dateFrom, dateTo, league, retryTick]);
+  }, [weeks, league, retryTick]);
 
   if (error) {
     return <ErrorState message={error} onRetry={() => setRetryTick((t) => t + 1)} />;
@@ -47,7 +65,8 @@ export function OddsAvailabilityTab({
     return <div className="text-sm text-muted">Loading…</div>;
   }
 
-  if (data.fixtures.length === 0) {
+  const ranked = aggregateByMarket(data);
+  if (ranked.length === 0) {
     return (
       <div className="rounded-lg border border-border bg-surface p-4 text-sm text-muted">
         No missing markets in this window.
@@ -60,21 +79,15 @@ export function OddsAvailabilityTab({
       <table className="w-full text-xs">
         <thead>
           <tr className="text-left text-muted">
-            <th className="pb-2 pr-3">Match</th>
-            <th className="pb-2 pr-3">League</th>
-            <th className="pb-2 pr-3">Missing markets</th>
-            <th className="pb-2">Likely cause</th>
+            <th className="pb-2 pr-3">Market</th>
+            <th className="pb-2 text-right">% missing (window)</th>
           </tr>
         </thead>
         <tbody>
-          {data.fixtures.map((f) => (
-            <tr key={f.match_id} className="border-t border-border">
-              <td className="py-2 pr-3 text-ink">
-                {f.home_team ?? "—"} v {f.away_team ?? "—"}
-              </td>
-              <td className="py-2 pr-3 text-ink-secondary">{f.league ?? "—"}</td>
-              <td className="py-2 pr-3 text-ink">{f.missing_markets.join(", ")}</td>
-              <td className={`py-2 font-mono ${LIKELY_CAUSE_STYLE[f.likely_cause]}`}>{f.likely_cause}</td>
+          {ranked.map((r) => (
+            <tr key={r.market} className="border-t border-border">
+              <td className="py-2 pr-3 text-ink">{r.market}</td>
+              <td className={`py-2 text-right font-mono ${missingPctColor(r.pct)}`}>{Math.round(r.pct * 100)}%</td>
             </tr>
           ))}
         </tbody>

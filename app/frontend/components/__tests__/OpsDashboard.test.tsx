@@ -9,7 +9,7 @@ vi.mock("@/lib/api", () => ({
     failures: [],
     circuit_breakers: { the_odds_api: { state: "closed" }, oddspapi: { state: "closed" } },
   }),
-  getOpsOddsAvailability: vi.fn().mockResolvedValue({ fixtures: [] }),
+  getOpsOddsAvailabilityTrend: vi.fn().mockResolvedValue({ weeks: [] }),
   getOpsFeatureHealth: vi.fn().mockResolvedValue({ by_league: {} }),
   getAgentPerformanceDashboard: vi.fn().mockResolvedValue({
     kelly_roi_simulation: {
