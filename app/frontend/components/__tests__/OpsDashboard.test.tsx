@@ -11,20 +11,10 @@ vi.mock("@/lib/api", () => ({
   }),
   getOpsOddsAvailabilityTrend: vi.fn().mockResolvedValue({ weeks: [] }),
   getOpsFeatureHealthTrend: vi.fn().mockResolvedValue({ week_starts: [], tracked_feature_count: 0, flagged_features: [] }),
-  getAgentPerformanceDashboard: vi.fn().mockResolvedValue({
-    kelly_roi_simulation: {
-      matches_evaluated: 0, bets_placed: 0, bets_won: 0, roi: 0, hit_rate: 0,
-      bet_frequency: 0, max_drawdown: 0, insufficient_data_rate: 0,
-      starting_bankroll: 0, ending_bankroll: 0, total_staked: 0, total_profit: 0,
-    },
-    by_market_metrics: {},
-    by_market_selection_metrics: {},
-    by_league_metrics: {},
-    staked_bets: [],
-    top_winners: [],
-    top_losers: [],
-  }),
-  getStatus: vi.fn().mockResolvedValue({}),
+  getOpsPerformanceTrend: vi.fn().mockResolvedValue({ weeks: [], pick_scope: "one_per_match", include_conditional: false }),
+  // AppShell's useSandboxAsOf() hook calls this on every mount, independent
+  // of which /ops tab is active -- still needed even though the Performance
+  // tab itself no longer does.
   getSandboxStatus: vi.fn().mockResolvedValue({ sandbox_mode: false, as_of: null }),
   ApiError: class ApiError extends Error {
     status?: number;

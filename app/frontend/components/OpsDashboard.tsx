@@ -1,22 +1,19 @@
 "use client";
 
 /** 2026-11-02: /ops -- failures & circuit breakers, odds availability,
- * feature health, and recommendation performance (the existing, previously
- * unlinked agent-performance page, folded in here instead of rebuilt).
+ * feature health, and recommendation performance trends.
  * Shared Window (weeks) + league filter bar: fully wired into the Odds
- * Availability and Feature Health tabs; Failures only honors the league
- * filter (it isn't date-scoped); Performance manages its own date range
- * and ignores this filter bar entirely (unmodified, linked-not-rebuilt
- * page).
+ * Availability, Feature Health, and Performance tabs; Failures only honors
+ * the league filter (it isn't date-scoped).
  * Design: docs/superpowers/specs/2026-11-03-ops-dashboard-trends-design.md */
 
 import { useState } from "react";
 
 import { AppShell } from "./AppShell";
-import { AgentPerformanceContent } from "./AgentPerformanceDashboard";
 import { FailuresTab } from "./ops/FailuresTab";
 import { OddsAvailabilityTab } from "./ops/OddsAvailabilityTab";
 import { FeatureHealthTab } from "./ops/FeatureHealthTab";
+import { PerformanceTab } from "./ops/PerformanceTab";
 import { LEAGUE_LABEL } from "@/lib/dashboardMetrics";
 
 type TabKey = "failures" | "odds" | "features" | "performance";
@@ -97,7 +94,7 @@ export function OpsDashboard() {
           {tab === "failures" && <FailuresTab league={league || undefined} />}
           {tab === "odds" && <OddsAvailabilityTab weeks={weeks} league={league || undefined} />}
           {tab === "features" && <FeatureHealthTab weeks={weeks} league={league || undefined} />}
-          {tab === "performance" && <AgentPerformanceContent />}
+          {tab === "performance" && <PerformanceTab weeks={weeks} league={league || undefined} />}
         </div>
       </div>
     </AppShell>
