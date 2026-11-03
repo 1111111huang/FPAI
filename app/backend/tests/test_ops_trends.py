@@ -6,6 +6,8 @@ from datetime import date
 from pathlib import Path
 import sys
 
+import pytest
+
 sys.path.append(str(Path(__file__).resolve().parents[3]))
 
 from app.backend.ops_trends import recent_week_starts, thursday_week_start
@@ -33,3 +35,16 @@ def test_recent_week_starts_length_matches_weeks_param():
     starts = recent_week_starts(date(2026, 11, 3), weeks=8)
     assert len(starts) == 8
     assert starts[-1] == "2026-10-29"  # newest bucket is always "today"'s own week
+
+
+@pytest.mark.parametrize("date_str,expected", [
+    ("2026-10-08", "2026-10-08"),  # Thursday
+    ("2026-10-09", "2026-10-08"),  # Friday
+    ("2026-10-10", "2026-10-08"),  # Saturday
+    ("2026-10-11", "2026-10-08"),  # Sunday
+    ("2026-10-12", "2026-10-08"),  # Monday
+    ("2026-10-13", "2026-10-08"),  # Tuesday
+    ("2026-10-14", "2026-10-08"),  # Wednesday
+])
+def test_thursday_week_start_covers_every_day_of_the_week(date_str, expected):
+    assert thursday_week_start(date_str) == expected
