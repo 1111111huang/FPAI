@@ -11,6 +11,8 @@ from fastapi.testclient import TestClient
 
 from app.backend import recommendations
 from app.backend.main import app
+from app.backend.recommendation_cache import RecommendationCache
+from app.backend.recommendation_outcomes import RecommendationOutcomeStore, get_recommendation_outcome_store
 from app.backend.run_isolated import get_failures_store
 
 
@@ -347,3 +349,65 @@ def test_feature_health_trend_flags_a_drifting_feature(tmp_path: Path) -> None:
     assert "drift" in flagged_by_name["XOC_HOME"]["flags"]
     assert flagged_by_name["XOC_HOME"]["baseline_mean"] == 2.0
     assert flagged_by_name["XOC_HOME"]["recent_mean"] == 20.0
+
+
+def test_performance_trend_defaults_to_one_pick_per_match(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.delenv("APP_ACCESS_TOKEN", raising=False)
+    store = RecommendationOutcomeStore(db_path=tmp_path / "outcomes.db")
+    store.insert(
+        match_id="m1", date="2026-10-09", competition="E0", market="result_3way", selection="home",
+        recommendation_type="direct_bet", confidence="medium", odds=2.0, value_edge=0.1, correct=True,
+        generated_at="2026-10-09T12:00:00Z", home_goals=1, away_goals=0,
+    )
+
+    with TestClient(app) as client:
+        app.dependency_overrides[get_recommendation_outcome_store] = lambda: store
+        try:
+            response = client.get(
+                "/api/admin/ops/performance-trend", params={"weeks": 1, "today": "2026-10-14"},
+            )
+        finally:
+            app.dependency_overrides.pop(get_recommendation_outcome_store, None)
+
+    assert response.status_code == 200
+    weeks = response.json()["weeks"]
+    assert len(weeks) == 1
+    assert weeks[0]["week_start"] == "2026-10-08"
+    assert weeks[0]["bets_placed"] == 1
+    assert weeks[0]["hit_rate"] == 1.0
+
+
+def test_performance_trend_all_direct_pick_scope_needs_the_cache_too(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.delenv("APP_ACCESS_TOKEN", raising=False)
+    store = RecommendationOutcomeStore(db_path=tmp_path / "outcomes.db")
+    store.insert(
+        match_id="m1", date="2026-10-09", competition="E0", market="result_3way", selection="home",
+        recommendation_type="direct_bet", confidence="medium", odds=2.0, value_edge=0.1, correct=True,
+        generated_at="2026-10-09T12:00:00Z", home_goals=1, away_goals=0,
+    )
+    cache = RecommendationCache(db_path=tmp_path / "cache.db")
+    cache.record_generation(
+        match_id="m1", date="2026-10-09", agent_config_hash="h", odds={}, triggered_by="scheduled",
+        recommendation={
+            "match": {"league": "E0"}, "overall": "direct_bet",
+            "candidates": [
+                {"market": "result_3way", "selection": "home", "recommendation_type": "direct_bet", "current_odds": 2.0, "value_edge": 0.1},
+                {"market": "btts", "selection": "no", "recommendation_type": "direct_bet", "current_odds": 1.8, "value_edge": 0.05},
+            ],
+        },
+    )
+
+    with TestClient(app) as client:
+        app.dependency_overrides[get_recommendation_outcome_store] = lambda: store
+        app.dependency_overrides[recommendations.get_cache] = lambda: cache
+        try:
+            response = client.get(
+                "/api/admin/ops/performance-trend",
+                params={"weeks": 1, "today": "2026-10-14", "pick_scope": "all_direct"},
+            )
+        finally:
+            app.dependency_overrides.pop(get_recommendation_outcome_store, None)
+            app.dependency_overrides.pop(recommendations.get_cache, None)
+
+    assert response.status_code == 200
+    assert response.json()["weeks"][0]["bets_placed"] == 2  # both direct_bet candidates, not just the stored pick

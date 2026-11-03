@@ -43,6 +43,7 @@ from app.backend.llm_check import check_llm_reachable
 from app.backend.missing_odds_alert import missing_markets_from_cache_odds
 from app.backend.ops_trends import (
     aggregate_feature_weeks,
+    build_week_records,
     flag_drifting_features,
     recent_week_starts,
     thursday_week_start,
@@ -55,7 +56,9 @@ from app.backend.recommendation_outcomes import (
     resolve_pending_recommendations,
 )
 from app.backend.agent_performance_dashboard import compute_agent_performance_dashboard
-from app.backend.recommendation_stats import compute_recommendation_stats
+from app.backend.recommendation_stats import DEFAULT_STARTING_BANKROLL, compute_recommendation_stats
+from src.agent.evaluation import build_evaluation_report
+from src.agent.staking import simulate_kelly_stake
 from app.backend.bet_stats import compute_bet_stats
 from app.backend.recommendations import MatchRecommendationOut, RecommendationRequest, validate_and_degrade
 from app.backend.scheduler import JobRunLog, RecoverableScheduler
@@ -850,6 +853,59 @@ def get_ops_feature_health_trend(
         "tracked_feature_count": len(weekly),
         "flagged_features": flagged,
     }
+
+
+@app.get("/api/admin/ops/performance-trend")
+def get_ops_performance_trend(
+    weeks: int = Query(8, ge=1, le=52),
+    league: str | None = None,
+    today: str | None = None,
+    pick_scope: str = Query("one_per_match", pattern="^(one_per_match|all_direct)$"),
+    include_conditional: bool = False,
+    store: RecommendationOutcomeStore = Depends(get_recommendation_outcome_store),
+    cache: RecommendationCache = Depends(recommendations.get_cache),
+) -> dict:
+    """2026-11-03: /ops dashboard's Performance tab, trend view -- weekly
+    hit-rate/ROI/profit, under a chosen betting strategy (pick_scope x
+    include_conditional, see ops_trends.build_week_records). Each week is
+    simulated independently from the same fixed starting_bankroll (not a
+    continuous cross-week equity curve) so weeks are directly comparable to
+    each other, not polluted by a prior week's drawdown."""
+    today_date = date.fromisoformat(today) if today else _current_real_date()
+    week_starts = recent_week_starts(today_date, weeks)
+
+    all_outcomes = store.list_all()
+    if league is not None:
+        all_outcomes = [o for o in all_outcomes if o.competition == league]
+    outcomes_by_week: dict[str, list] = {w: [] for w in week_starts}
+    for outcome in all_outcomes:
+        week_start = thursday_week_start(outcome.date)
+        if week_start in outcomes_by_week:
+            outcomes_by_week[week_start].append(outcome)
+
+    cached_candidates_by_key: dict[tuple[str, str], list[dict]] = {}
+    if pick_scope == "all_direct":
+        keys = [(o.match_id, o.date) for week_outcomes in outcomes_by_week.values() for o in week_outcomes]
+        entries = cache.list_latest_for_keys(keys)
+        for (match_id, entry_date), entry in entries.items():
+            cached_candidates_by_key[(match_id, entry_date)] = entry.recommendation.get("candidates") or []
+
+    weeks_out = []
+    for week_start in week_starts:
+        records = build_week_records(
+            outcomes_by_week[week_start], cached_candidates_by_key, pick_scope, include_conditional,
+        )
+        bankroll_result = simulate_kelly_stake(records, starting_bankroll=DEFAULT_STARTING_BANKROLL)
+        report = build_evaluation_report(records, bankroll_result)
+        weeks_out.append({
+            "week_start": week_start,
+            "hit_rate": report["hit_rate"],
+            "roi": report["roi"],
+            "bets_placed": report["bets_placed"],
+            "total_profit": report["total_profit"],
+            "ending_bankroll": report["ending_bankroll"],
+        })
+    return {"weeks": weeks_out, "pick_scope": pick_scope, "include_conditional": include_conditional}
 
 
 @app.get("/api/admin/export-recommendations")
