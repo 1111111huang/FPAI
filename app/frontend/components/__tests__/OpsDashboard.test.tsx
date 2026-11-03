@@ -53,4 +53,20 @@ describe("OpsDashboard", () => {
     await screen.findByRole("tab", { name: /failures/i });
     expect(screen.getByLabelText(/league/i)).toHaveValue("");
   });
+
+  it("defaults the Window selector to 8w", async () => {
+    render(<OpsDashboard />);
+    await screen.findByRole("tab", { name: /failures/i });
+    expect(screen.getByRole("button", { name: "8w" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("button", { name: "4w" })).toHaveAttribute("aria-pressed", "false");
+  });
+
+  it("selects a different window chip on click", async () => {
+    const user = userEvent.setup();
+    render(<OpsDashboard />);
+    await screen.findByRole("tab", { name: /failures/i });
+    await user.click(screen.getByRole("button", { name: "26w" }));
+    expect(screen.getByRole("button", { name: "26w" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("button", { name: "8w" })).toHaveAttribute("aria-pressed", "false");
+  });
 });

@@ -3,23 +3,21 @@
 /** 2026-11-02: /ops -- failures & circuit breakers, odds availability,
  * feature health, and recommendation performance (the existing, previously
  * unlinked agent-performance page, folded in here instead of rebuilt).
- * Shared date-range + league filter bar: fully wired into the Odds
+ * Shared Window (weeks) + league filter bar: fully wired into the Odds
  * Availability and Feature Health tabs; Failures only honors the league
  * filter (it isn't date-scoped); Performance manages its own date range
  * and ignores this filter bar entirely (unmodified, linked-not-rebuilt
  * page).
- * Design: docs/superpowers/specs/2026-11-02-background-job-safety-net-design.md */
+ * Design: docs/superpowers/specs/2026-11-03-ops-dashboard-trends-design.md */
 
 import { useState } from "react";
 
 import { AppShell } from "./AppShell";
 import { AgentPerformanceContent } from "./AgentPerformanceDashboard";
-import { addDays, dateString } from "./MatchUI";
 import { FailuresTab } from "./ops/FailuresTab";
 import { OddsAvailabilityTab } from "./ops/OddsAvailabilityTab";
 import { FeatureHealthTab } from "./ops/FeatureHealthTab";
 import { LEAGUE_LABEL } from "@/lib/dashboardMetrics";
-import { useSandboxAsOf } from "@/lib/useSandboxAsOf";
 
 type TabKey = "failures" | "odds" | "features" | "performance";
 
@@ -30,20 +28,12 @@ const TABS: { key: TabKey; label: string }[] = [
   { key: "performance", label: "Performance" },
 ];
 
+const WEEK_OPTIONS = [4, 8, 12, 26];
+
 export function OpsDashboard() {
   const [tab, setTab] = useState<TabKey>("failures");
   const [league, setLeague] = useState<string>("");
-  // W30: date-window defaults go through the sandbox-aware clock, not a raw
-  // `new Date()` (see lib/useSandboxAsOf.ts, MatchUI.tsx's dateString/
-  // addDays) -- a real browser instant otherwise, or the sandbox's as_of
-  // once GET /api/sandbox/status resolves. Held as an override so these
-  // keep re-deriving from the latest asOf until the user actually edits
-  // one of the inputs below, instead of freezing at mount time.
-  const { asOf, sandboxMode } = useSandboxAsOf();
-  const [dateFromOverride, setDateFromOverride] = useState<string | null>(null);
-  const [dateToOverride, setDateToOverride] = useState<string | null>(null);
-  const dateFrom = dateFromOverride ?? dateString(addDays(asOf, -7, sandboxMode), sandboxMode);
-  const dateTo = dateToOverride ?? dateString(asOf, sandboxMode);
+  const [weeks, setWeeks] = useState<number>(8);
 
   return (
     <AppShell active="ops">
@@ -51,24 +41,24 @@ export function OpsDashboard() {
         <h1 className="text-xl font-semibold text-ink">Ops Dashboard</h1>
 
         <div className="mt-4 flex flex-wrap items-center gap-3 rounded-lg border border-border bg-surface p-3 text-sm">
-          <label className="flex items-center gap-2">
-            <span className="text-muted">From</span>
-            <input
-              type="date"
-              value={dateFrom}
-              onChange={(e) => setDateFromOverride(e.target.value)}
-              className="rounded border border-border bg-bg px-2 py-1 text-ink"
-            />
-          </label>
-          <label className="flex items-center gap-2">
-            <span className="text-muted">To</span>
-            <input
-              type="date"
-              value={dateTo}
-              onChange={(e) => setDateToOverride(e.target.value)}
-              className="rounded border border-border bg-bg px-2 py-1 text-ink"
-            />
-          </label>
+          <div className="flex items-center gap-2">
+            <span className="text-muted">Window</span>
+            <div className="flex gap-1">
+              {WEEK_OPTIONS.map((w) => (
+                <button
+                  key={w}
+                  type="button"
+                  aria-pressed={weeks === w}
+                  onClick={() => setWeeks(w)}
+                  className={`rounded-full px-3 py-1 text-xs font-semibold ${
+                    weeks === w ? "bg-accent text-white" : "border border-border text-muted hover:text-ink"
+                  }`}
+                >
+                  {w}w
+                </button>
+              ))}
+            </div>
+          </div>
           <label className="flex items-center gap-2">
             <span className="text-muted">League</span>
             <select
@@ -105,8 +95,8 @@ export function OpsDashboard() {
 
         <div className="mt-4">
           {tab === "failures" && <FailuresTab league={league || undefined} />}
-          {tab === "odds" && <OddsAvailabilityTab dateFrom={dateFrom} dateTo={dateTo} league={league || undefined} />}
-          {tab === "features" && <FeatureHealthTab dateFrom={dateFrom} dateTo={dateTo} league={league || undefined} />}
+          {tab === "odds" && <OddsAvailabilityTab weeks={weeks} league={league || undefined} />}
+          {tab === "features" && <FeatureHealthTab weeks={weeks} league={league || undefined} />}
           {tab === "performance" && <AgentPerformanceContent />}
         </div>
       </div>
