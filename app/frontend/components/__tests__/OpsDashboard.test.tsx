@@ -10,7 +10,7 @@ vi.mock("@/lib/api", () => ({
     circuit_breakers: { the_odds_api: { state: "closed" }, oddspapi: { state: "closed" } },
   }),
   getOpsOddsAvailabilityTrend: vi.fn().mockResolvedValue({ weeks: [] }),
-  getOpsFeatureHealth: vi.fn().mockResolvedValue({ by_league: {} }),
+  getOpsFeatureHealthTrend: vi.fn().mockResolvedValue({ week_starts: [], tracked_feature_count: 0, flagged_features: [] }),
   getAgentPerformanceDashboard: vi.fn().mockResolvedValue({
     kelly_roi_simulation: {
       matches_evaluated: 0, bets_placed: 0, bets_won: 0, roi: 0, hit_rate: 0,

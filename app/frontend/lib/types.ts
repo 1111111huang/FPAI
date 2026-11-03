@@ -270,19 +270,6 @@ export type OpsOddsAvailabilityResponse = {
   fixtures: OddsAvailabilityFixture[];
 };
 
-// GET /api/admin/ops/feature-health response shape (app/backend/main.py's
-// get_ops_feature_health).
-export type FeatureHealthLeagueStats = {
-  sample_size: number;
-  cold_start_risk_rate: number;
-  unknown_team_rate: number;
-  avg_feature_completeness: number | null;
-};
-
-export type OpsFeatureHealthResponse = {
-  by_league: Record<string, FeatureHealthLeagueStats>;
-};
-
 // GET /api/admin/ops/odds-availability-trend response shape
 // (app/backend/main.py's get_ops_odds_availability_trend).
 export type OddsAvailabilityTrendWeek = {

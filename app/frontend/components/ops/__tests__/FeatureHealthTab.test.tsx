@@ -19,7 +19,7 @@ function flaggedFeature(overrides: Partial<FlaggedFeature> = {}): FlaggedFeature
 }
 
 describe("FeatureHealthTab", () => {
-  it("renders the scorecard and the flagged-feature list, sorted by the API's own order", async () => {
+  it("renders the scorecard and the flagged-feature list", async () => {
     vi.mocked(getOpsFeatureHealthTrend).mockResolvedValue({
       week_starts: ["2026-10-08"], tracked_feature_count: 52,
       flagged_features: [flaggedFeature()],
@@ -27,6 +27,39 @@ describe("FeatureHealthTab", () => {
     render(<FeatureHealthTab weeks={8} />);
     expect(await screen.findByText("XOC_HOME")).toBeInTheDocument();
     expect(screen.getByText("52")).toBeInTheDocument(); // tracked_feature_count tile
+  });
+
+  it("renders a per-feature sparkline with real min/max axis labels", async () => {
+    vi.mocked(getOpsFeatureHealthTrend).mockResolvedValue({
+      week_starts: ["2026-10-08", "2026-10-15", "2026-10-22"], tracked_feature_count: 52,
+      flagged_features: [
+        flaggedFeature({
+          weekly: [
+            { week_start: "2026-10-08", mean: 1.8, null_rate: 0.0 },
+            { week_start: "2026-10-15", mean: 6.2, null_rate: 0.0 },
+            { week_start: "2026-10-22", mean: 12.7, null_rate: 0.0 },
+          ],
+        }),
+      ],
+    });
+    render(<FeatureHealthTab weeks={8} />);
+    await screen.findByText("XOC_HOME");
+    expect(screen.getByText("1.8")).toBeInTheDocument(); // min
+    expect(screen.getByText("12.7")).toBeInTheDocument(); // max
+  });
+
+  it("renders flagged features sorted by magnitude, highest first", async () => {
+    vi.mocked(getOpsFeatureHealthTrend).mockResolvedValue({
+      week_starts: ["2026-10-08"], tracked_feature_count: 52,
+      flagged_features: [
+        flaggedFeature({ name: "LOW_MAGNITUDE", magnitude: 2.0 }),
+        flaggedFeature({ name: "HIGH_MAGNITUDE", magnitude: 9.0 }),
+      ],
+    });
+    render(<FeatureHealthTab weeks={8} />);
+    await screen.findByText("HIGH_MAGNITUDE");
+    const names = screen.getAllByText(/_MAGNITUDE$/).map((el) => el.textContent);
+    expect(names).toEqual(["HIGH_MAGNITUDE", "LOW_MAGNITUDE"]);
   });
 
   it("caps the list and reveals the rest on click", async () => {

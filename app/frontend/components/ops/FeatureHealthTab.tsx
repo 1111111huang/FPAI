@@ -44,6 +44,14 @@ function Sparkline({ weekly }: { weekly: FlaggedFeature["weekly"] }) {
   );
 }
 
+// Fixed-width sparkline slot (matches the SVG's own width + its two
+// flanking labels) so a suppressed sparkline (fewer than 2 valid weekly
+// points) still reserves its column -- otherwise `justify-between` would
+// redistribute the row's slack across one fewer gap and shift the badge
+// column relative to rows that do render one. Same fixed-column fix
+// OddsAvailabilityTab uses for its bar/label columns.
+const SPARK_SLOT_W = 124;
+
 function FeatureRow({ feature }: { feature: FlaggedFeature }) {
   return (
     <div className="flex items-center justify-between gap-3 rounded border border-border bg-surface-raised px-3 py-2">
@@ -59,7 +67,9 @@ function FeatureRow({ feature }: { feature: FlaggedFeature }) {
           <span className="rounded-full bg-warning-dim px-2 py-0.5 font-semibold text-warning">NULL RATE ↑</span>
         )}
       </div>
-      <Sparkline weekly={feature.weekly} />
+      <div className="shrink-0" style={{ width: SPARK_SLOT_W }}>
+        <Sparkline weekly={feature.weekly} />
+      </div>
       <div className="shrink-0 text-right text-xs text-muted">
         {feature.flags.includes("drift") && feature.baseline_mean !== null && feature.recent_mean !== null
           ? `${feature.baseline_mean.toFixed(2)} → ${feature.recent_mean.toFixed(2)}`
@@ -144,6 +154,7 @@ export function FeatureHealthTab({ weeks, league }: { weeks: number; league?: st
         <div className="rounded-lg border border-border bg-surface p-4">
           <input
             placeholder="Filter by name, e.g. XOC"
+            aria-label="Filter flagged features by name"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             className="mb-3 w-56 rounded border border-border bg-page px-2 py-1 font-mono text-xs text-ink outline-none focus:border-accent"
