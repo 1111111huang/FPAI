@@ -102,6 +102,105 @@ def test_get_ops_odds_availability_reports_missing_markets_with_cause(tmp_path: 
     assert row["likely_cause"] == "circuit_open"
 
 
+def test_odds_availability_trend_buckets_by_week_and_ranks_markets(tmp_path: Path) -> None:
+    from app.backend.recommendation_cache import CacheEntry
+
+    complete_odds = {
+        "home": 2.0, "draw": 3.0, "away": 3.5,
+        "total_goals": {"over_2.5": 1.9},
+        "asian_handicap": {"line": -0.5, "home": 1.9, "away": 1.9},
+        "corners": {"over_9.5": 1.9},
+    }
+    missing_corners_odds = {**complete_odds, "corners": None}
+
+    entries = [
+        # Week of 2026-10-08 (Thu-Wed): 2 fixtures, one missing total_corners.
+        CacheEntry(
+            match_id="m1", date="2026-10-09", agent_config_hash="h",
+            odds=missing_corners_odds, recommendation={"match": {"league": "E0", "home": "A", "away": "B"}},
+            generated_at="2026-10-09T10:00:00+00:00", triggered_by="scheduled",
+        ),
+        CacheEntry(
+            match_id="m2", date="2026-10-10", agent_config_hash="h",
+            odds=complete_odds, recommendation={"match": {"league": "E0", "home": "C", "away": "D"}},
+            generated_at="2026-10-10T10:00:00+00:00", triggered_by="scheduled",
+        ),
+        # Week of 2026-10-15: 1 fixture, missing total_corners too.
+        CacheEntry(
+            match_id="m3", date="2026-10-16", agent_config_hash="h",
+            odds=missing_corners_odds, recommendation={"match": {"league": "E0", "home": "E", "away": "F"}},
+            generated_at="2026-10-16T10:00:00+00:00", triggered_by="scheduled",
+        ),
+    ]
+    mock_cache = MagicMock()
+    mock_cache.list_latest_per_match.return_value = entries
+
+    with patch("app.backend.main.get_circuit_breaker_status", return_value={
+        "the_odds_api": {"state": "closed"}, "oddspapi": {"state": "closed"},
+    }):
+        with TestClient(app) as client:
+            app.dependency_overrides[recommendations.get_cache] = lambda: mock_cache
+            try:
+                response = client.get(
+                    "/api/admin/ops/odds-availability-trend", params={"weeks": 2, "today": "2026-10-15"},
+                )
+            finally:
+                app.dependency_overrides.pop(recommendations.get_cache, None)
+
+    assert response.status_code == 200
+    body = response.json()
+    assert [w["week_start"] for w in body["weeks"]] == ["2026-10-08", "2026-10-15"]
+    week1 = body["weeks"][0]
+    assert week1["total_fixtures"] == 2
+    assert week1["by_market"]["total_corners"]["missing"] == 1
+    assert week1["by_market"]["total_corners"]["not_posted"] == 1
+    assert week1["by_market"]["total_corners"]["circuit_open"] == 0
+    week2 = body["weeks"][1]
+    assert week2["total_fixtures"] == 1
+    assert week2["by_market"]["total_corners"]["missing"] == 1
+
+
+def test_odds_availability_trend_cause_attribution_matches_fixture_level_rule(tmp_path: Path) -> None:
+    """2026-11-03: the real get_ops_odds_availability rule computes ONE
+    likely_cause per fixture (total_corners+oddspapi checked first, then
+    any the_odds_api-backed market), not an independent check per market.
+    With oddspapi closed and the_odds_api open, a fixture missing BOTH
+    total_corners and 1X2 gets likely_cause="circuit_open" for the whole
+    fixture (via the elif branch) -- so total_corners must be counted
+    circuit_open here too, even though its own vendor breaker (oddspapi) is
+    closed. A naive "total_corners checks oddspapi, everything else checks
+    the_odds_api" per-market rule would wrongly call it not_posted."""
+    from app.backend.recommendation_cache import CacheEntry
+
+    entry = CacheEntry(
+        match_id="m1", date="2026-10-09", agent_config_hash="h",
+        odds={"home": None, "draw": None, "away": None, "total_goals": {"over_2.5": 1.9},
+              "asian_handicap": {"line": -0.5, "home": 1.9, "away": 1.9}, "corners": None},
+        recommendation={"match": {"league": "E0", "home": "A", "away": "B"}},
+        generated_at="2026-10-09T10:00:00+00:00", triggered_by="scheduled",
+    )
+    mock_cache = MagicMock()
+    mock_cache.list_latest_per_match.return_value = [entry]
+
+    with patch("app.backend.main.get_circuit_breaker_status", return_value={
+        "the_odds_api": {"state": "open"}, "oddspapi": {"state": "closed"},
+    }):
+        with TestClient(app) as client:
+            app.dependency_overrides[recommendations.get_cache] = lambda: mock_cache
+            try:
+                response = client.get(
+                    "/api/admin/ops/odds-availability-trend", params={"weeks": 1, "today": "2026-10-09"},
+                )
+            finally:
+                app.dependency_overrides.pop(recommendations.get_cache, None)
+
+    body = response.json()
+    by_market = body["weeks"][0]["by_market"]
+    assert by_market["1X2"]["circuit_open"] == 1
+    assert by_market["total_corners"]["circuit_open"] == 1
+    assert by_market["total_corners"]["not_posted"] == 0
+
+
 def test_get_ops_feature_health_aggregates_by_league(tmp_path: Path) -> None:
     from unittest.mock import MagicMock, patch
     from app.backend.recommendation_cache import CacheEntry

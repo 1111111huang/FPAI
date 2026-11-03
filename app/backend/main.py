@@ -41,6 +41,7 @@ from app.backend.sweden_fixtures_client import (
 )
 from app.backend.llm_check import check_llm_reachable
 from app.backend.missing_odds_alert import missing_markets_from_cache_odds
+from app.backend.ops_trends import recent_week_starts, thursday_week_start
 from app.backend.recommendation_cache import DEFAULT_DB_PATH as RECOMMENDATION_CACHE_DB_PATH, RecommendationCache
 from app.backend.results_cache import ResultsCache
 from app.backend.recommendation_outcomes import (
@@ -648,6 +649,19 @@ def get_ops_failures(
     return {"failures": failures, "circuit_breakers": get_circuit_breaker_status()}
 
 
+def _likely_cause_for_missing_markets(missing: list[str], odds_api_open: bool, oddspapi_open: bool) -> str:
+    """Shared by get_ops_odds_availability and get_ops_odds_availability_trend
+    below: ONE cause for a whole fixture's missing markets (not computed
+    independently per market) -- total_corners+oddspapi checked first, then
+    any of the three the_odds_api-backed markets. Kept as a single function
+    so the two endpoints can't silently drift apart on this rule."""
+    if "total_corners" in missing and oddspapi_open:
+        return "circuit_open"
+    if any(m in missing for m in ("1X2", "over/under 2.5", "Asian handicap")) and odds_api_open:
+        return "circuit_open"
+    return "not_posted"
+
+
 @app.get("/api/admin/ops/odds-availability")
 def get_ops_odds_availability(
     date_from: str,
@@ -680,17 +694,63 @@ def get_ops_odds_availability(
         missing = missing_markets_from_cache_odds(entry.odds)
         if not missing:
             continue
-        likely_cause = "not_posted"
-        if "total_corners" in missing and oddspapi_open:
-            likely_cause = "circuit_open"
-        elif any(m in missing for m in ("1X2", "over/under 2.5", "Asian handicap")) and odds_api_open:
-            likely_cause = "circuit_open"
+        likely_cause = _likely_cause_for_missing_markets(missing, odds_api_open, oddspapi_open)
         fixtures.append({
             "match_id": entry.match_id, "date": entry.date, "league": entry_league,
             "home_team": match.get("home"), "away_team": match.get("away"),
             "missing_markets": missing, "likely_cause": likely_cause,
         })
     return {"fixtures": fixtures}
+
+
+@app.get("/api/admin/ops/odds-availability-trend")
+def get_ops_odds_availability_trend(
+    weeks: int = Query(8, ge=1, le=52),
+    league: str | None = None,
+    today: str | None = None,
+    cache: RecommendationCache = Depends(recommendations.get_cache),
+) -> dict:
+    """2026-11-03: /ops dashboard's Odds Availability tab, trend view --
+    buckets the same missing-market detection get_ops_odds_availability
+    already does by Thursday-anchored week instead of a flat date range, so
+    the frontend can rank "which market is constantly missing" across the
+    whole window rather than one snapshot. Attributes
+    _likely_cause_for_missing_markets()'s single fixture-level cause to
+    EVERY missing market of that fixture -- not an independent per-market
+    check, which would disagree with the real rule whenever a fixture is
+    missing both total_corners and a the_odds_api-backed market under
+    different breaker states. `today` is test-only (overrides the real
+    clock so week boundaries are deterministic in tests); omit it in
+    production, where it defaults to the real current date."""
+    breaker_status = get_circuit_breaker_status()
+    odds_api_open = breaker_status["the_odds_api"]["state"] == "open"
+    oddspapi_open = breaker_status["oddspapi"]["state"] == "open"
+    today_date = date.fromisoformat(today) if today else _current_real_date()
+    week_starts = recent_week_starts(today_date, weeks)
+    week_index = {start: i for i, start in enumerate(week_starts)}
+
+    buckets: list[dict] = [{"week_start": start, "total_fixtures": 0, "by_market": {}} for start in week_starts]
+
+    for entry in cache.list_latest_per_match():
+        idx = week_index.get(thursday_week_start(entry.date))
+        if idx is None:
+            continue  # outside the requested window
+        match = entry.recommendation.get("match") or {}
+        entry_league = match.get("league")
+        if league is not None and entry_league != league:
+            continue
+        bucket = buckets[idx]
+        bucket["total_fixtures"] += 1
+        missing = missing_markets_from_cache_odds(entry.odds)
+        if not missing:
+            continue
+        likely_cause = _likely_cause_for_missing_markets(missing, odds_api_open, oddspapi_open)
+        for market in missing:
+            market_bucket = bucket["by_market"].setdefault(market, {"missing": 0, "circuit_open": 0, "not_posted": 0})
+            market_bucket["missing"] += 1
+            market_bucket[likely_cause] += 1
+
+    return {"weeks": buckets}
 
 
 @app.get("/api/admin/ops/feature-health")
