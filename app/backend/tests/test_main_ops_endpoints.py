@@ -299,3 +299,51 @@ def test_get_ops_feature_health_avg_completeness_is_none_when_no_entry_reported_
     body = response.json()
     assert body["by_league"]["I1"]["sample_size"] == 1
     assert body["by_league"]["I1"]["avg_feature_completeness"] is None
+
+
+def test_feature_health_trend_flags_a_drifting_feature(tmp_path: Path) -> None:
+    """2026-11-03: XOC_HOME drifts from a baseline mean of ~2.0 (weeks of
+    2026-10-08/10-15) to a recent mean of ~20.0 (weeks of 2026-10-22/10-29)
+    -- a 10x jump, well past DRIFT_RATIO_THRESHOLD. Each half needs >=
+    MIN_APPEARANCES_PER_HALF (3) appearances, so each week gets 2 cached
+    recommendations (4 per half)."""
+    from app.backend.recommendation_cache import CacheEntry
+
+    def make_entry(match_id: str, date_str: str, value: float) -> CacheEntry:
+        return CacheEntry(
+            match_id=match_id, date=date_str, agent_config_hash="a",
+            odds={}, recommendation={"match": {"league": "E0", "home": "A", "away": "B"}},
+            generated_at=f"{date_str}T10:00:00+00:00", triggered_by="scheduled",
+            forecast_payload={"explainability": {"top_features": [
+                {"name": "XOC_HOME", "value": value, "importance": 0.5},
+            ]}},
+        )
+
+    entries = [
+        # Baseline half: weeks of 2026-10-08 and 2026-10-15, mean ~2.0.
+        make_entry("m1", "2026-10-09", 2.0), make_entry("m2", "2026-10-10", 2.0),
+        make_entry("m3", "2026-10-16", 2.0), make_entry("m4", "2026-10-17", 2.0),
+        # Recent half: weeks of 2026-10-22 and 2026-10-29, mean ~20.0.
+        make_entry("m5", "2026-10-23", 20.0), make_entry("m6", "2026-10-24", 20.0),
+        make_entry("m7", "2026-10-30", 20.0), make_entry("m8", "2026-10-31", 20.0),
+    ]
+    mock_cache = MagicMock()
+    mock_cache.list_latest_per_match.return_value = entries
+
+    with TestClient(app) as client:
+        app.dependency_overrides[recommendations.get_cache] = lambda: mock_cache
+        try:
+            response = client.get(
+                "/api/admin/ops/feature-health-trend", params={"weeks": 4, "today": "2026-10-29"},
+            )
+        finally:
+            app.dependency_overrides.pop(recommendations.get_cache, None)
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["week_starts"] == ["2026-10-08", "2026-10-15", "2026-10-22", "2026-10-29"]
+    flagged_by_name = {f["name"]: f for f in body["flagged_features"]}
+    assert "XOC_HOME" in flagged_by_name
+    assert "drift" in flagged_by_name["XOC_HOME"]["flags"]
+    assert flagged_by_name["XOC_HOME"]["baseline_mean"] == 2.0
+    assert flagged_by_name["XOC_HOME"]["recent_mean"] == 20.0

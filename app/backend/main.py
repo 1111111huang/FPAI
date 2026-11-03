@@ -41,7 +41,12 @@ from app.backend.sweden_fixtures_client import (
 )
 from app.backend.llm_check import check_llm_reachable
 from app.backend.missing_odds_alert import missing_markets_from_cache_odds
-from app.backend.ops_trends import recent_week_starts, thursday_week_start
+from app.backend.ops_trends import (
+    aggregate_feature_weeks,
+    flag_drifting_features,
+    recent_week_starts,
+    thursday_week_start,
+)
 from app.backend.recommendation_cache import DEFAULT_DB_PATH as RECOMMENDATION_CACHE_DB_PATH, RecommendationCache
 from app.backend.results_cache import ResultsCache
 from app.backend.recommendation_outcomes import (
@@ -802,6 +807,49 @@ def get_ops_feature_health(
             "avg_feature_completeness": round(bucket["completeness_sum"] / completeness_n, 6) if completeness_n else None,
         }
     return {"by_league": result}
+
+
+@app.get("/api/admin/ops/feature-health-trend")
+def get_ops_feature_health_trend(
+    weeks: int = Query(8, ge=2, le=52),
+    league: str | None = None,
+    today: str | None = None,
+    cache: RecommendationCache = Depends(recommendations.get_cache),
+) -> dict:
+    """2026-11-03: /ops dashboard's Feature Health tab, trend view -- flags
+    only features whose values drifted from their own baseline or whose
+    null-rate climbed, across the window's earlier vs. later half. See
+    ops_trends.py's aggregate_feature_weeks/flag_drifting_features for the
+    actual math; this endpoint is just the fetch + filter + call.
+    `top_features` lives at forecast_payload["explainability"]["top_features"]
+    (sibling to "diagnostics"/"data_quality", same as get_ops_feature_health
+    above reads) -- each item is {"name", "value", "importance"} per
+    forecast_service.py's _top_features, not {"feature", "shap_value"}
+    (that's a different, per-candidate field elsewhere in this codebase)."""
+    today_date = date.fromisoformat(today) if today else _current_real_date()
+    week_starts = recent_week_starts(today_date, weeks)
+    week_set = set(week_starts)
+
+    entries_for_aggregation: list[dict] = []
+    for entry in cache.list_latest_per_match():
+        week_start = thursday_week_start(entry.date)
+        if week_start not in week_set:
+            continue
+        match = entry.recommendation.get("match") or {}
+        if league is not None and match.get("league") != league:
+            continue
+        if entry.forecast_payload is None:
+            continue
+        top_features = (entry.forecast_payload.get("explainability") or {}).get("top_features") or []
+        entries_for_aggregation.append({"week_start": week_start, "top_features": top_features})
+
+    weekly = aggregate_feature_weeks(entries_for_aggregation, week_starts)
+    flagged = flag_drifting_features(weekly, week_starts)
+    return {
+        "week_starts": week_starts,
+        "tracked_feature_count": len(weekly),
+        "flagged_features": flagged,
+    }
 
 
 @app.get("/api/admin/export-recommendations")
