@@ -8,11 +8,14 @@ import { ErrorState } from "../MatchUI";
 
 type RankedMarket = { market: string; missing: number; total: number; pct: number };
 
-// Same high-is-bad threshold scale as FeatureHealthTab's riskRateColor.
-function missingPctColor(pct: number): string {
-  if (pct >= 0.5) return "text-serious";
-  if (pct >= 0.2) return "text-warning";
-  return "text-good";
+const AXIS_TICKS = [0, 0.25, 0.5, 0.75, 1];
+
+// Same high-is-bad threshold scale as FeatureHealthTab's riskRateColor, as a
+// bar fill instead of text color.
+function missingPctFill(pct: number): string {
+  if (pct >= 0.5) return "bg-serious";
+  if (pct >= 0.2) return "bg-warning";
+  return "bg-muted";
 }
 
 // One overall % per market across the whole window (not per-week): sum each
@@ -75,23 +78,27 @@ export function OddsAvailabilityTab({ weeks, league }: { weeks: number; league?:
   }
 
   return (
-    <div className="overflow-x-auto">
-      <table className="w-full text-xs">
-        <thead>
-          <tr className="text-left text-muted">
-            <th className="pb-2 pr-3">Market</th>
-            <th className="pb-2 text-right">% missing (window)</th>
-          </tr>
-        </thead>
-        <tbody>
-          {ranked.map((r) => (
-            <tr key={r.market} className="border-t border-border">
-              <td className="py-2 pr-3 text-ink">{r.market}</td>
-              <td className={`py-2 text-right font-mono ${missingPctColor(r.pct)}`}>{Math.round(r.pct * 100)}%</td>
-            </tr>
+    <div className="flex flex-col gap-3 rounded-lg border border-border bg-surface p-4">
+      {/* Shared axis: same w-40 label / flex-1 bar / w-12 readout columns as
+          each row below, so its ticks line up over the bar track only. */}
+      <div className="flex items-center gap-3 text-[10px] text-muted">
+        <div className="w-40 shrink-0" />
+        <div className="flex flex-1 justify-between">
+          {AXIS_TICKS.map((t) => (
+            <span key={t}>{Math.round(t * 100)}%</span>
           ))}
-        </tbody>
-      </table>
+        </div>
+        <div className="w-12 shrink-0" />
+      </div>
+      {ranked.map((r) => (
+        <div key={r.market} className="flex items-center gap-3">
+          <div className="w-40 shrink-0 truncate text-xs text-ink">{r.market}</div>
+          <div className="h-4 flex-1 rounded bg-inset">
+            <div className={`h-full rounded ${missingPctFill(r.pct)}`} style={{ width: `${r.pct * 100}%` }} />
+          </div>
+          <div className="w-12 shrink-0 text-right text-xs font-mono text-ink">{Math.round(r.pct * 100)}%</div>
+        </div>
+      ))}
     </div>
   );
 }
