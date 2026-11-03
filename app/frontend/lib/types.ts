@@ -282,3 +282,57 @@ export type FeatureHealthLeagueStats = {
 export type OpsFeatureHealthResponse = {
   by_league: Record<string, FeatureHealthLeagueStats>;
 };
+
+// GET /api/admin/ops/odds-availability-trend response shape
+// (app/backend/main.py's get_ops_odds_availability_trend).
+export type OddsAvailabilityTrendWeek = {
+  week_start: string;
+  total_fixtures: number;
+  by_market: Record<string, { missing: number; circuit_open: number; not_posted: number }>;
+};
+
+export type OpsOddsAvailabilityTrendResponse = {
+  weeks: OddsAvailabilityTrendWeek[];
+};
+
+// GET /api/admin/ops/feature-health-trend response shape
+// (app/backend/main.py's get_ops_feature_health_trend, ops_trends.py's
+// flag_drifting_features).
+export type FeatureHealthFlag = "drift" | "nullrate";
+
+export type FlaggedFeature = {
+  name: string;
+  category: string;
+  flags: FeatureHealthFlag[];
+  baseline_mean: number | null;
+  recent_mean: number | null;
+  baseline_null_rate: number;
+  recent_null_rate: number;
+  magnitude: number;
+  weekly: { week_start: string; mean: number | null; null_rate: number }[];
+};
+
+export type OpsFeatureHealthTrendResponse = {
+  week_starts: string[];
+  tracked_feature_count: number;
+  flagged_features: FlaggedFeature[];
+};
+
+// GET /api/admin/ops/performance-trend response shape
+// (app/backend/main.py's get_ops_performance_trend).
+export type PerformanceTrendWeek = {
+  week_start: string;
+  hit_rate: number;
+  roi: number;
+  bets_placed: number;
+  total_profit: number;
+  ending_bankroll: number;
+};
+
+export type PickScope = "one_per_match" | "all_direct";
+
+export type OpsPerformanceTrendResponse = {
+  weeks: PerformanceTrendWeek[];
+  pick_scope: PickScope;
+  include_conditional: boolean;
+};

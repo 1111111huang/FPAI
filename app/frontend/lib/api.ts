@@ -8,7 +8,11 @@ import type {
   MatchRecommendationOut,
   OpsFailuresResponse,
   OpsFeatureHealthResponse,
+  OpsFeatureHealthTrendResponse,
   OpsOddsAvailabilityResponse,
+  OpsOddsAvailabilityTrendResponse,
+  OpsPerformanceTrendResponse,
+  PickScope,
   SandboxStatus,
   StatusResponse,
 } from "./types";
@@ -342,6 +346,52 @@ export async function getOpsFeatureHealth(opts: {
   const response = await apiFetch(`/api/admin/ops/feature-health?${params.toString()}`);
   if (!response.ok) {
     throw new ApiError(`Failed to load feature health (${response.status})`, response.status);
+  }
+  return response.json();
+}
+
+/** 2026-11-03: /ops dashboard's Odds Availability tab, trend view. */
+export async function getOpsOddsAvailabilityTrend(opts: {
+  weeks: number;
+  league?: string;
+}): Promise<OpsOddsAvailabilityTrendResponse> {
+  const params = new URLSearchParams({ weeks: String(opts.weeks) });
+  if (opts.league) params.set("league", opts.league);
+  const response = await apiFetch(`/api/admin/ops/odds-availability-trend?${params.toString()}`);
+  if (!response.ok) {
+    throw new ApiError(`Failed to load odds availability trend (${response.status})`, response.status);
+  }
+  return response.json();
+}
+
+/** 2026-11-03: /ops dashboard's Feature Health tab, trend view. */
+export async function getOpsFeatureHealthTrend(opts: {
+  weeks: number;
+  league?: string;
+}): Promise<OpsFeatureHealthTrendResponse> {
+  const params = new URLSearchParams({ weeks: String(opts.weeks) });
+  if (opts.league) params.set("league", opts.league);
+  const response = await apiFetch(`/api/admin/ops/feature-health-trend?${params.toString()}`);
+  if (!response.ok) {
+    throw new ApiError(`Failed to load feature health trend (${response.status})`, response.status);
+  }
+  return response.json();
+}
+
+/** 2026-11-03: /ops dashboard's Performance tab, trend view. */
+export async function getOpsPerformanceTrend(opts: {
+  weeks: number;
+  league?: string;
+  pickScope?: PickScope;
+  includeConditional?: boolean;
+}): Promise<OpsPerformanceTrendResponse> {
+  const params = new URLSearchParams({ weeks: String(opts.weeks) });
+  if (opts.league) params.set("league", opts.league);
+  if (opts.pickScope) params.set("pick_scope", opts.pickScope);
+  if (opts.includeConditional) params.set("include_conditional", "true");
+  const response = await apiFetch(`/api/admin/ops/performance-trend?${params.toString()}`);
+  if (!response.ok) {
+    throw new ApiError(`Failed to load performance trend (${response.status})`, response.status);
   }
   return response.json();
 }
