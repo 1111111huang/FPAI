@@ -135,7 +135,19 @@ def flag_drifting_features(
     comment for why. Returns a list sorted by severity (largest deviation
     first), each entry: {"name", "category", "flags": [...], "baseline_mean",
     "recent_mean", "baseline_null_rate", "recent_null_rate", "magnitude",
-    "weekly": [{"week_start", "mean", "null_rate"}, ...]}."""
+    "weekly": [{"week_start", "mean", "null_rate"}, ...]}.
+
+    "magnitude" is a unitless severity score used ONLY to sort/rank flagged
+    features against each other -- it is NOT a comparable statistic across
+    flag types, because it's computed differently depending on which branch
+    fired: a mean/mean ratio (~2.0-10.0+) for ordinary drift, raw
+    abs(recent_mean) with no normalization when the baseline mean is exactly
+    0 (ratio is undefined there), or (recent_null - baseline_null) * 10 for
+    the null-rate flag (scaled to land roughly in the same numeric range as
+    a drift ratio, nothing more principled than that). Treat it as "bigger
+    number = worse, within this one flagged list" and nothing more. A future
+    flag type needs its own normalization story worked out before being
+    blended into this same field."""
     split = len(week_starts) // 2
     baseline_weeks, recent_weeks = week_starts[:split], week_starts[split:]
     flagged: list[dict] = []
@@ -183,10 +195,16 @@ def flag_drifting_features(
     return flagged
 
 
-_CATEGORY_PREFIXES = [
+# Sorted longest-first so a more specific prefix (e.g. "DEF_ANCHOR_") is
+# always checked before a shorter prefix it overlaps with ("DEF_") --
+# mirrors feature_groups.py's resolve_feature_group_tag(), which checks
+# DEF_ANCHOR_ before the general DEF_/OFF_ branch for the same reason: a
+# hand-ordered list silently shadows the longer prefix the moment someone
+# appends a new one without checking order.
+_CATEGORY_PREFIXES = sorted([
     "OFF_", "DEF_", "MKT_", "CTX_", "DIS_", "SQUAD_", "H2H_", "LUCK_", "EFFICIENCY_",
-    "OPP_ADJ_", "DC_", "XOC", "DEF_ANCHOR",
-]
+    "OPP_ADJ_", "DC_", "XOC_", "DEF_ANCHOR_",
+], key=len, reverse=True)
 
 
 def _feature_category(name: str) -> str:

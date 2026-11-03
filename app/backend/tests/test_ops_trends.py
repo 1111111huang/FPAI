@@ -72,7 +72,12 @@ def test_aggregate_feature_weeks_computes_mean_and_null_rate_per_feature_per_wee
     assert result["DEF_ANCHOR_AWAY"]["2026-10-08"] == FeatureWeekStats(appearances=1, mean=None, null_rate=1.0)
 
 
-def test_flag_drifting_features_requires_minimum_sample_size_in_both_halves():
+def test_flag_drifting_features_excludes_a_clearly_low_sample_feature():
+    # Not a boundary test -- LOW_SAMPLE has only 1 appearance per half,
+    # nowhere near MIN_APPEARANCES_PER_HALF=3. See
+    # test_flag_drifting_features_minimum_appearances_boundary below for the
+    # actual <3 vs >=3 edge (this test alone wouldn't catch a `<` vs `<=`
+    # off-by-one in the gate).
     from app.backend.ops_trends import flag_drifting_features
 
     # XOC_HOME: baseline mean 2.0 (2 weeks), recent mean 8.0 (2 weeks) -- a real 4x jump, enough samples.
@@ -95,3 +100,40 @@ def test_flag_drifting_features_requires_minimum_sample_size_in_both_halves():
     names = {f["name"] for f in flagged}
     assert "XOC_HOME" in names
     assert "LOW_SAMPLE" not in names
+
+
+def test_flag_drifting_features_minimum_appearances_boundary():
+    # Real edge of MIN_APPEARANCES_PER_HALF=3: a feature with exactly 2
+    # appearances per half (below the gate) must be excluded; one with
+    # exactly 3 (the gate itself) must be included, given an otherwise
+    # clear drift. Catches a `<` vs `<=` off-by-one that a 10-vs-1 sample
+    # mismatch would never reach.
+    from app.backend.ops_trends import flag_drifting_features
+
+    weekly = {
+        "BELOW_GATE": {
+            "2026-10-08": FeatureWeekStats(appearances=2, mean=2.0, null_rate=0.0),
+            "2026-10-15": FeatureWeekStats(appearances=2, mean=8.0, null_rate=0.0),
+        },
+        "AT_GATE": {
+            "2026-10-08": FeatureWeekStats(appearances=3, mean=2.0, null_rate=0.0),
+            "2026-10-15": FeatureWeekStats(appearances=3, mean=8.0, null_rate=0.0),
+        },
+    }
+    flagged = flag_drifting_features(weekly, week_starts=["2026-10-08", "2026-10-15"])
+    names = {f["name"] for f in flagged}
+    assert "BELOW_GATE" not in names
+    assert "AT_GATE" in names
+
+
+def test_feature_category_prefers_the_more_specific_def_anchor_prefix():
+    # DEF_ANCHOR_HOME/AWAY are real computed features (src/features/
+    # lineup_features.py) that also start with "DEF_" -- a naively-ordered
+    # prefix list matches "DEF_" first and misclassifies them. Mirrors the
+    # same shadowing precedent src/logic/feature_groups.py's
+    # resolve_feature_group_tag() already guards against.
+    from app.backend.ops_trends import _feature_category
+
+    assert _feature_category("DEF_ANCHOR_HOME") == "def_anchor"
+    assert _feature_category("DEF_ANCHOR_AWAY") == "def_anchor"
+    assert _feature_category("DEF_GOALS_CONCEDED_R5") == "def"
