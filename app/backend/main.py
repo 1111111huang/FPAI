@@ -59,7 +59,7 @@ from app.backend.recommendation_outcomes import (
 from app.backend.agent_performance_dashboard import compute_agent_performance_dashboard
 from app.backend.recommendation_stats import DEFAULT_STARTING_BANKROLL, compute_recommendation_stats
 from src.agent.evaluation import build_evaluation_report
-from src.agent.staking import simulate_kelly_stake
+from src.agent.staking import simulate_flat_stake, simulate_kelly_stake
 from app.backend.bet_stats import compute_bet_stats
 from app.backend.recommendations import MatchRecommendationOut, RecommendationRequest, validate_and_degrade
 from app.backend.scheduler import JobRunLog, RecoverableScheduler
@@ -872,6 +872,7 @@ def get_ops_performance_trend(
     today: str | None = None,
     pick_scope: str = Query("one_per_match", pattern="^(one_per_match|all_direct)$"),
     include_conditional: bool = False,
+    staking_mode: str = Query("kelly", pattern="^(kelly|flat|ub)$"),
     store: RecommendationOutcomeStore = Depends(get_recommendation_outcome_store),
     cache: RecommendationCache = Depends(recommendations.get_cache),
 ) -> dict:
@@ -880,7 +881,16 @@ def get_ops_performance_trend(
     include_conditional, see ops_trends.build_week_records). Each week is
     simulated independently from the same fixed starting_bankroll (not a
     continuous cross-week equity curve) so weeks are directly comparable to
-    each other, not polluted by a prior week's drawdown."""
+    each other, not polluted by a prior week's drawdown.
+
+    `staking_mode` (2026-11-04, direct user request): "kelly" (default) is
+    the pre-existing compounding-bankroll Kelly stake. "flat" is
+    simulate_flat_stake -- a fixed stake_pct of starting_bankroll every bet.
+    "ub" replicates the real app's displayed "X UB" stake sizing
+    (src/agent/schema.py's _attach_unit_bet_multiplier, A82): same Kelly
+    fraction, but sized off a FIXED starting_bankroll reference instead of
+    the grown running bankroll -- see simulate_kelly_stake's
+    use_fixed_bankroll_for_sizing docstring."""
     today_date = date.fromisoformat(today) if today else _current_real_date()
     week_starts = recent_week_starts(today_date, weeks)
 
@@ -905,7 +915,14 @@ def get_ops_performance_trend(
         records = build_week_records(
             outcomes_by_week[week_start], cached_candidates_by_key, pick_scope, include_conditional,
         )
-        bankroll_result = simulate_kelly_stake(records, starting_bankroll=DEFAULT_STARTING_BANKROLL)
+        if staking_mode == "flat":
+            bankroll_result = simulate_flat_stake(records, starting_bankroll=DEFAULT_STARTING_BANKROLL)
+        elif staking_mode == "ub":
+            bankroll_result = simulate_kelly_stake(
+                records, starting_bankroll=DEFAULT_STARTING_BANKROLL, use_fixed_bankroll_for_sizing=True,
+            )
+        else:
+            bankroll_result = simulate_kelly_stake(records, starting_bankroll=DEFAULT_STARTING_BANKROLL)
         report = build_evaluation_report(records, bankroll_result)
         weeks_out.append({
             "week_start": week_start,
@@ -915,7 +932,10 @@ def get_ops_performance_trend(
             "total_profit": report["total_profit"],
             "ending_bankroll": report["ending_bankroll"],
         })
-    return {"weeks": weeks_out, "pick_scope": pick_scope, "include_conditional": include_conditional}
+    return {
+        "weeks": weeks_out, "pick_scope": pick_scope, "include_conditional": include_conditional,
+        "staking_mode": staking_mode,
+    }
 
 
 @app.get("/api/admin/export-recommendations")

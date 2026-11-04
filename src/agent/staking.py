@@ -88,9 +88,29 @@ def simulate_kelly_stake(
     records: list["BacktestRecord"],
     starting_bankroll: float = 1000.0,
     max_fraction: float = 0.10,
+    use_fixed_bankroll_for_sizing: bool = False,
 ) -> BankrollResult:
-    """Kelly stake = value_edge / (odds - 1) * current bankroll, capped at max_fraction.
-    Bets with non-positive edge are skipped (Kelly fraction would be <= 0)."""
+    """Kelly stake = value_edge / (odds - 1) * sizing_bankroll, capped at
+    max_fraction. Bets with non-positive edge are skipped (Kelly fraction
+    would be <= 0).
+
+    `use_fixed_bankroll_for_sizing` (2026-11-04, direct user request --
+    ops dashboard's Performance tab "UB" staking mode): when False
+    (default, unchanged from every pre-existing caller), `sizing_bankroll`
+    is the RUNNING bankroll, so each stake compounds off prior wins/losses
+    -- the backtest-standard behavior this function has always had. When
+    True, `sizing_bankroll` stays pinned at `starting_bankroll` for every
+    bet's SIZE calculation, while `bankroll`/`equity_curve` still track the
+    real, compounding P&L exactly as before -- only the stake-sizing input
+    is fixed, not the tracked outcome. This replicates
+    src/agent/schema.py's `_attach_unit_bet_multiplier` (A82): the app's
+    displayed "X UB" suggestion is explicitly `kelly_fraction(...) /
+    UNIT_BET_BASELINE_FRACTION`, a multiple of a FIXED reference unit, not
+    a bankroll-relative fraction that itself grows/shrinks with a
+    simulated running bankroll -- i.e. what a real bettor's results would
+    look like if they bet the literal UB multiplier the app shows them,
+    without letting a backtest's own compounding silently change what
+    "1 UB" means bet-to-bet."""
     bankroll = starting_bankroll
     equity_curve = [bankroll]
     bets: list[BetOutcome] = []
@@ -108,7 +128,8 @@ def simulate_kelly_stake(
             fraction = kelly_fraction(value_edge, odds, max_fraction)
             if fraction <= 0:
                 continue
-            stake = bankroll * fraction
+            sizing_bankroll = starting_bankroll if use_fixed_bankroll_for_sizing else bankroll
+            stake = sizing_bankroll * fraction
             won = bool(m["correct"])
             payout = stake * (odds - 1) if won else -stake
             bankroll += payout

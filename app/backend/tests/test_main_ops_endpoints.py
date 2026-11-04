@@ -411,3 +411,63 @@ def test_performance_trend_all_direct_pick_scope_needs_the_cache_too(tmp_path: P
 
     assert response.status_code == 200
     assert response.json()["weeks"][0]["bets_placed"] == 2  # both direct_bet candidates, not just the stored pick
+
+
+def test_performance_trend_staking_mode_flat_vs_kelly_size_bets_differently(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.delenv("APP_ACCESS_TOKEN", raising=False)
+    store = RecommendationOutcomeStore(db_path=tmp_path / "outcomes.db")
+    store.insert(
+        match_id="m1", date="2026-10-09", competition="E0", market="result_3way", selection="home",
+        recommendation_type="direct_bet", confidence="medium", odds=3.0, value_edge=0.1, correct=True,
+        generated_at="2026-10-09T12:00:00Z", home_goals=1, away_goals=0,
+    )
+
+    with TestClient(app) as client:
+        app.dependency_overrides[get_recommendation_outcome_store] = lambda: store
+        try:
+            flat_response = client.get(
+                "/api/admin/ops/performance-trend",
+                params={"weeks": 1, "today": "2026-10-14", "staking_mode": "flat"},
+            )
+            kelly_response = client.get(
+                "/api/admin/ops/performance-trend",
+                params={"weeks": 1, "today": "2026-10-14", "staking_mode": "kelly"},
+            )
+        finally:
+            app.dependency_overrides.pop(get_recommendation_outcome_store, None)
+
+    assert flat_response.status_code == 200
+    assert kelly_response.status_code == 200
+    flat_week = flat_response.json()["weeks"][0]
+    kelly_week = kelly_response.json()["weeks"][0]
+    assert flat_response.json()["staking_mode"] == "flat"
+    # flat: 1% of 1000 = 10 staked, profit = 10 * (3.0 - 1) = 20
+    assert flat_week["total_profit"] == 20.0
+    # kelly: fraction = 0.1 / 2.0 = 0.05 -> stake 50, profit = 50 * (3.0 - 1) = 100
+    assert kelly_week["total_profit"] == 100.0
+
+
+def test_performance_trend_staking_mode_ub_does_not_compound_across_bets(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.delenv("APP_ACCESS_TOKEN", raising=False)
+    store = RecommendationOutcomeStore(db_path=tmp_path / "outcomes.db")
+    for i in range(2):
+        store.insert(
+            match_id=f"m{i}", date="2026-10-09", competition="E0", market="result_3way", selection="home",
+            recommendation_type="direct_bet", confidence="medium", odds=3.0, value_edge=0.1, correct=True,
+            generated_at="2026-10-09T12:00:00Z", home_goals=1, away_goals=0,
+        )
+
+    with TestClient(app) as client:
+        app.dependency_overrides[get_recommendation_outcome_store] = lambda: store
+        try:
+            response = client.get(
+                "/api/admin/ops/performance-trend",
+                params={"weeks": 1, "today": "2026-10-14", "staking_mode": "ub"},
+            )
+        finally:
+            app.dependency_overrides.pop(get_recommendation_outcome_store, None)
+
+    assert response.status_code == 200
+    # Both bets size off the same fixed 1000 starting_bankroll (fraction 0.05 -> stake 50 each),
+    # so total profit is exactly 2x a single bet's profit, not compounded.
+    assert response.json()["weeks"][0]["total_profit"] == 200.0

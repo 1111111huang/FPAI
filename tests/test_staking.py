@@ -1,6 +1,8 @@
 """Tests for bankroll simulation (A13 flat stake, A15 Kelly)."""
 from __future__ import annotations
 
+import pytest
+
 from src.agent.backtest import BacktestRecord
 from src.agent.staking import kelly_fraction, simulate_flat_stake, simulate_kelly_stake
 
@@ -91,6 +93,39 @@ def test_kelly_stake_skips_negative_or_zero_edge():
     }]
     result = simulate_kelly_stake([_record("m1", markets)], starting_bankroll=1000.0)
     assert result.bets == []
+
+
+def test_kelly_stake_use_fixed_bankroll_for_sizing_does_not_compound():
+    # Two winning bets, same edge/odds both times. Default (compounding)
+    # Kelly sizes the second stake off the GROWN bankroll after the first
+    # win; use_fixed_bankroll_for_sizing=True must size both off the same
+    # starting_bankroll instead -- same stake both times.
+    markets = [
+        {"market": "result_3way", "selection": "home", "recommendation_type": "direct_bet",
+         "current_odds": 3.0, "value_edge": 0.10, "correct": True},
+    ]
+    records = [_record("m1", markets), _record("m2", markets)]
+
+    compounding = simulate_kelly_stake(records, starting_bankroll=1000.0, max_fraction=0.5)
+    fixed = simulate_kelly_stake(records, starting_bankroll=1000.0, max_fraction=0.5, use_fixed_bankroll_for_sizing=True)
+
+    # fraction = 0.10 / 2.0 = 0.05 both times.
+    assert fixed.bets[0].stake == 50.0  # 1000 * 0.05
+    assert fixed.bets[1].stake == 50.0  # still 1000 * 0.05 -- fixed, not grown
+    assert compounding.bets[0].stake == 50.0  # 1000 * 0.05, same as fixed mode for bet 1
+    assert compounding.bets[1].stake == pytest.approx(1100.0 * 0.05)  # grown bankroll (1000 + 50*(3-1)=1100) * 0.05 -- diverges from fixed mode
+
+
+def test_kelly_stake_use_fixed_bankroll_for_sizing_still_tracks_real_ending_bankroll():
+    # The sizing input is pinned, but the tracked P&L (ending_bankroll,
+    # equity_curve) must still reflect what actually happened -- this
+    # mode changes stake SIZE calculation only, not outcome bookkeeping.
+    markets = [{
+        "market": "result_3way", "selection": "home", "recommendation_type": "direct_bet",
+        "current_odds": 3.0, "value_edge": 0.10, "correct": True,
+    }]
+    result = simulate_kelly_stake([_record("m1", markets)], starting_bankroll=1000.0, max_fraction=0.5, use_fixed_bankroll_for_sizing=True)
+    assert result.ending_bankroll == 1000.0 + 50.0 * (3.0 - 1)  # identical real payout math to the compounding test above
 
 
 def test_kelly_fraction_positive_edge():
