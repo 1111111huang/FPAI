@@ -590,11 +590,13 @@ class ForecastService:
                     metadata_path = model_path.with_suffix(model_path.suffix + ".metadata.json")
                     artifact_feature_names: list[str] | None = None
                     artifact_metrics: dict[str, Any] | None = None
+                    artifact_feature_importance: dict[str, Any] | None = None
                     if metadata_path.exists():
                         with metadata_path.open("r", encoding="utf-8") as meta_fh:
                             artifact_metadata = json.load(meta_fh)
                         artifact_feature_names = artifact_metadata.get("feature_names")
                         artifact_metrics = artifact_metadata.get("metrics")
+                        artifact_feature_importance = artifact_metadata.get("feature_importance")
                     metadata: dict[str, Any] = {
                         "target": target,
                         "model_type": entry.get("model_type", "unknown"),
@@ -615,6 +617,18 @@ class ForecastService:
                         # PAYLOAD, src/agent/pipeline.py). None when the
                         # artifact predates this field or has no sidecar.
                         "metrics": artifact_metrics,
+                        # BUG-103: this model's own saved feature-importance
+                        # table (already computed and written at training
+                        # time by model_manager.py's _build_artifact_metadata,
+                        # same sidecar as feature_names/metrics above) --
+                        # previously silently dropped here, which meant
+                        # _top_features() (this file) always found it empty
+                        # and every live recommendation's forecast_payload.
+                        # explainability.top_features was `[]` since this
+                        # loader was introduced. None when the artifact
+                        # predates this field or has no sidecar, same
+                        # convention as metrics/calibrator above.
+                        "feature_importance": artifact_feature_importance,
                     }
                     loaded[target] = (definition, self._load_model(model_path, metadata), metadata)
                 if loaded:
