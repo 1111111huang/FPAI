@@ -158,6 +158,20 @@ def _fixture_date(fixture: NormalizedMatch) -> str:
     return fixture.utc_date[:10]
 
 
+def _days_until_kickoff(fixture: NormalizedMatch, now: datetime) -> int:
+    """Calendar days between `now` and this fixture's kickoff -- 0 the day
+    of, 1 the day before. Direct user request (2026-11-04, BUG-104
+    follow-up): gates the missing-live-odds alert to the EOD refresh that
+    actually runs the night before kickoff. A book simply hasn't posted
+    totals/spreads lines yet 2+ days out by design (see BUG-104/BUG-096's
+    own docstrings) -- that's not an actionable signal, just noise from
+    main.py's multi-day pregenerate sweep, which (unlike the real nightly
+    EOD job, always exactly one day ahead) batches today..today+days_ahead
+    fixtures through the same run_eod_batch() call."""
+    kickoff = datetime.fromisoformat(fixture.utc_date.replace("Z", "+00:00"))
+    return (kickoff.date() - now.date()).days
+
+
 def has_kicked_off(fixture: NormalizedMatch, now: datetime) -> bool:
     """True once kickoff has passed. Shared by run_eod_batch (below, used by
     both the nightly EOD job and main.py's boot-time pregenerate sweep) and
@@ -270,17 +284,27 @@ def add_secondary_odds(
     # stuck on a cached home_goals/away_goals=None from an early EOD run,
     # while The Odds API demonstrably had real team_totals prices by the
     # time of a later regen -- this fixture just never got asked again.
-    # BUG-096: spreads (Asian handicap) is fetched in the same call as
-    # totals/btts. A cache row from before BUG-096 has no "asian_handicap"
-    # key at all, so it needs one re-fetch to pick up the line. Key presence
-    # (not truthiness) here, so a book that never posts spreads doesn't
-    # force a paid totals/btts re-fetch on every single run.
-    already_checked_secondary = cached_entry is not None and bool(
-        cached_entry.odds.get("total_goals") or cached_entry.odds.get("btts")
-    ) and "asian_handicap" in cached_entry.odds
-    already_checked_team_totals = cached_entry is not None and (
-        cached_entry.odds.get("home_goals") or cached_entry.odds.get("away_goals")
-    )
+    #
+    # Each market gets its own flag (not one combined OR across siblings):
+    # BUG-104, found live 2026-11-04 (missing-odds investigation) that OR-ing
+    # total_goals/btts truthiness together, then gating the whole trio
+    # (plus asian_handicap, via BUG-096's key-presence check) on that one
+    # flag, froze whichever market the book happened not to have posted
+    # yet at the *first* successful call -- e.g. btts priced but totals
+    # still None got cached as "already checked" and never retried again
+    # as long as h2h stayed unchanged, even at T-30 well after the 2.5 line
+    # would normally be posted. Same bug, same shape, for home_goals/
+    # away_goals below. A truthy check per field (superseding BUG-096's
+    # key-presence special case for asian_handicap, since a missing key is
+    # just another falsy value here) means only the markets still actually
+    # missing keep paying for a retry.
+    already_checked_total_goals = cached_entry is not None and bool(cached_entry.odds.get("total_goals"))
+    already_checked_btts = cached_entry is not None and bool(cached_entry.odds.get("btts"))
+    already_checked_ah = cached_entry is not None and bool(cached_entry.odds.get("asian_handicap"))
+    already_checked_secondary = already_checked_total_goals and already_checked_btts and already_checked_ah
+    already_checked_home_goals = cached_entry is not None and bool(cached_entry.odds.get("home_goals"))
+    already_checked_away_goals = cached_entry is not None and bool(cached_entry.odds.get("away_goals"))
+    already_checked_team_totals = already_checked_home_goals and already_checked_away_goals
     odds_event = matched_odds_event(fixture, odds_by_teams)
     get_event_odds = getattr(odds_client, "get_event_odds", None)
 
@@ -488,7 +512,8 @@ async def run_eod_batch(
     missing_odds_reports: list[tuple[str, str, list[str]]] = []
 
     async def _generate_one(fixture: NormalizedMatch) -> None:
-        if has_kicked_off(fixture, sandbox_now(timezone.utc)):
+        now = sandbox_now(timezone.utc)
+        if has_kicked_off(fixture, now):
             LOGGER.info(
                 "EOD batch: skipping match_id=%s (%s v %s) -- kickoff already passed, a "
                 "pre-match recommendation is no longer meaningful.",
@@ -575,7 +600,7 @@ async def run_eod_batch(
         )
         result.generated += 1
         missing = missing_live_odds(match_info)
-        if missing:
+        if missing and _days_until_kickoff(fixture, now) <= 1:
             missing_odds_reports.append((fixture.home_team, fixture.away_team, missing))
         if on_progress is not None:
             on_progress(fixture, "generated")

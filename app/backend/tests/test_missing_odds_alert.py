@@ -22,7 +22,9 @@ from app.backend.missing_odds_alert import (  # noqa: E402
 )
 from app.backend.odds_api_client import NormalizedOdds, NormalizedSecondaryOdds  # noqa: E402
 from app.backend.recommendation_cache import RecommendationCache  # noqa: E402
-from app.backend.tests.test_eod_batch import _RECOMMENDATION, _fixture, _future_date  # noqa: E402
+from app.backend.tests.test_eod_batch import (  # noqa: E402
+    _RECOMMENDATION, _fixture, _future_date, _future_utc_datetime,
+)
 from src.agent.agent_config import AgentConfig  # noqa: E402
 
 _FULL = {
@@ -110,6 +112,42 @@ def test_eod_batch_alerts_on_generated_fixture_missing_asian_handicap(tmp_path: 
     assert result.generated == 1
     mock_post.assert_called_once()
     assert "Arsenal v Everton: Asian handicap" in mock_post.call_args.kwargs["json"]["text"]
+
+
+def test_eod_batch_does_not_alert_for_a_fixture_two_days_out(tmp_path: Path):
+    """Direct user request (2026-11-04, BUG-104 follow-up): a book simply
+    hasn't posted totals/spreads lines yet for a fixture 2+ days out --
+    that's expected, not actionable, so main.py's multi-day pregenerate
+    sweep (today..today+days_ahead through this same run_eod_batch() call)
+    must not alert on it. Only the EOD refresh the night before kickoff
+    (fixture dated tomorrow or today) should."""
+    fixtures_client = MagicMock()
+    fixtures_client.get_fixtures.return_value = [
+        _fixture("m1", "Arsenal", "Everton", utc_date=_future_utc_datetime(3)),
+    ]
+    odds_client = MagicMock()
+    odds_client.get_odds.return_value = [
+        NormalizedOdds(
+            home_team="Arsenal", away_team="Everton", commence_time="2026-08-22T15:00:00Z",
+            home_odds=1.8, draw_odds=3.6, away_odds=4.5, event_id="evt1",
+        ),
+    ]
+    odds_client.get_event_odds.return_value = NormalizedSecondaryOdds(
+        total_goals=None, btts=None, asian_handicap=None,
+    )
+    cache = RecommendationCache(db_path=tmp_path / "cache.db")
+
+    with patch("app.backend.recommendations.run_agent", return_value=_RECOMMENDATION), \
+         patch("app.backend.slack_alerts.requests.post") as mock_post:
+        result = asyncio.run(
+            run_eod_batch(
+                fixtures_client=fixtures_client, odds_client=odds_client, cache=cache,
+                config=AgentConfig.default(), schedule_t30=lambda f: None, date_str=_future_date(3),
+            )
+        )
+
+    assert result.generated == 1
+    mock_post.assert_not_called()
 
 
 # missing_markets_from_cache_odds() -- the /ops odds-availability tab's

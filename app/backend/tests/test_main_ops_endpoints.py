@@ -104,6 +104,47 @@ def test_get_ops_odds_availability_reports_missing_markets_with_cause(tmp_path: 
     assert row["likely_cause"] == "circuit_open"
 
 
+def test_get_ops_odds_availability_excludes_a_fixture_two_days_out(tmp_path: Path) -> None:
+    """Direct user request (2026-11-04, BUG-104 follow-up): a fixture still
+    2+ days from kickoff hasn't had its chance at the EOD-before-matchday
+    refresh yet -- counting it as "missing" here is the same noise the
+    Slack alert fix already removed. T-1 (tomorrow) and T-0 (today) still
+    count; only the 2-days-out fixture is excluded."""
+    from app.backend.recommendation_cache import CacheEntry
+
+    missing_odds = {"home": 2.1, "draw": 3.4, "away": 3.6, "total_goals": None, "asian_handicap": None, "corners": None}
+    entries = [
+        CacheEntry(
+            match_id="t1", date="2026-11-03", agent_config_hash="h",  # tomorrow, relative to today="2026-11-02"
+            odds=missing_odds, recommendation={"match": {"home": "A", "away": "B", "league": "E0"}},
+            generated_at="2026-11-02T10:00:00+00:00", triggered_by="scheduled",
+        ),
+        CacheEntry(
+            match_id="t4", date="2026-11-04", agent_config_hash="h",  # 2 days out
+            odds=missing_odds, recommendation={"match": {"home": "C", "away": "D", "league": "E0"}},
+            generated_at="2026-11-02T10:00:00+00:00", triggered_by="scheduled",
+        ),
+    ]
+    mock_cache = MagicMock()
+    mock_cache.list_latest_per_match.return_value = entries
+
+    with patch("app.backend.main.get_circuit_breaker_status", return_value={
+        "the_odds_api": {"state": "closed"}, "oddspapi": {"state": "closed"},
+    }):
+        with TestClient(app) as client:
+            app.dependency_overrides[recommendations.get_cache] = lambda: mock_cache
+            try:
+                response = client.get(
+                    "/api/admin/ops/odds-availability",
+                    params={"date_from": "2026-11-01", "date_to": "2026-11-10", "today": "2026-11-02"},
+                )
+            finally:
+                app.dependency_overrides.pop(recommendations.get_cache, None)
+
+    body = response.json()
+    assert [row["match_id"] for row in body["fixtures"]] == ["t1"]
+
+
 def test_odds_availability_trend_buckets_by_week_and_ranks_markets(tmp_path: Path) -> None:
     from app.backend.recommendation_cache import CacheEntry
 
@@ -160,6 +201,48 @@ def test_odds_availability_trend_buckets_by_week_and_ranks_markets(tmp_path: Pat
     week2 = body["weeks"][1]
     assert week2["total_fixtures"] == 1
     assert week2["by_market"]["total_corners"]["missing"] == 1
+
+
+def test_odds_availability_trend_excludes_a_fixture_two_days_out(tmp_path: Path) -> None:
+    """Direct user request (2026-11-04, BUG-104 follow-up): same T-1 gate
+    as get_ops_odds_availability, applied to the trend/percentage view the
+    dashboard's "Constantly Missing Markets" chart actually reads -- a
+    fixture still 2+ days from kickoff is dropped entirely, not just
+    excluded from the missing count (it shouldn't inflate total_fixtures
+    either, since it hasn't had a real verdict yet)."""
+    from app.backend.recommendation_cache import CacheEntry
+
+    missing_odds = {"home": 2.1, "draw": 3.4, "away": 3.6, "total_goals": None, "asian_handicap": None, "corners": None}
+    entries = [
+        CacheEntry(
+            match_id="t1", date="2026-10-10", agent_config_hash="h",  # tomorrow, relative to today="2026-10-09"
+            odds=missing_odds, recommendation={"match": {"home": "A", "away": "B", "league": "E0"}},
+            generated_at="2026-10-09T10:00:00+00:00", triggered_by="scheduled",
+        ),
+        CacheEntry(
+            match_id="t2", date="2026-10-11", agent_config_hash="h",  # 2 days out
+            odds=missing_odds, recommendation={"match": {"home": "C", "away": "D", "league": "E0"}},
+            generated_at="2026-10-09T10:00:00+00:00", triggered_by="scheduled",
+        ),
+    ]
+    mock_cache = MagicMock()
+    mock_cache.list_latest_per_match.return_value = entries
+
+    with patch("app.backend.main.get_circuit_breaker_status", return_value={
+        "the_odds_api": {"state": "closed"}, "oddspapi": {"state": "closed"},
+    }):
+        with TestClient(app) as client:
+            app.dependency_overrides[recommendations.get_cache] = lambda: mock_cache
+            try:
+                response = client.get(
+                    "/api/admin/ops/odds-availability-trend", params={"weeks": 1, "today": "2026-10-09"},
+                )
+            finally:
+                app.dependency_overrides.pop(recommendations.get_cache, None)
+
+    week = response.json()["weeks"][0]
+    assert week["total_fixtures"] == 1
+    assert week["by_market"]["total_corners"]["missing"] == 1
 
 
 def test_odds_availability_trend_cause_attribution_matches_fixture_level_rule(tmp_path: Path) -> None:

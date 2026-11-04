@@ -658,6 +658,18 @@ def get_ops_failures(
     return {"failures": failures, "circuit_breakers": get_circuit_breaker_status()}
 
 
+def _within_t_minus_1(entry_date: str, today: date) -> bool:
+    """True once this fixture kicks off today or tomorrow, relative to
+    `today` -- i.e. it's had its chance at the EOD refresh the night before
+    kickoff (or has already kicked off/finished). Direct user request
+    (2026-11-04, BUG-104 follow-up): mirrors eod_batch.py's own
+    _days_until_kickoff() gate on the missing-odds Slack alert -- a fixture
+    still 2+ days out just hasn't had a book post lines yet by design, so
+    counting it in the dashboard's missing-odds metrics would be the same
+    noise the alert fix already removed."""
+    return (date.fromisoformat(entry_date) - today).days <= 1
+
+
 def _likely_cause_for_missing_markets(missing: list[str], odds_api_open: bool, oddspapi_open: bool) -> str:
     """Shared by get_ops_odds_availability and get_ops_odds_availability_trend
     below: ONE cause for a whole fixture's missing markets (not computed
@@ -676,6 +688,7 @@ def get_ops_odds_availability(
     date_from: str,
     date_to: str,
     league: str | None = None,
+    today: str | None = None,
     cache: RecommendationCache = Depends(recommendations.get_cache),
 ) -> dict:
     """2026-11-02: /ops dashboard's odds-availability tab. Scans every
@@ -687,14 +700,22 @@ def get_ops_odds_availability(
     open, not_posted otherwise (the common, benign case -- a book simply
     hasn't priced it yet). Only reports on fixtures with a cache row;
     there's no "fixture the pipeline hasn't reached yet" source of truth
-    independent of the cache itself."""
+    independent of the cache itself. Also excludes any fixture still 2+
+    days from kickoff (`_within_t_minus_1`, BUG-104 follow-up) -- same
+    "too early to mean anything" noise the missing-odds Slack alert
+    already filters out. `today` is test-only (overrides the real clock),
+    mirroring get_ops_odds_availability_trend's own param; omit it in
+    production."""
     breaker_status = get_circuit_breaker_status()
     odds_api_open = breaker_status["the_odds_api"]["state"] == "open"
     oddspapi_open = breaker_status["oddspapi"]["state"] == "open"
+    today_date = date.fromisoformat(today) if today else _current_real_date()
 
     fixtures: list[dict] = []
     for entry in cache.list_latest_per_match():
         if not (date_from <= entry.date <= date_to):
+            continue
+        if not _within_t_minus_1(entry.date, today_date):
             continue
         match = entry.recommendation.get("match") or {}
         entry_league = match.get("league")
@@ -728,9 +749,12 @@ def get_ops_odds_availability_trend(
     EVERY missing market of that fixture -- not an independent per-market
     check, which would disagree with the real rule whenever a fixture is
     missing both total_corners and a the_odds_api-backed market under
-    different breaker states. `today` is test-only (overrides the real
-    clock so week boundaries are deterministic in tests); omit it in
-    production, where it defaults to the real current date."""
+    different breaker states. Excludes any fixture still 2+ days from
+    kickoff (`_within_t_minus_1`, BUG-104 follow-up), same as
+    get_ops_odds_availability above. `today` is test-only (overrides the
+    real clock so week boundaries -- and this gate -- are deterministic in
+    tests); omit it in production, where it defaults to the real current
+    date."""
     breaker_status = get_circuit_breaker_status()
     odds_api_open = breaker_status["the_odds_api"]["state"] == "open"
     oddspapi_open = breaker_status["oddspapi"]["state"] == "open"
@@ -744,6 +768,8 @@ def get_ops_odds_availability_trend(
         idx = week_index.get(thursday_week_start(entry.date))
         if idx is None:
             continue  # outside the requested window
+        if not _within_t_minus_1(entry.date, today_date):
+            continue
         match = entry.recommendation.get("match") or {}
         entry_league = match.get("league")
         if league is not None and entry_league != league:

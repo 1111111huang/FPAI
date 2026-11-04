@@ -510,6 +510,57 @@ def test_secondary_odds_reused_from_cache_not_refetched_when_h2h_unchanged(tmp_p
     assert result.generated == 0
 
 
+def test_total_goals_retried_when_btts_already_cached_but_totals_still_null(tmp_path: Path) -> None:
+    """Found live 2026-11-04 (missing-odds investigation): a book that
+    posted btts but not yet the 2.5 total line caches total_goals=None,
+    btts=<real>. The old already_checked_secondary flag OR'd total_goals
+    and btts truthiness together, so btts being real froze this fixture as
+    "already checked" and total_goals stayed null forever (h2h never
+    moved) -- it never got asked again, including at T-30. total_goals
+    must keep getting retried on its own until it's actually filled."""
+    fixtures_client = MagicMock()
+    fixtures_client.get_fixtures.return_value = [_fixture("m1", "Arsenal", "Everton")]
+    odds_client = _seeded_odds_client()  # same h2h as the pre-existing cache row below
+    odds_client.get_event_odds.return_value = NormalizedSecondaryOdds(
+        total_goals={"over_2.5": 1.9, "under_2.5": 1.95}, btts={"yes": 1.7, "no": 2.1},
+        asian_handicap={"line": -0.75, "home": 1.95, "away": 1.95},
+    )
+    cache = RecommendationCache(db_path=tmp_path / "cache.db")
+    config = AgentConfig.default()
+    agent_config_hash = compute_agent_config_hash(config)
+    cache.record_generation(
+        match_id="m1", date=_future_date(1), agent_config_hash=agent_config_hash,
+        odds={
+            "home": 1.8, "draw": 3.6, "away": 4.5,
+            "total_goals": None,  # book hadn't posted the 2.5 line on the earlier pass
+            "btts": {"yes": 1.7, "no": 2.1}, "asian_handicap": {"line": -0.75, "home": 1.95, "away": 1.95},
+        },
+        recommendation=_RECOMMENDATION, triggered_by="scheduled",
+    )
+    captured_match_info = {}
+
+    def _capture(match_info, config):
+        captured_match_info.update(match_info)
+        return _RECOMMENDATION
+
+    with patch("app.backend.recommendations.run_agent", side_effect=_capture):
+        asyncio.run(
+            run_eod_batch(
+                fixtures_client=fixtures_client, odds_client=odds_client, cache=cache, config=config,
+                schedule_t30=lambda f: None, date_str=_future_date(1),
+            )
+        )
+
+    odds_client.get_event_odds.assert_any_call(
+        sport_key="soccer_epl", event_id="evt1", markets=("totals", "btts", "spreads"),
+        home_team="Arsenal", away_team="Everton",
+    )
+    assert captured_match_info["total_goals_odds"] == {"over_2.5": 1.9, "under_2.5": 1.95}
+
+    cached = cache.get_latest("m1", _future_date(1), agent_config_hash)
+    assert cached.odds["total_goals"] == {"over_2.5": 1.9, "under_2.5": 1.95}
+
+
 def test_team_totals_retried_after_a_previously_cached_null(tmp_path: Path) -> None:
     """A book that hadn't posted team_totals yet at the time of an earlier
     pass caches home_goals=away_goals=None. h2h staying unchanged must not
