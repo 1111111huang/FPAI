@@ -254,22 +254,6 @@ export type OpsFailuresResponse = {
   };
 };
 
-// GET /api/admin/ops/odds-availability response shape (app/backend/main.py's
-// get_ops_odds_availability).
-export type OddsAvailabilityFixture = {
-  match_id: string;
-  date: string;
-  league: string | null;
-  home_team: string | null;
-  away_team: string | null;
-  missing_markets: string[];
-  likely_cause: "circuit_open" | "not_posted";
-};
-
-export type OpsOddsAvailabilityResponse = {
-  fixtures: OddsAvailabilityFixture[];
-};
-
 // GET /api/admin/ops/odds-availability-trend response shape
 // (app/backend/main.py's get_ops_odds_availability_trend).
 export type OddsAvailabilityTrendWeek = {

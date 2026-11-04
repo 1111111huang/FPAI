@@ -8,7 +8,6 @@ import type {
   MatchRecommendationOut,
   OpsFailuresResponse,
   OpsFeatureHealthTrendResponse,
-  OpsOddsAvailabilityResponse,
   OpsOddsAvailabilityTrendResponse,
   OpsPerformanceTrendResponse,
   PickScope,
@@ -315,21 +314,6 @@ export async function getOpsFailures(
   const response = await apiFetch(`/api/admin/ops/failures${query ? `?${query}` : ""}`);
   if (!response.ok) {
     throw new ApiError(`Failed to load ops failures (${response.status})`, response.status);
-  }
-  return response.json();
-}
-
-/** 2026-11-02: /ops dashboard's odds-availability tab. */
-export async function getOpsOddsAvailability(opts: {
-  dateFrom: string;
-  dateTo: string;
-  league?: string;
-}): Promise<OpsOddsAvailabilityResponse> {
-  const params = new URLSearchParams({ date_from: opts.dateFrom, date_to: opts.dateTo });
-  if (opts.league) params.set("league", opts.league);
-  const response = await apiFetch(`/api/admin/ops/odds-availability?${params.toString()}`);
-  if (!response.ok) {
-    throw new ApiError(`Failed to load odds availability (${response.status})`, response.status);
   }
   return response.json();
 }

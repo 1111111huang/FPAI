@@ -10,8 +10,7 @@ type RankedMarket = { market: string; missing: number; total: number; pct: numbe
 
 const AXIS_TICKS = [0, 0.25, 0.5, 0.75, 1];
 
-// High-is-bad threshold scale, as a bar fill (0.5/0.2 -- not the same
-// thresholds as FeatureHealthTab's riskRateColor, which uses 0.25/0.1).
+// High-is-bad threshold scale, as a bar fill (0.5/0.2).
 // Low tier is bg-muted (neutral), not text-good's green: a market missing
 // in <20% of fixtures still isn't "good," just not yet alarming -- green
 // would overstate it.
