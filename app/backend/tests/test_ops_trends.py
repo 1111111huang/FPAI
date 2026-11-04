@@ -71,8 +71,59 @@ def test_aggregate_feature_weeks_computes_mean_and_null_rate_per_feature_per_wee
         ]},
     ]
     result = aggregate_feature_weeks(entries, week_starts=["2026-10-08"])
-    assert result["XOC_HOME"]["2026-10-08"] == FeatureWeekStats(appearances=2, mean=3.0, null_rate=0.0)
-    assert result["DEF_ANCHOR_AWAY"]["2026-10-08"] == FeatureWeekStats(appearances=1, mean=None, null_rate=1.0)
+    assert result["XOC_HOME"]["2026-10-08"] == FeatureWeekStats(
+        appearances=2, mean=3.0, null_rate=0.0, value_min=2.0, value_max=4.0,
+    )
+    assert result["DEF_ANCHOR_AWAY"]["2026-10-08"] == FeatureWeekStats(
+        appearances=1, mean=None, null_rate=1.0, value_min=None, value_max=None,
+    )
+
+
+def test_aggregate_feature_weeks_tracks_min_and_max_across_three_or_more_values():
+    # Direct user request: a raw rolling min/mean/max trendline per feature,
+    # since flag_drifting_features's drift-from-baseline comparison can't
+    # catch a feature that's been constantly wrong the whole window (a flat
+    # min==mean==max line is BUG-096's real signature, see documents/bugs.md).
+    entries = [
+        {"week_start": "2026-10-08", "top_features": [{"name": "MKT_IMPLIED_OVER25", "value": 0.57, "importance": 0.4}]},
+        {"week_start": "2026-10-08", "top_features": [{"name": "MKT_IMPLIED_OVER25", "value": 0.57, "importance": 0.4}]},
+        {"week_start": "2026-10-08", "top_features": [{"name": "MKT_IMPLIED_OVER25", "value": 0.12, "importance": 0.4}]},
+    ]
+    result = aggregate_feature_weeks(entries, week_starts=["2026-10-08"])
+    stats = result["MKT_IMPLIED_OVER25"]["2026-10-08"]
+    assert stats.value_min == 0.12
+    assert stats.value_max == 0.57
+
+
+def test_all_feature_trends_returns_every_feature_unfiltered_sorted_alphabetically():
+    from app.backend.ops_trends import all_feature_trends
+
+    entries = [
+        {"week_start": "2026-10-08", "top_features": [
+            {"name": "ZEBRA_FEATURE", "value": 1.0, "importance": 0.1},
+            {"name": "ALPHA_FEATURE", "value": 5.0, "importance": 0.9},
+        ]},
+        {"week_start": "2026-10-15", "top_features": [
+            {"name": "ALPHA_FEATURE", "value": 7.0, "importance": 0.9},
+        ]},
+    ]
+    week_starts = ["2026-10-08", "2026-10-15"]
+    weekly = aggregate_feature_weeks(entries, week_starts)
+    trends = all_feature_trends(weekly, week_starts)
+
+    # Alphabetical, not magnitude/severity-sorted -- no verdict baked in.
+    assert [t["name"] for t in trends] == ["ALPHA_FEATURE", "ZEBRA_FEATURE"]
+
+    alpha = next(t for t in trends if t["name"] == "ALPHA_FEATURE")
+    assert alpha["weekly"] == [
+        {"week_start": "2026-10-08", "appearances": 1, "mean": 5.0, "min": 5.0, "max": 5.0, "null_rate": 0.0},
+        {"week_start": "2026-10-15", "appearances": 1, "mean": 7.0, "min": 7.0, "max": 7.0, "null_rate": 0.0},
+    ]
+
+    # A feature with zero appearances in a week is simply absent from its
+    # own "weekly" list for that week, not a zero-filled entry.
+    zebra = next(t for t in trends if t["name"] == "ZEBRA_FEATURE")
+    assert [w["week_start"] for w in zebra["weekly"]] == ["2026-10-08"]
 
 
 def test_flag_drifting_features_excludes_a_clearly_low_sample_feature():

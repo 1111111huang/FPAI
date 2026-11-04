@@ -43,6 +43,7 @@ from app.backend.llm_check import check_llm_reachable
 from app.backend.missing_odds_alert import missing_markets_from_cache_odds
 from app.backend.ops_trends import (
     aggregate_feature_weeks,
+    all_feature_trends,
     build_week_records,
     flag_drifting_features,
     recent_week_starts,
@@ -852,6 +853,15 @@ def get_ops_feature_health_trend(
         "week_starts": week_starts,
         "tracked_feature_count": len(weekly),
         "flagged_features": flagged,
+        # 2026-11-04: additive, not consumed by the real /ops dashboard's
+        # FeatureHealthTab (that component only reads flagged_features/
+        # tracked_feature_count, unchanged above) -- raw per-week min/mean/
+        # max for every tracked feature, no drift/magnitude verdict. See
+        # ops_trends.all_feature_trends's own docstring for why: direct
+        # user request, after flag_drifting_features's baseline-vs-recent
+        # comparison was found to structurally miss a feature that's been
+        # constantly wrong since before the tracked window starts.
+        "all_features": all_feature_trends(weekly, week_starts),
     }
 
 

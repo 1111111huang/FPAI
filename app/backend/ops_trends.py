@@ -54,6 +54,17 @@ class FeatureWeekStats:
     appearances: int
     mean: float | None
     null_rate: float
+    # 2026-11-04: added for the standalone ops-dashboard's raw
+    # rolling-min/mean/max-per-week trendline view (direct user request,
+    # after finding flag_drifting_features's baseline-vs-recent comparison
+    # structurally can't catch a feature that's been constantly wrong
+    # since before the tracked window even starts -- see BUG-096's own
+    # notes in documents/bugs.md). Defaulted to None so every existing
+    # construction call (this module's own `aggregate_feature_weeks`
+    # before this change, and every pre-existing test fixture) keeps
+    # working unchanged.
+    value_min: float | None = None
+    value_max: float | None = None
 
 
 def aggregate_feature_weeks(
@@ -73,6 +84,7 @@ def aggregate_feature_weeks(
     # name -> week_start -> running totals
     totals: dict[str, dict[str, dict[str, float]]] = defaultdict(lambda: defaultdict(lambda: {
         "appearances": 0, "null_count": 0, "value_sum": 0.0, "value_count": 0,
+        "value_min": None, "value_max": None,
     }))
     week_set = set(week_starts)
     for entry in entries:
@@ -89,8 +101,11 @@ def aggregate_feature_weeks(
             if value is None:
                 bucket["null_count"] += 1
             else:
-                bucket["value_sum"] += float(value)
+                value = float(value)
+                bucket["value_sum"] += value
                 bucket["value_count"] += 1
+                bucket["value_min"] = value if bucket["value_min"] is None else min(bucket["value_min"], value)
+                bucket["value_max"] = value if bucket["value_max"] is None else max(bucket["value_max"], value)
 
     result: dict[str, dict[str, FeatureWeekStats]] = {}
     for name, by_week in totals.items():
@@ -100,6 +115,7 @@ def aggregate_feature_weeks(
             null_rate = bucket["null_count"] / bucket["appearances"] if bucket["appearances"] else 0.0
             result[name][week_start] = FeatureWeekStats(
                 appearances=bucket["appearances"], mean=mean, null_rate=round(null_rate, 6),
+                value_min=bucket["value_min"], value_max=bucket["value_max"],
             )
     return result
 
@@ -222,6 +238,47 @@ def _feature_category(name: str) -> str:
         if name.startswith(prefix):
             return prefix.rstrip("_").lower()
     return "other"
+
+
+def all_feature_trends(
+    weekly: dict[str, dict[str, FeatureWeekStats]], week_starts: list[str]
+) -> list[dict]:
+    """2026-11-04: raw per-week min/mean/max for EVERY tracked feature, no
+    filtering and no drift/magnitude verdict -- direct user request after
+    finding flag_drifting_features's baseline-vs-recent comparison
+    structurally can't catch a feature that's been constantly wrong since
+    before the tracked window starts (a flat min==mean==max line across
+    every week is exactly BUG-096's real signature, visually obvious on a
+    raw trendline without needing a second heuristic to detect it).
+    Deliberately a separate function from flag_drifting_features rather than
+    a replacement for it -- this file's two established trend endpoints
+    (the real /ops dashboard's FeatureHealthTab) already consume
+    flag_drifting_features's output and must keep working unchanged; this
+    is purely additive, consumed by the standalone ops-dashboard tool only.
+
+    Returns one entry per feature name that appeared at least once anywhere
+    in `weekly`, sorted alphabetically (a neutral order -- no severity score
+    to sort by here, by design): {"name", "category", "weekly":
+    [{"week_start", "appearances", "mean", "min", "max", "null_rate"}, ...]}.
+    A week with zero appearances for that feature is simply omitted from its
+    own "weekly" list (same "absent key means never surfaced, not surfaced-
+    and-null" convention aggregate_feature_weeks itself already uses)."""
+    result: list[dict] = []
+    for name in sorted(weekly.keys()):
+        by_week = weekly[name]
+        result.append({
+            "name": name,
+            "category": _feature_category(name),
+            "weekly": [
+                {
+                    "week_start": w, "appearances": by_week[w].appearances,
+                    "mean": by_week[w].mean, "min": by_week[w].value_min, "max": by_week[w].value_max,
+                    "null_rate": by_week[w].null_rate,
+                }
+                for w in week_starts if w in by_week
+            ],
+        })
+    return result
 
 
 def build_week_records(
