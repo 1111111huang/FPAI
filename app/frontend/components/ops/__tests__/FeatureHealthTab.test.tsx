@@ -1,4 +1,4 @@
-import { render, screen, fireEvent } from "@testing-library/react";
+import { act, render, screen, fireEvent } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
 import { FeatureHealthTab } from "../FeatureHealthTab";
@@ -94,5 +94,18 @@ describe("FeatureHealthTab", () => {
     vi.mocked(getOpsFeatureHealthTrend).mockRejectedValue(new Error("boom"));
     render(<FeatureHealthTab weeks={8} />);
     expect(await screen.findByText("boom")).toBeInTheDocument();
+  });
+
+  it("re-fetches when the weeks prop changes", async () => {
+    vi.mocked(getOpsFeatureHealthTrend).mockResolvedValue({
+      week_starts: ["2026-10-08"], tracked_feature_count: 52,
+      flagged_features: [flaggedFeature()],
+    });
+    const { rerender } = render(<FeatureHealthTab weeks={8} />);
+    await screen.findByText("XOC_HOME");
+    await act(async () => {
+      rerender(<FeatureHealthTab weeks={12} />);
+    });
+    expect(getOpsFeatureHealthTrend).toHaveBeenLastCalledWith(expect.objectContaining({ weeks: 12 }));
   });
 });

@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { act, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
 import { OddsAvailabilityTab } from "../OddsAvailabilityTab";
@@ -78,5 +78,24 @@ describe("OddsAvailabilityTab", () => {
     render(<OddsAvailabilityTab weeks={8} />);
 
     expect(await screen.findByText("boom")).toBeInTheDocument();
+  });
+
+  it("re-fetches when the weeks prop changes", async () => {
+    vi.mocked(getOpsOddsAvailabilityTrend).mockResolvedValue({
+      weeks: [
+        {
+          week_start: "2026-10-08",
+          total_fixtures: 50,
+          by_market: { total_corners: { missing: 40, circuit_open: 30, not_posted: 10 } },
+        },
+      ],
+    });
+
+    const { rerender } = render(<OddsAvailabilityTab weeks={8} />);
+    await screen.findByText("total_corners");
+    await act(async () => {
+      rerender(<OddsAvailabilityTab weeks={12} />);
+    });
+    expect(getOpsOddsAvailabilityTrend).toHaveBeenLastCalledWith(expect.objectContaining({ weeks: 12 }));
   });
 });

@@ -64,6 +64,20 @@ describe("PerformanceTab", () => {
     );
   });
 
+  it("re-fetches when the weeks prop changes", async () => {
+    vi.mocked(getOpsPerformanceTrend).mockResolvedValue({
+      weeks: [{ week_start: "2026-11-05", hit_rate: 0.5, roi: 0.1, bets_placed: 4, total_profit: 20, ending_bankroll: 1020 }],
+      pick_scope: "one_per_match",
+      include_conditional: false,
+    });
+    const { rerender } = render(<PerformanceTab weeks={8} />);
+    await screen.findByText(/50%/);
+    await act(async () => {
+      rerender(<PerformanceTab weeks={12} />);
+    });
+    expect(getOpsPerformanceTrend).toHaveBeenLastCalledWith(expect.objectContaining({ weeks: 12 }));
+  });
+
   it("renders a losing week's negative total_profit with a serious (not good) delta", async () => {
     vi.mocked(getOpsPerformanceTrend).mockResolvedValue({
       weeks: [
