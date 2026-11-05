@@ -131,3 +131,26 @@ Bodø/Glimt) are well-known, regular UCL/UEL participants, so "not found in
 14 days" most likely reflects their domestic league being between
 matchdays, not genuine unavailability — re-check over a longer window
 before treating any of these as a real gap.
+
+## Group/league-phase standings source — resolved
+
+`GET https://www.fotmob.com/api/data/tltable?leagueId=<id>` is a real,
+confirmed-live standings endpoint for UCL/UEL's Swiss-format league phase
+— found after several other plausible fotmob paths returned either `404`
+or a `200` with a `null` body. Response shape: a one-element list; that
+element's `data` key holds `leagueId`/`leagueName`/`legend` (qualification
+zones, each with a `title`, `color`, and the team-index range it covers —
+e.g. "Qualification to 1/8 finals", indices 0-7) and `table.all` (one row
+per team: `played`/`wins`/`draws`/`losses`/`scoresStr`/`goalConDiff`/
+`pts`/`idx`/`qualColor`). 36 rows for both competitions, exactly matching
+the Swiss-format league phase's real field size — this is the structured
+data Section 5's dead-rubber/qualification-scenario detection needs, not
+something to reason about via web search.
+
+Internally this endpoint reports `leagueId=42` for UCL and `leagueId=73`
+for UEL — the commonly-cited-but-unverified public IDs, correctly treated
+with suspicion earlier in this session rather than assumed (the separate
+`/api/data/matches` endpoint uses different, season-specific IDs:
+943230/943229, confirmed live during planning). Both ID pairs are now
+confirmed live, for their respective endpoints — neither was ever guessed
+into the committed code.
