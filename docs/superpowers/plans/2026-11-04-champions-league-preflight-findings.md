@@ -154,3 +154,46 @@ with suspicion earlier in this session rather than assumed (the separate
 943230/943229, confirmed live during planning). Both ID pairs are now
 confirmed live, for their respective endpoints — neither was ever guessed
 into the committed code.
+
+## Consolidated recommendation
+
+Of the real 150-club UCL/UEL opponent pool (since 2026-01-01):
+
+- **37 already in the 11-league universe** (cup-transfer model, free) —
+  and this is a confirmed *undercount*: Task 4 caught Manchester
+  City/United, Nottingham Forest, Atletico Madrid, Athletic Bilbao,
+  Eintracht Frankfurt, and Stade Rennais all missed here due to
+  football-data.co.uk's non-truncation-style abbreviations. The real
+  number is meaningfully higher than 37.
+- **43 reachable via a wider football-data.co.uk country** — real
+  historical training data (several back to 2012), not just a live
+  snapshot, across 15 newly-confirmed countries (Netherlands, Portugal,
+  Belgium, Turkey, Scotland, Greece, Austria, Switzerland, Denmark,
+  Norway, Poland, Russia, Romania, Ireland, Finland).
+- **58 more visible in fotmob's unfiltered payload** — a lighter signal
+  (confirms the club exists and is active, not deep structured history),
+  which is exactly Dixon-Coles's natural home for this tier.
+- **12 not found in a 14-day window** — likely a between-matchdays timing
+  artifact for several well-known regulars (Ferencváros, Dinamo Zagreb,
+  Bodø/Glimt), not confirmed genuine unavailability.
+
+**Answer to "how wide does the Dixon-Coles pool actually need to be"
+(replacing the design spec's abstract "20-30 countries" estimate):** not
+uniformly across all of UEFA. The 15 confirmed football-data.co.uk
+countries plus the 11-league universe already cover a clear majority of
+real training-grade need (at least 80/150 clubs, likely more given the
+confirmed undercount), and fotmob's unfiltered payload is a usable
+secondary signal for most of the remainder. Fewer than 10% of the real
+opponent pool showed no signal at all in this pass, and even that may
+overstate genuine unavailability.
+
+**Standings source: resolved** — `tltable` endpoint, Section "Group/
+league-phase standings source" above.
+
+**Recommendation:** proceed with building the cup-transfer model + widened
+Dixon-Coles fallback for UCL/UEL using the 15 confirmed countries as the
+pool's core, plus fotmob-sourced score-only data for the remainder. Before
+writing real ingestion code, replace this spike's substring-matching
+approximation with `TeamNameMapper`'s actual alias dictionary — the
+Manchester City/Atletico Madrid misses here are exactly the failure mode
+`TeamNameMapper` exists to prevent.

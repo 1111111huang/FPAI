@@ -39,7 +39,7 @@ Zero new API calls — `data/oddspapi_ucl_uel_snapshots/manifest.json` only
 exists on the abandoned branch, not this one, so it's read via `git show`
 rather than copied into this worktree's own tree.
 
-- [ ] **Step 1: Pull the manifest from the abandoned branch (read-only, no new fetch)**
+- [x] **Step 1: Pull the manifest from the abandoned branch (read-only, no new fetch)**
 
 Run:
 ```bash
@@ -47,7 +47,7 @@ git show worktree-llm-only-ucl-uel:data/oddspapi_ucl_uel_snapshots/manifest.json
 ```
 Expected: a JSON file, ~368 top-level fixture entries.
 
-- [ ] **Step 2: Write the extraction script**
+- [x] **Step 2: Write the extraction script**
 
 ```python
 """One-off spike (UCL/UEL pre-flight, 2026-11-04): extract the real set of
@@ -92,14 +92,14 @@ if __name__ == "__main__":
     main()
 ```
 
-- [ ] **Step 3: Run it**
+- [x] **Step 3: Run it**
 
 Run: `python scripts/extract_ucl_uel_club_list.py`
 Expected: 368 fixtures, 150 unique clubs (189 UCL-side + 179 UEL-side
 fixture-participations, per the already-recorded backfill counts, with
 overlap since some clubs play in both competitions).
 
-- [ ] **Step 4: Record findings and commit**
+- [x] **Step 4: Record findings and commit**
 
 Create `docs/superpowers/plans/2026-11-04-champions-league-preflight-findings.md`:
 
@@ -136,7 +136,7 @@ Free, unauthenticated. Checks real country pages by status code, same
 the domestic-cup design's 5 second divisions — extended here to a wider
 candidate list, since UCL/UEL draws from far more countries than either.
 
-- [ ] **Step 1: Write the discovery script**
+- [x] **Step 1: Write the discovery script**
 
 ```python
 """One-off spike (UCL/UEL pre-flight, 2026-11-04): check which additional
@@ -184,7 +184,7 @@ if __name__ == "__main__":
     main()
 ```
 
-- [ ] **Step 2: Run it**
+- [x] **Step 2: Run it**
 
 Run: `python scripts/discover_football_data_country_coverage.py`
 Expected: most candidates found (football-data.co.uk covers most of
@@ -195,7 +195,7 @@ poland, russia, romania, ireland, finland; not found = ukraine, croatia,
 serbia, czechrepublic (404s — israel/cyprus not yet checked at the time of
 spec-writing, confirm in this run).
 
-- [ ] **Step 3: Record findings and commit**
+- [x] **Step 3: Record findings and commit**
 
 Append to the findings doc:
 
@@ -253,7 +253,7 @@ check which of Task 1's 150 clubs appear in it (normalized substring match
 production-grade team-name resolution, which is `TeamNameMapper`'s job
 when real ingestion code is written).
 
-- [ ] **Step 1: Write the bucketing script**
+- [x] **Step 1: Write the bucketing script**
 
 ```python
 """One-off spike (UCL/UEL pre-flight, 2026-11-04): bucket every club from
@@ -350,7 +350,7 @@ if __name__ == "__main__":
     main()
 ```
 
-- [ ] **Step 2: Run it**
+- [x] **Step 2: Run it**
 
 Run: `python scripts/bucket_ucl_uel_clubs_by_coverage.py`
 Expected: a meaningful fraction of the 150 clubs matched to a
@@ -363,7 +363,7 @@ and may produce a few false positives on short/common name fragments —
 treat this as a directional bucket count, not a precise final list; a real
 ingestion pass would use `TeamNameMapper` for anything load-bearing.
 
-- [ ] **Step 3: Record findings and commit**
+- [x] **Step 3: Record findings and commit**
 
 Append to the findings doc, with the real bucket counts and the full
 `unresolved` list from this run.
@@ -389,7 +389,7 @@ payload has seen them in their own domestic league recently — same
 mechanism as the domestic-cup spike's Task 7, applied to specific club
 names instead of competition names.
 
-- [ ] **Step 1: Write the check script**
+- [x] **Step 1: Write the check script**
 
 ```python
 """One-off spike (UCL/UEL pre-flight, 2026-11-04): for clubs Task 3 could
@@ -452,7 +452,7 @@ if __name__ == "__main__":
     main()
 ```
 
-- [ ] **Step 2: Run it**
+- [x] **Step 2: Run it**
 
 Run: `python scripts/check_fotmob_unresolved_ucl_uel_clubs.py`
 Expected: some fraction found (fotmob's unfiltered payload is broad), a
@@ -461,7 +461,7 @@ no-coverage candidates for this pass (true no-coverage, or their domestic
 league simply didn't play in this window; note the caveat either way, same
 as the domestic-cup spike's equivalent finding).
 
-- [ ] **Step 3: Record findings and commit**
+- [x] **Step 3: Record findings and commit**
 
 Append final counts and the genuinely-unresolved club list to the findings
 doc.
@@ -492,7 +492,7 @@ responds `200` but returns a `null` body regardless of extra params tried
 (`tab=table`, `season=...`) — the endpoint exists but doesn't resolve this
 ID the way `/api/data/matches` does. `/api/leaguedetails?id=943230` 404s.
 
-- [ ] **Step 1: Write a broader discovery script**
+- [x] **Step 1: Write a broader discovery script**
 
 ```python
 """One-off spike (UCL/UEL pre-flight, 2026-11-04): discover a working
@@ -549,7 +549,7 @@ if __name__ == "__main__":
     main()
 ```
 
-- [ ] **Step 2: Run it, and manually extend the candidate list if none hit**
+- [x] **Step 2: Run it, and manually extend the candidate list if none hit**
 
 Run: `python scripts/discover_fotmob_standings_endpoint.py`
 If none of the candidates return real data: open fotmob.com/leagues/943230
@@ -559,7 +559,7 @@ request shows, not a further guess. Record the real working URL and its
 real response shape (which field holds the group/league-phase standings
 table) once found.
 
-- [ ] **Step 3: Record findings and commit**
+- [x] **Step 3: Record findings and commit**
 
 Append to the findings doc: either the confirmed working endpoint + its
 real shape, or an honest "not resolved in this pass" if no candidate
@@ -580,7 +580,7 @@ git commit -m "spike: discover (or document non-discovery of) a UCL/UEL standing
 - Modify: `docs/superpowers/plans/2026-11-04-champions-league-preflight-findings.md`
 - Modify: `docs/superpowers/specs/2026-11-04-champions-league-recommendations-design.md`
 
-- [ ] **Step 1: Write the consolidated recommendation**
+- [x] **Step 1: Write the consolidated recommendation**
 
 Append a final section to the findings doc covering: what fraction of the
 150-club real UCL/UEL opponent pool is reachable via football-data.co.uk
@@ -590,7 +590,7 @@ to "how wide does the Dixon-Coles pool actually need to be," replacing the
 abstract "20-30 countries" estimate in the design spec with real numbers.
 Also state plainly whether Task 5 found a usable standings source or not.
 
-- [ ] **Step 2: Update the design spec's Section 8 open items**
+- [x] **Step 2: Update the design spec's Section 8 open items**
 
 In `docs/superpowers/specs/2026-11-04-champions-league-recommendations-design.md`,
 replace Section 8's "Dixon-Coles pool breadth" and "Group/league-phase
@@ -602,7 +602,7 @@ standings source" bullets with a pointer to the real findings:
 for the real club-coverage breakdown and standings-source discovery result.
 ```
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add docs/superpowers/plans/2026-11-04-champions-league-preflight-findings.md \

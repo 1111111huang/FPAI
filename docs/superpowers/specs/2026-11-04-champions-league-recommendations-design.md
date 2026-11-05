@@ -127,17 +127,24 @@ could pass trivially at zero volume again if not made explicit.
 
 ## 8. Open items (flagged, not resolved here)
 
-- **Dixon-Coles pool breadth for the wider UEFA country set** — needs its
-  own pre-flight data-availability spike, same shape as
-  `docs/superpowers/plans/2026-11-04-domestic-cup-preflight-spike.md`, before
-  committing to which countries' score-only data is actually reachable.
+- **Dixon-Coles pool breadth for the wider UEFA country set — resolved
+  2026-11-04.** See
+  `docs/superpowers/plans/2026-11-04-champions-league-preflight-findings.md`:
+  15 additional countries confirmed on football-data.co.uk beyond the
+  11-league universe, covering a clear majority of the real 150-club
+  UCL/UEL opponent pool; fotmob's unfiltered payload covers most of the
+  remainder as a lighter secondary signal. Replaces the abstract "20-30
+  countries" estimate with a real, data-backed answer.
 - **Live UCL/UEL odds-serving needs to be built fresh** (Section 3, item 1)
   — confirmed it doesn't exist yet anywhere in the abandoned branch, not a
   bug to fix. Must use the live `/v4/odds` response shape
   (`bookmakerOdds`/dict) confirmed during the domestic-cup spike, not the
   historical one.
-- **Group/league-phase standings source** — not yet identified; needed for
-  Section 5's stakes/dead-rubber detection.
+- **Group/league-phase standings source — resolved 2026-11-04.** See the
+  same findings doc: `GET /api/data/tltable?leagueId=<id>` (fotmob),
+  confirmed live for both competitions (36 teams each, matching the
+  Swiss-format league phase exactly), with qualification-zone and per-team
+  standings data needed for Section 5's stakes/dead-rubber detection.
 
 ## 9. Testing
 
