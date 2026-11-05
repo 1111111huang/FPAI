@@ -1,0 +1,27 @@
+{
+  "found": [
+    "netherlands",
+    "portugal",
+    "belgium",
+    "turkey",
+    "scotland",
+    "greece",
+    "austria",
+    "switzerland",
+    "denmark",
+    "norway",
+    "poland",
+    "russia",
+    "romania",
+    "ireland",
+    "finland"
+  ],
+  "not_found": [
+    "ukraine",
+    "croatia",
+    "serbia",
+    "czechrepublic",
+    "israel",
+    "cyprus"
+  ]
+}
