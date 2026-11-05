@@ -507,6 +507,12 @@ have real 1X2 odds. If the oldest sample lacks odds but the newest has them,
 that's a real cutoff date, same shape as UCL/UEL's confirmed 2026-01-01 —
 narrow it down with a couple more sampled fixtures between the two dates if
 the gap matters for deciding whether there's enough training history.
+Live-verified 2026-11-04: every cup's oldest (2024) sample returned 404,
+consistent with the known 2026-01-01 cutoff. 4/6 cups' newest sample (FA
+Cup, Carabao Cup, DFB-Pokal, Coppa Italia) confirmed real 1X2 odds; Copa del
+Rey and Coupe de France's single newest sample came back empty — not
+conclusive on one sample each, re-check with a wider sample before treating
+as "no coverage."
 
 - [ ] **Step 4: Record findings and commit**
 
@@ -517,12 +523,12 @@ Append to the findings doc:
 
 | Cup | Finished fixtures (statusId=2) | Oldest sample has odds | Newest sample has odds |
 |---|---|---|---|
-| FA Cup | <fill in> | <fill in> | <fill in> |
-| Carabao Cup | <fill in> | <fill in> | <fill in> |
-| Copa del Rey | <fill in> | <fill in> | <fill in> |
-| DFB-Pokal | <fill in> | <fill in> | <fill in> |
-| Coupe de France | <fill in> | <fill in> | <fill in> |
-| Coppa Italia | <fill in> | <fill in> | <fill in> |
+| FA Cup | 571 | False (2024, pre-cutoff) | True |
+| Carabao Cup | 235 | False (2024, pre-cutoff) | True |
+| Copa del Rey | 323 | False (2024, pre-cutoff) | False (one sample, not conclusive) |
+| DFB-Pokal | 148 | False (2024, pre-cutoff) | True |
+| Coupe de France | 411 | False (2024, pre-cutoff) | False (one sample, not conclusive) |
+| Coppa Italia | 98 | False (2024, pre-cutoff) | True |
 ```
 
 ```bash
