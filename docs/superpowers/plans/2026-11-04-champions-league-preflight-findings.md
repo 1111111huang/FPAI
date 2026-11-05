@@ -98,3 +98,36 @@ back to 2012). 70 clubs (67 from the script + 3 corrected) remain
 unresolved — candidates for Task 4's fotmob check, including Glasgow
 Rangers, Lillestroem SK, and Inter Club de Escaldes despite the script's
 raw output.
+
+## FotMob raw payload coverage for unresolved clubs (last 14 days)
+
+58/70 previously-unresolved clubs found in fotmob's unfiltered payload.
+The 3 manually-corrected clubs from Task 3 all resolved here: Glasgow
+Rangers and Inter Club de Escaldes found; Lillestroem SK not found in this
+14-day window (worth a longer window before concluding no coverage).
+
+**Important miscount discovered here, affecting Task 3's numbers:**
+several clubs "found" in this check are ones that should already belong to
+an *earlier* bucket (11-league universe or a wider football-data.co.uk
+country) — Manchester City, Manchester United, Nottingham Forest
+(England), Atletico Madrid, Athletic Bilbao (Spain), Eintracht Frankfurt
+(Germany), Stade Rennais (France), Sporting CP (Portugal, a wider-country
+match). They were missed in Task 3 because football-data.co.uk abbreviates
+names in ways that aren't simple truncations ("Man City" vs "Manchester
+City", "Nott'm Forest" vs "Nottingham Forest") — a substring check can't
+catch a different short-form word. **This means Task 3's "already
+covered" counts are undercounts, not overcounts — the real new-coverage
+need is smaller than the raw numbers suggest.** Safe direction of error
+for a pre-flight spike (overestimates remaining work, doesn't understate
+data risk), but a reminder that real ingestion code must use
+`TeamNameMapper`'s actual alias dictionary, not this spike's substring
+heuristic, which was never intended to replace it.
+
+12 clubs genuinely not found in 14 days: Bodoe/Glimt, Ferencvarosi
+Budapest, Floriana FC, GNK Dinamo Zagreb, Kuopion Palloseura, Lillestroem
+SK, MSK Zilina, Maxline Vitebsk, Mjallby AIF, Qarabag FK, Tallinna FC
+Flora, WKW ETO FC Gyor — some of these (Ferencváros, Dinamo Zagreb,
+Bodø/Glimt) are well-known, regular UCL/UEL participants, so "not found in
+14 days" most likely reflects their domestic league being between
+matchdays, not genuine unavailability — re-check over a longer window
+before treating any of these as a real gap.
