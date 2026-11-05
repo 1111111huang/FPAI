@@ -161,3 +161,30 @@ already used for the 6 modeled leagues.
 This substantially de-risks the training-data question for Option A (the
 cup-transfer model) — decades of real results+odds already exist for all
 5 second divisions, not just a current-season snapshot.
+
+## FotMob raw payload coverage (last 7 days, 2026-11-04)
+
+All 5 second divisions and 4/6 cups found in fotmob's unfiltered payload
+over the last week. Loose name fragments also pulled in unrelated noise
+(e.g. "Championship" matched several unrelated leagues worldwide; "DFB
+Pokal" fragment matched a Danish cup and the German women's competition,
+not the men's) — the real competition was still clearly identifiable among
+the matches where found.
+
+| Competition | Found in fotmob's unfiltered payload |
+|---|---|
+| Championship | True |
+| Segunda | True ("Segunda Division") |
+| Serie B | True |
+| 2. Bundesliga | True |
+| Ligue 2 | True |
+| FA Cup | True |
+| Carabao Cup | True ("EFL Cup", "League Cup") |
+| Copa del Rey | True |
+| DFB-Pokal | False this week (women's comp + an unrelated Danish cup matched, not men's) |
+| Coupe de France | False this week |
+| Coppa Italia | False this week |
+
+Coupe de France and Coppa Italia's absence is consistent with their
+OddsPapi-confirmed next fixtures being 1-4 weeks out (see live-odds
+section above) — read as "no round played this week," not "unavailable."

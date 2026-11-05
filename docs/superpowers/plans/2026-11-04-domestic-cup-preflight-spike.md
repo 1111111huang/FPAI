@@ -982,7 +982,13 @@ Run: `python scripts/check_fotmob_lower_tier_coverage.py`
 Expected: `FOUND` or `NOT FOUND` per competition, based on real matches in the
 last 7 days. A cup showing `NOT FOUND` may simply mean no round was played
 that week — note this caveat rather than treating it as a final answer if
-any domestic cup isn't currently mid-round.
+any domestic cup isn't currently mid-round. Live-verified 2026-11-04: all 5
+second divisions and 4/6 cups found (loose name fragments also pulled in
+unrelated noise for CHAMPIONSHIP/CARABAO_CUP/DFB_POKAL — the real
+competition was still clearly present among the matches for each). Coupe
+de France and Coppa Italia weren't found this week, consistent with their
+OddsPapi-confirmed next fixtures being 1-4 weeks out (Task 2) — read as
+"no round this week," not "unavailable."
 
 - [ ] **Step 3: Record findings and commit**
 
@@ -993,17 +999,17 @@ Append to the findings doc:
 
 | Competition | Found in fotmob's unfiltered payload |
 |---|---|
-| Championship | <fill in> |
-| Segunda | <fill in> |
-| Serie B | <fill in> |
-| 2. Bundesliga | <fill in> |
-| Ligue 2 | <fill in> |
-| FA Cup | <fill in> |
-| Carabao Cup | <fill in> |
-| Copa del Rey | <fill in> |
-| DFB-Pokal | <fill in> |
-| Coupe de France | <fill in> |
-| Coppa Italia | <fill in> |
+| Championship | True ("Championship", among unrelated same-named leagues) |
+| Segunda | True ("Segunda Division") |
+| Serie B | True |
+| 2. Bundesliga | True |
+| Ligue 2 | True |
+| FA Cup | True |
+| Carabao Cup | True ("EFL Cup", "League Cup") |
+| Copa del Rey | True |
+| DFB-Pokal | False this week (women's + an unrelated Danish cup matched, not the men's comp) |
+| Coupe de France | False this week (consistent with next fixture being 10 days out) |
+| Coppa Italia | False this week (consistent with next fixture being ~4 weeks out) |
 ```
 
 ```bash
