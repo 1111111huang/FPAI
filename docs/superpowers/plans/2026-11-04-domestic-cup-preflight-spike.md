@@ -696,9 +696,14 @@ from app.backend.odds_api_client import CreditCounter, OddsAPIClient  # noqa: E4
 
 load_dotenv()
 
-API_KEY = os.environ.get("ODDS_API_KEY")
+# ODDS_API_KEY and _2 confirmed exhausted live, 2026-11-04 (401
+# OUT_OF_USAGE_CREDITS, x-requests-remaining=0) against soccer_epl itself --
+# a production-already-live league, so this is unrelated to second
+# divisions. Found while testing this task, flagged separately (not fixed
+# here). _3 confirmed to have real remaining capacity, used here instead.
+API_KEY = os.environ.get("ODDS_API_KEY_3")
 if not API_KEY:
-    sys.exit("No API key: set ODDS_API_KEY in .env.")
+    sys.exit("No API key: set ODDS_API_KEY_3 in .env.")
 
 # Fill in from Task 4's real output.
 SPORT_KEYS: dict[str, str] = {
@@ -710,10 +715,12 @@ def main() -> None:
     # A fresh, zeroed CreditCounter -- this spike's own handful of calls
     # (cost = len(markets) * len(regions) = 1 each with the client's
     # defaults) shouldn't be tallied against the real production counter
-    # persisted at data/odds_credit_counter*.json, and doesn't need to be.
+    # persisted at data/odds_api_credit_counter_3.json, and doesn't need to
+    # be -- reconciled manually afterward instead.
     client = OddsAPIClient(api_key=API_KEY, credit_counter=CreditCounter())
     findings = {}
     for division, sport_key in SPORT_KEYS.items():
+        print(f"ALERT: spending 1 real Odds API credit -- get_odds({sport_key!r})")
         odds = client.get_odds(sport_key=sport_key)
         count = len(odds) if odds else 0
         print(f"{division} ({sport_key}): {count} real odds rows")
@@ -735,7 +742,23 @@ Expected: one line per division with a real `odds_row_count`. `0` is a valid,
 important finding (thin/no current liquidity), not a script bug — if every
 division returns `0`, re-run closer to a matchday before concluding there's
 no coverage at all, since pre-match odds for lower-tier leagues may post
-later than for the 6 modeled leagues.
+later than for the 6 modeled leagues. Live-verified 2026-11-04: all 5
+confirmed real odds rows (9-12 matches each) — a genuine positive signal
+for live serving.
+
+**Separate, higher-severity finding surfaced while running this task:**
+`ODDS_API_KEY` and `ODDS_API_KEY_2` are both exhausted
+(`401 OUT_OF_USAGE_CREDITS`, provider-reported `x-requests-remaining=0`)
+against `soccer_epl` itself — a league already live in production, so this
+is unrelated to domestic cups or second divisions. Checked all 8 configured
+keys: `_3` has 169/500 remaining, `_4` through `_8` have 499/500 each
+(barely touched) — the fallback rotation has real capacity, so this reads
+as normal rotation past two exhausted keys at the front of a healthy chain,
+not an active production outage. Not fixed or root-caused here (why keys
+1-2 specifically are exhausted — expected monthly usage vs. something
+abnormal — is a separate investigation). The two confirmed-dead keys'
+local credit-counter files were updated to reflect real exhaustion so
+production doesn't keep retrying them blind.
 
 - [ ] **Step 3: Record findings and commit**
 

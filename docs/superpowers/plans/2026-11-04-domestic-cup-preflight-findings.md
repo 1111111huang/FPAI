@@ -113,3 +113,33 @@ source for that cup alongside OddsPapi, not pursued further here.
 | Serie B | soccer_italy_serie_b | Serie B - Italy | True |
 | 2. Bundesliga | soccer_germany_bundesliga2 | Bundesliga 2 - Germany | True |
 | Ligue 2 | soccer_france_ligue_two | Ligue 2 - France | True |
+
+## The Odds API live odds coverage (second divisions)
+
+All 5 confirmed real live odds rows via production's own `OddsAPIClient`:
+
+| Division | sport_key | Real odds rows |
+|---|---|---|
+| Championship | soccer_efl_champ | 12 |
+| Segunda División | soccer_spain_segunda_division | 11 |
+| Serie B | soccer_italy_serie_b | 10 |
+| 2. Bundesliga | soccer_germany_bundesliga2 | 9 |
+| Ligue 2 | soccer_france_ligue_two | 9 |
+
+**Separate, higher-severity finding surfaced while running this check, out
+of scope for domestic cups entirely:** `ODDS_API_KEY` and `ODDS_API_KEY_2`
+are both exhausted (`401 OUT_OF_USAGE_CREDITS`, provider-reported
+`x-requests-remaining=0`), confirmed against `soccer_epl` itself — already
+live in production, so not a second-division-specific issue. All 8
+configured keys checked: `_3` has 169/500 remaining, `_4`-`_8` have 499/500
+each. The fallback rotation has real capacity — reads as normal rotation
+past two exhausted keys at the front of a healthy chain, not confirmed as
+an active outage, but **not root-caused here** (expected monthly usage vs.
+something abnormal is a separate investigation). The two dead keys' local
+credit-counter files (`data/odds_api_credit_counter.json`,
+`_2.json`) were updated to reflect real exhaustion; `_3` through `_8`'s
+counters were **not** reconciled — this session is isolated in a git
+worktree and the harness blocks writing to the shared checkout's files from
+inside it. Real provider-reported usage for the record, to reconcile
+manually or on next merge: `_3`: 331 used / 169 remaining; `_4`-`_8`: 1 used
+each (from this session's own test calls) / 499 remaining each.
