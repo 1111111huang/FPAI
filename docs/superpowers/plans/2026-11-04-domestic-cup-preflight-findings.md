@@ -96,3 +96,20 @@ window — a real training-data foundation exists for most of this scope.
 Copa del Rey and Coupe de France's single newest-sample check came back
 empty; worth a wider sample before concluding no coverage, same caveat as
 the live-odds section above.
+
+## The Odds API sport_keys (second divisions)
+
+One real naming miss caught while running this: matching on "segunda"
+alone found nothing — the real title is "La Liga 2 - Spain" (key
+`soccer_spain_segunda_division`), confirmed live, 2026-11-04. All 5 resolved
+to a single unambiguous key once corrected. Incidental finding: The Odds
+API also carries `soccer_spain_copa_del_rey` — a second potential live-odds
+source for that cup alongside OddsPapi, not pursued further here.
+
+| Division | sport_key | Real title | active |
+|---|---|---|---|
+| Championship | soccer_efl_champ | Championship | True |
+| Segunda División | soccer_spain_segunda_division | La Liga 2 - Spain | True |
+| Serie B | soccer_italy_serie_b | Serie B - Italy | True |
+| 2. Bundesliga | soccer_germany_bundesliga2 | Bundesliga 2 - Germany | True |
+| Ligue 2 | soccer_france_ligue_two | Ligue 2 - France | True |

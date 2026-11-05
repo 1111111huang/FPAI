@@ -581,7 +581,11 @@ BASE_URL = "https://api.the-odds-api.com"
 # listing below -- The Odds API's own key naming isn't known in advance.
 DIVISION_NAME_FRAGMENTS = {
     "CHAMPIONSHIP": ["championship"],
-    "SEGUNDA": ["segunda"],
+    # "segunda" alone matches nothing live -- the real title is
+    # "La Liga 2 - Spain" (key soccer_spain_segunda_division), confirmed
+    # 2026-11-04. Both fragments kept so the script is self-explanatory
+    # about why.
+    "SEGUNDA": ["segunda", "la liga 2"],
     "SERIE_B": ["serie b"],
     "BUNDESLIGA_2": ["bundesliga"],  # must disambiguate from top-flight D1 + Austria, see Step 2
     "LIGUE_2": ["ligue 2"],
@@ -629,6 +633,10 @@ Expected: `BUNDESLIGA_2` prints multiple candidates (at minimum
 `soccer_germany_bundesliga` (top flight, already D1's key — exclude) and
 `soccer_germany_bundesliga2`). Pick the one whose real `title` says
 "2. Bundesliga" / "Bundesliga 2 - Germany", not the top-flight one.
+Live-verified 2026-11-04: all 5 resolved to a single unambiguous key.
+Incidental finding: The Odds API also carries `soccer_spain_copa_del_rey` —
+a second potential live-odds source for that cup, alongside OddsPapi — not
+pursued further here, just noted.
 
 - [ ] **Step 3: Record findings**
 
@@ -639,11 +647,11 @@ Append to the findings doc:
 
 | Division | sport_key | Real title | active |
 |---|---|---|---|
-| Championship | <fill in> | <fill in> | <fill in> |
-| Segunda División | <fill in> | <fill in> | <fill in> |
-| Serie B | <fill in> | <fill in> | <fill in> |
-| 2. Bundesliga | <fill in> | <fill in> | <fill in> |
-| Ligue 2 | <fill in> | <fill in> | <fill in> |
+| Championship | soccer_efl_champ | Championship | True |
+| Segunda División | soccer_spain_segunda_division | La Liga 2 - Spain | True |
+| Serie B | soccer_italy_serie_b | Serie B - Italy | True |
+| 2. Bundesliga | soccer_germany_bundesliga2 | Bundesliga 2 - Germany | True |
+| Ligue 2 | soccer_france_ligue_two | Ligue 2 - France | True |
 ```
 
 - [ ] **Step 4: Commit**
