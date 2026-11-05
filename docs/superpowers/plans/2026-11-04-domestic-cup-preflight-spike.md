@@ -263,8 +263,12 @@ def _last_price(outcomes: dict, outcome_id: str) -> float | None:
     outcome = outcomes.get(outcome_id)
     if not outcome:
         return None
-    ticks = outcome.get("players", {}).get("0", [])
-    return ticks[-1].get("price") if ticks else None
+    # "players"->"0" is a single price dict in the real payload (confirmed
+    # live, 2026-11-04: {"active": true, ..., "price": 9.86}), not a list of
+    # historical "ticks" as production's own _last_price
+    # (app/backend/oddspapi_client.py) assumes.
+    player = outcome.get("players", {}).get("0", {})
+    return player.get("price")
 
 
 def main() -> None:
@@ -282,14 +286,29 @@ def main() -> None:
             findings[cup] = {"fixture_count": 0, "has_1x2_odds": None}
             continue
 
-        sample = fixtures[0]
+        # /v4/fixtures does not return results sorted by date -- picking
+        # fixtures[0] directly can land on an arbitrary far-future fixture
+        # with no odds posted yet, which looks like "no coverage" but is
+        # really just "too early for this specific match." Sort by
+        # startTime and use the nearest one instead.
+        fixtures_sorted = sorted(fixtures, key=lambda f: f.get("startTime", "9999"))
+        sample = fixtures_sorted[0]
         fixture_id = str(sample["fixtureId"])
+        print(f"  nearest fixture start_time={sample.get('startTime')}")
+        print(f"  ALERT: spending 1 real OddsPapi credit -- /v4/odds for fixture {fixture_id}")
         time.sleep(5.0)  # same cooldown convention as pull_oddspapi_btts_corners.py
         odds_status, odds_payload = _get("/v4/odds", fixtureId=fixture_id, bookmakers="pinnacle")
         outcomes = {}
         if odds_status == 200 and isinstance(odds_payload, dict):
+            # The real top-level key is "bookmakerOdds", not "bookmakers" --
+            # confirmed live, 2026-11-04, against a real payload where
+            # market 101 (match-winner) had real prices sitting under
+            # "bookmakerOdds" and nothing under "bookmakers". The same wrong
+            # key also exists in production (app/backend/oddspapi_client.py's
+            # _parse_corners_odds) and two other scripts -- out of scope to
+            # fix as part of this plan, flagged separately.
             outcomes = (
-                odds_payload.get("bookmakers", {}).get("pinnacle", {})
+                odds_payload.get("bookmakerOdds", {}).get("pinnacle", {})
                 .get("markets", {}).get(MATCH_WINNER_MARKET_ID, {}).get("outcomes", {})
             )
         home = _last_price(outcomes, MATCH_WINNER_OUTCOME_HOME)
@@ -313,6 +332,20 @@ if __name__ == "__main__":
 Run: `python scripts/check_domestic_cup_odds_coverage.py`
 Expected: one block per cup showing `fixture_count` and `has_1x2_odds`
 (`True`/`False`/`None` if there were no upcoming fixtures to check at all).
+Live-verified 2026-11-04: two real bugs caught and fixed while running
+this (both documented inline above) — the response's real top-level key is
+`bookmakerOdds` not `bookmakers`, and `players["0"]` is a single price dict
+not a list of ticks. Both bugs also exist in production code
+(`app/backend/oddspapi_client.py`'s `_parse_corners_odds`), masking each
+other there (the wrong key always produced an empty `outcomes` dict, so the
+list-indexing bug was never reached with real data) — flagged separately,
+not fixed as part of this plan. Real result: FA Cup and Carabao Cup
+confirmed real 1X2 odds on their nearest fixture; Copa del Rey, DFB-Pokal,
+Coupe de France, and Coppa Italia came back with no price posted yet on a
+single-sample check (Copa del Rey's "nearest" fixture under `statusId=0`
+had a start time a month in the past — likely a postponed/rescheduled match
+still flagged pre-game, a data-quality wrinkle for later ingestion work, not
+resolved here).
 
 - [ ] **Step 4: Append real findings to the findings doc**
 
