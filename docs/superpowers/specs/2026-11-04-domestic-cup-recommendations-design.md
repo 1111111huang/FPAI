@@ -109,6 +109,19 @@ liquidity is an open unknown — if it's thin, the no-odds abstain path fires
 constantly regardless of model quality, and that's worth knowing before the
 onboarding work, not after.
 
+**Resolved 2026-11-04:** see
+`docs/superpowers/plans/2026-11-04-domestic-cup-preflight-findings.md` for
+the live-verified results. Short version: all 5 second divisions are a full
+go (decades of training history on football-data.co.uk, confirmed live
+odds, confirmed fotmob visibility — no caveats). 4 of 6 cups are a full go;
+Copa del Rey and Coupe de France need a second, wider odds sample closer to
+their next fixture before their coverage is confident (not a block, both
+have real fixture schedules and finished-match history). Two unrelated
+production findings surfaced during this check — a likely-broken live
+corners-odds parser in `app/backend/oddspapi_client.py`, and two exhausted
+(but non-blocking, given a healthy fallback chain) Odds API keys — flagged
+in the findings doc, not fixed as part of this spec or its pre-flight plan.
+
 ## 5. Edge computation
 
 **Cup-transfer model:** a dedicated model (not shared with any league's

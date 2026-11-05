@@ -57,7 +57,7 @@ cup-transfer model specifically.
 - Create: `scripts/discover_domestic_cup_tournament_ids.py`
 - Create: `docs/superpowers/plans/2026-11-04-domestic-cup-preflight-findings.md`
 
-- [ ] **Step 1: Write the discovery script**
+- [x] **Step 1: Write the discovery script**
 
 ```python
 """One-off spike (domestic cup pre-flight, 2026-11-04): discover OddsPapi
@@ -137,7 +137,7 @@ if __name__ == "__main__":
     main()
 ```
 
-- [ ] **Step 2: Run it against the live API**
+- [x] **Step 2: Run it against the live API**
 
 Run: `python scripts/discover_domestic_cup_tournament_ids.py`
 Expected: prints one block per cup with `id=<int> name='<real name>'
@@ -149,7 +149,7 @@ category was added as a filter (name alone matched 14 "FA Cup"-named
 tournaments across different countries) — FA Cup=19, EFL Cup=21,
 Copa del Rey=329, DFB Pokal=217, Coupe de France=335, Coppa Italia=328.
 
-- [ ] **Step 3: Record findings**
+- [x] **Step 3: Record findings**
 
 Create `docs/superpowers/plans/2026-11-04-domestic-cup-preflight-findings.md`
 with this starting content (fill in the real `id=`/`name=` values or
@@ -173,7 +173,7 @@ showed, not an assumption.
 | Coppa Italia | <fill in> | <fill in> |
 ```
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add scripts/discover_domestic_cup_tournament_ids.py \
@@ -194,7 +194,7 @@ credits, against the shared 250/month free-tier budget already partly used
 by the UCL/UEL historical backfill and the live BTTS/corners pull). Check
 the current balance first so this can't accidentally blow the budget.
 
-- [ ] **Step 1: Check current OddsPapi credit usage before spending more**
+- [x] **Step 1: Check current OddsPapi credit usage before spending more**
 
 Run:
 ```bash
@@ -204,7 +204,7 @@ Expected: JSON with a `credits_used`/similar field, or the fallback message.
 If `credits_used` is within ~10 credits of 250, stop here and flag it in the
 findings doc instead of spending more — this task only needs 6.
 
-- [ ] **Step 2: Write the coverage-check script**
+- [x] **Step 2: Write the coverage-check script**
 
 ```python
 """One-off spike (domestic cup pre-flight, 2026-11-04): for each domestic
@@ -327,7 +327,7 @@ if __name__ == "__main__":
     main()
 ```
 
-- [ ] **Step 3: Fill in `TOURNAMENT_IDS` from Task 1's real output, then run**
+- [x] **Step 3: Fill in `TOURNAMENT_IDS` from Task 1's real output, then run**
 
 Run: `python scripts/check_domestic_cup_odds_coverage.py`
 Expected: one block per cup showing `fixture_count` and `has_1x2_odds`
@@ -347,7 +347,7 @@ had a start time a month in the past — likely a postponed/rescheduled match
 still flagged pre-game, a data-quality wrinkle for later ingestion work, not
 resolved here).
 
-- [ ] **Step 4: Append real findings to the findings doc**
+- [x] **Step 4: Append real findings to the findings doc**
 
 Add to `docs/superpowers/plans/2026-11-04-domestic-cup-preflight-findings.md`:
 
@@ -364,7 +364,7 @@ Add to `docs/superpowers/plans/2026-11-04-domestic-cup-preflight-findings.md`:
 | Coppa Italia | <fill in> | <fill in> |
 ```
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add scripts/check_domestic_cup_odds_coverage.py \
@@ -387,14 +387,14 @@ historical endpoint (`/v4/historical-odds`, fixture-ID-based), confirmed
 live for UCL/UEL with a 2026-01-01 cutoff — that cutoff is specific to
 UCL/UEL and must not be assumed for the 6 domestic cups without checking.
 
-- [ ] **Step 1: Re-check current OddsPapi credit usage**
+- [x] **Step 1: Re-check current OddsPapi credit usage**
 
 Run: `cat data/oddspapi_credit_counter.json 2>/dev/null || echo "no counter file yet -- 0 used"`
 Expected: confirm there's budget left after Task 2's spend before this task
 spends more (one `/v4/historical-odds` call per cup with a finished fixture
 = up to 6 more credits).
 
-- [ ] **Step 2: Write the historical-coverage script**
+- [x] **Step 2: Write the historical-coverage script**
 
 ```python
 """One-off spike (domestic cup pre-flight, 2026-11-04): check whether
@@ -499,7 +499,7 @@ if __name__ == "__main__":
     main()
 ```
 
-- [ ] **Step 3: Fill in `TOURNAMENT_IDS` from Task 1's real output, then run**
+- [x] **Step 3: Fill in `TOURNAMENT_IDS` from Task 1's real output, then run**
 
 Run: `python scripts/check_domestic_cup_historical_odds.py`
 Expected: per cup, whether the oldest and newest finished fixtures sampled
@@ -514,7 +514,7 @@ Rey and Coupe de France's single newest sample came back empty — not
 conclusive on one sample each, re-check with a wider sample before treating
 as "no coverage."
 
-- [ ] **Step 4: Record findings and commit**
+- [x] **Step 4: Record findings and commit**
 
 Append to the findings doc:
 
@@ -552,7 +552,7 @@ response that justified it — same discipline here, including the D1 gotcha:
 `soccer_germany_bundesliga2` (2. Bundesliga) and `soccer_austria_bundesliga`
 both exist in the same listing and must not be confused.
 
-- [ ] **Step 1: Write the discovery script**
+- [x] **Step 1: Write the discovery script**
 
 ```python
 """One-off spike (domestic cup pre-flight, 2026-11-04): discover The Odds
@@ -626,7 +626,7 @@ if __name__ == "__main__":
     main()
 ```
 
-- [ ] **Step 2: Run it, disambiguating BUNDESLIGA_2 by hand**
+- [x] **Step 2: Run it, disambiguating BUNDESLIGA_2 by hand**
 
 Run: `python scripts/discover_second_division_sport_keys.py`
 Expected: `BUNDESLIGA_2` prints multiple candidates (at minimum
@@ -638,7 +638,7 @@ Incidental finding: The Odds API also carries `soccer_spain_copa_del_rey` —
 a second potential live-odds source for that cup, alongside OddsPapi — not
 pursued further here, just noted.
 
-- [ ] **Step 3: Record findings**
+- [x] **Step 3: Record findings**
 
 Append to the findings doc:
 
@@ -654,7 +654,7 @@ Append to the findings doc:
 | Ligue 2 | soccer_france_ligue_two | Ligue 2 - France | True |
 ```
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add scripts/discover_second_division_sport_keys.py \
@@ -675,7 +675,7 @@ it does not mean a bookmaker is actually offering odds on it right now. This
 step confirms real odds rows come back, reusing the existing production
 `OddsAPIClient.get_odds()` rather than re-implementing the call.
 
-- [ ] **Step 1: Write the coverage-check script**
+- [x] **Step 1: Write the coverage-check script**
 
 ```python
 """One-off spike (domestic cup pre-flight, 2026-11-04): confirm The Odds API
@@ -735,7 +735,7 @@ if __name__ == "__main__":
     main()
 ```
 
-- [ ] **Step 2: Fill in `SPORT_KEYS` from Task 4's real output, then run**
+- [x] **Step 2: Fill in `SPORT_KEYS` from Task 4's real output, then run**
 
 Run: `python scripts/check_second_division_odds_coverage.py`
 Expected: one line per division with a real `odds_row_count`. `0` is a valid,
@@ -760,7 +760,7 @@ abnormal — is a separate investigation). The two confirmed-dead keys'
 local credit-counter files were updated to reflect real exhaustion so
 production doesn't keep retrying them blind.
 
-- [ ] **Step 3: Record findings and commit**
+- [x] **Step 3: Record findings and commit**
 
 Append the real counts to the findings doc's sport_key table (add an
 "Odds rows found" column), then:
@@ -790,7 +790,7 @@ one page covering several divisions (e.g. `englandm.php` lists E0 alongside
 lower English divisions), so the second divisions are plausibly already on
 pages this codebase has scraped before — confirm, don't assume.
 
-- [ ] **Step 1: Write the coverage-check script**
+- [x] **Step 1: Write the coverage-check script**
 
 ```python
 """One-off spike (domestic cup pre-flight, 2026-11-04): check whether each
@@ -857,7 +857,7 @@ if __name__ == "__main__":
     main()
 ```
 
-- [ ] **Step 2: Run it**
+- [x] **Step 2: Run it**
 
 Run: `python scripts/check_second_division_historical_coverage.py`
 Expected: one or more real CSV links per division (football-data.co.uk
@@ -871,7 +871,7 @@ than "the current season" — the full historical archive, back to the
 1990s, is linked on each page (30-34 season CSVs each). This substantially
 de-risks the training-data question for Option A.
 
-- [ ] **Step 3: Record findings and commit**
+- [x] **Step 3: Record findings and commit**
 
 Append to the findings doc:
 
@@ -909,7 +909,7 @@ only `fotmob_match_id`/`match_date`/`home_team`/`away_team`. This script
 reads the raw payload's `leagues` list directly instead, so competition
 identity isn't lost before it can be checked.
 
-- [ ] **Step 1: Write the coverage-check script**
+- [x] **Step 1: Write the coverage-check script**
 
 ```python
 """One-off spike (domestic cup pre-flight, 2026-11-04): check whether
@@ -976,7 +976,7 @@ if __name__ == "__main__":
     main()
 ```
 
-- [ ] **Step 2: Run it**
+- [x] **Step 2: Run it**
 
 Run: `python scripts/check_fotmob_lower_tier_coverage.py`
 Expected: `FOUND` or `NOT FOUND` per competition, based on real matches in the
@@ -990,7 +990,7 @@ de France and Coppa Italia weren't found this week, consistent with their
 OddsPapi-confirmed next fixtures being 1-4 weeks out (Task 2) — read as
 "no round this week," not "unavailable."
 
-- [ ] **Step 3: Record findings and commit**
+- [x] **Step 3: Record findings and commit**
 
 Append to the findings doc:
 
@@ -1026,7 +1026,7 @@ git commit -m "spike: check fotmob raw payload coverage for lower-tier competiti
 - Modify: `docs/superpowers/plans/2026-11-04-domestic-cup-preflight-findings.md`
 - Modify: `docs/superpowers/specs/2026-11-04-domestic-cup-recommendations-design.md`
 
-- [ ] **Step 1: Write the consolidated recommendation**
+- [x] **Step 1: Write the consolidated recommendation**
 
 Append a final section to the findings doc, using the real data gathered in
 Tasks 1-7 (not a restatement of the task list). Address live-serving
@@ -1054,7 +1054,7 @@ window), or be dropped from this pass entirely -- citing the specific
 finding from Tasks 1-7 that justifies each call, not a general impression.
 ```
 
-- [ ] **Step 2: Update the design spec's Section 4 pre-flight note**
+- [x] **Step 2: Update the design spec's Section 4 pre-flight note**
 
 In `docs/superpowers/specs/2026-11-04-domestic-cup-recommendations-design.md`,
 Section 4, replace the "Pre-flight check before committing further build
@@ -1067,7 +1067,7 @@ the live-verified odds/score coverage per competition and the resulting
 go/no-go call for each.
 ```
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add docs/superpowers/plans/2026-11-04-domestic-cup-preflight-findings.md \

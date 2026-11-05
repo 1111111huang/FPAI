@@ -188,3 +188,47 @@ the matches where found.
 Coupe de France and Coppa Italia's absence is consistent with their
 OddsPapi-confirmed next fixtures being 1-4 weeks out (see live-odds
 section above) — read as "no round played this week," not "unavailable."
+
+## Go/no-go recommendation
+
+**5 second divisions: full GO, no caveats.** Training data (decades of
+football-data.co.uk history), live odds (The Odds API, confirmed real rows),
+and fotmob visibility all confirmed for every one of the 5. The onboarding
+cost (the `adding-a-league` checklist, ×5) is now a known-safe investment,
+not a bet on unverified data.
+
+**4 of 6 cups: GO.** FA Cup and Carabao Cup confirmed on all three axes
+(training, live, fotmob). DFB-Pokal and Coppa Italia confirmed on training
+data specifically (the axis that matters most for the cup-transfer model);
+their live-odds and fotmob checks landed on a week with no fixture due,
+consistent with matchdays several weeks out, not a coverage gap.
+
+**2 of 6 cups: proceed with a flagged caveat, not a block.** Copa del Rey
+and Coupe de France's single-sample checks came back inconclusive on both
+training and live odds (Copa del Rey's sample additionally had a
+stale/postponed-looking fixture date). Both have real fixture schedules
+(8 and 86 upcoming fixtures respectively) and real finished-fixture history
+(323 and 411 respectively) — recommend a second, wider sample closer to
+each one's next matchday (Coupe de France: 2026-11-14, ~10 days out) before
+drawing a firm conclusion, not excluding either from scope now.
+
+**Recommendation: proceed to Plan 2 (registry/tier/schema skeleton) and
+Plan 5 (second-division onboardings) with full confidence.** For Plan 3
+(cup ingestion), proceed for all 6, with a specific follow-up task to
+re-check Copa del Rey and Coupe de France's odds coverage closer to their
+next fixtures before finalizing confidence in those two specifically.
+
+**Two findings from this spike are explicitly out of scope and not fixed
+here — recommend logging separately, per CLAUDE.md convention
+(`documents/bugs.md`):**
+1. `app/backend/oddspapi_client.py`'s `get_corners_odds()` likely has never
+   successfully parsed a real corners price — it calls the live `/v4/odds`
+   endpoint but parses with the historical endpoint's shape, based on a
+   specific prior investigation (cited in the file's own header, `W199`)
+   that this session's live testing shows is no longer (or was never)
+   accurate.
+2. `ODDS_API_KEY` and `ODDS_API_KEY_2` are both exhausted
+   (`401 OUT_OF_USAGE_CREDITS`) — the fallback rotation has real remaining
+   capacity (keys `_3` through `_8`), so this doesn't read as an active
+   outage, but why the first two keys specifically are exhausted (expected
+   usage vs. something abnormal) was not investigated.
