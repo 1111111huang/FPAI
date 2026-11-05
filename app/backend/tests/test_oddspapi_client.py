@@ -40,17 +40,25 @@ def _no_real_throttle_sleep(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(oddspapi_client_module.time, "sleep", lambda seconds: None)
     oddspapi_client_module._last_request_at = 0.0
 
-# Real shape confirmed by scripts/extract_oddspapi_odds_lookup.py against
-# downloaded /v4/historical-odds snapshots; W199's investigation notes confirm
-# /v4/odds (the live endpoint) returns the identical shape.
+# BUG found live (2026-11-04, domestic-cup pre-flight spike): W199's
+# investigation notes (cited in oddspapi_client.py's module docstring) claim
+# /v4/odds (the live endpoint this client actually calls) returns the
+# identical shape as /v4/historical-odds. Confirmed false against a real
+# live payload: the live endpoint's real top-level key is "bookmakerOdds"
+# (not "bookmakers"), and each outcome's "players"->"0" is a single price
+# object (not a list of historical ticks). The historical endpoint's shape
+# (bookmakers/list-of-ticks) is real too -- it's just the wrong one for this
+# module, which never calls that endpoint. scripts/extract_oddspapi_odds_lookup.py
+# correctly uses the historical shape for the historical endpoint it actually
+# calls; this fixture previously copied that shape here by mistake.
 _CORNERS_PAYLOAD = {
-    "bookmakers": {
+    "bookmakerOdds": {
         "pinnacle": {
             "markets": {
                 "10803": {
                     "outcomes": {
-                        "10803": {"players": {"0": [{"price": 1.9}, {"price": 1.85}]}},
-                        "10804": {"players": {"0": [{"price": 2.0}, {"price": 1.95}]}},
+                        "10803": {"players": {"0": {"price": 1.85}}},
+                        "10804": {"players": {"0": {"price": 1.95}}},
                     }
                 }
             }
@@ -64,14 +72,14 @@ _FIXTURES_PAYLOAD = [
 ]
 
 
-def test_parse_corners_odds_takes_the_last_tick_per_outcome() -> None:
+def test_parse_corners_odds_reads_the_real_live_endpoint_shape() -> None:
     result = _parse_corners_odds(_CORNERS_PAYLOAD)
 
     assert result == {"over_9.5": 1.85, "under_9.5": 1.95}
 
 
 def test_parse_corners_odds_returns_none_when_market_missing() -> None:
-    result = _parse_corners_odds({"bookmakers": {"pinnacle": {"markets": {}}}})
+    result = _parse_corners_odds({"bookmakerOdds": {"pinnacle": {"markets": {}}}})
 
     assert result is None
 

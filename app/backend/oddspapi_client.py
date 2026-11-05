@@ -6,11 +6,15 @@ was a one-off historical pull into a static JSON file for backtesting only;
 this is the first live client, used by eod_batch.py's add_secondary_odds()
 alongside the existing OddsAPIClient calls.
 
-Market ID/line and the historical-odds JSON shape (bookmakers.pinnacle.markets
-[id].outcomes[id].players["0"] -> price ticks, last tick = current price) are
-copied from scripts/extract_oddspapi_odds_lookup.py's already-proven parsing
-(real downloaded snapshots) -- W199's investigation notes confirm the live
-/v4/odds endpoint returns the identical shape. Credit gating mirrors
+Market ID/line are the same as the historical pull
+(scripts/extract_oddspapi_odds_lookup.py), but the live /v4/odds endpoint's
+JSON shape is NOT identical to /v4/historical-odds's, despite W199's
+investigation notes claiming otherwise -- confirmed false live, 2026-11-04:
+the real live shape is bookmakerOdds.pinnacle.markets[id].outcomes[id]
+.players["0"].price (a single current price), not bookmakers.(...)
+.players["0"] -> [ticks] (the historical endpoint's own shape, which
+scripts/extract_oddspapi_odds_lookup.py correctly uses for the historical
+endpoint it actually calls). Credit gating mirrors
 OddsAPIClient's CreditCounter pattern exactly (app/backend/odds_api_client.py),
 just against OddsPapi's own 250-req/month free-tier budget instead of The
 Odds API's 500.
@@ -112,14 +116,16 @@ def _last_price(outcomes: dict, outcome_id: str) -> float | None:
     outcome = outcomes.get(outcome_id)
     if not outcome:
         return None
-    ticks = outcome.get("players", {}).get("0", [])
-    if not ticks:
-        return None
-    return ticks[-1].get("price")
+    # BUG found live (2026-11-04): /v4/odds (the live endpoint this module
+    # calls) returns "players"->"0" as a single price object, not a list of
+    # historical ticks -- confirmed against a real payload. The W199 claim
+    # this used to rely on (that the live endpoint matches the historical
+    # endpoint's shape, where "0" genuinely is a tick list) is false.
+    return outcome.get("players", {}).get("0", {}).get("price")
 
 
 def _parse_corners_odds(payload: dict) -> dict[str, float] | None:
-    outcomes = payload.get("bookmakers", {}).get("pinnacle", {}).get("markets", {}).get(CORNERS_MARKET_ID, {}).get("outcomes", {})
+    outcomes = payload.get("bookmakerOdds", {}).get("pinnacle", {}).get("markets", {}).get(CORNERS_MARKET_ID, {}).get("outcomes", {})
     over = _last_price(outcomes, CORNERS_OUTCOME_OVER)
     under = _last_price(outcomes, CORNERS_OUTCOME_UNDER)
     if over is None or under is None:

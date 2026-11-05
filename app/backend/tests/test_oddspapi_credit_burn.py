@@ -38,7 +38,7 @@ from app.backend.tests.test_eod_batch import (  # noqa: E402
 )
 from src.agent.agent_config import AgentConfig  # noqa: E402
 
-_NO_LINE_PAYLOAD = {"bookmakers": {"pinnacle": {"markets": {}}}}
+_NO_LINE_PAYLOAD = {"bookmakerOdds": {"pinnacle": {"markets": {}}}}
 _H2H = {"home": 1.8, "draw": 3.6, "away": 4.5}
 _SECONDARY = {
     "total_goals": {"over_2.5": 1.9, "under_2.5": 1.95}, "btts": {"yes": 1.7, "no": 2.1},
