@@ -85,16 +85,17 @@ if not API_KEY:
     sys.exit("No API key: set ODDSPAPI_API_KEY in .env.")
 BASE_URL = "https://api.oddspapi.io"
 
-# Name fragments to search for in the tournament listing, one per cup in
-# scope. OddsPapi's own naming isn't known in advance -- confirm against the
-# real listing below, don't assume these match the "name" field exactly.
+# Name fragments + category, one per cup in scope. OddsPapi reuses generic
+# names like "FA Cup"/"League Cup" across dozens of countries -- name alone
+# is not enough, "categoryName" (the real per-tournament country/region
+# field) is required to disambiguate.
 CUP_NAME_FRAGMENTS = {
-    "FA_CUP": ["fa cup"],
-    "CARABAO_CUP": ["carabao", "efl cup", "league cup"],
-    "COPA_DEL_REY": ["copa del rey"],
-    "DFB_POKAL": ["dfb", "pokal"],
-    "COUPE_DE_FRANCE": ["coupe de france"],
-    "COPPA_ITALIA": ["coppa italia"],
+    "FA_CUP": (["fa cup"], "England"),
+    "CARABAO_CUP": (["efl cup"], "England"),
+    "COPA_DEL_REY": (["copa del rey"], "Spain"),
+    "DFB_POKAL": (["dfb pokal"], "Germany"),
+    "COUPE_DE_FRANCE": (["coupe de france"], "France"),
+    "COPPA_ITALIA": (["coppa italia"], "Italy"),
 }
 
 
@@ -106,19 +107,25 @@ def main() -> None:
     tournaments = resp.json()
     print(f"Fetched {len(tournaments)} total soccer tournaments.")
 
+    # Real field names confirmed live (not "id"/"name" as the inline
+    # LEAGUE_TOURNAMENT_IDS comments elsewhere implied): tournamentId,
+    # tournamentName, categoryName.
     matches: dict[str, list[dict]] = {cup: [] for cup in CUP_NAME_FRAGMENTS}
     for t in tournaments:
-        name_lower = str(t.get("name", "")).lower()
-        for cup, fragments in CUP_NAME_FRAGMENTS.items():
-            if any(frag in name_lower for frag in fragments):
-                matches[cup].append({"id": t.get("id"), "name": t.get("name")})
+        name_lower = str(t.get("tournamentName", "")).lower()
+        category = str(t.get("categoryName", ""))
+        for cup, (fragments, expected_category) in CUP_NAME_FRAGMENTS.items():
+            if any(frag in name_lower for frag in fragments) and category == expected_category:
+                matches[cup].append({
+                    "id": t.get("tournamentId"), "name": t.get("tournamentName"), "category": category,
+                })
 
     for cup, found in matches.items():
         print(f"\n{cup}:")
         if not found:
             print("  NO MATCH FOUND")
         for f in found:
-            print(f"  id={f['id']}  name={f['name']!r}")
+            print(f"  id={f['id']}  name={f['name']!r}  category={f['category']!r}")
 
     out_path = Path(__file__).parent.parent / "data" / "domestic_cup_tournament_discovery.json"
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -133,9 +140,14 @@ if __name__ == "__main__":
 - [ ] **Step 2: Run it against the live API**
 
 Run: `python scripts/discover_domestic_cup_tournament_ids.py`
-Expected: prints one block per cup with `id=<int> name='<real name>'`, or
-`NO MATCH FOUND` for any cup OddsPapi doesn't carry. This is real-world
+Expected: prints one block per cup with `id=<int> name='<real name>'
+category='<real category>'`, or `NO MATCH FOUND` for any cup OddsPapi
+doesn't carry under that name+category combination. This is real-world
 discovery — a `NO MATCH FOUND` is a valid, important finding, not a bug.
+Live-verified 2026-11-04: all 6 resolved to a single unambiguous ID once
+category was added as a filter (name alone matched 14 "FA Cup"-named
+tournaments across different countries) — FA Cup=19, EFL Cup=21,
+Copa del Rey=329, DFB Pokal=217, Coupe de France=335, Coppa Italia=328.
 
 - [ ] **Step 3: Record findings**
 
