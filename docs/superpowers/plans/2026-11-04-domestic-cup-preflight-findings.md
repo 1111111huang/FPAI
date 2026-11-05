@@ -143,3 +143,21 @@ worktree and the harness blocks writing to the shared checkout's files from
 inside it. Real provider-reported usage for the record, to reconcile
 manually or on next merge: `_3`: 331 used / 169 remaining; `_4`-`_8`: 1 used
 each (from this session's own test calls) / 499 remaining each.
+
+## football-data.co.uk coverage (second divisions, for training)
+
+All 5 divisions have far more than "the current season" linked — the full
+historical archive, back to the 1990s, on the exact same infrastructure
+already used for the 6 modeled leagues.
+
+| Division | Page | Expected CSV code | Seasons found | Earliest season |
+|---|---|---|---|---|
+| Championship | englandm.php | E1 | 34 | 1993/94 |
+| Segunda División | spainm.php | SP2 | 31 | 1996/97 |
+| Serie B | italym.php | I2 | 30 | 1997/98 |
+| 2. Bundesliga | germanym.php | D2 | 34 | 1993/94 |
+| Ligue 2 | francem.php | F2 | 31 | 1996/97 |
+
+This substantially de-risks the training-data question for Option A (the
+cup-transfer model) — decades of real results+odds already exist for all
+5 second divisions, not just a current-season snapshot.

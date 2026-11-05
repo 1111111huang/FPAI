@@ -866,7 +866,10 @@ live under the same `mmz4281/<season>/` pattern with other season codes,
 which a later ingestion plan would enumerate, not this spike). A division
 with zero links found means either the code guess is wrong (check the page
 by hand in a browser before concluding "no data") or that division genuinely
-isn't covered.
+isn't covered. Live-verified 2026-11-04: all 5 divisions found far more
+than "the current season" — the full historical archive, back to the
+1990s, is linked on each page (30-34 season CSVs each). This substantially
+de-risks the training-data question for Option A.
 
 - [ ] **Step 3: Record findings and commit**
 
@@ -875,13 +878,13 @@ Append to the findings doc:
 ```markdown
 ## football-data.co.uk coverage (second divisions, for training)
 
-| Division | Page | Expected CSV code | CSV link(s) found |
-|---|---|---|---|
-| Championship | englandm.php | E1 | <fill in> |
-| Segunda División | spainm.php | SP2 | <fill in> |
-| Serie B | italym.php | I2 | <fill in> |
-| 2. Bundesliga | germanym.php | D2 | <fill in> |
-| Ligue 2 | francem.php | F2 | <fill in> |
+| Division | Page | Expected CSV code | Seasons found | Earliest season |
+|---|---|---|---|---|
+| Championship | englandm.php | E1 | 34 | 1993/94 |
+| Segunda División | spainm.php | SP2 | 31 | 1996/97 |
+| Serie B | italym.php | I2 | 30 | 1997/98 |
+| 2. Bundesliga | germanym.php | D2 | 34 | 1993/94 |
+| Ligue 2 | francem.php | F2 | 31 | 1996/97 |
 ```
 
 ```bash
