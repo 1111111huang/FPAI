@@ -48,22 +48,28 @@ Cherry-pick from `worktree-llm-only-ucl-uel` rather than rebuild:
 - FotMob score extraction for finished UCL/UEL matches
 - The `raw_matches` join script (`scripts/build_ucl_uel_raw_matches.py`)
 
-**Two things must be re-verified when reusing, not assumed correct:**
+**One thing was checked directly and confirmed fine; one thing must still be
+fixed when reusing:**
 
-1. **Live vs. historical odds-response shape.** The domestic-cup pre-flight
-   spike (2026-11-04) found that OddsPapi's live `/v4/odds` endpoint and its
+1. **Live vs. historical odds-response shape — checked, confirmed not an
+   issue for the cherry-picked code.** The domestic-cup pre-flight spike
+   (2026-11-04) found that OddsPapi's live `/v4/odds` endpoint and its
    historical `/v4/historical-odds` endpoint have genuinely different real
    shapes: live uses top-level key `bookmakerOdds` with `players["0"]` as a
    single price dict; historical uses `bookmakers` with `players["0"]` as a
-   list of ticks. The backfill script calls `/v4/historical-odds`, so its
-   parsing is **likely already correct** (matches the shape production's
-   own historical-odds handling already assumes). But if any live-serving
-   code path in the abandoned branch calls `/v4/odds` instead, it needs the
-   live shape — check directly before trusting it, the same way a
-   production bug (`get_corners_odds()` in `app/backend/oddspapi_client.py`,
-   flagged separately, not fixed by this spec) was found doing exactly this
-   wrong.
-2. **Team-name crosswalk duplication.** The abandoned branch's 112-entry
+   list of ticks. Traced directly: the backfill script
+   (`scripts/pull_oddspapi_ucl_uel_1x2.py`) calls `/v4/historical-odds` and
+   its `extract_1x2_odds()` helper (`app/backend/oddspapi_client.py`) uses
+   the `bookmakers`/list shape — correct for that endpoint. `extract_1x2_odds`
+   has no other caller in the abandoned branch (confirmed via `git grep`) —
+   there is **no live-serving 1X2 fetch for UCL/UEL anywhere in that branch
+   at all**, buggy or otherwise; `forecast_llm_only`'s odds parameters are
+   passed in from upstream, and that upstream live-wiring was simply never
+   built. This needs to be built fresh when live serving is added (Section
+   8), not inherited — and must use the live shape (`bookmakerOdds`/dict)
+   confirmed today, not the historical one, to avoid repeating the same
+   mistake `get_corners_odds()` made elsewhere.
+2. **Team-name crosswalk duplication — not yet checked, do before trusting.** The abandoned branch's 112-entry
    bespoke `ODDSPAPI_TO_FOTMOB_ALIASES` dict duplicates `TeamNameMapper`
    (flagged as a bug on that branch only — its bug numbering diverged from
    `main`'s and collides with an unrelated, already-fixed bug there; cite by
@@ -125,8 +131,11 @@ could pass trivially at zero volume again if not made explicit.
   own pre-flight data-availability spike, same shape as
   `docs/superpowers/plans/2026-11-04-domestic-cup-preflight-spike.md`, before
   committing to which countries' score-only data is actually reachable.
-- **Live vs. historical odds-shape re-verification** (Section 3, item 1) —
-  a concrete check against the cherry-picked code, not yet done.
+- **Live UCL/UEL odds-serving needs to be built fresh** (Section 3, item 1)
+  — confirmed it doesn't exist yet anywhere in the abandoned branch, not a
+  bug to fix. Must use the live `/v4/odds` response shape
+  (`bookmakerOdds`/dict) confirmed during the domestic-cup spike, not the
+  historical one.
 - **Group/league-phase standings source** — not yet identified; needed for
   Section 5's stakes/dead-rubber detection.
 
