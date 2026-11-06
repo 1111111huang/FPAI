@@ -82,14 +82,23 @@ def _parse_finished_matches(matches_payload: list[dict]) -> list[dict]:
         if not utc_time:
             continue
         try:
+            home_score = match["home"]["score"]
+            away_score = match["away"]["score"]
+            if home_score is None or away_score is None:
+                # "finished": true with a null score happens on real
+                # abandoned/awarded/walkover matches -- treat it the same
+                # as a missing key rather than letting None reach callers
+                # (e.g. build_ucl_uel_raw_matches.py inserts it straight
+                # into raw_matches.fthg with no numeric/null check).
+                raise ValueError("score present but null")
             matches.append(
                 {
                     "fotmob_match_id": match["id"],
                     "match_date": pd.to_datetime(utc_time).tz_localize(None).normalize(),
                     "home_team": match["home"]["name"],
                     "away_team": match["away"]["name"],
-                    "home_score": match["home"]["score"],
-                    "away_score": match["away"]["score"],
+                    "home_score": home_score,
+                    "away_score": away_score,
                 }
             )
         except (KeyError, TypeError, ValueError) as exc:

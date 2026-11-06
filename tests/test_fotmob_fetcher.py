@@ -356,6 +356,22 @@ def test_parse_finished_matches_extracts_score():
     assert parsed[0]["away_score"] == 1
 
 
+def test_parse_finished_matches_skips_null_score(caplog):
+    """A real abandoned/awarded/walkover match can be "finished": true with
+    score: null -- that must hit the same skip-and-log path as a missing
+    score key, not silently propagate None to callers."""
+    payload = [{
+        "id": 456,
+        "home": {"id": 1, "score": None, "name": "Real Madrid"},
+        "away": {"id": 2, "score": 1, "name": "Bayern Munich"},
+        "status": {"utcTime": "2026-10-20T19:00:00.000Z", "finished": True, "scoreStr": None},
+    }]
+    with caplog.at_level("WARNING"):
+        parsed = _parse_finished_matches(payload)
+    assert parsed == []
+    assert "Skipping malformed match entry id=456" in caplog.text
+
+
 def test_league_ids_maps_the_three_new_leagues_to_their_real_fotmob_ids():
     """US#165: Serie A/Bundesliga/Ligue 1's real FotMob league ids
     (live-verified 2026-08-15 against /api/data/matches across several
