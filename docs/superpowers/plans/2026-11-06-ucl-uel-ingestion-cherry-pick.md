@@ -527,9 +527,92 @@ stop and investigate before proceeding — don't assume it's fine. If it
 matches expectations, no commit needed for this task (the data lives in
 the local DuckDB file, not a tracked artifact).
 
+**Real result (2026-11-06): 350/368 (95.1%), not 368/368 — root-caused, not
+a logic bug.** Ran to completion in ~2m18s (105 dates, 12,167 finished
+matches fetched). Spot-check (Step 2) passed fully — all 6 known-tricky
+clubs resolved to their correct existing canonical names. The 128
+"new canonical identities" reported are expected, not a defect: this
+worktree's local DuckDB has zero rows from any of the other 11 leagues
+(confirmed directly), so every UCL/UEL club looks "new" against an empty
+pool — this isn't a canonicalization bug, it's an artifact of a fresh
+local dev database with no other league data loaded yet.
+
+The 18 unmatched entries all trace to exactly 5 missing/wrong entries in
+`ODDSPAPI_TO_FOTMOB_ALIASES` (`scripts/build_ucl_uel_raw_matches.py`),
+confirmed by cross-referencing every unmatched fixture's real cached
+fotmob payload — all diacritic/special-character spelling drift, not a
+new class of bug:
+
+| OddsPapi name | Crosswalk currently has | fotmob actually returns | Entries affected |
+|---|---|---|---|
+| `Vikingur Reykjavik` | *(no entry)* | `Víkingur Reykjavík` | 6 |
+| `FC Hradec Kralove` | `Hradec Kralove` | `Hradec Králové` | 4 |
+| `Qarabag FK` | *(no entry)* | `Qarabağ FK` (Turkish ğ) | 4 |
+| `MSK Zilina` | `Zilina` | `Žilina` | 2 |
+| `The New Saints FC` | `TNS` (wrong) | `The New Saints` | 2 |
+
+6+4+4+2+2 = 18, exactly accounting for every unmatched entry — not a
+partial explanation. See Task 6 for the fix.
+
 ---
 
-### Task 6: Port the historical-odds backfill script (not run, for future reuse)
+### Task 6: Fix the 5 crosswalk gaps found running Task 5
+
+**Files:**
+- Modify: `scripts/build_ucl_uel_raw_matches.py`
+
+Task 5's real run found 18/368 fixtures unmatched, all tracing to exactly
+5 entries in `ODDSPAPI_TO_FOTMOB_ALIASES` — diacritic/special-character
+spelling drift between OddsPapi's name and fotmob's real output, not a
+logic bug in the matching mechanism itself.
+
+- [ ] **Step 1: Fix the 5 entries**
+
+In `scripts/build_ucl_uel_raw_matches.py`'s `ODDSPAPI_TO_FOTMOB_ALIASES`
+dict:
+- Add `"Vikingur Reykjavik": "Víkingur Reykjavík"` (no entry existed).
+- Change `"FC Hradec Kralove": "Hradec Kralove"` to
+  `"FC Hradec Kralove": "Hradec Králové"`.
+- Add `"Qarabag FK": "Qarabağ FK"` (no entry existed — this is OddsPapi's
+  real manifest spelling, confirmed via
+  `data/oddspapi_ucl_uel_snapshots/manifest.json`, not a guess).
+- Change `"MSK Zilina": "Zilina"` to `"MSK Zilina": "Žilina"`.
+- Change `"The New Saints FC": "TNS"` to
+  `"The New Saints FC": "The New Saints"`.
+
+Live-verify each fotmob spelling against the real cached payloads in
+`data/fotmob_date_cache/*.json` before committing — don't retype the
+table above blindly; confirm the exact accented string fotmob actually
+uses for each club (copy-paste from the real JSON, not from this doc).
+
+- [ ] **Step 2: Re-run the join and confirm the match rate improves**
+
+```bash
+rm -rf data/fotmob_date_cache  # stale: captured before this fix existed
+python scripts/build_ucl_uel_raw_matches.py
+```
+Expected: match rate improves from 350/368 toward 368/368. If it's still
+below 368/368 after this fix, investigate the remaining gap the same way
+(cross-reference the real unmatched entries against real cached fotmob
+payloads) rather than assuming the job is done.
+
+- [ ] **Step 3: Commit**
+
+```bash
+git add scripts/build_ucl_uel_raw_matches.py
+git commit -m "fix(ingestion): add/correct 5 diacritic-spelling UCL/UEL team-name aliases
+
+Found running the real join (Task 5): 18/368 fixtures unmatched, all
+tracing to 5 entries in ODDSPAPI_TO_FOTMOB_ALIASES -- diacritic/
+special-character spelling drift between OddsPapi's name and fotmob's
+real output (Vikingur Reykjavik, Hradec Kralove, Qarabag FK, MSK
+Zilina, The New Saints FC), confirmed against real cached fotmob
+payloads, not guessed."
+```
+
+---
+
+### Task 7: Port the historical-odds backfill script (not run, for future reuse)
 
 **Files:**
 - Create: `scripts/pull_oddspapi_ucl_uel_1x2.py`
@@ -559,7 +642,7 @@ git commit -m "feat(ingestion): port the UCL/UEL historical odds backfill script
 
 ---
 
-### Task 7: Documentation
+### Task 8: Documentation
 
 **Files:**
 - Modify: `documents/FRAI_TECHSPEC.md`
