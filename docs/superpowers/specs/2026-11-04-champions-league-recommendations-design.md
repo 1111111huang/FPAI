@@ -89,13 +89,23 @@ fixed when reusing:**
    already has the exact right pattern elsewhere in this codebase:
    `mapper.map_team(name, team_pool, use_token_match=True)`, where
    `team_pool` is the real set of existing `raw_matches` team names. Verified
-   directly, real scores against the actual `config/team_mapping.json`: all
-   6 "conflicts" resolve correctly with zero new entries — 3 via an exact or
-   accent-folded key that already exists (`Atletico Madrid`/`Atlético
-   Madrid` → `Ath Madrid`; `Athletic Club` → `Ath Bilbao`, already present
-   and not needing fuzzy matching at all), 3 more via `use_token_match=True`
-   fuzzy similarity at 0.95 (`Real Sociedad`/`Real Betis`/`Celta Vigo`,
-   well above the mapper's 0.82 acceptance threshold). The join writes each
+   directly against the actual `config/team_mapping.json`, and corrected
+   once already (an earlier pass here wrongly attributed 3 of these to
+   fuzzy matching — they're plain exact keys, confirmed by calling
+   `map_team()` itself rather than `suggest()` in isolation): all 6
+   "conflicts" resolve correctly with zero new entries, all five of
+   `Atletico Madrid`/`Atlético Madrid`/`Athletic Club`/`Real Sociedad`/
+   `Real Betis`/`Celta Vigo` via an exact or accent-folded key that already
+   exists in the file today, none needing the `use_token_match=True` fuzzy
+   fallback at all for these particular six. That fallback is still real
+   and still needed in production — for clubs with no exact/accent-fold
+   entry but a close token-level match in the pool — just not exercised by
+   this specific set of six; verified separately with an isolated
+   `TeamNameMapper` pointed at an empty mapping (`suggest("Real Sociedad",
+   {"Sociedad","Betis","Celta"}, use_token_match=True)` → `("Sociedad",
+   0.95)`, well above the 0.82 threshold) to confirm the fallback itself
+   works, since the real config file's existing entries would otherwise
+   mask it for any name that happens to already be mapped. The join writes each
    side's *resolved* canonical name into `raw_matches`, not fotmob's raw
    output — clubs with existing domestic representation need no new config
    at all; genuinely new clubs (no representation anywhere yet — Besiktas,
