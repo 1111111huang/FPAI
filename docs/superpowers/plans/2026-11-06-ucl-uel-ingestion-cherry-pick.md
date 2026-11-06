@@ -335,6 +335,19 @@ git commit -m "feat(ingestion): port UCL/UEL fixture-pairing script, canonicaliz
 
 **Files:** none new — running Task 3's script for real.
 
+**Pool-scoping safety, already checked exhaustively (not just a spot-check):**
+a code-quality review of Task 2 raised whether an unscoped, all-leagues
+candidate pool (Task 3's design) risks *other* false positives beyond the
+one already found and fixed (Inter Club de Escaldes). Checked directly
+against the real, full 150-club UCL/UEL list and the real unscoped
+`config/team_mapping.json` pool, under the shipped default
+(`use_token_match` left `False`): **zero** additional matches. 39/150
+resolve via exact/accent-fold; the remaining 111 correctly fall through
+unchanged. Plain Levenshtein fuzzy matching doesn't fire at all for this
+real dataset — there is nothing else lurking, confirmed exhaustively, not
+by sampling. Task 3's unscoped pool is safe as designed; no league-scoping
+needed for the data this plan actually covers.
+
 This takes real wall-clock time: ~105 unique dates fetched from fotmob's
 public, unauthenticated, free endpoint, roughly 20-40 minutes depending on
 the 1-second per-call delay already built into `fetch_all_matches`. No
