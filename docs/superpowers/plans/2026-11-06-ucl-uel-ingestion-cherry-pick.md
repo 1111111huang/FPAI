@@ -16,10 +16,19 @@ zero cost) and its fixture-pairing script largely unchanged — that part
 already achieves 100% match rate (368/368) via hand-verified exact aliases
 and is not the part that was wrong. Add one new canonicalization step
 before the `raw_matches` write: resolve the matched fotmob team names
-through `TeamNameMapper.map_team(name, team_pool, use_token_match=True)`
-against the real pool of existing `raw_matches` team names — the exact
-pattern already used in `src/ingestion/fotmob/merge.py`, not new
-infrastructure. No OddsPapi calls in this plan at all; fotmob calls
+through `TeamNameMapper.map_team(name, team_pool)` (exact + accent-fold +
+conservative Levenshtein fuzzy, `use_token_match` left at its default
+`False`) against the real pool of existing `raw_matches` team names —
+reusing the existing mechanism, not new infrastructure. **`use_token_match=True`
+was tried and rejected during Task 2's implementation**: against the real
+150-club UCL/UEL list and the real unscoped `config/team_mapping.json`
+pool, it resolves exactly one club, and resolves it wrong — "Inter Club de
+Escaldes" (a real, tiny Andorran club) to "Inter" (Inter Milan) at a 0.95
+token-containment score, a false positive matching the exact failure shape
+`US#141` already documented and fixed elsewhere (`src/ingestion/common/team_mapping.py`'s
+module docstring) for an unscoped, cross-competition candidate pool. Zero
+real benefit, one confirmed corruption — not used. No OddsPapi calls in
+this plan at all; fotmob calls
 (unauthenticated, free) will take real wall-clock time (~20-40 min for the
 ~105 unique dates needed) when the join actually runs.
 
@@ -73,9 +82,17 @@ full join script around it.
 ```python
 """Tests for the UCL/UEL team-name canonicalization step -- resolving a
 fotmob-sourced team name into the same canonical identity the domestic
-feature pipeline already uses, via the existing TeamNameMapper mechanism
-(src/ingestion/fotmob/merge.py's own pattern), not a bespoke crosswalk."""
+feature pipeline already uses, via map_team()'s existing exact/accent-fold/
+conservative-fuzzy mechanism, not a bespoke crosswalk. use_token_match is
+deliberately not enabled here -- see
+test_canonicalize_does_not_falsely_resolve_inter_club_de_escaldes_to_inter
+below for the confirmed real-data false positive that ruled it out."""
 from __future__ import annotations
+
+import sys
+from pathlib import Path
+
+sys.path.append(str(Path(__file__).resolve().parents[1]))
 
 from src.ingestion.ucl_uel_join import canonicalize_team_name
 from src.ingestion.common.team_mapping import TeamNameMapper
@@ -95,13 +112,40 @@ def test_canonicalize_resolves_accent_variant_via_folding() -> None:
     assert canonicalize_team_name("Atlético Madrid", mapper, pool) == "Ath Madrid"
 
 
-def test_canonicalize_resolves_via_token_match_fuzzy_fallback() -> None:
+def test_canonicalize_resolves_via_existing_exact_alias_for_known_la_liga_clubs() -> None:
+    """These three names are already exact keys in the real
+    config/team_mapping.json, so map_team() resolves them on its
+    exact-match check, same path as the first test above."""
     mapper = TeamNameMapper()
     pool = {"Sociedad", "Betis", "Celta"}
 
     assert canonicalize_team_name("Real Sociedad", mapper, pool) == "Sociedad"
     assert canonicalize_team_name("Real Betis", mapper, pool) == "Betis"
     assert canonicalize_team_name("Celta Vigo", mapper, pool) == "Celta"
+
+
+def test_canonicalize_does_not_falsely_resolve_inter_club_de_escaldes_to_inter() -> None:
+    """Regression test for a confirmed real-data false positive:
+    canonicalize_team_name used to pass use_token_match=True, and against
+    this module's real-world pool -- every value in config/team_mapping.json
+    combined across leagues, the shape raw_matches naturally has, since
+    there is no per-league scoping here (see team_mapping.py's own US#141
+    docstring on why an unscoped multi-league candidate pool is already a
+    known risk factor for fuzzy matching) -- "Inter Club de Escaldes" (a
+    real, tiny Andorran club) wrongly resolved to "Inter" (Inter Milan's
+    canonical name) via a token-containment score of 0.95.
+
+    use_token_match is no longer passed (defaults to False), which uses
+    plain Levenshtein similarity instead: the closest candidate scores only
+    0.27, well below the 0.82 threshold, so the name correctly falls
+    through to the unmapped/unchanged branch. This test uses the real
+    TeamNameMapper (real config/team_mapping.json) and the real full pool
+    of every canonical name in it, not a synthetic fixture, since the bug
+    only reproduced against real data."""
+    mapper = TeamNameMapper()
+    full_pool = set(mapper.mapping.values())
+
+    assert canonicalize_team_name("Inter Club de Escaldes", mapper, full_pool) == "Inter Club de Escaldes"
 
 
 def test_canonicalize_returns_the_name_unchanged_for_a_genuinely_new_club() -> None:
@@ -140,19 +184,33 @@ from src.ingestion.common.team_mapping import TeamNameMapper
 
 def canonicalize_team_name(name: str, mapper: TeamNameMapper, team_pool: set[str]) -> str:
     """Resolve a fotmob-sourced team name into the same canonical identity
-    the domestic feature pipeline already uses for that club, via the
-    existing exact/accent-fold/token-match fuzzy mechanism
-    (src/ingestion/fotmob/merge.py's own pattern) -- not a bespoke
-    OddsPapi/fotmob-specific crosswalk. Returns the name unchanged when no
-    existing representation is found, which is correct: that becomes the
-    club's first-time canonical identity, not an error."""
-    return mapper.map_team(name, team_pool, use_token_match=True)
+    the domestic feature pipeline already uses for that club, via
+    map_team()'s existing exact/accent-fold/conservative-fuzzy mechanism --
+    not a bespoke OddsPapi/fotmob-specific crosswalk. Returns the name
+    unchanged when no existing representation is found, which is correct:
+    that becomes the club's first-time canonical identity, not an error.
+
+    Deliberately does NOT pass use_token_match=True. This module's real
+    candidate pool is unscoped across every competition (every value in
+    config/team_mapping.json, the shape `raw_matches` naturally has here --
+    see the US#141 precedent in team_mapping.py's docstring for why an
+    unscoped multi-league pool is already a known risk factor). Against
+    that real pool, token-containment scoring produces a confirmed false
+    positive on real data: "Inter Club de Escaldes" (a real Andorran club)
+    resolves to "Inter" (Inter Milan) at score 0.95. Plain Levenshtein
+    (use_token_match's default, False) correctly leaves it unchanged
+    (closest score 0.27, well below the 0.82 threshold)."""
+    return mapper.map_team(name, team_pool)
 ```
 
 - [ ] **Step 4: Run to verify it passes**
 
 Run: `pytest tests/test_ucl_uel_join.py -v`
-Expected: 4 passed.
+Expected: 5 passed, using plain `pytest tests/test_ucl_uel_join.py -v` (not
+`python -m pytest`) — the `sys.path.append` line already in the test file
+above is required for the plain console-script invocation to find `src.*`
+at all, since there's no `conftest.py`/`pytest.ini` doing path setup for
+this project; `python -m pytest` would mask a missing one.
 
 - [ ] **Step 5: Commit**
 
