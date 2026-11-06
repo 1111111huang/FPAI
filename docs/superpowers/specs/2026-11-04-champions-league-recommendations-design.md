@@ -69,13 +69,41 @@ fixed when reusing:**
    8), not inherited — and must use the live shape (`bookmakerOdds`/dict)
    confirmed today, not the historical one, to avoid repeating the same
    mistake `get_corners_odds()` made elsewhere.
-2. **Team-name crosswalk duplication — not yet checked, do before trusting.** The abandoned branch's 112-entry
-   bespoke `ODDSPAPI_TO_FOTMOB_ALIASES` dict duplicates `TeamNameMapper`
-   (flagged as a bug on that branch only — its bug numbering diverged from
-   `main`'s and collides with an unrelated, already-fixed bug there; cite by
-   description, not number, if this resurfaces). Migrate onto
-   `TeamNameMapper`/`config/team_mapping.json` when cherry-picking, per the
-   same discipline the domestic-cup design already committed to.
+2. **Team-name crosswalk — resolved 2026-11-06, simpler than originally
+   planned.** The abandoned branch's 112-entry bespoke
+   `ODDSPAPI_TO_FOTMOB_ALIASES` dict (flagged as a bug on that branch only —
+   its bug numbering diverged from `main`'s and collides with an unrelated,
+   already-fixed bug there; cite by description, not number) wrote fotmob's
+   raw spelling directly into `raw_matches`. That's not just duplicate
+   infrastructure, it's the wrong target: 31 of its 112 entries collide
+   with an existing `config/team_mapping.json` key, and 6 of those
+   (Atletico Madrid, Athletic Bilbao, Real Sociedad, Real Betis, Celta
+   Vigo, Bayern Munich) need a *different* canonical spelling than the
+   domestic SP1/D1 feature pipeline already depends on for the same real
+   club — writing fotmob's spelling in would have silently broken the
+   existing domestic lookup for those 6, since the cup-transfer model
+   (Section 4) resolves each side's domestic features by the *same*
+   canonical name the domestic pipeline already uses.
+
+   The fix doesn't need a second mapping file. `src/ingestion/fotmob/merge.py`
+   already has the exact right pattern elsewhere in this codebase:
+   `mapper.map_team(name, team_pool, use_token_match=True)`, where
+   `team_pool` is the real set of existing `raw_matches` team names. Verified
+   directly, real scores against the actual `config/team_mapping.json`: all
+   6 "conflicts" resolve correctly with zero new entries — 3 via an exact or
+   accent-folded key that already exists (`Atletico Madrid`/`Atlético
+   Madrid` → `Ath Madrid`; `Athletic Club` → `Ath Bilbao`, already present
+   and not needing fuzzy matching at all), 3 more via `use_token_match=True`
+   fuzzy similarity at 0.95 (`Real Sociedad`/`Real Betis`/`Celta Vigo`,
+   well above the mapper's 0.82 acceptance threshold). The join writes each
+   side's *resolved* canonical name into `raw_matches`, not fotmob's raw
+   output — clubs with existing domestic representation need no new config
+   at all; genuinely new clubs (no representation anywhere yet — Besiktas,
+   Dinamo Zagreb, Kairat Almaty, etc.) get a first-time canonical entry
+   registered, not a conflict-prone migration. The old crosswalk's
+   hand-verification work (confirming which real club each OddsPapi/fotmob
+   name pair refers to) stays useful as a cross-check; its dict-as-code
+   design does not get ported.
 
 ## 4. Engine extension
 
