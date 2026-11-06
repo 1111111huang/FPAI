@@ -249,9 +249,17 @@ In `_insert_matched_rows`, build the real team pool once (same pattern as
 before building the `match_id` and the insert tuple:
 
 ```python
-def _insert_matched_rows(matched_rows: list[dict]) -> int:
+def _insert_matched_rows(matched_rows: list[dict], mapper: TeamNameMapper) -> tuple[int, set[str]]:
+    """... (docstring: same rationale as before, plus a note that the
+    returned team_pool is the pre-insert snapshot, reused by main()'s
+    new-clubs report below -- see Step 3 -- and a `ponytail:` comment
+    flagging that match_id is hashed from the canonicalized name at
+    insertion time, so a club whose canonical spelling changes in a LATER
+    run would get a different match_id and INSERT OR IGNORE would no
+    longer recognize it as the same fixture; no structural fix attempted,
+    pinning canonical identity at first insert is a separate design
+    question)."""
     db_manager = DuckDBManager()
-    mapper = TeamNameMapper()
 
     with db_manager.connection() as conn:
         CSVLoader._create_raw_matches_table(conn)
@@ -286,31 +294,36 @@ def _insert_matched_rows(matched_rows: list[dict]) -> int:
             records,
         )
         after = conn.execute("SELECT COUNT(*) FROM raw_matches").fetchone()[0]
-    return after - before
+    return after - before, team_pool
 ```
 
 Note: the team pool is read once, before any of this run's own rows are
-inserted — it reflects only the *existing* (other leagues') raw_matches
-rows, same as `fotmob/merge.py`'s own pattern, not a pool that grows
-mid-run as UCL/UEL rows are added (which could let one UCL/UEL row
-influence another's resolution, not wanted here).
+inserted. Note on "pre-insert" here: it means "whatever `raw_matches` held
+immediately before this run touched it" — UCL/UEL rows from *earlier* runs
+included, not "every other league, forever." That distinction matters for
+Step 3's report below, which reuses this exact pool rather than
+re-querying with a different, narrower filter.
 
 - [ ] **Step 3: Also report newly-registered (never-seen-before) clubs**
 
-In `main()`, after `_insert_matched_rows`, add a reporting block so new
-canonical identities are visible for review, not silently created:
+In `main()`, construct `mapper` once, pass it into `_insert_matched_rows`,
+and reuse its *returned* pool for the report — don't re-query
+`raw_matches` with a separate filter (an earlier draft of this step did
+exactly that, filtering `WHERE league NOT IN ('UCL', 'UEL')`, which
+permanently excludes this script's own prior-run rows and reprints
+already-resolved clubs as "new" forever on every re-run — caught and
+fixed during implementation, not a hypothetical):
 
 ```python
+    mapper = TeamNameMapper()
+    added, established_pool = _insert_matched_rows(matched_rows, mapper)
+
     # Report which clubs had no existing representation to resolve
     # against -- their fotmob spelling becomes their first-time canonical
     # identity from this run, not an error, but worth a human glance.
-    mapper = TeamNameMapper()
-    db_manager = DuckDBManager()
-    with db_manager.connection() as conn:
-        pool_df = conn.execute(
-            "SELECT home_team, away_team FROM raw_matches WHERE league NOT IN ('UCL', 'UEL')"
-        ).fetchdf()
-    established_pool = set(pool_df["home_team"]) | set(pool_df["away_team"])
+    # established_pool is the pool _insert_matched_rows read BEFORE this
+    # run's own rows went in, reused as-is here (same mapper too) rather
+    # than re-querying raw_matches with a separate filter.
     new_clubs = sorted({
         name for row in matched_rows
         for name in (row["home_team"], row["away_team"])
