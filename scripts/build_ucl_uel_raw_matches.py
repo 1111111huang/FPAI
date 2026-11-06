@@ -351,7 +351,7 @@ def _build_fotmob_matches_by_date(manifest: dict[str, dict]) -> dict[str, list[d
     return fotmob_matches_by_date
 
 
-def _insert_matched_rows(matched_rows: list[dict]) -> int:
+def _insert_matched_rows(matched_rows: list[dict], mapper: TeamNameMapper) -> tuple[int, set[str]]:
     """Upsert matched rows into raw_matches via the same INSERT OR IGNORE
     pattern as every other ingestion path (src/ingestion/football_data/
     loader.py). Only the UCL/UEL-relevant columns are populated; everything
@@ -370,9 +370,26 @@ def _insert_matched_rows(matched_rows: list[dict]) -> int:
     fotmob's raw spelling -- see ucl_uel_join.py's module docstring. The
     pool is read once, before any of this run's own rows are inserted, so
     it reflects only pre-existing rows and one UCL/UEL row can't influence
-    another's resolution (same pattern as fotmob/merge.py)."""
+    another's resolution (same pattern as fotmob/merge.py). That same
+    pre-insert pool is returned (alongside the inserted-row count) so
+    main()'s new-clubs report can reuse it directly instead of re-querying
+    raw_matches with its own (previously buggy) filter -- see the
+    docstring's note on match_id drift below for why "pre-insert" here
+    deliberately does NOT mean "every other league, forever": it means
+    "whatever raw_matches held immediately before this run touched it",
+    UCL/UEL rows from earlier runs included.
+
+    ponytail: match_id is a hash over the canonicalized team names at
+    insertion time, resolved against whatever raw_matches currently holds.
+    If a club's canonical spelling ever changes later (e.g. a new league
+    onboarding reassigns its mapped name), re-running this script would
+    hash a DIFFERENT match_id for the same real fixture, so INSERT OR
+    IGNORE would no longer recognize it as a duplicate and a second row
+    for that fixture would be inserted. No fix attempted here -- pinning
+    a club's canonical identity permanently at first-insert time is a
+    separate, larger design question. Revisit if/when this script needs
+    to be safely re-run across a canonical-name change."""
     db_manager = DuckDBManager()
-    mapper = TeamNameMapper()
 
     with db_manager.connection() as conn:
         CSVLoader._create_raw_matches_table(conn)
@@ -407,7 +424,7 @@ def _insert_matched_rows(matched_rows: list[dict]) -> int:
             records,
         )
         after = conn.execute("SELECT COUNT(*) FROM raw_matches").fetchone()[0]
-    return after - before
+    return after - before, team_pool
 
 
 def main() -> None:
@@ -422,18 +439,15 @@ def main() -> None:
     matched_rows, unmatched_entries = match_oddspapi_to_fotmob(manifest, fotmob_matches_by_date)
     offset_used = [r for r in matched_rows if r["date_offset_days"] != 0]
 
-    added = _insert_matched_rows(matched_rows)
+    mapper = TeamNameMapper()
+    added, established_pool = _insert_matched_rows(matched_rows, mapper)
 
     # Report which clubs had no existing representation to resolve
     # against -- their fotmob spelling becomes their first-time canonical
     # identity from this run, not an error, but worth a human glance.
-    mapper = TeamNameMapper()
-    db_manager = DuckDBManager()
-    with db_manager.connection() as conn:
-        pool_df = conn.execute(
-            "SELECT home_team, away_team FROM raw_matches WHERE league NOT IN ('UCL', 'UEL')"
-        ).fetchdf()
-    established_pool = set(pool_df["home_team"]) | set(pool_df["away_team"])
+    # established_pool is the pool _insert_matched_rows read BEFORE this
+    # run's own rows went in, reused as-is here (same mapper too) rather
+    # than re-querying raw_matches with a separate filter.
     new_clubs = sorted({
         name for row in matched_rows
         for name in (row["home_team"], row["away_team"])
