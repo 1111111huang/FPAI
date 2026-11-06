@@ -344,9 +344,120 @@ git commit -m "feat(ingestion): port UCL/UEL fixture-pairing script, canonicaliz
 
 ---
 
-### Task 4: Run the real join and verify it
+### Task 4: Port the fotmob score-extraction fix (real bug found running Task 5 the first time)
+
+**Files:**
+- Modify: `src/ingestion/fotmob/fetcher.py`
+
+**Why this task exists:** an earlier attempt at Task 5 (running the real
+join) crashed immediately with `KeyError: 'home_score'` in
+`match_oddspapi_to_fotmob` — `fetch_all_matches`'s shared parser
+(`_parse_finished_matches`) never extracted score fields at all, only
+`fotmob_match_id`/`match_date`/`home_team`/`away_team`. This is a real,
+100%-reproducible gap (not a flake — it fails on every match, every run),
+caused by this plan originally scoping Task 3 to port only
+`build_ucl_uel_raw_matches.py` without also porting the abandoned branch's
+separate `fetcher.py` commit that script actually depends on. The
+abandoned branch's own historical 368/368 match-rate claim is real — it
+ran against ITS version of `fetcher.py`, which had this fix; this branch
+never got it.
+
+- [ ] **Step 1: Port the fix**
+
+Apply this exact diff to `src/ingestion/fotmob/fetcher.py`'s
+`_parse_finished_matches` function (confirmed via `git show
+fa14fb9851082783e3bef19c69f0191c09034263 -- src/ingestion/fotmob/fetcher.py`
+on the abandoned branch — a small, already-tested change, not new logic
+to design):
+
+```python
+def _parse_finished_matches(matches_payload: list[dict]) -> list[dict]:
+    """Shared parsing for one league's raw 'matches' list -> our own finished-
+    match dicts (fotmob_match_id, match_date, home_team, away_team, home_score,
+    away_score). Used by both fetch_finished_match_ids (single league) and
+    fetch_matches_for_leagues (US#190, several leagues from one shared
+    request) so the two never drift."""
+    matches: list[dict] = []
+    for match in matches_payload:
+        status = match.get("status", {})
+        if not status.get("finished"):
+            continue
+        utc_time = status.get("utcTime")
+        if not utc_time:
+            continue
+        try:
+            matches.append(
+                {
+                    "fotmob_match_id": match["id"],
+                    "match_date": pd.to_datetime(utc_time).tz_localize(None).normalize(),
+                    "home_team": match["home"]["name"],
+                    "away_team": match["away"]["name"],
+                    "home_score": match["home"]["score"],
+                    "away_score": match["away"]["score"],
+                }
+            )
+        except (KeyError, TypeError, ValueError) as exc:
+            LOGGER.warning("Skipping malformed match entry id=%s: %s", match.get("id"), exc)
+    return matches
+```
+
+This is purely additive — two new dict keys. The existing `try/except
+(KeyError, TypeError, ValueError)` already wraps the whole dict
+construction, so a match genuinely missing a score field (if that ever
+happens — e.g. an edge-case abandoned/walkover match) degrades to the
+existing "skip and log" behavior, not a new crash mode.
+
+- [ ] **Step 2: Check for any other real caller this could affect**
+
+Run: `grep -rn "fetch_finished_match_ids\|fetch_matches_for_leagues" --include="*.py" . | grep -v "fetcher.py\|/tests/"`
+Expected: confirms the only real (non-test) callers are `main.py` (player-stats
+pipeline) and `src/ingestion/fotmob/lineup.py` (lineup backfill) — both
+consume specific known dict keys (`fotmob_match_id`, `home_team`, etc.),
+so two new keys appearing is additive and should not break either. Read
+both call sites briefly to confirm they don't do strict key-set validation
+(e.g. `assert set(d.keys()) == {...}`) that an added key would break — if
+either does, stop and report rather than assuming it's fine.
+
+- [ ] **Step 3: Run the existing fotmob fetcher test suite**
+
+Run: `pytest tests/test_fotmob_fetcher.py app/backend/tests -k fotmob -v` (adjust
+paths if the real test file names differ from this guess — check
+`find . -iname "*fotmob*test*" -o -iname "*test*fotmob*"` first rather
+than assuming).
+Expected: all pass, confirming the additive change didn't break any
+existing fotmob-fetcher-adjacent test.
+
+- [ ] **Step 4: Commit**
+
+```bash
+git add src/ingestion/fotmob/fetcher.py
+git commit -m "fix(ingestion): extract final score from fotmob finished-match payload
+
+Ported from the abandoned UCL/UEL branch's own fix
+(fa14fb9851082783e3bef19c69f0191c09034263) -- this branch's version of
+_parse_finished_matches never extracted score fields at all, which
+Task 5's first real run discovered by crashing on every single match
+(KeyError: home_score), not a flake."
+```
+
+---
+
+### Task 5: Run the real join and verify it
 
 **Files:** none new — running Task 3's script for real.
+
+**If this is a retry after Task 4's fix:** the first attempt already ran
+the full fetch phase (105 unique dates) before crashing on the
+`home_score` `KeyError` — `data/fotmob_date_cache/*.json` has all 105
+dates cached from that run (the script's own `_fetch_all_matches_cached`
+checks this cache first). A retry after Task 4's fix should be
+near-instant for the fetch phase, not another 20-40 minute wait — but the
+*cached* payloads were captured before Task 4's fetcher fix existed, so
+they're from `fetch_all_matches`'s OLD (pre-fix) output shape, missing
+`home_score`/`away_score` entirely. **Delete the stale cache before
+retrying** (`rm -rf data/fotmob_date_cache`) so the fetch re-runs through
+the now-fixed parser and actually gets score fields this time — otherwise
+Task 4's fix will have no effect and the same `KeyError` will recur.
 
 **Pool-scoping safety, already checked exhaustively (not just a spot-check):**
 a code-quality review of Task 2 raised whether an unscoped, all-leagues
@@ -402,7 +513,7 @@ the local DuckDB file, not a tracked artifact).
 
 ---
 
-### Task 5: Port the historical-odds backfill script (not run, for future reuse)
+### Task 6: Port the historical-odds backfill script (not run, for future reuse)
 
 **Files:**
 - Create: `scripts/pull_oddspapi_ucl_uel_1x2.py`
@@ -432,7 +543,7 @@ git commit -m "feat(ingestion): port the UCL/UEL historical odds backfill script
 
 ---
 
-### Task 6: Documentation
+### Task 7: Documentation
 
 **Files:**
 - Modify: `documents/FRAI_TECHSPEC.md`
