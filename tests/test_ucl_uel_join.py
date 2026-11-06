@@ -5,7 +5,10 @@ feature pipeline already uses, via the existing TeamNameMapper mechanism
 from __future__ import annotations
 
 import json
+import sys
 from pathlib import Path
+
+sys.path.append(str(Path(__file__).resolve().parents[1]))
 
 from src.ingestion.ucl_uel_join import canonicalize_team_name
 from src.ingestion.common.team_mapping import TeamNameMapper
