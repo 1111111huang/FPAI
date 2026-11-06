@@ -151,6 +151,15 @@ ODDSPAPI_TO_FOTMOB_ALIASES: dict[str, str | tuple[str, ...]] = {
     "Tallinna FC Flora": "Flora Tallinn",
     "MSK Zilina": "Žilina",
     "Vikingur Reykjavik": "Víkingur Reykjavík",
+    # fotmob genuinely uses both the accented and unaccented spelling for
+    # this club across different rounds (confirmed in real cached data:
+    # accented in qualifying rounds, unaccented "Qarabag FK" in the league
+    # phase) -- only the accented variant needs an explicit alias here
+    # because OddsPapi's own raw name ("Qarabag FK") already equals
+    # fotmob's unaccented spelling, so _oddspapi_name_candidates' fallback
+    # (standardize_team_name of the raw OddsPapi name) covers that half for
+    # free. This is an implicit coincidence, not a general mechanism --
+    # don't assume it holds for other clubs without checking.
     "Qarabag FK": "Qarabağ FK",
     "Aluminij Kidricevo": "Aluminij",
     "FC Universitatea Cluj": "Universitatea Cluj",
