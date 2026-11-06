@@ -386,14 +386,23 @@ def _parse_finished_matches(matches_payload: list[dict]) -> list[dict]:
         if not utc_time:
             continue
         try:
+            home_score = match["home"]["score"]
+            away_score = match["away"]["score"]
+            if home_score is None or away_score is None:
+                # "finished": true with a null score happens on real
+                # abandoned/awarded/walkover matches -- treat it the same
+                # as a missing key rather than letting None reach callers
+                # (e.g. build_ucl_uel_raw_matches.py inserts it straight
+                # into raw_matches.fthg with no numeric/null check).
+                raise ValueError("score present but null")
             matches.append(
                 {
                     "fotmob_match_id": match["id"],
                     "match_date": pd.to_datetime(utc_time).tz_localize(None).normalize(),
                     "home_team": match["home"]["name"],
                     "away_team": match["away"]["name"],
-                    "home_score": match["home"]["score"],
-                    "away_score": match["away"]["score"],
+                    "home_score": home_score,
+                    "away_score": away_score,
                 }
             )
         except (KeyError, TypeError, ValueError) as exc:
@@ -401,11 +410,18 @@ def _parse_finished_matches(matches_payload: list[dict]) -> list[dict]:
     return matches
 ```
 
-This is purely additive — two new dict keys. The existing `try/except
-(KeyError, TypeError, ValueError)` already wraps the whole dict
-construction, so a match genuinely missing a score field (if that ever
-happens — e.g. an edge-case abandoned/walkover match) degrades to the
-existing "skip and log" behavior, not a new crash mode.
+Two new dict keys, plus an explicit null-score check. The first draft of
+this fix (additive keys only, no null check) was caught by code-quality
+review: a present-but-`null` score — real on fotmob for
+abandoned/awarded/walkover matches still flagged `"finished": true` —
+doesn't raise `KeyError` (the key exists, its value is just `None`), so it
+would have flowed straight through into `home_score`/`away_score` as
+`None`, silently reaching `raw_matches.fthg` with no numeric/null check in
+the new consumer, unlike the existing precedent for this exact risk
+(`sweden_loader.py`'s `pd.to_numeric(..., errors="coerce")` + `dropna`).
+Explicitly raising `ValueError` for a `None` score routes it through the
+same existing skip-and-log `except` branch as a missing key — same log
+line, no new branch.
 
 - [ ] **Step 2: Check for any other real caller this could affect**
 
