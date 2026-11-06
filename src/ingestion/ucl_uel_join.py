@@ -12,10 +12,20 @@ from src.ingestion.common.team_mapping import TeamNameMapper
 
 def canonicalize_team_name(name: str, mapper: TeamNameMapper, team_pool: set[str]) -> str:
     """Resolve a fotmob-sourced team name into the same canonical identity
-    the domestic feature pipeline already uses for that club, via the
-    existing exact/accent-fold/token-match fuzzy mechanism
-    (src/ingestion/fotmob/merge.py's own pattern) -- not a bespoke
-    OddsPapi/fotmob-specific crosswalk. Returns the name unchanged when no
-    existing representation is found, which is correct: that becomes the
-    club's first-time canonical identity, not an error."""
-    return mapper.map_team(name, team_pool, use_token_match=True)
+    the domestic feature pipeline already uses for that club, via
+    map_team()'s existing exact/accent-fold/conservative-fuzzy mechanism --
+    not a bespoke OddsPapi/fotmob-specific crosswalk. Returns the name
+    unchanged when no existing representation is found, which is correct:
+    that becomes the club's first-time canonical identity, not an error.
+
+    Deliberately does NOT pass use_token_match=True. This module's real
+    candidate pool is unscoped across every competition (every value in
+    config/team_mapping.json, the shape `raw_matches` naturally has here --
+    see the US#141 precedent in team_mapping.py's docstring for why an
+    unscoped multi-league pool is already a known risk factor). Against
+    that real pool, token-containment scoring produces a confirmed false
+    positive on real data: "Inter Club de Escaldes" (a real Andorran club)
+    resolves to "Inter" (Inter Milan) at score 0.95. Plain Levenshtein
+    (use_token_match's default, False) correctly leaves it unchanged
+    (closest score 0.27, well below the 0.82 threshold)."""
+    return mapper.map_team(name, team_pool)
