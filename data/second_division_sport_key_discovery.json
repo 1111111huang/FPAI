@@ -1,0 +1,52 @@
+{
+  "CHAMPIONSHIP": [
+    {
+      "key": "soccer_efl_champ",
+      "title": "Championship",
+      "active": true
+    }
+  ],
+  "SEGUNDA": [
+    {
+      "key": "soccer_spain_segunda_division",
+      "title": "La Liga 2 - Spain",
+      "active": true
+    }
+  ],
+  "SERIE_B": [
+    {
+      "key": "soccer_italy_serie_b",
+      "title": "Serie B - Italy",
+      "active": true
+    }
+  ],
+  "BUNDESLIGA_2": [
+    {
+      "key": "soccer_austria_bundesliga",
+      "title": "Austrian Football Bundesliga",
+      "active": true
+    },
+    {
+      "key": "soccer_germany_bundesliga",
+      "title": "Bundesliga - Germany",
+      "active": true
+    },
+    {
+      "key": "soccer_germany_bundesliga2",
+      "title": "Bundesliga 2 - Germany",
+      "active": true
+    },
+    {
+      "key": "soccer_germany_bundesliga_women",
+      "title": "Frauen-Bundesliga",
+      "active": true
+    }
+  ],
+  "LIGUE_2": [
+    {
+      "key": "soccer_france_ligue_two",
+      "title": "Ligue 2 - France",
+      "active": true
+    }
+  ]
+}

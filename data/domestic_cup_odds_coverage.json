@@ -1,0 +1,26 @@
+{
+  "FA_CUP": {
+    "fixture_count": 40,
+    "has_1x2_odds": true
+  },
+  "CARABAO_CUP": {
+    "fixture_count": 4,
+    "has_1x2_odds": true
+  },
+  "COPA_DEL_REY": {
+    "fixture_count": 8,
+    "has_1x2_odds": false
+  },
+  "DFB_POKAL": {
+    "fixture_count": 8,
+    "has_1x2_odds": false
+  },
+  "COUPE_DE_FRANCE": {
+    "fixture_count": 86,
+    "has_1x2_odds": false
+  },
+  "COPPA_ITALIA": {
+    "fixture_count": 17,
+    "has_1x2_odds": false
+  }
+}

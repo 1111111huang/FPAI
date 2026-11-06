@@ -57,7 +57,7 @@ cup-transfer model specifically.
 - Create: `scripts/discover_domestic_cup_tournament_ids.py`
 - Create: `docs/superpowers/plans/2026-11-04-domestic-cup-preflight-findings.md`
 
-- [ ] **Step 1: Write the discovery script**
+- [x] **Step 1: Write the discovery script**
 
 ```python
 """One-off spike (domestic cup pre-flight, 2026-11-04): discover OddsPapi
@@ -85,16 +85,17 @@ if not API_KEY:
     sys.exit("No API key: set ODDSPAPI_API_KEY in .env.")
 BASE_URL = "https://api.oddspapi.io"
 
-# Name fragments to search for in the tournament listing, one per cup in
-# scope. OddsPapi's own naming isn't known in advance -- confirm against the
-# real listing below, don't assume these match the "name" field exactly.
+# Name fragments + category, one per cup in scope. OddsPapi reuses generic
+# names like "FA Cup"/"League Cup" across dozens of countries -- name alone
+# is not enough, "categoryName" (the real per-tournament country/region
+# field) is required to disambiguate.
 CUP_NAME_FRAGMENTS = {
-    "FA_CUP": ["fa cup"],
-    "CARABAO_CUP": ["carabao", "efl cup", "league cup"],
-    "COPA_DEL_REY": ["copa del rey"],
-    "DFB_POKAL": ["dfb", "pokal"],
-    "COUPE_DE_FRANCE": ["coupe de france"],
-    "COPPA_ITALIA": ["coppa italia"],
+    "FA_CUP": (["fa cup"], "England"),
+    "CARABAO_CUP": (["efl cup"], "England"),
+    "COPA_DEL_REY": (["copa del rey"], "Spain"),
+    "DFB_POKAL": (["dfb pokal"], "Germany"),
+    "COUPE_DE_FRANCE": (["coupe de france"], "France"),
+    "COPPA_ITALIA": (["coppa italia"], "Italy"),
 }
 
 
@@ -106,19 +107,25 @@ def main() -> None:
     tournaments = resp.json()
     print(f"Fetched {len(tournaments)} total soccer tournaments.")
 
+    # Real field names confirmed live (not "id"/"name" as the inline
+    # LEAGUE_TOURNAMENT_IDS comments elsewhere implied): tournamentId,
+    # tournamentName, categoryName.
     matches: dict[str, list[dict]] = {cup: [] for cup in CUP_NAME_FRAGMENTS}
     for t in tournaments:
-        name_lower = str(t.get("name", "")).lower()
-        for cup, fragments in CUP_NAME_FRAGMENTS.items():
-            if any(frag in name_lower for frag in fragments):
-                matches[cup].append({"id": t.get("id"), "name": t.get("name")})
+        name_lower = str(t.get("tournamentName", "")).lower()
+        category = str(t.get("categoryName", ""))
+        for cup, (fragments, expected_category) in CUP_NAME_FRAGMENTS.items():
+            if any(frag in name_lower for frag in fragments) and category == expected_category:
+                matches[cup].append({
+                    "id": t.get("tournamentId"), "name": t.get("tournamentName"), "category": category,
+                })
 
     for cup, found in matches.items():
         print(f"\n{cup}:")
         if not found:
             print("  NO MATCH FOUND")
         for f in found:
-            print(f"  id={f['id']}  name={f['name']!r}")
+            print(f"  id={f['id']}  name={f['name']!r}  category={f['category']!r}")
 
     out_path = Path(__file__).parent.parent / "data" / "domestic_cup_tournament_discovery.json"
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -130,14 +137,19 @@ if __name__ == "__main__":
     main()
 ```
 
-- [ ] **Step 2: Run it against the live API**
+- [x] **Step 2: Run it against the live API**
 
 Run: `python scripts/discover_domestic_cup_tournament_ids.py`
-Expected: prints one block per cup with `id=<int> name='<real name>'`, or
-`NO MATCH FOUND` for any cup OddsPapi doesn't carry. This is real-world
+Expected: prints one block per cup with `id=<int> name='<real name>'
+category='<real category>'`, or `NO MATCH FOUND` for any cup OddsPapi
+doesn't carry under that name+category combination. This is real-world
 discovery — a `NO MATCH FOUND` is a valid, important finding, not a bug.
+Live-verified 2026-11-04: all 6 resolved to a single unambiguous ID once
+category was added as a filter (name alone matched 14 "FA Cup"-named
+tournaments across different countries) — FA Cup=19, EFL Cup=21,
+Copa del Rey=329, DFB Pokal=217, Coupe de France=335, Coppa Italia=328.
 
-- [ ] **Step 3: Record findings**
+- [x] **Step 3: Record findings**
 
 Create `docs/superpowers/plans/2026-11-04-domestic-cup-preflight-findings.md`
 with this starting content (fill in the real `id=`/`name=` values or
@@ -161,7 +173,7 @@ showed, not an assumption.
 | Coppa Italia | <fill in> | <fill in> |
 ```
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add scripts/discover_domestic_cup_tournament_ids.py \
@@ -182,7 +194,7 @@ credits, against the shared 250/month free-tier budget already partly used
 by the UCL/UEL historical backfill and the live BTTS/corners pull). Check
 the current balance first so this can't accidentally blow the budget.
 
-- [ ] **Step 1: Check current OddsPapi credit usage before spending more**
+- [x] **Step 1: Check current OddsPapi credit usage before spending more**
 
 Run:
 ```bash
@@ -192,7 +204,7 @@ Expected: JSON with a `credits_used`/similar field, or the fallback message.
 If `credits_used` is within ~10 credits of 250, stop here and flag it in the
 findings doc instead of spending more — this task only needs 6.
 
-- [ ] **Step 2: Write the coverage-check script**
+- [x] **Step 2: Write the coverage-check script**
 
 ```python
 """One-off spike (domestic cup pre-flight, 2026-11-04): for each domestic
@@ -251,8 +263,12 @@ def _last_price(outcomes: dict, outcome_id: str) -> float | None:
     outcome = outcomes.get(outcome_id)
     if not outcome:
         return None
-    ticks = outcome.get("players", {}).get("0", [])
-    return ticks[-1].get("price") if ticks else None
+    # "players"->"0" is a single price dict in the real payload (confirmed
+    # live, 2026-11-04: {"active": true, ..., "price": 9.86}), not a list of
+    # historical "ticks" as production's own _last_price
+    # (app/backend/oddspapi_client.py) assumes.
+    player = outcome.get("players", {}).get("0", {})
+    return player.get("price")
 
 
 def main() -> None:
@@ -270,14 +286,29 @@ def main() -> None:
             findings[cup] = {"fixture_count": 0, "has_1x2_odds": None}
             continue
 
-        sample = fixtures[0]
+        # /v4/fixtures does not return results sorted by date -- picking
+        # fixtures[0] directly can land on an arbitrary far-future fixture
+        # with no odds posted yet, which looks like "no coverage" but is
+        # really just "too early for this specific match." Sort by
+        # startTime and use the nearest one instead.
+        fixtures_sorted = sorted(fixtures, key=lambda f: f.get("startTime", "9999"))
+        sample = fixtures_sorted[0]
         fixture_id = str(sample["fixtureId"])
+        print(f"  nearest fixture start_time={sample.get('startTime')}")
+        print(f"  ALERT: spending 1 real OddsPapi credit -- /v4/odds for fixture {fixture_id}")
         time.sleep(5.0)  # same cooldown convention as pull_oddspapi_btts_corners.py
         odds_status, odds_payload = _get("/v4/odds", fixtureId=fixture_id, bookmakers="pinnacle")
         outcomes = {}
         if odds_status == 200 and isinstance(odds_payload, dict):
+            # The real top-level key is "bookmakerOdds", not "bookmakers" --
+            # confirmed live, 2026-11-04, against a real payload where
+            # market 101 (match-winner) had real prices sitting under
+            # "bookmakerOdds" and nothing under "bookmakers". The same wrong
+            # key also exists in production (app/backend/oddspapi_client.py's
+            # _parse_corners_odds) and two other scripts -- out of scope to
+            # fix as part of this plan, flagged separately.
             outcomes = (
-                odds_payload.get("bookmakers", {}).get("pinnacle", {})
+                odds_payload.get("bookmakerOdds", {}).get("pinnacle", {})
                 .get("markets", {}).get(MATCH_WINNER_MARKET_ID, {}).get("outcomes", {})
             )
         home = _last_price(outcomes, MATCH_WINNER_OUTCOME_HOME)
@@ -296,13 +327,27 @@ if __name__ == "__main__":
     main()
 ```
 
-- [ ] **Step 3: Fill in `TOURNAMENT_IDS` from Task 1's real output, then run**
+- [x] **Step 3: Fill in `TOURNAMENT_IDS` from Task 1's real output, then run**
 
 Run: `python scripts/check_domestic_cup_odds_coverage.py`
 Expected: one block per cup showing `fixture_count` and `has_1x2_odds`
 (`True`/`False`/`None` if there were no upcoming fixtures to check at all).
+Live-verified 2026-11-04: two real bugs caught and fixed while running
+this (both documented inline above) — the response's real top-level key is
+`bookmakerOdds` not `bookmakers`, and `players["0"]` is a single price dict
+not a list of ticks. Both bugs also exist in production code
+(`app/backend/oddspapi_client.py`'s `_parse_corners_odds`), masking each
+other there (the wrong key always produced an empty `outcomes` dict, so the
+list-indexing bug was never reached with real data) — flagged separately,
+not fixed as part of this plan. Real result: FA Cup and Carabao Cup
+confirmed real 1X2 odds on their nearest fixture; Copa del Rey, DFB-Pokal,
+Coupe de France, and Coppa Italia came back with no price posted yet on a
+single-sample check (Copa del Rey's "nearest" fixture under `statusId=0`
+had a start time a month in the past — likely a postponed/rescheduled match
+still flagged pre-game, a data-quality wrinkle for later ingestion work, not
+resolved here).
 
-- [ ] **Step 4: Append real findings to the findings doc**
+- [x] **Step 4: Append real findings to the findings doc**
 
 Add to `docs/superpowers/plans/2026-11-04-domestic-cup-preflight-findings.md`:
 
@@ -319,7 +364,7 @@ Add to `docs/superpowers/plans/2026-11-04-domestic-cup-preflight-findings.md`:
 | Coppa Italia | <fill in> | <fill in> |
 ```
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add scripts/check_domestic_cup_odds_coverage.py \
@@ -342,14 +387,14 @@ historical endpoint (`/v4/historical-odds`, fixture-ID-based), confirmed
 live for UCL/UEL with a 2026-01-01 cutoff — that cutoff is specific to
 UCL/UEL and must not be assumed for the 6 domestic cups without checking.
 
-- [ ] **Step 1: Re-check current OddsPapi credit usage**
+- [x] **Step 1: Re-check current OddsPapi credit usage**
 
 Run: `cat data/oddspapi_credit_counter.json 2>/dev/null || echo "no counter file yet -- 0 used"`
 Expected: confirm there's budget left after Task 2's spend before this task
 spends more (one `/v4/historical-odds` call per cup with a finished fixture
 = up to 6 more credits).
 
-- [ ] **Step 2: Write the historical-coverage script**
+- [x] **Step 2: Write the historical-coverage script**
 
 ```python
 """One-off spike (domestic cup pre-flight, 2026-11-04): check whether
@@ -454,7 +499,7 @@ if __name__ == "__main__":
     main()
 ```
 
-- [ ] **Step 3: Fill in `TOURNAMENT_IDS` from Task 1's real output, then run**
+- [x] **Step 3: Fill in `TOURNAMENT_IDS` from Task 1's real output, then run**
 
 Run: `python scripts/check_domestic_cup_historical_odds.py`
 Expected: per cup, whether the oldest and newest finished fixtures sampled
@@ -462,8 +507,14 @@ have real 1X2 odds. If the oldest sample lacks odds but the newest has them,
 that's a real cutoff date, same shape as UCL/UEL's confirmed 2026-01-01 —
 narrow it down with a couple more sampled fixtures between the two dates if
 the gap matters for deciding whether there's enough training history.
+Live-verified 2026-11-04: every cup's oldest (2024) sample returned 404,
+consistent with the known 2026-01-01 cutoff. 4/6 cups' newest sample (FA
+Cup, Carabao Cup, DFB-Pokal, Coppa Italia) confirmed real 1X2 odds; Copa del
+Rey and Coupe de France's single newest sample came back empty — not
+conclusive on one sample each, re-check with a wider sample before treating
+as "no coverage."
 
-- [ ] **Step 4: Record findings and commit**
+- [x] **Step 4: Record findings and commit**
 
 Append to the findings doc:
 
@@ -472,12 +523,12 @@ Append to the findings doc:
 
 | Cup | Finished fixtures (statusId=2) | Oldest sample has odds | Newest sample has odds |
 |---|---|---|---|
-| FA Cup | <fill in> | <fill in> | <fill in> |
-| Carabao Cup | <fill in> | <fill in> | <fill in> |
-| Copa del Rey | <fill in> | <fill in> | <fill in> |
-| DFB-Pokal | <fill in> | <fill in> | <fill in> |
-| Coupe de France | <fill in> | <fill in> | <fill in> |
-| Coppa Italia | <fill in> | <fill in> | <fill in> |
+| FA Cup | 571 | False (2024, pre-cutoff) | True |
+| Carabao Cup | 235 | False (2024, pre-cutoff) | True |
+| Copa del Rey | 323 | False (2024, pre-cutoff) | False (one sample, not conclusive) |
+| DFB-Pokal | 148 | False (2024, pre-cutoff) | True |
+| Coupe de France | 411 | False (2024, pre-cutoff) | False (one sample, not conclusive) |
+| Coppa Italia | 98 | False (2024, pre-cutoff) | True |
 ```
 
 ```bash
@@ -501,7 +552,7 @@ response that justified it — same discipline here, including the D1 gotcha:
 `soccer_germany_bundesliga2` (2. Bundesliga) and `soccer_austria_bundesliga`
 both exist in the same listing and must not be confused.
 
-- [ ] **Step 1: Write the discovery script**
+- [x] **Step 1: Write the discovery script**
 
 ```python
 """One-off spike (domestic cup pre-flight, 2026-11-04): discover The Odds
@@ -530,7 +581,11 @@ BASE_URL = "https://api.the-odds-api.com"
 # listing below -- The Odds API's own key naming isn't known in advance.
 DIVISION_NAME_FRAGMENTS = {
     "CHAMPIONSHIP": ["championship"],
-    "SEGUNDA": ["segunda"],
+    # "segunda" alone matches nothing live -- the real title is
+    # "La Liga 2 - Spain" (key soccer_spain_segunda_division), confirmed
+    # 2026-11-04. Both fragments kept so the script is self-explanatory
+    # about why.
+    "SEGUNDA": ["segunda", "la liga 2"],
     "SERIE_B": ["serie b"],
     "BUNDESLIGA_2": ["bundesliga"],  # must disambiguate from top-flight D1 + Austria, see Step 2
     "LIGUE_2": ["ligue 2"],
@@ -571,15 +626,19 @@ if __name__ == "__main__":
     main()
 ```
 
-- [ ] **Step 2: Run it, disambiguating BUNDESLIGA_2 by hand**
+- [x] **Step 2: Run it, disambiguating BUNDESLIGA_2 by hand**
 
 Run: `python scripts/discover_second_division_sport_keys.py`
 Expected: `BUNDESLIGA_2` prints multiple candidates (at minimum
 `soccer_germany_bundesliga` (top flight, already D1's key — exclude) and
 `soccer_germany_bundesliga2`). Pick the one whose real `title` says
 "2. Bundesliga" / "Bundesliga 2 - Germany", not the top-flight one.
+Live-verified 2026-11-04: all 5 resolved to a single unambiguous key.
+Incidental finding: The Odds API also carries `soccer_spain_copa_del_rey` —
+a second potential live-odds source for that cup, alongside OddsPapi — not
+pursued further here, just noted.
 
-- [ ] **Step 3: Record findings**
+- [x] **Step 3: Record findings**
 
 Append to the findings doc:
 
@@ -588,14 +647,14 @@ Append to the findings doc:
 
 | Division | sport_key | Real title | active |
 |---|---|---|---|
-| Championship | <fill in> | <fill in> | <fill in> |
-| Segunda División | <fill in> | <fill in> | <fill in> |
-| Serie B | <fill in> | <fill in> | <fill in> |
-| 2. Bundesliga | <fill in> | <fill in> | <fill in> |
-| Ligue 2 | <fill in> | <fill in> | <fill in> |
+| Championship | soccer_efl_champ | Championship | True |
+| Segunda División | soccer_spain_segunda_division | La Liga 2 - Spain | True |
+| Serie B | soccer_italy_serie_b | Serie B - Italy | True |
+| 2. Bundesliga | soccer_germany_bundesliga2 | Bundesliga 2 - Germany | True |
+| Ligue 2 | soccer_france_ligue_two | Ligue 2 - France | True |
 ```
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add scripts/discover_second_division_sport_keys.py \
@@ -616,7 +675,7 @@ it does not mean a bookmaker is actually offering odds on it right now. This
 step confirms real odds rows come back, reusing the existing production
 `OddsAPIClient.get_odds()` rather than re-implementing the call.
 
-- [ ] **Step 1: Write the coverage-check script**
+- [x] **Step 1: Write the coverage-check script**
 
 ```python
 """One-off spike (domestic cup pre-flight, 2026-11-04): confirm The Odds API
@@ -637,9 +696,14 @@ from app.backend.odds_api_client import CreditCounter, OddsAPIClient  # noqa: E4
 
 load_dotenv()
 
-API_KEY = os.environ.get("ODDS_API_KEY")
+# ODDS_API_KEY and _2 confirmed exhausted live, 2026-11-04 (401
+# OUT_OF_USAGE_CREDITS, x-requests-remaining=0) against soccer_epl itself --
+# a production-already-live league, so this is unrelated to second
+# divisions. Found while testing this task, flagged separately (not fixed
+# here). _3 confirmed to have real remaining capacity, used here instead.
+API_KEY = os.environ.get("ODDS_API_KEY_3")
 if not API_KEY:
-    sys.exit("No API key: set ODDS_API_KEY in .env.")
+    sys.exit("No API key: set ODDS_API_KEY_3 in .env.")
 
 # Fill in from Task 4's real output.
 SPORT_KEYS: dict[str, str] = {
@@ -651,10 +715,12 @@ def main() -> None:
     # A fresh, zeroed CreditCounter -- this spike's own handful of calls
     # (cost = len(markets) * len(regions) = 1 each with the client's
     # defaults) shouldn't be tallied against the real production counter
-    # persisted at data/odds_credit_counter*.json, and doesn't need to be.
+    # persisted at data/odds_api_credit_counter_3.json, and doesn't need to
+    # be -- reconciled manually afterward instead.
     client = OddsAPIClient(api_key=API_KEY, credit_counter=CreditCounter())
     findings = {}
     for division, sport_key in SPORT_KEYS.items():
+        print(f"ALERT: spending 1 real Odds API credit -- get_odds({sport_key!r})")
         odds = client.get_odds(sport_key=sport_key)
         count = len(odds) if odds else 0
         print(f"{division} ({sport_key}): {count} real odds rows")
@@ -669,16 +735,32 @@ if __name__ == "__main__":
     main()
 ```
 
-- [ ] **Step 2: Fill in `SPORT_KEYS` from Task 4's real output, then run**
+- [x] **Step 2: Fill in `SPORT_KEYS` from Task 4's real output, then run**
 
 Run: `python scripts/check_second_division_odds_coverage.py`
 Expected: one line per division with a real `odds_row_count`. `0` is a valid,
 important finding (thin/no current liquidity), not a script bug — if every
 division returns `0`, re-run closer to a matchday before concluding there's
 no coverage at all, since pre-match odds for lower-tier leagues may post
-later than for the 6 modeled leagues.
+later than for the 6 modeled leagues. Live-verified 2026-11-04: all 5
+confirmed real odds rows (9-12 matches each) — a genuine positive signal
+for live serving.
 
-- [ ] **Step 3: Record findings and commit**
+**Separate, higher-severity finding surfaced while running this task:**
+`ODDS_API_KEY` and `ODDS_API_KEY_2` are both exhausted
+(`401 OUT_OF_USAGE_CREDITS`, provider-reported `x-requests-remaining=0`)
+against `soccer_epl` itself — a league already live in production, so this
+is unrelated to domestic cups or second divisions. Checked all 8 configured
+keys: `_3` has 169/500 remaining, `_4` through `_8` have 499/500 each
+(barely touched) — the fallback rotation has real capacity, so this reads
+as normal rotation past two exhausted keys at the front of a healthy chain,
+not an active production outage. Not fixed or root-caused here (why keys
+1-2 specifically are exhausted — expected monthly usage vs. something
+abnormal — is a separate investigation). The two confirmed-dead keys'
+local credit-counter files were updated to reflect real exhaustion so
+production doesn't keep retrying them blind.
+
+- [x] **Step 3: Record findings and commit**
 
 Append the real counts to the findings doc's sport_key table (add an
 "Odds rows found" column), then:
@@ -708,7 +790,7 @@ one page covering several divisions (e.g. `englandm.php` lists E0 alongside
 lower English divisions), so the second divisions are plausibly already on
 pages this codebase has scraped before — confirm, don't assume.
 
-- [ ] **Step 1: Write the coverage-check script**
+- [x] **Step 1: Write the coverage-check script**
 
 ```python
 """One-off spike (domestic cup pre-flight, 2026-11-04): check whether each
@@ -775,7 +857,7 @@ if __name__ == "__main__":
     main()
 ```
 
-- [ ] **Step 2: Run it**
+- [x] **Step 2: Run it**
 
 Run: `python scripts/check_second_division_historical_coverage.py`
 Expected: one or more real CSV links per division (football-data.co.uk
@@ -784,22 +866,25 @@ live under the same `mmz4281/<season>/` pattern with other season codes,
 which a later ingestion plan would enumerate, not this spike). A division
 with zero links found means either the code guess is wrong (check the page
 by hand in a browser before concluding "no data") or that division genuinely
-isn't covered.
+isn't covered. Live-verified 2026-11-04: all 5 divisions found far more
+than "the current season" — the full historical archive, back to the
+1990s, is linked on each page (30-34 season CSVs each). This substantially
+de-risks the training-data question for Option A.
 
-- [ ] **Step 3: Record findings and commit**
+- [x] **Step 3: Record findings and commit**
 
 Append to the findings doc:
 
 ```markdown
 ## football-data.co.uk coverage (second divisions, for training)
 
-| Division | Page | Expected CSV code | CSV link(s) found |
-|---|---|---|---|
-| Championship | englandm.php | E1 | <fill in> |
-| Segunda División | spainm.php | SP2 | <fill in> |
-| Serie B | italym.php | I2 | <fill in> |
-| 2. Bundesliga | germanym.php | D2 | <fill in> |
-| Ligue 2 | francem.php | F2 | <fill in> |
+| Division | Page | Expected CSV code | Seasons found | Earliest season |
+|---|---|---|---|---|
+| Championship | englandm.php | E1 | 34 | 1993/94 |
+| Segunda División | spainm.php | SP2 | 31 | 1996/97 |
+| Serie B | italym.php | I2 | 30 | 1997/98 |
+| 2. Bundesliga | germanym.php | D2 | 34 | 1993/94 |
+| Ligue 2 | francem.php | F2 | 31 | 1996/97 |
 ```
 
 ```bash
@@ -824,7 +909,7 @@ only `fotmob_match_id`/`match_date`/`home_team`/`away_team`. This script
 reads the raw payload's `leagues` list directly instead, so competition
 identity isn't lost before it can be checked.
 
-- [ ] **Step 1: Write the coverage-check script**
+- [x] **Step 1: Write the coverage-check script**
 
 ```python
 """One-off spike (domestic cup pre-flight, 2026-11-04): check whether
@@ -891,15 +976,21 @@ if __name__ == "__main__":
     main()
 ```
 
-- [ ] **Step 2: Run it**
+- [x] **Step 2: Run it**
 
 Run: `python scripts/check_fotmob_lower_tier_coverage.py`
 Expected: `FOUND` or `NOT FOUND` per competition, based on real matches in the
 last 7 days. A cup showing `NOT FOUND` may simply mean no round was played
 that week — note this caveat rather than treating it as a final answer if
-any domestic cup isn't currently mid-round.
+any domestic cup isn't currently mid-round. Live-verified 2026-11-04: all 5
+second divisions and 4/6 cups found (loose name fragments also pulled in
+unrelated noise for CHAMPIONSHIP/CARABAO_CUP/DFB_POKAL — the real
+competition was still clearly present among the matches for each). Coupe
+de France and Coppa Italia weren't found this week, consistent with their
+OddsPapi-confirmed next fixtures being 1-4 weeks out (Task 2) — read as
+"no round this week," not "unavailable."
 
-- [ ] **Step 3: Record findings and commit**
+- [x] **Step 3: Record findings and commit**
 
 Append to the findings doc:
 
@@ -908,17 +999,17 @@ Append to the findings doc:
 
 | Competition | Found in fotmob's unfiltered payload |
 |---|---|
-| Championship | <fill in> |
-| Segunda | <fill in> |
-| Serie B | <fill in> |
-| 2. Bundesliga | <fill in> |
-| Ligue 2 | <fill in> |
-| FA Cup | <fill in> |
-| Carabao Cup | <fill in> |
-| Copa del Rey | <fill in> |
-| DFB-Pokal | <fill in> |
-| Coupe de France | <fill in> |
-| Coppa Italia | <fill in> |
+| Championship | True ("Championship", among unrelated same-named leagues) |
+| Segunda | True ("Segunda Division") |
+| Serie B | True |
+| 2. Bundesliga | True |
+| Ligue 2 | True |
+| FA Cup | True |
+| Carabao Cup | True ("EFL Cup", "League Cup") |
+| Copa del Rey | True |
+| DFB-Pokal | False this week (women's + an unrelated Danish cup matched, not the men's comp) |
+| Coupe de France | False this week (consistent with next fixture being 10 days out) |
+| Coppa Italia | False this week (consistent with next fixture being ~4 weeks out) |
 ```
 
 ```bash
@@ -935,7 +1026,7 @@ git commit -m "spike: check fotmob raw payload coverage for lower-tier competiti
 - Modify: `docs/superpowers/plans/2026-11-04-domestic-cup-preflight-findings.md`
 - Modify: `docs/superpowers/specs/2026-11-04-domestic-cup-recommendations-design.md`
 
-- [ ] **Step 1: Write the consolidated recommendation**
+- [x] **Step 1: Write the consolidated recommendation**
 
 Append a final section to the findings doc, using the real data gathered in
 Tasks 1-7 (not a restatement of the task list). Address live-serving
@@ -963,7 +1054,7 @@ window), or be dropped from this pass entirely -- citing the specific
 finding from Tasks 1-7 that justifies each call, not a general impression.
 ```
 
-- [ ] **Step 2: Update the design spec's Section 4 pre-flight note**
+- [x] **Step 2: Update the design spec's Section 4 pre-flight note**
 
 In `docs/superpowers/specs/2026-11-04-domestic-cup-recommendations-design.md`,
 Section 4, replace the "Pre-flight check before committing further build
@@ -976,7 +1067,7 @@ the live-verified odds/score coverage per competition and the resulting
 go/no-go call for each.
 ```
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add docs/superpowers/plans/2026-11-04-domestic-cup-preflight-findings.md \

@@ -14,6 +14,7 @@ sys.path.append(str(Path(__file__).resolve().parents[1]))
 
 from src.ingestion.fotmob.fetcher import (
     LEAGUE_IDS,
+    _parse_finished_matches,
     fetch_all_matches,
     fetch_finished_match_ids,
     fetch_match_player_stats,
@@ -33,12 +34,14 @@ def _match_entry(
     away: str = "Everton",
     finished: bool = True,
     utc_time: str = "2024-05-19T15:00:00.000Z",
+    home_score: int = 2,
+    away_score: int = 1,
 ) -> dict:
     return {
         "id": match_id,
         "leagueId": 47,
-        "home": {"id": 9825, "name": home},
-        "away": {"id": 8668, "name": away},
+        "home": {"id": 9825, "name": home, "score": home_score},
+        "away": {"id": 8668, "name": away, "score": away_score},
         "status": {"finished": finished, "utcTime": utc_time},
     }
 
@@ -339,6 +342,34 @@ def test_fetch_player_match_stats_multi_league_shares_day_requests_across_league
     assert result["E0"].iloc[0]["home_team"] == "Arsenal"
     assert len(result["SP1"]) == 1
     assert result["SP1"].iloc[0]["home_team"] == "Barcelona"
+
+
+def test_parse_finished_matches_extracts_score():
+    payload = [{
+        "id": 123,
+        "home": {"id": 1, "score": 2, "name": "Real Madrid"},
+        "away": {"id": 2, "score": 1, "name": "Bayern Munich"},
+        "status": {"utcTime": "2026-10-20T19:00:00.000Z", "finished": True, "scoreStr": "2 - 1"},
+    }]
+    parsed = _parse_finished_matches(payload)
+    assert parsed[0]["home_score"] == 2
+    assert parsed[0]["away_score"] == 1
+
+
+def test_parse_finished_matches_skips_null_score(caplog):
+    """A real abandoned/awarded/walkover match can be "finished": true with
+    score: null -- that must hit the same skip-and-log path as a missing
+    score key, not silently propagate None to callers."""
+    payload = [{
+        "id": 456,
+        "home": {"id": 1, "score": None, "name": "Real Madrid"},
+        "away": {"id": 2, "score": 1, "name": "Bayern Munich"},
+        "status": {"utcTime": "2026-10-20T19:00:00.000Z", "finished": True, "scoreStr": None},
+    }]
+    with caplog.at_level("WARNING"):
+        parsed = _parse_finished_matches(payload)
+    assert parsed == []
+    assert "Skipping malformed match entry id=456" in caplog.text
 
 
 def test_league_ids_maps_the_three_new_leagues_to_their_real_fotmob_ids():

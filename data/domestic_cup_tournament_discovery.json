@@ -1,0 +1,79 @@
+{
+  "FA_CUP": [
+    {
+      "id": 19,
+      "name": "FA Cup",
+      "category": "England"
+    },
+    {
+      "id": 1696,
+      "name": "FA Cup, Qualification",
+      "category": "England"
+    },
+    {
+      "id": 18488,
+      "name": "FA Cup, Women",
+      "category": "England"
+    }
+  ],
+  "CARABAO_CUP": [
+    {
+      "id": 21,
+      "name": "EFL Cup",
+      "category": "England"
+    }
+  ],
+  "COPA_DEL_REY": [
+    {
+      "id": 329,
+      "name": "Copa del Rey",
+      "category": "Spain"
+    }
+  ],
+  "DFB_POKAL": [
+    {
+      "id": 217,
+      "name": "DFB Pokal",
+      "category": "Germany"
+    }
+  ],
+  "COUPE_DE_FRANCE": [
+    {
+      "id": 335,
+      "name": "Coupe de France",
+      "category": "France"
+    },
+    {
+      "id": 18364,
+      "name": "Coupe de France, Women",
+      "category": "France"
+    }
+  ],
+  "COPPA_ITALIA": [
+    {
+      "id": 328,
+      "name": "Coppa Italia",
+      "category": "Italy"
+    },
+    {
+      "id": 824,
+      "name": "Coppa Italia Serie C",
+      "category": "Italy"
+    },
+    {
+      "id": 1554,
+      "name": "Coppa Italia Primavera",
+      "category": "Italy"
+    },
+    {
+      "id": 28127,
+      "name": "Coppa Italia, Women",
+      "category": "Italy"
+    },
+    {
+      "id": 39221,
+      "name": "Coppa Italia Serie D",
+      "category": "Italy"
+    }
+  ]
+}

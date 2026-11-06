@@ -1,0 +1,58 @@
+{
+  "CHAMPIONSHIP": [
+    "Australian Championship Grp. A",
+    "Australian Championship Grp. B",
+    "Australian Championship Grp. C",
+    "Australian Championship Grp. D",
+    "Championship",
+    "National League Championship",
+    "Northern Super League - Championship - Semi-finals",
+    "Serie A - Championship Round",
+    "USL Championship Playoff",
+    "USL League One - Championship - Quarter-finals",
+    "Veikkausliiga Championship Group"
+  ],
+  "SEGUNDA": [
+    "Segunda Division",
+    "Segunda Federacion - Group 1",
+    "Segunda Federacion - Group 2",
+    "Segunda Federacion - Group 3",
+    "Segunda Federacion - Group 4",
+    "Segunda Federacion - Group 5"
+  ],
+  "SERIE_B": [
+    "Serie B"
+  ],
+  "BUNDESLIGA_2": [
+    "2. Bundesliga"
+  ],
+  "LIGUE_2": [
+    "Ligue 2"
+  ],
+  "FA_CUP": [
+    "FA Cup"
+  ],
+  "CARABAO_CUP": [
+    "EFL Cup",
+    "League Cup",
+    "League Cup - Play-offs",
+    "League Cup Grp. A",
+    "League Cup Grp. B",
+    "League Cup Grp. C",
+    "League Cup Grp. D",
+    "National League Cup Group A",
+    "National League Cup Group B",
+    "National League Cup Group C",
+    "National League Cup Group D",
+    "Women's League Cup"
+  ],
+  "COPA_DEL_REY": [
+    "Copa del Rey"
+  ],
+  "DFB_POKAL": [
+    "DBU Pokalen",
+    "DFB Pokal Frauen"
+  ],
+  "COUPE_DE_FRANCE": [],
+  "COPPA_ITALIA": []
+}

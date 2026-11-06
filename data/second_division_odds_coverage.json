@@ -1,0 +1,22 @@
+{
+  "CHAMPIONSHIP": {
+    "sport_key": "soccer_efl_champ",
+    "odds_row_count": 12
+  },
+  "SEGUNDA": {
+    "sport_key": "soccer_spain_segunda_division",
+    "odds_row_count": 11
+  },
+  "SERIE_B": {
+    "sport_key": "soccer_italy_serie_b",
+    "odds_row_count": 10
+  },
+  "BUNDESLIGA_2": {
+    "sport_key": "soccer_germany_bundesliga2",
+    "odds_row_count": 9
+  },
+  "LIGUE_2": {
+    "sport_key": "soccer_france_ligue_two",
+    "odds_row_count": 9
+  }
+}

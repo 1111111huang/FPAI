@@ -133,6 +133,41 @@ def _parse_corners_odds(payload: dict) -> dict[str, float] | None:
     return {f"over_{CORNERS_LINE}": over, f"under_{CORNERS_LINE}": under}
 
 
+# Confirmed live against real UCL fixtures, used by scripts/pull_oddspapi_ucl_uel_1x2.py.
+MATCH_WINNER_MARKET_ID = "101"
+MATCH_WINNER_OUTCOME_HOME = "101"
+MATCH_WINNER_OUTCOME_DRAW = "102"
+MATCH_WINNER_OUTCOME_AWAY = "103"
+
+
+def _last_historical_price(outcomes: dict, outcome_id: str) -> float | None:
+    """Historical-odds shape only (/v4/historical-odds): outcomes[id]
+    ["players"]["0"] is a LIST of price ticks, last tick = latest price --
+    genuinely different from _last_price's live-endpoint shape (a single
+    price dict), per BUG-105. Kept separate on purpose so a future live-shape
+    change to _last_price can't silently break this historical-only path."""
+    outcome = outcomes.get(outcome_id)
+    if not outcome:
+        return None
+    ticks = outcome.get("players", {}).get("0", [])
+    if not ticks:
+        return None
+    return ticks[-1].get("price")
+
+
+def extract_1x2_odds(payload: dict) -> dict[str, float] | None:
+    """Extracts 1X2 (match-winner) odds from a /v4/historical-odds payload,
+    used by scripts/pull_oddspapi_ucl_uel_1x2.py. Market id 101 confirmed
+    live against real UCL fixtures (101=home, 102=draw, 103=away)."""
+    outcomes = payload.get("bookmakers", {}).get("pinnacle", {}).get("markets", {}).get(MATCH_WINNER_MARKET_ID, {}).get("outcomes", {})
+    home = _last_historical_price(outcomes, MATCH_WINNER_OUTCOME_HOME)
+    draw = _last_historical_price(outcomes, MATCH_WINNER_OUTCOME_DRAW)
+    away = _last_historical_price(outcomes, MATCH_WINNER_OUTCOME_AWAY)
+    if home is None or draw is None or away is None:
+        return None
+    return {"home": home, "draw": draw, "away": away}
+
+
 def _parse_fixtures(payload: list[dict]) -> list[OddsPapiFixture]:
     return [
         OddsPapiFixture(

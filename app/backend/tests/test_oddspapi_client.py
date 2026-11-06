@@ -25,6 +25,7 @@ from app.backend.oddspapi_client import (
     OddsPapiFixture,
     _parse_corners_odds,
     _parse_fixtures,
+    extract_1x2_odds,
 )
 
 
@@ -80,6 +81,40 @@ def test_parse_corners_odds_reads_the_real_live_endpoint_shape() -> None:
 
 def test_parse_corners_odds_returns_none_when_market_missing() -> None:
     result = _parse_corners_odds({"bookmakerOdds": {"pinnacle": {"markets": {}}}})
+
+    assert result is None
+
+
+_MATCH_WINNER_PAYLOAD = {
+    "bookmakers": {
+        "pinnacle": {
+            "markets": {
+                "101": {
+                    "outcomes": {
+                        "101": {"players": {"0": [{"price": 1.5}, {"price": 1.45}]}},
+                        "102": {"players": {"0": [{"price": 4.0}, {"price": 4.2}]}},
+                        "103": {"players": {"0": [{"price": 6.0}, {"price": 5.8}]}},
+                    }
+                }
+            }
+        }
+    }
+}
+
+
+def test_extract_1x2_odds_takes_the_last_tick_per_outcome() -> None:
+    """scripts/pull_oddspapi_ucl_uel_1x2.py calls this against
+    /v4/historical-odds payloads, where players["0"] is a list of price
+    ticks -- same historical shape as _parse_corners_odds above, deliberately
+    not routed through the live-shape _last_price (see BUG-105 note on
+    _last_historical_price)."""
+    result = extract_1x2_odds(_MATCH_WINNER_PAYLOAD)
+
+    assert result == {"home": 1.45, "draw": 4.2, "away": 5.8}
+
+
+def test_extract_1x2_odds_returns_none_when_market_missing() -> None:
+    result = extract_1x2_odds({"bookmakers": {"pinnacle": {"markets": {}}}})
 
     assert result is None
 

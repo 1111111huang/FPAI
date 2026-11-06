@@ -1,0 +1,234 @@
+# Domestic Cup Pre-Flight Findings
+
+Live-verified 2026-11-04. Each section records what the real API output
+showed, not an assumption.
+
+## OddsPapi tournament IDs (domestic cups)
+
+A real bug was caught and fixed while running this: the discovery script's
+first draft assumed field names `id`/`name`, matching the comments on
+existing `LEAGUE_TOURNAMENT_IDS` dicts elsewhere in this codebase -- the
+real OddsPapi response uses `tournamentId`/`tournamentName`/`categoryName`
+instead, so the first run silently matched nothing (0/2016). Also: OddsPapi
+reuses generic names ("FA Cup", "League Cup") across dozens of countries
+(14 "FA Cup"-named tournaments alone -- England, China, South Africa, Ghana,
+Thailand, Malaysia, Fiji, Hong Kong, plus women's/qualification variants) --
+name alone isn't enough to disambiguate; `categoryName` (confirmed real
+field, not guessed) is required too.
+
+| Cup | Tournament ID | OddsPapi name | Category | Note |
+|---|---|---|---|---|
+| FA Cup | 19 | FA Cup | England | Excludes id=1696 (Qualification), id=18488 (Women) |
+| Carabao Cup | 21 | EFL Cup | England | Single unambiguous match |
+| Copa del Rey | 329 | Copa del Rey | Spain | Single unambiguous match |
+| DFB-Pokal | 217 | DFB Pokal | Germany | Excludes id=686 (Women) |
+| Coupe de France | 335 | Coupe de France | France | Excludes id=18364 (Women) |
+| Coppa Italia | 328 | Coppa Italia | Italy | Excludes id=824/1554/39221 (Serie C/Primavera/Serie D feeders), id=28127 (Women) |
+
+## OddsPapi live odds coverage (domestic cups)
+
+Two real bugs caught and fixed while running this check (not pre-existing
+knowledge — found live against a real payload): the LIVE `/v4/odds`
+response's actual top-level key is `bookmakerOdds`, not `bookmakers`; and
+`outcome["players"]["0"]` there is a single price object, not a list of
+historical ticks.
+
+**This also surfaces a likely pre-existing production bug, precisely
+scoped after checking both endpoints' real shapes (Task 3 below) —
+narrower than first suspected.** `app/backend/oddspapi_client.py`'s
+`get_corners_odds()` calls the **live** `/v4/odds` endpoint, but parses the
+response with `bookmakers`/list-of-ticks logic — which is correct for the
+**historical** `/v4/historical-odds` endpoint, not the live one it actually
+calls. The file's own header comment cites a specific prior investigation
+("W199's investigation notes confirm the live /v4/odds endpoint returns the
+identical shape") as the reason the historical parser was reused for live
+calls — that claim is what's actually false, confirmed against a real live
+payload today. `scripts/extract_oddspapi_odds_lookup.py` and
+`scripts/pull_oddspapi_btts_corners.py` both correctly target the
+historical endpoint (confirmed, Task 3) — they are **not** bugged, an
+earlier draft of this note wrongly lumped them in. Practical effect:
+production's `get_corners_odds()` very likely has never successfully
+parsed a real corners price from a live payload, silently falling through
+to its documented "no line posted yet" branch every time instead. This is
+a pre-existing production issue unrelated to domestic cups — **not fixed as
+part of this plan**, flagged here because it was found while verifying the
+same provider for cup coverage.
+
+| Cup | Upcoming fixtures (statusId=0) | Nearest fixture start time | Has real 1X2 odds |
+|---|---|---|---|
+| FA Cup | 40 | 2026-11-06 | **True** (2.95 / 3.65 / 2.23) |
+| Carabao Cup | 4 | 2026-12-15 | **True** (12.33 / 6.22 / 1.215) |
+| Copa del Rey | 8 | 2026-10-04 (⚠ in the past — likely postponed/rescheduled, still flagged pre-game) | False on this sample |
+| DFB-Pokal | 8 | 2026-12-01 | False on this sample (3-4 weeks out — may simply be too early for a line) |
+| Coupe de France | 86 | 2026-11-14 | False on this sample (same caveat) |
+| Coppa Italia | 17 | 2026-12-01 | False on this sample (same caveat) |
+
+All 6 cups have real fixture schedules in OddsPapi. Only 2/6 confirmed a
+real posted price on a single-sample check — not conclusive for the other
+4 (re-check closer to each one's matchday before treating as "no coverage,"
+per the plan's own guidance).
+
+## OddsPapi historical odds coverage (domestic cups, for training)
+
+The historical endpoint (`/v4/historical-odds`) has a genuinely different
+real shape from the live endpoint above — confirmed live, 2026-11-04:
+top-level key `bookmakers` (not `bookmakerOdds`), and `players["0"]` is a
+real list of price ticks over time (not a single dict). This matches what
+production's `_parse_corners_odds` already assumes — correct for *this*
+endpoint, just wired to the wrong one elsewhere (see note above).
+
+Each cup's oldest finished fixture (2024) returned 404 — consistent with
+the already-known UCL/UEL cutoff (historical odds only exist from
+2026-01-01 onward). The newest finished fixture per cup (checked instead of
+assuming the cutoff is identical for every competition):
+
+| Cup | Finished fixtures (statusId=2) | Oldest sample (2024) | Newest sample |
+|---|---|---|---|
+| FA Cup | 571 | 404 (no odds) | **True** (4.91 / 5.01 / 1.408), 2026-10-20 |
+| Carabao Cup | 235 | 404 (no odds) | **True** (1.077 / 10.89 / 44.16), 2026-10-29 |
+| Copa del Rey | 323 | 404 (no odds) | False, 2026-10-29 (one sample, not conclusive) |
+| DFB-Pokal | 148 | 404 (no odds) | **True** (1.089 / 9.67 / 34.62), 2026-10-28 |
+| Coupe de France | 411 | 404 (no odds) | 404 (no odds), 2026-10-31 (one sample, not conclusive) |
+| Coppa Italia | 98 | 404 (no odds) | **True** (1.196 / 5.31 / 30.8), 2026-09-15 |
+
+4/6 cups confirmed real historical 1X2 odds within the known coverage
+window — a real training-data foundation exists for most of this scope.
+Copa del Rey and Coupe de France's single newest-sample check came back
+empty; worth a wider sample before concluding no coverage, same caveat as
+the live-odds section above.
+
+## The Odds API sport_keys (second divisions)
+
+One real naming miss caught while running this: matching on "segunda"
+alone found nothing — the real title is "La Liga 2 - Spain" (key
+`soccer_spain_segunda_division`), confirmed live, 2026-11-04. All 5 resolved
+to a single unambiguous key once corrected. Incidental finding: The Odds
+API also carries `soccer_spain_copa_del_rey` — a second potential live-odds
+source for that cup alongside OddsPapi, not pursued further here.
+
+| Division | sport_key | Real title | active |
+|---|---|---|---|
+| Championship | soccer_efl_champ | Championship | True |
+| Segunda División | soccer_spain_segunda_division | La Liga 2 - Spain | True |
+| Serie B | soccer_italy_serie_b | Serie B - Italy | True |
+| 2. Bundesliga | soccer_germany_bundesliga2 | Bundesliga 2 - Germany | True |
+| Ligue 2 | soccer_france_ligue_two | Ligue 2 - France | True |
+
+## The Odds API live odds coverage (second divisions)
+
+All 5 confirmed real live odds rows via production's own `OddsAPIClient`:
+
+| Division | sport_key | Real odds rows |
+|---|---|---|
+| Championship | soccer_efl_champ | 12 |
+| Segunda División | soccer_spain_segunda_division | 11 |
+| Serie B | soccer_italy_serie_b | 10 |
+| 2. Bundesliga | soccer_germany_bundesliga2 | 9 |
+| Ligue 2 | soccer_france_ligue_two | 9 |
+
+**Separate, higher-severity finding surfaced while running this check, out
+of scope for domestic cups entirely:** `ODDS_API_KEY` and `ODDS_API_KEY_2`
+are both exhausted (`401 OUT_OF_USAGE_CREDITS`, provider-reported
+`x-requests-remaining=0`), confirmed against `soccer_epl` itself — already
+live in production, so not a second-division-specific issue. All 8
+configured keys checked: `_3` has 169/500 remaining, `_4`-`_8` have 499/500
+each. The fallback rotation has real capacity — reads as normal rotation
+past two exhausted keys at the front of a healthy chain, not confirmed as
+an active outage, but **not root-caused here** (expected monthly usage vs.
+something abnormal is a separate investigation). The two dead keys' local
+credit-counter files (`data/odds_api_credit_counter.json`,
+`_2.json`) were updated to reflect real exhaustion; `_3` through `_8`'s
+counters were **not** reconciled — this session is isolated in a git
+worktree and the harness blocks writing to the shared checkout's files from
+inside it. Real provider-reported usage for the record, to reconcile
+manually or on next merge: `_3`: 331 used / 169 remaining; `_4`-`_8`: 1 used
+each (from this session's own test calls) / 499 remaining each.
+
+## football-data.co.uk coverage (second divisions, for training)
+
+All 5 divisions have far more than "the current season" linked — the full
+historical archive, back to the 1990s, on the exact same infrastructure
+already used for the 6 modeled leagues.
+
+| Division | Page | Expected CSV code | Seasons found | Earliest season |
+|---|---|---|---|---|
+| Championship | englandm.php | E1 | 34 | 1993/94 |
+| Segunda División | spainm.php | SP2 | 31 | 1996/97 |
+| Serie B | italym.php | I2 | 30 | 1997/98 |
+| 2. Bundesliga | germanym.php | D2 | 34 | 1993/94 |
+| Ligue 2 | francem.php | F2 | 31 | 1996/97 |
+
+This substantially de-risks the training-data question for Option A (the
+cup-transfer model) — decades of real results+odds already exist for all
+5 second divisions, not just a current-season snapshot.
+
+## FotMob raw payload coverage (last 7 days, 2026-11-04)
+
+All 5 second divisions and 4/6 cups found in fotmob's unfiltered payload
+over the last week. Loose name fragments also pulled in unrelated noise
+(e.g. "Championship" matched several unrelated leagues worldwide; "DFB
+Pokal" fragment matched a Danish cup and the German women's competition,
+not the men's) — the real competition was still clearly identifiable among
+the matches where found.
+
+| Competition | Found in fotmob's unfiltered payload |
+|---|---|
+| Championship | True |
+| Segunda | True ("Segunda Division") |
+| Serie B | True |
+| 2. Bundesliga | True |
+| Ligue 2 | True |
+| FA Cup | True |
+| Carabao Cup | True ("EFL Cup", "League Cup") |
+| Copa del Rey | True |
+| DFB-Pokal | False this week (women's comp + an unrelated Danish cup matched, not men's) |
+| Coupe de France | False this week |
+| Coppa Italia | False this week |
+
+Coupe de France and Coppa Italia's absence is consistent with their
+OddsPapi-confirmed next fixtures being 1-4 weeks out (see live-odds
+section above) — read as "no round played this week," not "unavailable."
+
+## Go/no-go recommendation
+
+**5 second divisions: full GO, no caveats.** Training data (decades of
+football-data.co.uk history), live odds (The Odds API, confirmed real rows),
+and fotmob visibility all confirmed for every one of the 5. The onboarding
+cost (the `adding-a-league` checklist, ×5) is now a known-safe investment,
+not a bet on unverified data.
+
+**4 of 6 cups: GO.** FA Cup and Carabao Cup confirmed on all three axes
+(training, live, fotmob). DFB-Pokal and Coppa Italia confirmed on training
+data specifically (the axis that matters most for the cup-transfer model);
+their live-odds and fotmob checks landed on a week with no fixture due,
+consistent with matchdays several weeks out, not a coverage gap.
+
+**2 of 6 cups: proceed with a flagged caveat, not a block.** Copa del Rey
+and Coupe de France's single-sample checks came back inconclusive on both
+training and live odds (Copa del Rey's sample additionally had a
+stale/postponed-looking fixture date). Both have real fixture schedules
+(8 and 86 upcoming fixtures respectively) and real finished-fixture history
+(323 and 411 respectively) — recommend a second, wider sample closer to
+each one's next matchday (Coupe de France: 2026-11-14, ~10 days out) before
+drawing a firm conclusion, not excluding either from scope now.
+
+**Recommendation: proceed to Plan 2 (registry/tier/schema skeleton) and
+Plan 5 (second-division onboardings) with full confidence.** For Plan 3
+(cup ingestion), proceed for all 6, with a specific follow-up task to
+re-check Copa del Rey and Coupe de France's odds coverage closer to their
+next fixtures before finalizing confidence in those two specifically.
+
+**Two findings from this spike are explicitly out of scope and not fixed
+here — recommend logging separately, per CLAUDE.md convention
+(`documents/bugs.md`):**
+1. `app/backend/oddspapi_client.py`'s `get_corners_odds()` likely has never
+   successfully parsed a real corners price — it calls the live `/v4/odds`
+   endpoint but parses with the historical endpoint's shape, based on a
+   specific prior investigation (cited in the file's own header, `W199`)
+   that this session's live testing shows is no longer (or was never)
+   accurate.
+2. `ODDS_API_KEY` and `ODDS_API_KEY_2` are both exhausted
+   (`401 OUT_OF_USAGE_CREDITS`) — the fallback rotation has real remaining
+   capacity (keys `_3` through `_8`), so this doesn't read as an active
+   outage, but why the first two keys specifically are exhausted (expected
+   usage vs. something abnormal) was not investigated.

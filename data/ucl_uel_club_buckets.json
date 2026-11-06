@@ -1,0 +1,276 @@
+{
+  "already_in_11_league_universe": [
+    "AC Milan",
+    "AFC Bournemouth",
+    "AS Monaco",
+    "AS Roma",
+    "Arsenal FC",
+    "Aston Villa",
+    "Atalanta BC",
+    "Bayer Leverkusen",
+    "Bayern Munich",
+    "Bologna FC",
+    "Borussia Dortmund",
+    "Chelsea FC",
+    "Como 1907",
+    "Crystal Palace",
+    "FC Barcelona",
+    "Inter Milano",
+    "Juventus Turin",
+    "Lille OSC",
+    "Liverpool FC",
+    "Newcastle United",
+    "OGC Nice",
+    "Olympique Lyon",
+    "Olympique Marseille",
+    "Paris Saint-Germain",
+    "RB Leipzig",
+    "RC Celta de Vigo",
+    "Racing Club De Lens",
+    "Real Betis Seville",
+    "Real Madrid",
+    "Real Sociedad San Sebastian",
+    "SC Freiburg",
+    "SSC Napoli",
+    "Sunderland AFC",
+    "TSG Hoffenheim",
+    "Tottenham Hotspur",
+    "VfB Stuttgart",
+    "Villarreal CF"
+  ],
+  "football_data_country": [
+    "Go Ahead Eagles",
+    "PSV Eindhoven",
+    "FC Utrecht",
+    "Ajax Amsterdam",
+    "Feyenoord Rotterdam",
+    "FC Twente Enschede",
+    "NEC Nijmegen",
+    "AZ Alkmaar",
+    "FC Porto",
+    "SC Braga",
+    "SL Benfica",
+    "St. Truidense VV",
+    "Club Brugge",
+    "KRC Genk",
+    "RSC Anderlecht",
+    "Galatasaray Istanbul",
+    "Besiktas Istanbul",
+    "Fenerbahce Istanbul",
+    "Trabzonspor",
+    "Celtic Glasgow",
+    "OFI Crete",
+    "PAOK Thessaloniki",
+    "Panathinaikos Athens",
+    "SK Sturm Graz",
+    "LASK Linz",
+    "FC Salzburg",
+    "Young Boys Bern",
+    "FC St. Gallen 1879",
+    "FC Thun",
+    "FC Basel 1893",
+    "FC Midtjylland",
+    "FC Copenhagen",
+    "AGF Aarhus",
+    "Tromsoe IL",
+    "SK Brann",
+    "Viking FK",
+    "Vikingur Reykjavik",
+    "Gornik Zabrze",
+    "KKS Lech Poznan",
+    "Jagiellonia Bialystok",
+    "Fotbal Club FCSB",
+    "Derry City FC",
+    "Shamrock Rovers"
+  ],
+  "unresolved": [
+    "AC Omonia Nicosia",
+    "AEK Athens",
+    "Aluminij Kidricevo",
+    "Atert Bissen",
+    "Athletic Bilbao",
+    "Atletico Madrid",
+    "Bodoe/Glimt",
+    "CS Universitatea Craiova",
+    "Eintracht Frankfurt",
+    "FC Ararat-Armenia",
+    "FC Drita",
+    "FC Dynamo Kyiv",
+    "FC Hradec Kralove",
+    "FC Iberia 1999",
+    "FC Kairat Almaty",
+    "FC Shakhtar Donetsk",
+    "FC Sheriff Tiraspol",
+    "FC Universitatea Cluj",
+    "FC Viktoria Plzen",
+    "FK Borac Banja Luka",
+    "FK Crvena Zvezda Belgrade",
+    "FK Kauno Zalgiris",
+    "FK Sutjeska Niksic",
+    "FK Vardar Skopje",
+    "FK Vojvodina Novi Sad",
+    "Ferencvarosi Budapest",
+    "Floriana FC",
+    "GNK Dinamo Zagreb",
+    "Glasgow Rangers",
+    "HNK Hajduk Split",
+    "Hammarby IF",
+    "Hapoel Be`er Sheva FC",
+    "Heart of Midlothian FC",
+    "IF Vestri",
+    "Inter Club de Escaldes",
+    "KF Egnatia Rrogozhine",
+    "KI Klaksvik",
+    "Kuopion Palloseura",
+    "Larne FC",
+    "Lillestroem SK",
+    "Lincoln Red Imps",
+    "MSK Zilina",
+    "Maccabi Tel Aviv FC",
+    "Malmo FF",
+    "Manchester City",
+    "Manchester United",
+    "Maxline Vitebsk",
+    "Mjallby AIF",
+    "NK Celje",
+    "Nottingham Forest",
+    "Olympiacos Piraeus",
+    "PFC CSKA Sofia",
+    "PFC Levski Sofia",
+    "PFC Ludogorets 1945 Razgrad",
+    "Pafos FC",
+    "Petrocub Hincesti",
+    "Qarabag FK",
+    "Riga FC",
+    "SCU Torreense",
+    "SK Slovan Bratislava",
+    "SP Tre Fiori",
+    "Sabah Masazir",
+    "Slavia Prague",
+    "Sparta Prague",
+    "Sporting CP",
+    "Stade Rennais FC",
+    "Tallinna FC Flora",
+    "The New Saints FC",
+    "Union Saint-Gilloise",
+    "WKW ETO FC Gyor"
+  ],
+  "matched_by_country": {
+    "netherlands": {
+      "format": "mmz4281/N1",
+      "matched_clubs": [
+        "Go Ahead Eagles",
+        "PSV Eindhoven",
+        "FC Utrecht",
+        "Ajax Amsterdam",
+        "Feyenoord Rotterdam",
+        "FC Twente Enschede",
+        "NEC Nijmegen",
+        "AZ Alkmaar"
+      ]
+    },
+    "portugal": {
+      "format": "mmz4281/P1",
+      "matched_clubs": [
+        "FC Porto",
+        "SC Braga",
+        "SL Benfica"
+      ]
+    },
+    "belgium": {
+      "format": "mmz4281/B1",
+      "matched_clubs": [
+        "St. Truidense VV",
+        "Club Brugge",
+        "KRC Genk",
+        "RSC Anderlecht"
+      ]
+    },
+    "turkey": {
+      "format": "mmz4281/T1",
+      "matched_clubs": [
+        "Galatasaray Istanbul",
+        "Besiktas Istanbul",
+        "Fenerbahce Istanbul",
+        "Trabzonspor"
+      ]
+    },
+    "scotland": {
+      "format": "mmz4281/SC0",
+      "matched_clubs": [
+        "Celtic Glasgow"
+      ]
+    },
+    "greece": {
+      "format": "mmz4281/G1",
+      "matched_clubs": [
+        "OFI Crete",
+        "PAOK Thessaloniki",
+        "Panathinaikos Athens"
+      ]
+    },
+    "austria": {
+      "format": "new/AUT",
+      "matched_clubs": [
+        "SK Sturm Graz",
+        "LASK Linz",
+        "FC Salzburg"
+      ]
+    },
+    "switzerland": {
+      "format": "new/SWZ",
+      "matched_clubs": [
+        "Young Boys Bern",
+        "FC St. Gallen 1879",
+        "FC Thun",
+        "FC Basel 1893"
+      ]
+    },
+    "denmark": {
+      "format": "new/DNK",
+      "matched_clubs": [
+        "FC Midtjylland",
+        "FC Copenhagen",
+        "AGF Aarhus"
+      ]
+    },
+    "norway": {
+      "format": "new/NOR",
+      "matched_clubs": [
+        "Tromsoe IL",
+        "SK Brann",
+        "Viking FK",
+        "Vikingur Reykjavik"
+      ]
+    },
+    "poland": {
+      "format": "new/POL",
+      "matched_clubs": [
+        "Gornik Zabrze",
+        "KKS Lech Poznan",
+        "Jagiellonia Bialystok"
+      ]
+    },
+    "russia": {
+      "format": "new/RUS",
+      "matched_clubs": []
+    },
+    "romania": {
+      "format": "new/ROU",
+      "matched_clubs": [
+        "Fotbal Club FCSB"
+      ]
+    },
+    "ireland": {
+      "format": "new/IRL",
+      "matched_clubs": [
+        "Derry City FC",
+        "Shamrock Rovers"
+      ]
+    },
+    "finland": {
+      "format": "new/FIN",
+      "matched_clubs": []
+    }
+  }
+}

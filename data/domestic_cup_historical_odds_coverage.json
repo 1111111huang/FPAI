@@ -1,0 +1,80 @@
+{
+  "FA_CUP": {
+    "finished_fixture_count": 571,
+    "checked_samples": [
+      {
+        "start_time": "2024-11-01T19:45:00.000Z",
+        "has_odds": false
+      },
+      {
+        "start_time": "2026-10-20T18:45:00.000Z",
+        "has_odds": true
+      }
+    ]
+  },
+  "CARABAO_CUP": {
+    "finished_fixture_count": 235,
+    "checked_samples": [
+      {
+        "start_time": "2024-08-27T18:15:00.000Z",
+        "has_odds": false
+      },
+      {
+        "start_time": "2026-10-29T19:45:00.000Z",
+        "has_odds": true
+      }
+    ]
+  },
+  "COPA_DEL_REY": {
+    "finished_fixture_count": 323,
+    "checked_samples": [
+      {
+        "start_time": "2024-10-09T15:30:00.000Z",
+        "has_odds": false
+      },
+      {
+        "start_time": "2026-10-29T20:00:00.000Z",
+        "has_odds": false
+      }
+    ]
+  },
+  "DFB_POKAL": {
+    "finished_fixture_count": 148,
+    "checked_samples": [
+      {
+        "start_time": "2024-08-19T16:00:00.000Z",
+        "has_odds": false
+      },
+      {
+        "start_time": "2026-10-28T19:45:00.000Z",
+        "has_odds": true
+      }
+    ]
+  },
+  "COUPE_DE_FRANCE": {
+    "finished_fixture_count": 411,
+    "checked_samples": [
+      {
+        "start_time": "2024-11-15T18:00:00.000Z",
+        "has_odds": false
+      },
+      {
+        "start_time": "2026-10-31T18:00:00.000Z",
+        "has_odds": false
+      }
+    ]
+  },
+  "COPPA_ITALIA": {
+    "finished_fixture_count": 98,
+    "checked_samples": [
+      {
+        "start_time": "2024-09-24T14:00:00.000Z",
+        "has_odds": false
+      },
+      {
+        "start_time": "2026-09-15T19:00:00.000Z",
+        "has_odds": true
+      }
+    ]
+  }
+}
