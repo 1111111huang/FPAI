@@ -118,6 +118,44 @@ comparing directly against the pure-LLM result (ROI = 0.0, 26/27 `no_bet`)
 is a clean, apples-to-apples validation — new-approach-vs-already-measured
 -failure on the same matches, not just a baseline comparison.
 
+## 6a. Data budget policy
+
+**Odds (training and live) have exactly one source, and it's metered.**
+Confirmed live, 2026-11-06: football-data.co.uk has zero UCL/UEL coverage
+of any kind — no dedicated page, no CSV under either of its two formats
+(`mmz4281`/`new`), no mention of "champions"/"europa"/"uefa" anywhere on
+its site index. OddsPapi is the only source for UCL/UEL odds, live or
+historical, with no free fallback. Given OddsPapi's 250-req/month budget
+is shared with live production serving for the 6 leagues' `total_corners`
+market, **no further OddsPapi spend for this effort without a deliberate,
+budgeted decision** — the ingestion cherry-pick (Section 3) costs nothing
+new, since it reuses credits already spent on the abandoned branch's
+backfill.
+
+**The existing 368-match odds-backed sample is the real ceiling for
+odds-anchored training/validation, not the Swiss-format boundary.**
+Confirmed live: 189 UCL + 179 UEL fixtures, 2026-01-20 to 2026-09-17 —
+spanning the tail of the 2025-26 knockout rounds plus the 2026-27 season's
+qualifying rounds and opening league-phase matchdays, not one clean
+continuous sample. OddsPapi's own historical floor (2026-01-01) is already
+16 months inside the Swiss-format era (started August 2024), so the format
+change never actually constrains the odds-anchored bucket — OddsPapi's own
+floor is the binding constraint. The sample is also stale by about 7 weeks
+as of 2026-11-06 (last backfilled 2026-10-08) — a bounded, cheap extension
+(fixture discovery is near-free; only the incremental odds pull for the
+gap would spend real credits) worth doing deliberately when ingestion work
+starts, not reflexively here.
+
+**Score-only data for the Dixon-Coles pool has no such ceiling, and is
+free.** fotmob and football-data.co.uk's "new leagues" format (both used
+for the pool-widening check, Section 8) carry results with no odds
+dependency, so they aren't bound by OddsPapi's floor at all. Capped
+instead at the Swiss-format boundary (August 2024) as a deliberate policy
+— not reaching further back for marginally more Dixon-Coles rows that
+would need separate, format-aware feature handling (a different
+standings shape, a different per-team fixture count, non-comparable
+group-vs-league-phase stakes semantics).
+
 ## 7. Launch gate
 
 Same volume-floor + ROI-floor requirement as the domestic-cup design,
