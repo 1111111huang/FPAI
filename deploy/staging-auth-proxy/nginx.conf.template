@@ -12,6 +12,19 @@
 # logic -- the actual, single source of truth for which origins are allowed --
 # is what answers it. The real (non-OPTIONS) request behind the preflight is
 # still fully auth-gated, unchanged.
+#
+# Mechanism note: a first attempt used `if ($request_method = OPTIONS) {
+# auth_basic off; }` to override the auth_basic set by the included
+# basic_auth.conf snippet below -- confirmed live (curled the proxy directly,
+# bypassing the browser entirely) that this does NOT work. nginx cannot
+# reliably override auth_basic across two different config contexts
+# (include vs. if) -- a known nginx limitation (trac.nginx.org/nginx/ticket/
+# 2013), not something specific to this template or a syntax mistake.
+# auth_basic instead takes its value from a single variable
+# ($auth_basic_realm, computed once below): auth_basic has supported a
+# variable argument since nginx 1.3.10 specifically for this per-request
+# toggle use case, and there's only ever one textual auth_basic call in this
+# config, so there's nothing left to "override."
 
 server {
     listen 80;
@@ -29,12 +42,24 @@ server {
 
     # Proxy headers
     location / {
+        # Default: no auth, so a deploy with no basic_auth.conf content at
+        # all (ALLOW_NO_AUTH=true) still has $auth_basic_realm declared --
+        # nginx needs at least one `set` for a custom variable to parse it.
+        set $auth_basic_realm off;
+
+        # May override $auth_basic_realm to the configured realm (and set
+        # auth_basic_user_file) -- see docker-entrypoint.sh. Empty when
+        # BASIC_AUTH isn't configured, leaving the default above in place.
+        include /etc/nginx/snippets/basic_auth.conf;
+
         # See file header: a CORS preflight carries no credentials by spec,
-        # so auth_basic would 401 it unconditionally and block the real
-        # request from ever being sent.
+        # so leaving auth_basic on would 401 it unconditionally and block
+        # the real request from ever being sent.
         if ($request_method = OPTIONS) {
-            auth_basic off;
+            set $auth_basic_realm off;
         }
+
+        auth_basic $auth_basic_realm;
 
         proxy_http_version 1.1;
 
@@ -54,9 +79,6 @@ server {
         proxy_set_header Connection $connection_upgrade;
 
         proxy_pass $upstream;
-
-        # Conditionally included by the entrypoint (may be empty)
-        include /etc/nginx/snippets/basic_auth.conf;
     }
 }
 

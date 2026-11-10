@@ -54,8 +54,11 @@ if [[ -n "${BASIC_AUTH:-}" ]]; then
     exit 1
   fi
 
+  # Sets $auth_basic_realm rather than calling auth_basic directly -- see
+  # nginx.conf.template's header comment for why (auth_basic can't be
+  # reliably overridden across an include + if, a known nginx limitation).
   cat > "$AUTH_SNIPPET" <<EOF
-auth_basic "${BASIC_AUTH_REALM:-Restricted}";
+set \$auth_basic_realm "${BASIC_AUTH_REALM:-Restricted}";
 auth_basic_user_file $HTPASSWD_FILE;
 EOF
 
