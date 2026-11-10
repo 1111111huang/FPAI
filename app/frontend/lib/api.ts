@@ -45,11 +45,22 @@ export class ApiError extends Error {
 
 /** Every request goes through here so the shared-secret header (when
  * configured) is attached exactly once, instead of repeated at each of the
- * call sites below. */
+ * call sites below.
+ *
+ * credentials: 'include' so a cross-origin API_BASE (e.g. staging's
+ * nginx-password-auth proxy, gating FPAI behind HTTP Basic Auth -- FPAI
+ * itself has no public domain there) gets the browser's cached Basic Auth
+ * credentials attached automatically, the same way they'd attach to a plain
+ * top-level navigation to that origin. 'same-origin' (fetch's default)
+ * never sends stored HTTP auth cross-origin at all. Paired with the
+ * backend's own allow_credentials=True (main.py's CORSMiddleware) -- without
+ * both sides, the browser blocks reading the response even once the proxy's
+ * auth succeeds. No effect when API_BASE is same-origin or the backend
+ * doesn't require credentials (production, local dev). */
 function apiFetch(path: string, init: RequestInit = {}): Promise<Response> {
   const headers = new Headers(init.headers);
   if (APP_TOKEN) headers.set("X-App-Token", APP_TOKEN);
-  return fetch(`${API_BASE}${path}`, { ...init, headers });
+  return fetch(`${API_BASE}${path}`, { ...init, headers, credentials: "include" });
 }
 
 // Direct user report: switching between pages feels laggy. Every page mount

@@ -594,6 +594,17 @@ app.add_middleware(
     allow_origins=_parse_cors_origins(os.environ.get("CORS_ALLOWED_ORIGINS", "http://localhost:3000")),
     allow_methods=["*"],
     allow_headers=["*"],
+    # allow_credentials=True so a credentialed cross-origin request (e.g. the
+    # staging frontend's apiFetch(), sent with credentials: 'include' so the
+    # browser forwards its cached Basic Auth creds through the staging
+    # nginx-password-auth proxy) gets Access-Control-Allow-Credentials back --
+    # without it the browser blocks reading the response even after the
+    # proxy's own auth succeeds. CORS_ALLOWED_ORIGINS is always an explicit
+    # origin list (never "*", see _parse_cors_origins), which is required for
+    # allow_credentials=True to be valid at all. Inert for production/local
+    # dev, neither of which currently sends a credentialed cross-origin
+    # request to this backend.
+    allow_credentials=True,
 )
 
 
