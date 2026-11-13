@@ -14,6 +14,23 @@ set -euo pipefail
 
 fail=0
 
+echo "== 0. OPTIONS preflight with a non-matching Origin must NOT be reflected (CORS allowlist regression guard) =="
+bogus_origin="https://evil.example.com"
+bogus_preflight_headers=$(curl -s -i --max-time 10 \
+  -X OPTIONS "$STAGING_URL/api/status" \
+  -H "Origin: $bogus_origin" \
+  -H "Access-Control-Request-Method: GET" \
+  -H "Access-Control-Request-Headers: content-type" \
+  -H "Cache-Control: no-cache" || true)
+echo "$bogus_preflight_headers" | tr -d '\r'
+if echo "$bogus_preflight_headers" | grep -qi "Access-Control-Allow-Origin: $bogus_origin"; then
+  echo "FAIL: Access-Control-Allow-Origin reflected the non-matching Origin ($bogus_origin) -- allowlist is not enforced"
+  fail=1
+else
+  echo "PASS: Access-Control-Allow-Origin did not reflect the non-matching Origin ($bogus_origin)"
+fi
+
+echo
 echo "== 1. OPTIONS preflight (no credentials attached -- browsers never send them on a preflight) =="
 preflight_headers=$(curl -s -i --max-time 10 \
   -X OPTIONS "$STAGING_URL/api/status" \
