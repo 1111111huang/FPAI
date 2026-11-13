@@ -19,6 +19,20 @@ if [[ "$ORIGIN" != http://* && "$ORIGIN" != https://* ]]; then
   exit 1
 fi
 
+# Validate FRONTEND_ORIGIN format -- the nginx map that gates the CORS
+# allowlist does an exact string match against the browser's Origin header,
+# so a typo'd scheme or trailing slash here wouldn't error anywhere, it
+# would just silently never match -- the exact W255 symptom recurring with
+# no error message pointing at the cause.
+if [[ "$FRONTEND_ORIGIN" != http://* && "$FRONTEND_ORIGIN" != https://* ]]; then
+  echo "[entrypoint] ERROR: FRONTEND_ORIGIN must start with http:// or https://"
+  exit 1
+fi
+if [[ "$FRONTEND_ORIGIN" == */ ]]; then
+  echo "[entrypoint] ERROR: FRONTEND_ORIGIN must not end with a trailing slash (an Origin header never has a path) -- got: $FRONTEND_ORIGIN"
+  exit 1
+fi
+
 # Require BASIC_AUTH for easier debugging (set ALLOW_NO_AUTH=true to disable this check)
 if [[ -z "${BASIC_AUTH:-}" && "${ALLOW_NO_AUTH:-}" != "true" ]]; then
   echo "[entrypoint] ERROR: BASIC_AUTH is required for security. Set BASIC_AUTH=username:password"
