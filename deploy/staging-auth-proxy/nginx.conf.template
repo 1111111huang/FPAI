@@ -28,13 +28,20 @@
 # any variable's value or phase-ordering subtlety. Real (non-OPTIONS)
 # requests are unaffected, still proxied through with auth_basic enforced.
 #
-# Reflects the request's own Origin header on the preflight response rather
-# than hardcoding one: safe because a preflight carries no credentials and
-# no sensitive data, and real origin enforcement still lives downstream --
-# the upstream FastAPI CORSMiddleware's CORS_ALLOWED_ORIGINS allow-list only
-# attaches Access-Control-Allow-Origin to the REAL request's response for an
-# actually-allowed origin, so a disallowed origin's preflight "succeeding"
-# here still can't read the real response.
+# The preflight itself is allowlist-gated, not blindly reflected: the
+# $cors_allow_origin map below only echoes $http_origin back when it equals
+# FRONTEND_ORIGIN (the one known legitimate staging frontend), so any other
+# origin's preflight still gets a 204 but with an empty/absent
+# Access-Control-Allow-Origin, which the browser treats as a failed
+# preflight. This matters because upstream endpoints (e.g.
+# app/backend/main.py) are protected only by this proxy's auth_basic, not by
+# their own per-request auth -- and a browser auto-attaches cached Basic Auth
+# credentials to same-host requests regardless of which page triggered them
+# (unlike cookies, Basic Auth isn't origin-scoped). Blindly reflecting
+# $http_origin would let a malicious third-party page's preflight succeed
+# for any origin, clearing the way for a credentialed cross-site POST whose
+# server-side side effects (generation, cache writes, cost) happen before
+# FastAPI's CORSMiddleware ever gets a chance to withhold the response.
 
 server {
     listen 80;
@@ -65,10 +72,11 @@ server {
         # See file header: answer a CORS preflight locally and return
         # immediately, before auth_basic's access-phase check ever runs.
         if ($request_method = OPTIONS) {
-            add_header Access-Control-Allow-Origin $http_origin always;
+            add_header Access-Control-Allow-Origin $cors_allow_origin always;
             add_header Access-Control-Allow-Credentials true always;
             add_header Access-Control-Allow-Methods "GET, POST, PUT, PATCH, DELETE, OPTIONS" always;
             add_header Access-Control-Allow-Headers "Content-Type, Authorization, X-App-Token" always;
+            add_header Vary Origin always;
             return 204;
         }
 
@@ -99,4 +107,12 @@ server {
 map $http_upgrade $connection_upgrade {
     default upgrade;
     '' close;
+}
+
+# Only reflect Origin back on the CORS preflight when it matches the known
+# staging frontend -- see file header. Any other origin gets "" here, so
+# the preflight still returns 204 but with no usable CORS header.
+map $http_origin $cors_allow_origin {
+    default "";
+    "${FRONTEND_ORIGIN}" "${FRONTEND_ORIGIN}";
 }

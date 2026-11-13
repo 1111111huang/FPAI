@@ -18,6 +18,7 @@ EXPOSE 80
 
 # Default envs (can be overridden at run time)
 ENV ORIGIN=""
+ENV FRONTEND_ORIGIN=""
 ENV BASIC_AUTH=""
 ENV BASIC_AUTH_REALM="Restricted"
 

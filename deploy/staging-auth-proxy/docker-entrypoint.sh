@@ -7,6 +7,12 @@ if [[ -z "${ORIGIN:-}" ]]; then
   exit 1
 fi
 
+# Fail fast if FRONTEND_ORIGIN is missing
+if [[ -z "${FRONTEND_ORIGIN:-}" ]]; then
+  echo "[entrypoint] ERROR: FRONTEND_ORIGIN env var is required (the staging frontend's origin, e.g. https://fpai-staging.vercel.app) -- used to scope which origin's CORS preflight gets answered"
+  exit 1
+fi
+
 # Validate ORIGIN format
 if [[ "$ORIGIN" != http://* && "$ORIGIN" != https://* ]]; then
   echo "[entrypoint] ERROR: ORIGIN must start with http:// or https://"
@@ -106,7 +112,7 @@ fi
 
 echo "[entrypoint] Generating nginx configuration with DNS resolver: $DNS_RESOLVER"
 export DNS_RESOLVER
-envsubst '\$ORIGIN \$DNS_RESOLVER' < /etc/nginx/templates/reverse.conf.template > /etc/nginx/conf.d/reverse.conf
+envsubst '\$ORIGIN \$DNS_RESOLVER \$FRONTEND_ORIGIN' < /etc/nginx/templates/reverse.conf.template > /etc/nginx/conf.d/reverse.conf
 
 # Verify the config was generated
 if [[ ! -f /etc/nginx/conf.d/reverse.conf || ! -s /etc/nginx/conf.d/reverse.conf ]]; then
