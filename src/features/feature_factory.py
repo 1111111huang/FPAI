@@ -1146,6 +1146,8 @@ class FeatureFactory:
         import json
         import numpy as np
 
+        from src.features.goal_market_fallback import fallback_lambda_home_away
+
         home_norm = standardize_team_name(home_team)
         away_norm = standardize_team_name(away_team)
 
@@ -1415,6 +1417,40 @@ class FeatureFactory:
 
         odds_feats = self._compute_odds_features(combined)
         features = features.merge(odds_feats, on="match_id", how="left")
+
+        # US#134 (moved up from below): computed here, not just where
+        # cold-start imputation uses it, so the fallback right below can
+        # also look up each row's own league.
+        league_by_match_id = combined.set_index("match_id")["league"]
+        match_league = features["match_id"].map(league_by_match_id)
+
+        # 2026-11-16: MKT_LAMBDA_HOME/MKT_LAMBDA_AWAY are NaN whenever
+        # MKT_AH_LINE is missing (no real AH price at generation time) --
+        # see docs/superpowers/specs/2026-11-16-goal-market-lambda-fallback-design.md.
+        # That NaN then reaches XGBoost-family models raw (BUG-096), whose
+        # missing-value routing was never trained on real NaN examples
+        # (feature_store is ~100% AH-populated) and was found to push hard
+        # toward "over" regardless of real signal. Replace it with a
+        # calibrated split of the already-real MKT_LAMBDA_TOTAL instead of
+        # leaving it NaN. Live-serving only by construction: build_for_match
+        # is never called for an already-played match (those hit the
+        # feature_store cache lookup in forecast_service.py first) or from
+        # the bulk training/replay path (compute_rolling_stats).
+        needs_fallback = features["MKT_LAMBDA_TOTAL"].notna() & features["MKT_AH_LINE"].isna()
+        features["MKT_LAMBDA_HOME_AWAY_IMPUTED"] = needs_fallback
+        for idx in features.index[needs_fallback]:
+            lam_home, lam_away = fallback_lambda_home_away(
+                lambda_total=features.at[idx, "MKT_LAMBDA_TOTAL"],
+                implied_home=features.at[idx, "MKT_IMPLIED_HOME"],
+                implied_away=features.at[idx, "MKT_IMPLIED_AWAY"],
+                league=match_league.at[idx],
+            )
+            features.at[idx, "MKT_LAMBDA_HOME"] = lam_home
+            features.at[idx, "MKT_LAMBDA_AWAY"] = lam_away
+            features.at[idx, "MKT_POISSON_BTTS_PROB"] = (
+                (1.0 - np.exp(-lam_home)) * (1.0 - np.exp(-lam_away))
+            )
+
         opp_adj = self._compute_opp_adjusted_rolling(combined)
         features = features.merge(opp_adj, on="match_id", how="left")
         league_ctx = self._compute_league_standings(combined)
@@ -1465,14 +1501,10 @@ class FeatureFactory:
         if not dc_feats.empty:
             features = features.merge(dc_feats, on="match_id", how="left")
 
-        # US#134: group by league (see _apply_cold_start_imputation docstring).
-        # combined's "league" column covers each historical row's own
-        # competition plus the synthetic row's target league, so a team-name
-        # collision across competitions can't cross-contaminate fill values.
-        league_by_match_id = combined.set_index("match_id")["league"]
-        features = self._apply_cold_start_imputation(
-            features, league=features["match_id"].map(league_by_match_id)
-        )
+        # US#134: group by league (see _apply_cold_start_imputation
+        # docstring) -- match_league was already computed above, right
+        # after the odds_feats merge, for the lambda fallback to use too.
+        features = self._apply_cold_start_imputation(features, league=match_league)
 
         # Return the synthetic match row only
         row = features[features["match_id"] == SYNTHETIC_ID].copy()

@@ -1037,3 +1037,67 @@ def test_build_for_match_dixon_coles_concat_raises_no_future_warning(tmp_path: P
             home_team="Arsenal", away_team="Chelsea", match_date="2025-04-01",
             league="E0", odds_h=1.8, odds_d=3.6, odds_a=4.2,
         )
+
+
+def test_build_for_match_fills_lambda_home_away_when_ah_line_missing(tmp_path: Path) -> None:
+    """2026-11-16: MKT_LAMBDA_HOME/AWAY must not stay NaN just because the
+    Asian Handicap line hasn't posted yet -- see
+    docs/superpowers/specs/2026-11-16-goal-market-lambda-fallback-design.md."""
+    db_path = tmp_path / "test_fpai.db"
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        yaml.safe_dump({"paths": {"database_path": str(db_path)}}),
+        encoding="utf-8",
+    )
+
+    with duckdb.connect(str(db_path)) as conn:
+        conn.execute(
+            """
+            CREATE TABLE raw_matches (
+                match_id TEXT PRIMARY KEY, league TEXT, tier INTEGER, date TIMESTAMP,
+                home_team TEXT, away_team TEXT, fthg INTEGER, ftag INTEGER,
+                hs FLOAT, "as" FLOAT, hst FLOAT, ast FLOAT, hc FLOAT, ac FLOAT,
+                hy FLOAT, ay FLOAT, hr FLOAT, ar FLOAT,
+                odds_h FLOAT, odds_d FLOAT, odds_a FLOAT,
+                avgh FLOAT, avgd FLOAT, avga FLOAT,
+                maxch FLOAT, maxcd FLOAT, maxca FLOAT,
+                avgch FLOAT, avgcd FLOAT, avgca FLOAT,
+                xg_h FLOAT, xg_a FLOAT, xga_h FLOAT, xga_a FLOAT,
+                over25_odds FLOAT, under25_odds FLOAT,
+                ah_line FLOAT, ah_home_odds FLOAT, ah_away_odds FLOAT
+            )
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO raw_matches
+            (match_id, league, tier, date, home_team, away_team, fthg, ftag, odds_h, odds_d, odds_a, avgh, avgd, avga)
+            VALUES
+            ('m1', 'E0', 1, '2025-08-10 20:00:00', 'Arsenal', 'Everton', 2, 1, 1.5, 4.0, 5.0, 1.5, 4.0, 5.0)
+            """
+        )
+        conn.execute(
+            "CREATE TABLE raw_player_match_stats (match_id TEXT, team_name TEXT, player_id BIGINT, "
+            "xg FLOAT, xa FLOAT, rating FLOAT, goals INTEGER, assists INTEGER)"
+        )
+        conn.execute(
+            "CREATE TABLE player_market_values (fotmob_player_id BIGINT, transfermarkt_player_id BIGINT, "
+            "snapshot_date TEXT, market_value_eur BIGINT)"
+        )
+
+    feature_factory = FeatureFactory(config_path=str(config_path))
+    row = feature_factory.build_for_match(
+        home_team="Arsenal", away_team="Everton", match_date="2025-08-24",
+        league="E0", odds_h=1.8, odds_d=3.6, odds_a=4.2,
+        over25_odds=1.9,  # real O/U 2.5 price -> MKT_LAMBDA_TOTAL is real
+        # ah_line/ah_home_odds/ah_away_odds deliberately omitted -- AH hasn't posted yet
+    )
+
+    assert not pd.isna(row["MKT_LAMBDA_TOTAL"].iloc[0])  # sanity: trigger condition is real
+    assert pd.isna(row["MKT_AH_LINE"].iloc[0])  # sanity: AH is genuinely missing
+    assert not pd.isna(row["MKT_LAMBDA_HOME"].iloc[0])
+    assert not pd.isna(row["MKT_LAMBDA_AWAY"].iloc[0])
+    assert not pd.isna(row["MKT_POISSON_BTTS_PROB"].iloc[0])
+    assert bool(row["MKT_LAMBDA_HOME_AWAY_IMPUTED"].iloc[0]) is True
+    lam_total = row["MKT_LAMBDA_TOTAL"].iloc[0]
+    assert row["MKT_LAMBDA_HOME"].iloc[0] + row["MKT_LAMBDA_AWAY"].iloc[0] == pytest.approx(lam_total)
