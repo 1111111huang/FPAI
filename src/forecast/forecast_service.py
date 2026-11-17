@@ -98,7 +98,13 @@ def _compute_shap_contributions(model: Any, feature_row: pd.DataFrame, top_n: in
 # BUG-096: the goal-market features derived from over/under 2.5 and Asian
 # handicap prices. A live forecast with none of them real cannot price any
 # goal market from the market's own view.
-_GOAL_MARKET_FEATURES = ("MKT_IMPLIED_OVER25", "MKT_LAMBDA_HOME", "MKT_LAMBDA_AWAY")
+# 2026-11-16: checks MKT_AH_LINE directly, not MKT_LAMBDA_HOME/AWAY -- those
+# two can now be a calibrated fallback value (src/features/goal_market_fallback.py)
+# even when AH is genuinely missing, so checking them here would wrongly
+# report "available" for a fallback-derived row. MKT_AH_LINE itself is never
+# given a fallback, so it stays the correct signal for "a real AH price was
+# actually used."
+_GOAL_MARKET_FEATURES = ("MKT_IMPLIED_OVER25", "MKT_AH_LINE")
 
 
 # Mirrors ModelManager.prepare_training_data's own list of model types
@@ -126,6 +132,19 @@ def _goal_market_features_available(feature_row: pd.DataFrame) -> bool:
         if pd.isna(value):
             return False
     return True
+
+
+def _lambda_home_away_imputed(feature_row: pd.DataFrame) -> bool:
+    """True when MKT_LAMBDA_HOME/MKT_LAMBDA_AWAY were filled by the
+    calibrated AH-missing fallback (src/features/goal_market_fallback.py)
+    rather than a real AH-derived split. The flag column is absent entirely
+    on the 'international'/market-odds-only path, which never runs the
+    fallback (ForecastService._compute_mkt_features_from_odds) -- treated
+    as not-imputed in that case, same as every other MKT_* diagnostic on
+    that path."""
+    if "MKT_LAMBDA_HOME_AWAY_IMPUTED" not in feature_row.columns:
+        return False
+    return bool(feature_row["MKT_LAMBDA_HOME_AWAY_IMPUTED"].iloc[0])
 
 
 def _market_nan_frame(imputed: pd.DataFrame, unimputed: pd.DataFrame) -> pd.DataFrame:
@@ -809,6 +828,7 @@ class ForecastService:
         # frame models are scored on -- see _market_nan_frame below.
         unimputed_frame = feature_frame.copy()
         goal_market_features_available = _goal_market_features_available(feature_row)
+        lambda_home_away_imputed = _lambda_home_away_imputed(feature_row)
 
         # Impute column means for any remaining NaN (cold-start)
         still_missing = [col for col in feature_frame.columns if feature_frame[col].isna().any()]
@@ -884,6 +904,12 @@ class ForecastService:
                 # (and result_3way, built from them) scored on placeholder
                 # market features. Informational only -- nothing blocks on it.
                 "goal_market_features_available": goal_market_features_available,
+                # 2026-11-16: True when MKT_LAMBDA_HOME/MKT_LAMBDA_AWAY came
+                # from the calibrated AH-missing fallback rather than a real
+                # AH-derived split -- see
+                # docs/superpowers/specs/2026-11-16-goal-market-lambda-fallback-design.md.
+                # Informational only, same as the field above.
+                "lambda_home_away_imputed": lambda_home_away_imputed,
             },
         }
         validate_forecast_payload(payload)

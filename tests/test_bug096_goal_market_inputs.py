@@ -27,6 +27,7 @@ from src.agent.pipeline import forecast_node, goal_market_odds_kwargs
 from src.forecast.forecast_service import (
     ForecastService,
     _goal_market_features_available,
+    _lambda_home_away_imputed,
     _market_nan_frame,
 )
 
@@ -146,14 +147,28 @@ def test_market_nan_frame_restores_only_market_columns():
     assert frame.loc[0, "OFF_HOME_XG_R5"] == 1.4  # non-market imputation is unchanged
 
 
-def test_goal_market_features_available_needs_all_three_real_values():
-    full = pd.DataFrame([{"MKT_IMPLIED_OVER25": 0.6, "MKT_LAMBDA_HOME": 1.8, "MKT_LAMBDA_AWAY": 1.0}])
-    missing = full.assign(MKT_LAMBDA_HOME=np.nan)
-    absent = full.drop(columns=["MKT_LAMBDA_AWAY"])
+def test_goal_market_features_available_needs_over25_and_ah_line():
+    """2026-11-16: checks MKT_AH_LINE directly now, not MKT_LAMBDA_HOME/AWAY
+    -- those two can now be a calibrated fallback value even when AH is
+    genuinely missing (src/features/goal_market_fallback.py), so checking
+    them here would wrongly report True for a fallback-derived row."""
+    full = pd.DataFrame([{"MKT_IMPLIED_OVER25": 0.6, "MKT_AH_LINE": -0.5}])
+    missing = full.assign(MKT_AH_LINE=np.nan)
+    absent = full.drop(columns=["MKT_AH_LINE"])
 
     assert _goal_market_features_available(full) is True
     assert _goal_market_features_available(missing) is False
     assert _goal_market_features_available(absent) is False
+
+
+def test_lambda_home_away_imputed_reads_the_flag_column():
+    flagged = pd.DataFrame([{"MKT_LAMBDA_HOME_AWAY_IMPUTED": True}])
+    clean = pd.DataFrame([{"MKT_LAMBDA_HOME_AWAY_IMPUTED": False}])
+    absent = pd.DataFrame([{"MKT_LAMBDA_HOME": 1.4}])
+
+    assert _lambda_home_away_imputed(flagged) is True
+    assert _lambda_home_away_imputed(clean) is False
+    assert _lambda_home_away_imputed(absent) is False
 
 
 class XGBRegressor:  # name matters: matches _NAN_TRAINED_MODEL_CLASSES
