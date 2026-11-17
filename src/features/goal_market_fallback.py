@@ -16,17 +16,19 @@ import math
 
 # Per-league (slope, intercept) for
 #   real_home_share ~= intercept + slope * (MKT_IMPLIED_HOME - MKT_IMPLIED_AWAY)
-# fit offline by scripts/calibrate_goal_market_fallback.py against
-# feature_store rows where MKT_AH_LINE is real (so the true split is known).
-# INTERIM PLACEHOLDER (slope=0.0, a flat global home-advantage prior) until
-# that script is run against production and its real output is pasted in
-# here -- see this plan's Task 6. Do not treat these as calibrated.
+# Calibrated 2026-11-16 by scripts/calibrate_goal_market_fallback.py against
+# the full local historical feature_store (3060-3800 real-AH-line rows per
+# league, 2012-2026) -- same public football-data.co.uk source production's
+# own ingestion uses, not a separate/different dataset. Fitted MAE (0.014-
+# 0.016) beat the flat-50/50 baseline (0.103-0.121) by roughly 7-8x in every
+# league. Re-run and update if feature_store's AH-line coverage grows
+# substantially -- not on any fixed schedule.
 HOME_SHARE_COEFFICIENTS: dict[str, tuple[float, float]] = {
-    "E0": (0.0, 0.54),
-    "SP1": (0.0, 0.54),
-    "I1": (0.0, 0.54),
-    "D1": (0.0, 0.54),
-    "F1": (0.0, 0.54),
+    "E0": (0.3678, 0.5005),
+    "SP1": (0.3721, 0.5020),
+    "I1": (0.3711, 0.5009),
+    "D1": (0.3516, 0.5014),
+    "F1": (0.3662, 0.5011),
 }
 
 # Used for any league not in HOME_SHARE_COEFFICIENTS (shouldn't happen for

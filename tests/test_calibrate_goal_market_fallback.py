@@ -61,3 +61,34 @@ def test_fetch_rows_by_league_reads_only_rows_with_a_real_ah_line():
     assert lambda_home == pytest.approx(1.4, abs=1e-6)
     assert implied_home == pytest.approx(0.5, abs=1e-6)
     assert implied_away == pytest.approx(0.3, abs=1e-6)
+
+
+def test_fetch_rows_by_league_excludes_a_row_with_a_real_ah_line_but_a_nan_lambda():
+    """2026-11-16: found calibrating against real production data -- SQL's
+    `IS NOT NULL` does not exclude a float column holding IEEE NaN (a real
+    E0/SP1 case: a genuine AH line, but MKT_LAMBDA_TOTAL/MKT_LAMBDA_HOME NaN
+    from a brentq edge case upstream), which silently poisoned the fit into
+    returning nan/nan for those leagues."""
+    conn = duckdb.connect(":memory:")
+    conn.execute("CREATE TABLE raw_matches (match_id VARCHAR, league VARCHAR)")
+    conn.execute(
+        'CREATE TABLE feature_store (match_id VARCHAR, "MKT_LAMBDA_TOTAL" FLOAT, '
+        '"MKT_LAMBDA_HOME" FLOAT, "MKT_AH_LINE" FLOAT, "MKT_IMPLIED_HOME" FLOAT, '
+        '"MKT_IMPLIED_AWAY" FLOAT)'
+    )
+    conn.execute("INSERT INTO raw_matches VALUES ('e1', 'E0'), ('e2', 'E0')")
+    conn.execute(
+        "INSERT INTO feature_store VALUES "
+        "('e1', 2.6, 1.4, -0.5, 0.5, 0.3), "  # real AH line, real lambda -> included
+        "('e2', 'nan'::FLOAT, 'nan'::FLOAT, -0.5, 0.5, 0.3)"  # real AH line, but NaN lambda -> excluded
+    )
+
+    class _FakeDb:
+        @contextlib.contextmanager
+        def connection(self, read_only=False):
+            yield conn
+
+    rows_by_league = script._fetch_rows_by_league(_FakeDb())
+
+    assert len(rows_by_league["E0"]) == 1
+    assert rows_by_league["E0"][0][0] == pytest.approx(2.6, abs=1e-6)

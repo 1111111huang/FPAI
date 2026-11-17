@@ -21,6 +21,7 @@ the interim flat-prior placeholder there.
 from __future__ import annotations
 
 import argparse
+import math
 from pathlib import Path
 import sys
 
@@ -50,7 +51,17 @@ def fit_home_share_coefficients(rows: list[tuple[float, float, float, float]]) -
 def _fetch_rows_by_league(db_manager: DuckDBManager) -> dict[str, list[tuple[float, float, float, float]]]:
     """{league: [(lambda_total, lambda_home, implied_home, implied_away), ...]}
     -- only rows with a real MKT_AH_LINE (the true split is known for these,
-    which is what makes them usable as calibration ground truth)."""
+    which is what makes them usable as calibration ground truth).
+
+    2026-11-16, found calibrating against real data: SQL's `IS NOT NULL`
+    does not exclude a float column holding IEEE NaN (NaN is not the same
+    as SQL NULL) -- a handful of real-production E0/SP1 rows have a real
+    MKT_AH_LINE but a NaN MKT_LAMBDA_TOTAL/MKT_LAMBDA_HOME anyway (a
+    brentq/_solve_lambda edge case in feature_factory.py's own computation,
+    not something introduced here), and silently poisoned np.polyfit into
+    returning nan/nan for those two leagues. Filtered out in Python below,
+    not SQL, to keep the filter readable without a DuckDB-specific isnan()
+    call in the query."""
     rows_by_league: dict[str, list[tuple[float, float, float, float]]] = {}
     with db_manager.connection(read_only=True) as conn:
         query = """
@@ -64,7 +75,10 @@ def _fetch_rows_by_league(db_manager: DuckDBManager) -> dict[str, list[tuple[flo
               AND fs."MKT_IMPLIED_HOME" IS NOT NULL AND fs."MKT_IMPLIED_AWAY" IS NOT NULL
         """
         for league, lambda_total, lambda_home, implied_home, implied_away in conn.execute(query).fetchall():
-            rows_by_league.setdefault(league, []).append((lambda_total, lambda_home, implied_home, implied_away))
+            row = (lambda_total, lambda_home, implied_home, implied_away)
+            if any(math.isnan(v) for v in row):
+                continue
+            rows_by_league.setdefault(league, []).append(row)
     return rows_by_league
 
 
