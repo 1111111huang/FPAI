@@ -341,7 +341,7 @@ class OddsAPIClient:
         markets: tuple[str, ...] = ("h2h",),
         regions: tuple[str, ...] = ("uk",),
         credit_limit: int = 500,
-        safety_margin: int = 50,
+        safety_margin: int = 0,  # was 50 (stopped each key at 90%); user request 2026-11-20 -- use full budget
     ) -> None:
         self._api_key = api_key
         self._credit_counter = credit_counter

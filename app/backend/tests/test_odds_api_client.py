@@ -247,12 +247,21 @@ def test_get_event_odds_costs_markets_times_regions() -> None:
 def test_get_event_odds_skips_call_when_it_would_exceed_the_safety_margin() -> None:
     session = _mock_event_odds_session({"bookmakers": []})
     counter = CreditCounter(credits_used=495)  # 500 limit - 50 safety margin = 450 usable, already over
-    client = OddsAPIClient(api_key="fake-key", credit_counter=counter, session=session)
+    client = OddsAPIClient(api_key="fake-key", credit_counter=counter, session=session, safety_margin=50)
 
     result = client.get_event_odds(sport_key="soccer_epl", event_id="evt123")
 
     assert result is None
     session.get.assert_not_called()
+
+
+def test_default_safety_margin_uses_the_full_credit_budget() -> None:
+    # 2026-11-20: default margin dropped 50 -> 0; 498 + 2 = 500 is allowed, 499 + 2 is not.
+    session = _mock_event_odds_session({"bookmakers": []})
+    assert OddsAPIClient(api_key="k", credit_counter=CreditCounter(credits_used=498), session=session).get_event_odds(
+        sport_key="soccer_epl", event_id="e") is not None
+    assert OddsAPIClient(api_key="k", credit_counter=CreditCounter(credits_used=499), session=session).get_event_odds(
+        sport_key="soccer_epl", event_id="e") is None
 
 
 def test_a_simulated_month_of_calls_matches_hand_computed_usage() -> None:
